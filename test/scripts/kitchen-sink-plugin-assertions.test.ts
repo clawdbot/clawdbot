@@ -71,11 +71,13 @@ function runAssertInstalled({
   diagnostics = [],
   env = {},
   inspectPayload,
+  surfaceMode = "full",
 }: {
   allInspectPayload?: unknown;
   diagnostics?: Array<{ level: string; message: string }>;
   env?: NodeJS.ProcessEnv;
   inspectPayload?: ReturnType<typeof fullSurfaceInspectPayload>;
+  surfaceMode?: string;
 } = {}) {
   const label = `diagnostics-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -121,7 +123,7 @@ function runAssertInstalled({
         KITCHEN_SINK_LABEL: label,
         KITCHEN_SINK_SOURCE: "npm",
         KITCHEN_SINK_SPEC: "npm:@openclaw/kitchen-sink@latest",
-        KITCHEN_SINK_SURFACE_MODE: "full",
+        KITCHEN_SINK_SURFACE_MODE: surfaceMode,
         KITCHEN_SINK_TMP_DIR: scratchRoot,
       },
     });
@@ -260,8 +262,12 @@ function toGitBashPath(value: string) {
   if (!match) {
     return value;
   }
-
-  return `/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+  const drive = match[1];
+  const suffix = match[2];
+  if (drive === undefined || suffix === undefined) {
+    return value;
+  }
+  return `/${drive.toLowerCase()}/${suffix.replaceAll("\\", "/")}`;
 }
 
 describe("kitchen-sink plugin assertions", () => {
@@ -307,6 +313,44 @@ describe("kitchen-sink plugin assertions", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("rejects diagnostics in conformance mode", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(["plugin must declare contracts.tools for: kitchen-sink-tool"]),
+      surfaceMode: "conformance",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "unexpected kitchen-sink diagnostic errors: plugin must declare contracts.tools for: kitchen-sink-tool",
+    );
+  });
+
+  it("persists the scenario personality in plugin config", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-config-"));
+    try {
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "configure-runtime"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          KITCHEN_SINK_ID: "openclaw-kitchen-sink-fixture",
+          KITCHEN_SINK_PERSONALITY: "conformance",
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(
+        readFileSync(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      );
+      expect(config.plugins.entries["openclaw-kitchen-sink-fixture"]).toMatchObject({
+        config: { personality: "conformance" },
+        hooks: { allowConversationAccess: true },
+      });
+    } finally {
+      rmSync(home, { force: true, recursive: true });
+    }
   });
 
   it("requires kitchen-sink plugins to appear in inspect-all output", () => {

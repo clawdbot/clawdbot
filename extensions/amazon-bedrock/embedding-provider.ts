@@ -11,6 +11,7 @@ import {
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
@@ -22,6 +23,9 @@ type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
+  endpoint?: string;
+  useFipsEndpoint?: true;
+  useDualstackEndpoint?: true;
 };
 
 /** Default Bedrock embedding model used when no explicit model is configured. */
@@ -118,38 +122,18 @@ function inferFamily(modelId: string): Family {
 // AWS SDK lazy loader
 // ---------------------------------------------------------------------------
 
-type SdkClient = import("@aws-sdk/client-bedrock-runtime").BedrockRuntimeClient;
-type SdkCommand = import("@aws-sdk/client-bedrock-runtime").InvokeModelCommand;
+type AwsSdk = typeof import("@aws-sdk/client-bedrock-runtime");
+type AwsCredentialProvider = typeof import("@aws-sdk/credential-provider-node").defaultProvider;
+type AwsCredentialProviderLoader = () => Promise<AwsCredentialProvider | null>;
 
-interface AwsSdk {
-  BedrockRuntimeClient: new (config: { region: string }) => SdkClient;
-  InvokeModelCommand: new (input: {
-    modelId: string;
-    body: string;
-    contentType: string;
-    accept: string;
-  }) => SdkCommand;
-}
-
-interface AwsCredentialProviderSdk {
-  defaultProvider: (init?: { timeout?: number; maxRetries?: number }) => () => Promise<{
-    accessKeyId?: string;
-  }>;
-}
-
-type AwsCredentialProviderLoader = () => Promise<AwsCredentialProviderSdk | null>;
-
-let sdkCache: AwsSdk | null = null;
-let credentialProviderSdkCache: AwsCredentialProviderSdk | null | undefined;
+let sdkPromise: Promise<AwsSdk> | null = null;
+let credentialProviderPromise: Promise<AwsCredentialProvider | null> | null = null;
 
 async function loadSdk(): Promise<AwsSdk> {
-  if (sdkCache) {
-    return sdkCache;
-  }
   try {
-    sdkCache = (await import("@aws-sdk/client-bedrock-runtime")) as unknown as AwsSdk;
-    return sdkCache;
+    return await (sdkPromise ??= import("@aws-sdk/client-bedrock-runtime"));
   } catch {
+    sdkPromise = null;
     throw new Error(
       "No API key found for provider bedrock: @aws-sdk/client-bedrock-runtime is not installed. " +
         "Install it with: npm install @aws-sdk/client-bedrock-runtime",
@@ -157,17 +141,10 @@ async function loadSdk(): Promise<AwsSdk> {
   }
 }
 
-async function loadCredentialProviderSdk(): Promise<AwsCredentialProviderSdk | null> {
-  if (credentialProviderSdkCache !== undefined) {
-    return credentialProviderSdkCache;
-  }
-  try {
-    credentialProviderSdkCache =
-      (await import("@aws-sdk/credential-provider-node")) as unknown as AwsCredentialProviderSdk;
-  } catch {
-    credentialProviderSdkCache = null;
-  }
-  return credentialProviderSdkCache;
+function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> {
+  return (credentialProviderPromise ??= import("@aws-sdk/credential-provider-node")
+    .then(({ defaultProvider }) => defaultProvider)
+    .catch(() => null));
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +152,7 @@ async function loadCredentialProviderSdk(): Promise<AwsCredentialProviderSdk | n
 // ---------------------------------------------------------------------------
 
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
-const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
+const REGION_RE = /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\./;
 
 function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
@@ -315,11 +292,15 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-export const testing = {
+const testing = {
   parseCohereBatch,
   parseSingle,
   stripInferenceProfilePrefix,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
+}
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -328,8 +309,8 @@ export const testing = {
 export async function createBedrockEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
-  const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
+  const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -342,7 +323,12 @@ export async function createBedrockEmbeddingProvider(
 
   const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
-    const sdk = new BedrockRuntimeClient({ region: client.region });
+    const sdk = new BedrockRuntimeClient({
+      region: client.region,
+      endpoint: client.endpoint,
+      useFipsEndpoint: client.useFipsEndpoint,
+      useDualstackEndpoint: client.useDualstackEndpoint,
+    });
     try {
       const res = await sdk.send(
         new InvokeModelCommand({
@@ -421,17 +407,53 @@ export async function createBedrockEmbeddingProvider(
 
 function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
   const spec = resolveSpec(model);
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
+  let endpoint =
+    normalizeOptionalString(options.remote?.baseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
+  let useFipsEndpoint: true | undefined;
+  let useDualstackEndpoint: true | undefined;
 
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
     regionFromUrl(providerConfig?.baseUrl) ??
-    process.env.AWS_REGION ??
-    process.env.AWS_DEFAULT_REGION ??
+    normalizeOptionalString(process.env.AWS_REGION) ??
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
+
+  if (endpoint) {
+    const sdk = new BedrockRuntimeClient({ region });
+    try {
+      const normalizedEndpoint = new URL(endpoint).href;
+      for (const fips of [false, true]) {
+        for (const dualstack of [false, true]) {
+          const endpointModes = { Region: region, UseFIPS: fips, UseDualStack: dualstack };
+          try {
+            if (sdk.config.endpointProvider(endpointModes).url.href !== normalizedEndpoint) {
+              continue;
+            }
+          } catch {
+            // Unsupported hypothetical modes must not reject a valid custom endpoint.
+            continue;
+          }
+          // SDK-owned endpoints must retain their security modes and environment overrides.
+          endpoint = undefined;
+          useFipsEndpoint = fips || undefined;
+          useDualstackEndpoint = dualstack || undefined;
+          break;
+        }
+        if (!endpoint) {
+          break;
+        }
+      }
+    } finally {
+      sdk.destroy();
+    }
+  }
 
   let dimensions: number | undefined;
   if (options.outputDimensionality != null) {
@@ -445,7 +467,14 @@ function resolveBedrockEmbeddingClient(
     dimensions = spec?.dims;
   }
 
-  return { region, model, dimensions };
+  return {
+    region,
+    model,
+    dimensions,
+    ...(endpoint ? { endpoint } : {}),
+    ...(useFipsEndpoint ? { useFipsEndpoint } : {}),
+    ...(useDualstackEndpoint ? { useDualstackEndpoint } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +483,7 @@ function resolveBedrockEmbeddingClient(
 
 export async function hasAwsCredentials(
   env: NodeJS.ProcessEnv = process.env,
-  loadCredentialProvider: AwsCredentialProviderLoader = loadCredentialProviderSdk,
+  loadCredentialProvider: AwsCredentialProviderLoader = loadDefaultCredentialProvider,
 ): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return true;
@@ -462,12 +491,12 @@ export async function hasAwsCredentials(
   if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
     return true;
   }
-  const credentialProviderSdk = await loadCredentialProvider();
-  if (!credentialProviderSdk) {
+  const defaultProvider = await loadCredentialProvider();
+  if (!defaultProvider) {
     return false;
   }
   try {
-    const credentials = await credentialProviderSdk.defaultProvider({
+    const credentials = await defaultProvider({
       timeout: 1000,
       maxRetries: 0,
     })();
@@ -476,4 +505,3 @@ export async function hasAwsCredentials(
     return false;
   }
 }
-export { testing as __testing };

@@ -8,10 +8,15 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import {
+  createGatewayConnectionLifecycle,
+  type GatewayConnectionSnapshot,
+} from "../gateway-connection-lifecycle.ts";
+import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import type { SessionCapability } from "../sessions/index.ts";
+import type { AgentsPanel } from "./panels.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective as loadToolsEffectiveShared,
@@ -19,7 +24,8 @@ import {
   resetToolsEffectiveState,
 } from "./tools-effective.ts";
 
-export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+export type { AgentsPanel } from "./panels.ts";
+export { watchAgentScope } from "./watch-agent-scope.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -45,20 +51,17 @@ export type AgentsState = {
   agentsPanel?: AgentsPanel;
 };
 
-export type AgentsConfigCapability = {
+type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
+
+type AgentsConfigCapability = {
   readonly state: { configFormDirty: boolean };
-  save: () => Promise<boolean>;
+  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
 };
 
-type AgentGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-};
-
 type AgentGateway = {
-  readonly snapshot: AgentGatewaySnapshot;
-  subscribe: (listener: (snapshot: AgentGatewaySnapshot) => void) => () => void;
+  readonly snapshot: GatewayConnectionSnapshot;
+  subscribe: (listener: (snapshot: GatewayConnectionSnapshot) => void) => () => void;
 };
 
 type AgentFilesStatus = {
@@ -81,6 +84,7 @@ export type AgentCapability = {
   ensureList: () => Promise<AgentsListResult | null>;
   refreshList: () => Promise<AgentsListResult | null>;
   files: (agentId: string | null | undefined) => AgentFilesStatus;
+  invalidateFiles: (agentIds: readonly (string | null | undefined)[]) => void;
   ensureFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
   refreshFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
   subscribe: (listener: (state: AgentCapabilityState) => void) => () => void;
@@ -98,7 +102,7 @@ async function loadAgentFilesList(
   return client.request<AgentsFilesListResult | null>("agents.files.list", { agentId });
 }
 
-function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean {
+function hasSelectedAgentMismatch(state: AgentToolsState, agentId: string): boolean {
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
 }
 
@@ -111,44 +115,7 @@ function resolveToolsErrorMessage(
     : String(err);
 }
 
-export async function loadAgents(state: AgentsState) {
-  const client = state.client;
-  if (!client || !state.connected || state.agentsLoading) {
-    return;
-  }
-  const generation = state.requestGeneration;
-  const isCurrent = () =>
-    state.client === client && state.connected && state.requestGeneration === generation;
-  state.agentsLoading = true;
-  state.agentsError = null;
-  try {
-    const res = await loadAgentsList(client);
-    if (!isCurrent()) {
-      return;
-    }
-    state.agentsList = res;
-    const selected = state.agentsSelectedId;
-    if (!selected || !res.agents.some((entry) => entry.id === selected)) {
-      state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
-    }
-  } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    if (isMissingOperatorReadScopeError(err)) {
-      state.agentsList = null;
-      state.agentsError = formatMissingOperatorReadScopeMessage("agent list");
-    } else {
-      state.agentsError = String(err);
-    }
-  } finally {
-    if (isCurrent()) {
-      state.agentsLoading = false;
-    }
-  }
-}
-
-export async function loadToolsCatalog(state: AgentsState, agentId: string) {
+export async function loadToolsCatalog(state: AgentToolsState, agentId: string) {
   const resolvedAgentId = agentId.trim();
   const client = state.client;
   if (
@@ -202,7 +169,7 @@ export {
 };
 
 export async function loadToolsEffective(
-  state: AgentsState,
+  state: AgentToolsState,
   params: { agentId: string; sessionKey: string },
 ) {
   const client = state.client;
@@ -220,16 +187,41 @@ export async function setDefaultAgent(
   config: AgentsConfigCapability,
   agentId: string,
   refreshAgents: () => Promise<unknown>,
+  canDispatch: () => boolean = () => true,
 ): Promise<void> {
+  if (!canDispatch()) {
+    return;
+  }
   const hadPendingConfigDraft = config.state.configFormDirty;
   if (config.stageDefaultAgent(agentId)) {
     if (!hadPendingConfigDraft && config.state.configFormDirty) {
-      const saved = await config.save();
-      if (saved) {
+      const saved = await config.save({ canDispatch });
+      if (saved && canDispatch()) {
         await refreshAgents();
       }
     }
   }
+}
+
+type AgentIdentityUpdate = {
+  agentId: string;
+  name?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+/** Persist identity fields through the gateway; the handler also rewrites the
+    agent's workspace IDENTITY.md so agent and UI share one identity source. */
+export async function updateAgentIdentity(
+  client: GatewayBrowserClient,
+  update: AgentIdentityUpdate,
+): Promise<void> {
+  await client.request("agents.update", {
+    agentId: update.agentId,
+    ...(update.name ? { name: update.name } : {}),
+    ...(update.emoji ? { emoji: update.emoji } : {}),
+    ...(update.avatar ? { avatar: update.avatar } : {}),
+  });
 }
 
 function emptyAgentFilesStatus(): AgentFilesStatus {
@@ -242,9 +234,10 @@ function normalizeAgentId(agentId: string | null | undefined): string | null {
 }
 
 export function createAgentCapability(gateway: AgentGateway): AgentCapability {
+  const lifecycle = createGatewayConnectionLifecycle(gateway.snapshot);
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
-    connected: gateway.snapshot.connected,
+    connected: gateway.snapshot.phase === "connected",
     agentsLoading: false,
     agentsError: null,
     agentsList: null,
@@ -254,9 +247,6 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const fileRequestOwners = new Map<string, symbol>();
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
-  // Transport reconnects reuse the client object, so identity alone cannot
-  // stop pre-disconnect completions from repopulating capability state.
-  let requestGeneration = 0;
   let agentsRequest: Promise<AgentsListResult | null> | null = null;
   let agentsRequestOwner: symbol | null = null;
 
@@ -268,9 +258,6 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       listener(state);
     }
   };
-  const isCurrentRequest = (client: GatewayBrowserClient, generation: number) =>
-    !disposed && state.connected && state.client === client && requestGeneration === generation;
-
   const fileStatus = (agentId: string): AgentFilesStatus => {
     const existing = files.get(agentId);
     if (existing) {
@@ -282,8 +269,8 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   };
 
   const loadList = async (force: boolean): Promise<AgentsListResult | null> => {
-    const client = state.client;
-    if (!client || !state.connected) {
+    const scope = lifecycle.capture();
+    if (!scope) {
       return state.agentsList;
     }
     if (agentsRequest && !force) {
@@ -292,12 +279,11 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     state.agentsLoading = true;
     state.agentsError = null;
     publish();
-    const generation = requestGeneration;
     const owner = Symbol();
     agentsRequestOwner = owner;
-    const request = loadAgentsList(client)
+    const request = loadAgentsList(scope.client)
       .then((result) => {
-        const current = isCurrentRequest(client, generation) && agentsRequestOwner === owner;
+        const current = lifecycle.isCurrent(scope) && agentsRequestOwner === owner;
         if (current) {
           state.agentsList = result;
           state.agentsError = null;
@@ -305,7 +291,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         return current ? result : null;
       })
       .catch((err: unknown) => {
-        if (isCurrentRequest(client, generation) && agentsRequestOwner === owner) {
+        if (lifecycle.isCurrent(scope) && agentsRequestOwner === owner) {
           state.agentsError = isMissingOperatorReadScopeError(err)
             ? formatMissingOperatorReadScopeMessage("agent list")
             : String(err);
@@ -318,7 +304,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
           agentsRequest = null;
           agentsRequestOwner = null;
         }
-        if (currentRequest && isCurrentRequest(client, generation)) {
+        if (currentRequest && lifecycle.isCurrent(scope)) {
           state.agentsLoading = false;
           publish();
         }
@@ -332,8 +318,8 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     force: boolean,
   ): Promise<AgentsFilesListResult | null> => {
     const agentId = normalizeAgentId(rawAgentId);
-    const client = state.client;
-    if (!agentId || !client || !state.connected) {
+    const scope = lifecycle.capture();
+    if (!agentId || !scope) {
       return agentId ? (files.get(agentId)?.list ?? null) : null;
     }
     const status = fileStatus(agentId);
@@ -347,13 +333,11 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     status.loading = true;
     status.error = null;
     publish();
-    const generation = requestGeneration;
     const owner = Symbol();
     fileRequestOwners.set(agentId, owner);
-    const request = loadAgentFilesList(client, agentId)
+    const request = loadAgentFilesList(scope.client, agentId)
       .then((result) => {
-        const current =
-          isCurrentRequest(client, generation) && fileRequestOwners.get(agentId) === owner;
+        const current = lifecycle.isCurrent(scope) && fileRequestOwners.get(agentId) === owner;
         if (current && result) {
           status.list = result;
           status.error = null;
@@ -361,7 +345,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         return current ? status.list : null;
       })
       .catch((err: unknown) => {
-        if (isCurrentRequest(client, generation) && fileRequestOwners.get(agentId) === owner) {
+        if (lifecycle.isCurrent(scope) && fileRequestOwners.get(agentId) === owner) {
           status.error = String(err);
         }
         return null;
@@ -372,7 +356,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
           fileRequests.delete(agentId);
           fileRequestOwners.delete(agentId);
         }
-        if (currentRequest && isCurrentRequest(client, generation)) {
+        if (currentRequest && lifecycle.isCurrent(scope)) {
           status.loading = false;
           publish();
         }
@@ -383,25 +367,22 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
 
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
+    const connected = snapshot.phase === "connected";
+    lifecycle.transition(snapshot);
     state.client = snapshot.client;
-    state.connected = snapshot.connected;
-    if (clientChanged || !snapshot.connected) {
-      requestGeneration += 1;
+    state.connected = connected;
+    if (clientChanged || !connected) {
       agentsRequest = null;
       agentsRequestOwner = null;
       fileRequests.clear();
       fileRequestOwners.clear();
-    }
-    if (clientChanged || !snapshot.connected) {
-      files.clear();
-      state.agentsList = null;
-      state.agentsError = null;
-    }
-    if (clientChanged || !snapshot.connected) {
-      state.agentsLoading = false;
       for (const status of files.values()) {
         status.loading = false;
       }
+      files.clear();
+      state.agentsList = null;
+      state.agentsError = null;
+      state.agentsLoading = false;
     }
     publish();
   });
@@ -426,6 +407,20 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
         : emptyAgentFilesStatus();
     },
+    invalidateFiles(agentIds) {
+      let changed = false;
+      const normalizedIds = new Set(
+        agentIds.map(normalizeAgentId).filter((agentId): agentId is string => agentId !== null),
+      );
+      for (const agentId of normalizedIds) {
+        changed = files.delete(agentId) || changed;
+        changed = fileRequests.delete(agentId) || changed;
+        changed = fileRequestOwners.delete(agentId) || changed;
+      }
+      if (changed) {
+        publish();
+      }
+    },
     ensureFiles: (agentId) => loadFiles(agentId, false),
     refreshFiles: (agentId) => loadFiles(agentId, true),
     subscribe(listener) {
@@ -434,7 +429,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     },
     dispose() {
       disposed = true;
-      requestGeneration += 1;
+      lifecycle.dispose();
       stopGateway();
       listeners.clear();
       fileRequests.clear();

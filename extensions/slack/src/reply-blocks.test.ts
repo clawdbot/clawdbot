@@ -1,10 +1,15 @@
+import {
+  presentationToInteractiveControlsReply,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveSlackReplyBlockResolution, resolveSlackReplyText } from "./reply-blocks.js";
+import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
+import { resolveSlackReplyBlockResolution } from "./reply-blocks.js";
 
-describe("resolveSlackReplyText", () => {
+describe("renderSlackMessagePresentationFallbackText", () => {
   it("includes complete portable table data in Slack accessibility text", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         text: "Pipeline summary",
         presentation: {
           blocks: [
@@ -27,7 +32,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps raw table values literal without changing authored Slack text", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         text: "Intentional <!here>",
         presentation: {
           title: "Report <@U999>",
@@ -48,7 +53,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps plain-text controls literal when they accompany structured data", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         presentation: {
           blocks: [
             { type: "table", caption: "Data", headers: ["Value"], rows: [[1]] },
@@ -88,7 +93,7 @@ describe("resolveSlackReplyText", () => {
   });
 
   it("marks command fallbacks with backticks as not copyable", () => {
-    const rendered = resolveSlackReplyText({
+    const rendered = renderSlackMessagePresentationFallbackText({
       presentation: {
         blocks: [
           {
@@ -117,7 +122,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps safe command fallback bytes exact", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         presentation: {
           blocks: [
             {
@@ -247,7 +252,7 @@ describe("resolveSlackReplyText", () => {
         },
       ],
     });
-    expect(resolveSlackReplyText(payload)).toContain("- Account: account-99");
+    expect(renderSlackMessagePresentationFallbackText(payload)).toContain("- Account: account-99");
   });
 
   it("coalesces adjacent fallbacks without changing their authored order", () => {
@@ -514,5 +519,197 @@ describe("resolveSlackReplyText", () => {
         { block_id: "openclaw_reply_buttons_1", elements: [{ value: "refresh" }] },
       ],
     });
+  });
+
+  it("subtracts exact legacy mirrors for every typed action family", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Command",
+              action: { type: "command", command: "/approve req-1 allow-once" },
+            },
+            { label: "Callback", action: { type: "callback", value: "callback-button" } },
+            {
+              label: "Approval",
+              action: {
+                type: "approval",
+                approvalId: "plugin:req-1",
+                approvalKind: "plugin",
+                decision: "allow-once",
+              },
+            },
+            { label: "URL", action: { type: "url", url: "https://example.com/docs" } },
+            {
+              label: "Web app",
+              action: { type: "web-app", url: "https://example.com/app" },
+            },
+          ],
+        },
+        {
+          type: "select",
+          placeholder: "Command select",
+          options: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-2 deny" },
+            },
+          ],
+        },
+        {
+          type: "select",
+          placeholder: "Callback select",
+          options: [{ label: "Retry", action: { type: "callback", value: "callback-select" } }],
+        },
+      ],
+    } satisfies MessagePresentation;
+
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation,
+      interactive: presentationToInteractiveControlsReply(presentation),
+    });
+    const blocks = segments[0]?.kind === "blocks" ? segments[0].blocks : [];
+    const actionIds = blocks.flatMap((block) =>
+      block.type === "actions"
+        ? ((block as { elements?: Array<{ action_id?: string }> }).elements ?? []).flatMap(
+            (element) => (element.action_id ? [element.action_id] : []),
+          )
+        : [],
+    );
+
+    expect(segments).toHaveLength(1);
+    expect(blocks).toHaveLength(3);
+    expect(actionIds).toEqual([
+      "openclaw:reply_button:1:1",
+      "openclaw:callback_button:1:2",
+      "openclaw:approval_button:1:3",
+      "openclaw:reply_link:1:4",
+      "openclaw:reply_link:1:5",
+      "openclaw:reply_select:1",
+      "openclaw:callback_select:2",
+    ]);
+  });
+
+  it("keeps transport-distinct controls with the same visible content", () => {
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Run", action: { type: "callback", value: "same" } }],
+          },
+        ],
+      },
+      interactive: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Run", value: "same" }] }],
+      },
+    });
+    const blocks = segments[0]?.kind === "blocks" ? segments[0].blocks : [];
+
+    expect(blocks).toHaveLength(2);
+    expect(
+      blocks.map(
+        (block) => (block as { elements?: Array<{ action_id?: string }> }).elements?.[0]?.action_id,
+      ),
+    ).toEqual(["openclaw:callback_button:1:1", "openclaw:reply_button:2:1"]);
+  });
+
+  it("subtracts mirrors as a multiset and keeps surplus or changed rows", () => {
+    const repeated = {
+      type: "buttons" as const,
+      buttons: [{ label: "Run", action: { type: "callback" as const, value: "same" } }],
+    };
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation: { blocks: [repeated, repeated] },
+      interactive: {
+        blocks: [
+          repeated,
+          repeated,
+          repeated,
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Run",
+                action: { type: "callback", value: "same" },
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const blocks = segments[0]?.kind === "blocks" ? segments[0].blocks : [];
+
+    expect(blocks).toHaveLength(4);
+    expect(
+      blocks.map(
+        (block) => (block as { elements?: Array<{ style?: string }> }).elements?.[0]?.style,
+      ),
+    ).toEqual([undefined, undefined, undefined, "danger"]);
+  });
+
+  it("keeps legacy controls when their presentation mirror falls back to text", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: Array.from({ length: 26 }, (_entry, index) => ({
+            label: `Action ${String(index + 1)}`,
+            action: { type: "callback" as const, value: `action-${String(index + 1)}` },
+          })),
+        },
+      ],
+    } satisfies MessagePresentation;
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation,
+      interactive: presentationToInteractiveControlsReply(presentation),
+    });
+
+    expect(segments.map((segment) => segment.kind)).toEqual(["text", "blocks"]);
+    const blocks = segments[1]?.kind === "blocks" ? segments[1].blocks : [];
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { elements?: unknown[] }).elements).toHaveLength(25);
+  });
+
+  it("subtracts mirrors before enforcing each Slack message block limit", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+        },
+      ],
+    } satisfies MessagePresentation;
+    const interactive = presentationToInteractiveControlsReply(presentation);
+    const channelData = {
+      slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" })) },
+    };
+
+    const exact = resolveSlackReplyBlockResolution({ channelData, presentation, interactive });
+    expect(exact.segments).toHaveLength(1);
+    expect(exact.segments[0]?.kind === "blocks" ? exact.segments[0].blocks : []).toHaveLength(50);
+
+    const withUniqueRow = resolveSlackReplyBlockResolution({
+      channelData,
+      presentation,
+      interactive: {
+        blocks: [
+          ...(interactive?.blocks ?? []),
+          { type: "buttons", buttons: [{ label: "Later", value: "later" }] },
+        ],
+      },
+    });
+    expect(withUniqueRow.segments).toHaveLength(2);
+    expect(
+      withUniqueRow.segments[1]?.kind === "blocks" ? withUniqueRow.segments[1].blocks : [],
+    ).toMatchObject([
+      {
+        block_id: "openclaw_reply_buttons_3",
+        elements: [{ action_id: "openclaw:reply_button:3:1", value: "later" }],
+      },
+    ]);
   });
 });

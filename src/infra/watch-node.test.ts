@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
 import { runWatchMain } from "../../scripts/watch-node.mjs";
@@ -94,12 +95,7 @@ const startWatchRun = ({
   return { watcher, createWatcher, fakeProcess, runPromise };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireMockCall(mock: ReturnType<typeof vi.fn>, callIndex: number): unknown[] {
   const call = mock.mock.calls[callIndex] as unknown[] | undefined;
@@ -258,7 +254,10 @@ describe("watch-node script", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(loadChokidar).toHaveBeenCalledTimes(1);
     expect(spawn.mock.invocationCallOrder[0]).toBeLessThan(
-      loadChokidar.mock.invocationCallOrder[0],
+      expectDefined(
+        loadChokidar.mock.invocationCallOrder[0],
+        "loadChokidar.mock.invocationCallOrder[0] test invariant",
+      ),
     );
 
     resolveLoadChokidar({ watch });
@@ -272,6 +271,43 @@ describe("watch-node script", () => {
     expect(exitCode).toBe(130);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes generated asset paths before each runner start", async () => {
+    const childA = createAutoExitChild();
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    const pathClassifier = {
+      refreshGeneratedPluginAssetPaths: vi.fn(),
+      isRestartRelevantRunNodePath: vi.fn(() => true),
+    };
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => true },
+      lockDisabled: true,
+      pathClassifier,
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(1);
+    watcher.emit("change", "extensions/browser/package.json");
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
   });
 
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
@@ -362,7 +398,6 @@ describe("watch-node script", () => {
       "--non-interactive",
     ]);
     expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
-    expect(requireSpawnEnv(spawn, 1).OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
 
     doctor.emit("exit", 0, null);
     await new Promise((resolve) => {
@@ -374,9 +409,6 @@ describe("watch-node script", () => {
     expect(restartedGatewaySpawnCall[0]).toBe("/usr/local/bin/node");
     expect(restartedGatewaySpawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
     expect(requireSpawnOptions(spawn, 2).stdio).toBe("inherit");
-    expect(
-      requireSpawnEnv(spawn, 2).OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS,
-    ).toBeUndefined();
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;

@@ -1,0 +1,12 @@
+window.open("https://example.com");
+globalThis.open("https://example.com");
+(window as Window).open("https://example.com");
+(window.open as typeof window.open)("https://example.com");
+window?.open?.("https://example.com");
+const open = window.open;
+const { open: openWindow } = window;
+window["open"]("https://example.com");
+app.window.open("https://example.com");
+(window satisfies Window).open("https://example.com");
+// window.open("https://example.com");
+const text = "window.open('https://example.com')";

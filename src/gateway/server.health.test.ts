@@ -142,6 +142,27 @@ describe("gateway server health/presence", () => {
     },
   );
 
+  test("system-event accepts exact-session routing fields", async () => {
+    const { ws } = await harness.openClient();
+    const responseP = onceMessage(ws, (o) => o.type === "res" && o.id === "targeted-event");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "targeted-event",
+        method: "system-event",
+        params: {
+          text: "post-update welcome",
+          sessionKey: "agent:main:main",
+          wake: false,
+        },
+      }),
+    );
+
+    expect(await responseP).toMatchObject({ ok: true, payload: { ok: true } });
+    ws.close();
+  });
+
   test("agent events stream with seq", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
     const { ws } = await harness.openClient();
 

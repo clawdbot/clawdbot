@@ -1,0 +1,49 @@
+openclaw-approval-page {
+  display: block;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100svh;
+  overflow: hidden;
+}
+
+.approval-page {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 720px);
+  grid-template-rows: max-content max-content;
+  grid-auto-rows: max-content;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100svh;
+  align-content: start;
+  align-content: safe center;
+  justify-content: center;
+  place-items: center;
+  gap: 18px;
+  overflow: hidden auto;
+  padding: max(32px, var(--safe-area-top)) max(22px, var(--safe-area-right))
+    max(24px, var(--safe-area-bottom)) max(22px, var(--safe-area-left));
+  background: var(--bg);
+  color: var(--text);
+}
+
+@media (display-mode: standalone) {
+  openclaw-approval-page {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .approval-page {
+    min-height: 100%;
+  }
+}
+
+.approval-page--booting {
+  align-content: center;
+  color: var(--muted);
+}
+
+/* Only the shell's pre-hydration booting state lives here; the full approval
+ * page styles load with the lazy page chunk (see approval-page.ts). */

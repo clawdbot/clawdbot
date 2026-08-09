@@ -1,6 +1,9 @@
 // Dev Tooling Safety script supports OpenClaw repository automation.
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../../src/logging/redact.js";
+
+export { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
 const REDACT_OPTIONS = { mode: "tools" } as const;
 
@@ -13,7 +16,7 @@ export function previewForDevToolLog(value: string, maxChars = 400): string {
   if (redacted.length <= maxChars) {
     return redacted;
   }
-  return `${redacted.slice(0, Math.max(0, maxChars - 3))}...`;
+  return `${truncateUtf16Safe(redacted, Math.max(0, maxChars - 3))}...`;
 }
 
 export function maskIdentifier(value: string | undefined, keepStart = 6, keepEnd = 4): string {
@@ -38,30 +41,6 @@ export function redactHomePath(value: string, home = process.env.HOME ?? ""): st
   }
   if (resolved.startsWith(`${normalizedHome}${path.sep}`)) {
     return `~${resolved.slice(normalizedHome.length)}`;
-  }
-  return value;
-}
-
-export function parseStrictIntegerOption(params: {
-  fallback: number;
-  label: string;
-  min: number;
-  raw: string | undefined;
-}): number {
-  const raw = params.raw?.trim();
-  if (!raw) {
-    return params.fallback;
-  }
-  if (!/^\d+$/u.test(raw)) {
-    throw new Error(
-      `${params.label} must be an integer >= ${params.min}; got ${JSON.stringify(raw)}`,
-    );
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < params.min) {
-    throw new Error(
-      `${params.label} must be an integer >= ${params.min}; got ${JSON.stringify(raw)}`,
-    );
   }
   return value;
 }

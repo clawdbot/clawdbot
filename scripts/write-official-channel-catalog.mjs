@@ -2,12 +2,72 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import officialExternalChannelCatalog from "./lib/official-external-channel-catalog.json" with { type: "json" };
+import { parse as parseYaml } from "yaml";
+import officialExternalChannelSeed from "./lib/official-external-channel-seed.json" with { type: "json" };
+import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mjs";
 import { isRecord, trimString } from "./lib/record-shared.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
-/** Generated official channel catalog path in dist. */
+/** Generated official channel catalog committed for source and packaged runtime consumers. */
+export const OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH =
+  "scripts/lib/official-external-channel-catalog.json";
+export const OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH = "docs/channels/index.md";
+export const OFFICIAL_CHANNEL_DOCS_NAV_RELATIVE_PATH = "docs/docs.json";
+
+/**
+ * Generated official channel catalog path in dist.
+ * @internal Directly tested script implementation detail.
+ */
 export const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
+
+const OFFICIAL_CHANNEL_DOCS_START_MARKER = "<!-- BEGIN GENERATED: official channel catalog -->";
+const OFFICIAL_CHANNEL_DOCS_END_MARKER = "<!-- END GENERATED: official channel catalog -->";
+const WEBCHAT_DOCS_ENTRY = {
+  id: "webchat",
+  docsPath: "/web/webchat",
+  source: "built-in",
+};
+
+function readRepositoryPackageJsons(repoRoot) {
+  const extensionsRoot = path.join(repoRoot, "extensions");
+  if (!fs.existsSync(extensionsRoot)) {
+    return [];
+  }
+
+  const packageJsons = [];
+  const extensionDirectories = fs
+    .readdirSync(extensionsRoot, { withFileTypes: true })
+    .filter((dirent) => dirent.isDirectory())
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const dirent of extensionDirectories) {
+    const packageJsonPath = path.join(extensionsRoot, dirent.name, "package.json");
+    if (!fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+    try {
+      const pluginManifestPath = path.join(extensionsRoot, dirent.name, "openclaw.plugin.json");
+      packageJsons.push({
+        dirName: dirent.name,
+        packageJson: JSON.parse(fs.readFileSync(packageJsonPath, "utf8")),
+        pluginManifest: fs.existsSync(pluginManifestPath)
+          ? JSON.parse(fs.readFileSync(pluginManifestPath, "utf8"))
+          : undefined,
+      });
+    } catch {
+      // Invalid package metadata must not prevent unrelated channels from being generated.
+    }
+  }
+  return packageJsons;
+}
+
+function readExcludedPackagedExtensionDirs(repoRoot) {
+  const packageJsonPath = path.join(repoRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return new Set();
+  }
+  const rootPackageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  return collectExcludedPackagedExtensionDirs(rootPackageJson);
+}
 
 function toCatalogInstall(value, packageName) {
   const install = isRecord(value) ? value : {};
@@ -31,7 +91,23 @@ function toCatalogInstall(value, packageName) {
   };
 }
 
-function buildCatalogEntry(packageJson) {
+function toCatalogManifestFields(value) {
+  const manifest = isRecord(value) ? value : {};
+  const catalog = isRecord(manifest.catalog) ? manifest.catalog : null;
+  const contracts = isRecord(manifest.contracts) ? manifest.contracts : null;
+  const channelConfigs = isRecord(manifest.channelConfigs) ? manifest.channelConfigs : null;
+  const providerEndpoints = Array.isArray(manifest.providerEndpoints)
+    ? manifest.providerEndpoints
+    : null;
+  return {
+    ...(catalog ? { catalog } : {}),
+    ...(contracts ? { contracts } : {}),
+    ...(channelConfigs ? { channelConfigs } : {}),
+    ...(providerEndpoints ? { providerEndpoints } : {}),
+  };
+}
+
+function buildCatalogEntry(packageJson, pluginManifest) {
   if (!isRecord(packageJson)) {
     return null;
   }
@@ -52,7 +128,10 @@ function buildCatalogEntry(packageJson) {
     name: packageName,
     ...(version ? { version } : {}),
     ...(description ? { description } : {}),
+    source: "official",
+    kind: "channel",
     openclaw: {
+      ...toCatalogManifestFields(pluginManifest),
       channel,
       install,
     },
@@ -63,42 +142,61 @@ function getCatalogChannelId(entry) {
   return trimString(entry?.openclaw?.channel?.id) || trimString(entry?.name);
 }
 
+function getCatalogChannelKey(entry) {
+  return getCatalogChannelId(entry).toLowerCase();
+}
+
+function setUniqueCatalogEntry(entriesByChannelId, entry, owner) {
+  const channelId = getCatalogChannelId(entry);
+  const channelKey = getCatalogChannelKey(entry);
+  if (!channelKey) {
+    throw new Error(`official channel catalog entry from ${owner} is missing a channel id`);
+  }
+  const existing = entriesByChannelId.get(channelKey);
+  if (existing) {
+    throw new Error(
+      `duplicate official channel id "${channelId}" from ${existing.owner} and ${owner}`,
+    );
+  }
+  entriesByChannelId.set(channelKey, { entry, owner });
+}
+
 /**
  * Collects publishable channel catalog entries from bundled and external channels.
+ * @internal Directly tested script implementation detail.
  */
 export function buildOfficialChannelCatalog(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
-  const extensionsRoot = path.join(repoRoot, "extensions");
-  const entries = Array.isArray(officialExternalChannelCatalog.entries)
-    ? [...officialExternalChannelCatalog.entries]
-    : [];
-  if (!fs.existsSync(extensionsRoot)) {
-    return { entries };
+  const seedEntriesByChannelId = new Map();
+  for (const entry of Array.isArray(officialExternalChannelSeed.entries)
+    ? officialExternalChannelSeed.entries
+    : []) {
+    setUniqueCatalogEntry(
+      seedEntriesByChannelId,
+      entry,
+      `scripts/lib/official-external-channel-seed.json package "${trimString(entry?.name)}"`,
+    );
   }
 
-  for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
-      continue;
-    }
-    const packageJsonPath = path.join(extensionsRoot, dirent.name, "package.json");
-    if (!fs.existsSync(packageJsonPath)) {
-      continue;
-    }
-    try {
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-      const entry = buildCatalogEntry(packageJson);
-      const channelId = entry ? getCatalogChannelId(entry) : "";
-      const alreadyPresent = channelId
-        ? entries.some((existing) => getCatalogChannelId(existing) === channelId)
-        : false;
-      if (entry && !alreadyPresent) {
-        entries.push(entry);
-      }
-    } catch {
-      // Ignore invalid package metadata and keep generating the rest of the catalog.
+  const repositoryEntriesByChannelId = new Map();
+  for (const { dirName, packageJson, pluginManifest } of readRepositoryPackageJsons(repoRoot)) {
+    const entry = buildCatalogEntry(packageJson, pluginManifest);
+    if (entry) {
+      setUniqueCatalogEntry(
+        repositoryEntriesByChannelId,
+        entry,
+        `extensions/${dirName}/package.json`,
+      );
     }
   }
 
+  // Repository packages deliberately replace same-id external seeds when a
+  // channel moves in tree. Duplicates within either ownership class are errors.
+  const entriesByChannelId = new Map(seedEntriesByChannelId);
+  for (const [channelId, entry] of repositoryEntriesByChannelId) {
+    entriesByChannelId.set(channelId, entry);
+  }
+  const entries = [...entriesByChannelId.values()].map(({ entry }) => entry);
   entries.sort((left, right) => {
     const leftId = trimString(left.openclaw?.channel?.id) || left.name;
     const rightId = trimString(right.openclaw?.channel?.id) || right.name;
@@ -108,13 +206,400 @@ export function buildOfficialChannelCatalog(params = {}) {
   return { entries };
 }
 
+export function renderOfficialChannelCatalog(params = {}) {
+  return `${JSON.stringify(buildOfficialChannelCatalog(params), null, 2)}\n`;
+}
+
 export function writeOfficialChannelCatalog(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
-  const catalog = buildOfficialChannelCatalog({ repoRoot });
-  writeTextFileIfChanged(outputPath, `${JSON.stringify(catalog, null, 2)}\n`);
+  return writeTextFileIfChanged(outputPath, renderOfficialChannelCatalog({ repoRoot }));
+}
+
+export function writeOfficialChannelCatalogSource(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH);
+  return writeTextFileIfChanged(outputPath, renderOfficialChannelCatalog({ repoRoot }));
+}
+
+export function checkOfficialChannelCatalogSource(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH);
+  const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : "";
+  return current === renderOfficialChannelCatalog({ repoRoot });
+}
+
+function toChannelDocsEntry(entry, sourceOverride) {
+  const channel = isRecord(entry?.openclaw?.channel) ? entry.openclaw.channel : null;
+  const exposure = channel && isRecord(channel.exposure) ? channel.exposure : null;
+  if (!channel || exposure?.docs === false) {
+    return null;
+  }
+  const id = trimString(channel.id);
+  if (!id) {
+    return null;
+  }
+  const docsPath = trimString(channel.docsPath) || `/channels/${id}`;
+  const source = sourceOverride ?? trimString(entry.source);
+  return {
+    id,
+    docsPath,
+    source:
+      source === "external" || source === "bundled" || source === "built-in" ? source : "official",
+  };
+}
+
+function readChannelDocsFrontmatter(repoRoot, entry) {
+  const route = entry.docsPath.split(/[?#]/u, 1)[0]?.replace(/^\/+/u, "");
+  if (!route) {
+    throw new Error(`channel ${entry.id} has an invalid docs route: ${entry.docsPath}`);
+  }
+  const candidates = [
+    path.join(repoRoot, "docs", `${route}.md`),
+    path.join(repoRoot, "docs", `${route}.mdx`),
+  ];
+  const docsPath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!docsPath) {
+    throw new Error(`channel ${entry.id} docs route does not resolve: ${entry.docsPath}`);
+  }
+  const content = fs.readFileSync(docsPath, "utf8");
+  const frontmatterMatch = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(content);
+  if (!frontmatterMatch) {
+    throw new Error(`${path.relative(repoRoot, docsPath)} is missing YAML frontmatter`);
+  }
+  const frontmatter = parseYaml(frontmatterMatch[1]);
+  const label = trimString(frontmatter?.title);
+  const summary = trimString(frontmatter?.summary);
+  if (!label || !summary) {
+    throw new Error(`${path.relative(repoRoot, docsPath)} must define title and summary`);
+  }
+  return { ...entry, label, summary };
+}
+
+function isInstallableChannelManifest(manifest) {
+  const release = isRecord(manifest.release) ? manifest.release : null;
+  const install = isRecord(manifest.install) ? manifest.install : null;
+  return (
+    release?.publishToNpm === true ||
+    release?.publishToClawHub === true ||
+    Boolean(trimString(install?.npmSpec) || trimString(install?.clawhubSpec))
+  );
+}
+
+/**
+ * Builds the public docs projection from the install catalog plus bundled channel manifests.
+ * @internal Directly tested script implementation detail.
+ */
+export function buildOfficialChannelDocsCatalog(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const entriesByChannelId = new Map();
+  const excludedPackagedExtensionDirs = readExcludedPackagedExtensionDirs(repoRoot);
+
+  for (const entry of buildOfficialChannelCatalog({ repoRoot }).entries) {
+    const docsEntry = toChannelDocsEntry(entry);
+    if (docsEntry) {
+      entriesByChannelId.set(docsEntry.id, docsEntry);
+    }
+  }
+
+  for (const { dirName, packageJson } of readRepositoryPackageJsons(repoRoot)) {
+    const manifest = isRecord(packageJson?.openclaw) ? packageJson.openclaw : null;
+    const channel = manifest && isRecord(manifest.channel) ? manifest.channel : null;
+    if (!channel) {
+      continue;
+    }
+    const exposure = isRecord(channel.exposure) ? channel.exposure : null;
+    const isCoreBundled = !excludedPackagedExtensionDirs.has(dirName);
+    const isInstallable = isInstallableChannelManifest(manifest);
+    if (!isCoreBundled && !isInstallable) {
+      if (exposure?.docs === false) {
+        continue;
+      }
+      throw new Error(
+        `docs-visible channel ${trimString(channel.id) || dirName} is neither bundled nor installable`,
+      );
+    }
+    const docsEntry = toChannelDocsEntry(
+      { openclaw: { channel } },
+      isCoreBundled ? "bundled" : "official",
+    );
+    if (docsEntry) {
+      entriesByChannelId.set(docsEntry.id, docsEntry);
+    }
+  }
+
+  entriesByChannelId.set(WEBCHAT_DOCS_ENTRY.id, WEBCHAT_DOCS_ENTRY);
+  const entries = [...entriesByChannelId.values()].map((entry) =>
+    readChannelDocsFrontmatter(repoRoot, entry),
+  );
+  entries.sort(
+    (left, right) =>
+      left.label.localeCompare(right.label, "en") || left.id.localeCompare(right.id, "en"),
+  );
+  return { entries };
+}
+
+function renderChannelDocsSummary(entry) {
+  const summary = entry.summary.replace(/[.!?]+$/u, "");
+  const normalizedSummary = summary
+    ? `${summary.slice(0, 1).toUpperCase()}${summary.slice(1)}`
+    : `${entry.label} messaging for OpenClaw`;
+  const sourceLabel =
+    entry.source === "external"
+      ? "external plugin"
+      : entry.source === "bundled"
+        ? "bundled plugin"
+        : entry.source === "built-in"
+          ? "included in core"
+          : "official plugin";
+  return `- [${entry.label}](${entry.docsPath}) - ${normalizedSummary} (${sourceLabel}).`;
+}
+
+function renderOfficialChannelDocsBlock(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const lines = buildOfficialChannelDocsCatalog({ repoRoot }).entries.map(renderChannelDocsSummary);
+  return [
+    OFFICIAL_CHANNEL_DOCS_START_MARKER,
+    "<!-- Generated by `pnpm channels:catalog:gen`. Edit manifests/seed for membership and routes; edit page frontmatter for public names and summaries. -->",
+    "",
+    ...lines,
+    "",
+    OFFICIAL_CHANNEL_DOCS_END_MARKER,
+  ].join("\n");
+}
+
+function replaceOfficialChannelDocsBlock(current, block) {
+  const startIndex = current.indexOf(OFFICIAL_CHANNEL_DOCS_START_MARKER);
+  const endIndex = current.indexOf(OFFICIAL_CHANNEL_DOCS_END_MARKER);
+  const startCount = current.split(OFFICIAL_CHANNEL_DOCS_START_MARKER).length - 1;
+  const endCount = current.split(OFFICIAL_CHANNEL_DOCS_END_MARKER).length - 1;
+  if (
+    startCount !== 1 ||
+    endCount !== 1 ||
+    startIndex === -1 ||
+    endIndex === -1 ||
+    endIndex < startIndex
+  ) {
+    throw new Error(
+      `${OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH} must contain exactly one generated channel marker pair`,
+    );
+  }
+  const afterEndIndex = endIndex + OFFICIAL_CHANNEL_DOCS_END_MARKER.length;
+  return `${current.slice(0, startIndex)}${block}${current.slice(afterEndIndex)}`;
+}
+
+export function renderOfficialChannelDocsIndex(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
+  const current = fs.readFileSync(outputPath, "utf8");
+  return replaceOfficialChannelDocsBlock(current, renderOfficialChannelDocsBlock({ repoRoot }));
+}
+
+export function writeOfficialChannelDocsIndex(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
+  return writeTextFileIfChanged(outputPath, renderOfficialChannelDocsIndex({ repoRoot }));
+}
+
+export function checkOfficialChannelDocsIndex(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
+  if (!fs.existsSync(outputPath)) {
+    return false;
+  }
+  const current = fs.readFileSync(outputPath, "utf8");
+  try {
+    return current === renderOfficialChannelDocsIndex({ repoRoot });
+  } catch {
+    return false;
+  }
+}
+
+function collectDocsNavPageCounts(node, counts = new Map()) {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectDocsNavPageCounts(item, counts);
+    }
+    return counts;
+  }
+  if (!isRecord(node)) {
+    return counts;
+  }
+  if (Array.isArray(node.pages)) {
+    for (const page of node.pages) {
+      if (typeof page === "string") {
+        const route = page.replace(/^\/+/u, "");
+        counts.set(route, (counts.get(route) ?? 0) + 1);
+      } else {
+        collectDocsNavPageCounts(page, counts);
+      }
+    }
+  }
+  for (const value of Object.values(node)) {
+    if (value !== node.pages) {
+      collectDocsNavPageCounts(value, counts);
+    }
+  }
+  return counts;
+}
+
+function findEnglishChannelsTab(docsConfig) {
+  const navigation = isRecord(docsConfig.navigation) ? docsConfig.navigation : null;
+  const languages = Array.isArray(navigation?.languages) ? navigation.languages : [];
+  const english = languages.find(
+    (language) => isRecord(language) && trimString(language.language) === "en",
+  );
+  const tabs = isRecord(english) && Array.isArray(english.tabs) ? english.tabs : [];
+  return tabs.find((tab) => isRecord(tab) && trimString(tab.tab) === "Channels") ?? null;
+}
+
+function readDocsNavCounts(repoRoot) {
+  const navPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_NAV_RELATIVE_PATH);
+  const docsConfig = JSON.parse(fs.readFileSync(navPath, "utf8"));
+  return {
+    all: collectDocsNavPageCounts(docsConfig),
+    channels: collectDocsNavPageCounts(findEnglishChannelsTab(docsConfig)),
+  };
+}
+
+function buildHiddenChannelDocsRoutes(repoRoot) {
+  const channelsById = new Map();
+  for (const entry of Array.isArray(officialExternalChannelSeed.entries)
+    ? officialExternalChannelSeed.entries
+    : []) {
+    const channel = isRecord(entry?.openclaw?.channel) ? entry.openclaw.channel : null;
+    const channelId = trimString(channel?.id);
+    if (channelId && channel) {
+      channelsById.set(channelId, channel);
+    }
+  }
+  for (const { packageJson } of readRepositoryPackageJsons(repoRoot)) {
+    const manifest = isRecord(packageJson?.openclaw) ? packageJson.openclaw : null;
+    const channel = manifest && isRecord(manifest.channel) ? manifest.channel : null;
+    const channelId = trimString(channel?.id);
+    if (channelId && channel) {
+      channelsById.set(channelId, channel);
+    }
+  }
+
+  const routes = new Set();
+  for (const channel of channelsById.values()) {
+    const exposure = isRecord(channel.exposure) ? channel.exposure : null;
+    const docsPath = trimString(channel.docsPath);
+    if (exposure?.docs !== false || !docsPath.startsWith("/")) {
+      continue;
+    }
+    const route = docsPath.split("#", 1)[0]?.replace(/^\/+/u, "");
+    if (route) {
+      routes.add(route);
+    }
+  }
+  return routes;
+}
+
+export function findMissingOfficialChannelDocsNavRoutes(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const navCounts = readDocsNavCounts(repoRoot);
+  const missing = new Set();
+  for (const entry of buildOfficialChannelDocsCatalog({ repoRoot }).entries) {
+    if (!entry.docsPath.startsWith("/")) {
+      continue;
+    }
+    const route = entry.docsPath.split("#", 1)[0]?.replace(/^\/+/u, "");
+    const counts = route?.startsWith("channels/") ? navCounts.channels : navCounts.all;
+    if (route && (counts.get(route) ?? 0) === 0) {
+      missing.add(route);
+    }
+  }
+  return [...missing].toSorted((left, right) => left.localeCompare(right, "en"));
+}
+
+export function findUnexpectedOfficialChannelDocsNavRoutes(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const navCounts = readDocsNavCounts(repoRoot).all;
+  return [...buildHiddenChannelDocsRoutes(repoRoot)]
+    .filter((route) => (navCounts.get(route) ?? 0) > 0)
+    .toSorted((left, right) => left.localeCompare(right, "en"));
+}
+
+export function findDuplicateOfficialChannelDocsNavRoutes(params = {}) {
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const navCounts = readDocsNavCounts(repoRoot).all;
+  const duplicateRoutes = new Set();
+  for (const entry of buildOfficialChannelDocsCatalog({ repoRoot }).entries) {
+    const route = entry.docsPath.split("#", 1)[0]?.replace(/^\/+/u, "");
+    if (route && (navCounts.get(route) ?? 0) > 1) {
+      duplicateRoutes.add(route);
+    }
+  }
+  return [...duplicateRoutes].toSorted((left, right) => left.localeCompare(right, "en"));
+}
+
+function reportOfficialChannelDocsNavIssues(params = {}) {
+  const issueGroups = [
+    {
+      label: "is missing channel routes",
+      routes: findMissingOfficialChannelDocsNavRoutes(params),
+    },
+    {
+      label: "exposes hidden channel routes",
+      routes: findUnexpectedOfficialChannelDocsNavRoutes(params),
+    },
+    {
+      label: "duplicates channel routes",
+      routes: findDuplicateOfficialChannelDocsNavRoutes(params),
+    },
+  ];
+  let failed = false;
+  for (const issue of issueGroups) {
+    if (issue.routes.length === 0) {
+      continue;
+    }
+    console.error(
+      `${OFFICIAL_CHANNEL_DOCS_NAV_RELATIVE_PATH} ${issue.label}: ${issue.routes.join(", ")}`,
+    );
+    failed = true;
+  }
+  return failed;
+}
+
+function main(argv = process.argv.slice(2)) {
+  const write = argv.includes("--write");
+  const check = argv.includes("--check");
+  if (write === check) {
+    console.error("usage: node scripts/write-official-channel-catalog.mjs --write|--check");
+    process.exitCode = 2;
+    return;
+  }
+  if (write) {
+    writeOfficialChannelCatalogSource();
+    writeOfficialChannelDocsIndex();
+    if (reportOfficialChannelDocsNavIssues()) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+  let failed = false;
+  if (!checkOfficialChannelCatalogSource()) {
+    console.error(
+      `${OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH} is stale. Run \`pnpm channels:catalog:gen\`.`,
+    );
+    failed = true;
+  }
+  if (!checkOfficialChannelDocsIndex()) {
+    console.error(
+      `${OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH} is stale. Run \`pnpm channels:catalog:gen\`.`,
+    );
+    failed = true;
+  }
+  if (reportOfficialChannelDocsNavIssues()) {
+    failed = true;
+  }
+  if (failed) {
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  writeOfficialChannelCatalog();
+  main();
 }

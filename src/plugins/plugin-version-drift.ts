@@ -9,7 +9,7 @@ import {
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 
-export type PluginVersionDriftEntry = {
+type PluginVersionDriftEntry = {
   pluginId: string;
   installedVersion: string;
   gatewayVersion: string;

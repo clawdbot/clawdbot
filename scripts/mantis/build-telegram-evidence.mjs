@@ -70,62 +70,6 @@ function evidenceCredentialSource(summary) {
   );
 }
 
-// Historical Telegram summary artifacts can still appear in old Mantis uploads.
-// Current QA producers write qa-evidence.json for gate inputs.
-function legacyTelegramSummaryToEvidenceSummary(summary) {
-  const scenarios = Array.isArray(summary.scenarios) ? summary.scenarios : [];
-  return {
-    kind: "openclaw.qa.evidence-summary",
-    schemaVersion: 2,
-    generatedAt: new Date().toISOString(),
-    entries: scenarios.map((scenario) => ({
-      test: {
-        kind: "legacy-telegram-qa-scenario",
-        id: scenario?.id ?? "legacy-telegram-scenario",
-        title: scenario?.title ?? scenario?.id ?? "Legacy Telegram scenario",
-      },
-      mapping: {
-        profile: "release",
-        coverage: [],
-      },
-      execution: {
-        runner: "legacy-telegram-qa",
-        environment: {
-          ref: null,
-          os: "unknown",
-          nodeVersion: "unknown",
-        },
-        provider: {
-          id: "unknown",
-          live: true,
-          model: { name: null, ref: null },
-          auth: summary.credentials?.source ?? "unknown",
-        },
-        channel: {
-          id: "telegram",
-          live: true,
-          driver: "native",
-        },
-        packageSource: { kind: "unknown" },
-        artifacts: [
-          {
-            kind: "summary",
-            path: "telegram-qa-summary.json",
-            source: "legacy-telegram-qa",
-          },
-        ],
-      },
-      result: {
-        status: scenario?.status === "skip" ? "skipped" : (scenario?.status ?? "fail"),
-        ...(scenario?.status === "pass"
-          ? {}
-          : { failure: { reason: scenario?.details ?? "legacy scenario did not pass" } }),
-        ...(typeof scenario?.rttMs === "number" ? { timing: { rttMs: scenario.rttMs } } : {}),
-      },
-    })),
-  };
-}
-
 function renderScenarioList(summary) {
   const entries = evidenceEntries(summary);
   if (entries.length === 0) {
@@ -420,7 +364,7 @@ export function buildTelegramEvidenceManifest({
       kind: "report",
       lane: "run",
       label: "Telegram QA report",
-      path: "telegram-qa-report.md",
+      path: "qa-suite-report.md",
       targetPath: "report.md",
     },
   ];
@@ -453,17 +397,11 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
   const outputDir = path.resolve(args.output_dir);
   mkdirSync(outputDir, { recursive: true });
   const evidenceSummaryPath = path.join(outputDir, "qa-evidence.json");
-  const legacySummaryPath = path.join(outputDir, "telegram-qa-summary.json");
-  const usesCurrentEvidenceSummary = existsSync(evidenceSummaryPath);
-  const summaryPath = usesCurrentEvidenceSummary ? evidenceSummaryPath : legacySummaryPath;
-  const observedPath = path.join(outputDir, "telegram-qa-observed-messages.json");
-  const reportPath = path.join(outputDir, "telegram-qa-report.md");
-  if (!existsSync(summaryPath)) {
+  const reportPath = path.join(outputDir, "qa-suite-report.md");
+  if (!existsSync(evidenceSummaryPath)) {
     throw new Error(`Missing Telegram QA evidence summary: ${evidenceSummaryPath}`);
   }
-  const summary = usesCurrentEvidenceSummary
-    ? readJson(evidenceSummaryPath)
-    : legacyTelegramSummaryToEvidenceSummary(readJson(legacySummaryPath));
+  const summary = readJson(evidenceSummaryPath);
   const counts = evidenceCounts(summary);
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
   if (!existsSync(reportPath)) {
@@ -472,17 +410,15 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
     }
     writeFileSync(reportPath, "# Mantis Telegram Live QA\n\nTelegram QA report was unavailable.\n");
   }
-  const hasLegacyObservedMessages = !usesCurrentEvidenceSummary && existsSync(observedPath);
-  const observedMessages = hasLegacyObservedMessages ? readJson(observedPath) : [];
-  const transcriptHtml = renderTelegramEvidenceHtml({ observedMessages, summary });
+  const transcriptHtml = renderTelegramEvidenceHtml({ observedMessages: [], summary });
   writeFileSync(path.join(outputDir, "telegram-live-transcript.html"), transcriptHtml, "utf8");
   const manifest = buildTelegramEvidenceManifest({
     candidateRef: args.candidate_ref,
     candidateSha: args.candidate_sha,
-    hasObservedMessages: hasLegacyObservedMessages,
+    hasObservedMessages: false,
     scenarioLabel: args.scenario_label,
     summary,
-    summaryArtifactPath: path.basename(summaryPath),
+    summaryArtifactPath: path.basename(evidenceSummaryPath),
   });
   writeFileSync(
     path.join(outputDir, "mantis-evidence.json"),

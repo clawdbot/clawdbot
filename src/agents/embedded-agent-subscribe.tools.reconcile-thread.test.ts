@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { getMatchingMessagingToolReplyTargets } from "../auto-reply/reply/reply-payloads-dedupe.js";
+import { resolveMessagingToolPayloadDedupe } from "../auto-reply/reply/reply-payloads-dedupe.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -75,13 +75,13 @@ describe("extractMessagingToolSendResult thread evidence", () => {
     expect(confirmed.threadImplicit).toBe(true);
     expect(confirmed.threadId).toBe("root-1");
 
-    const matches = getMatchingMessagingToolReplyTargets({
+    const decision = resolveMessagingToolPayloadDedupe({
       messageProvider: PARTIAL_RESULT_PROVIDER,
       originatingTo: "channel:abc",
       originatingThreadId: "root-1",
       messagingToolSentTargets: [confirmed],
     });
-    expect(matches).toHaveLength(1);
+    expect(decision.matchingRoute).toBe(true);
   });
 
   it("lets an explicit provider-reported thread override pending implicit evidence", () => {

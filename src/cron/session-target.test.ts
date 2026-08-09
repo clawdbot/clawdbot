@@ -29,13 +29,13 @@ describe("cron session target helpers", () => {
     );
   });
 
-  it("resolves current targets to the creator session key", () => {
+  it("preserves current targets when a creator session key exists", () => {
     expect(
       resolveCronCurrentSessionTarget({
         sessionTarget: "current",
         sessionKey: " agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a== ",
       }),
-    ).toBe("session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==");
+    ).toBe("current");
   });
 
   it("falls back current targets to isolated without a creator session key", () => {

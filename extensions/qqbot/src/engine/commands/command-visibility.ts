@@ -32,7 +32,7 @@ const PRIVATE_ONLY_CORE_COMMANDS = new Set([
   "tools",
   "skill",
   "diagnostics",
-  "crestodian",
+  "openclaw",
   "tasks",
   "allowlist",
   "approve",
@@ -70,7 +70,7 @@ const PRIVATE_ONLY_CORE_COMMANDS = new Set([
   "bash",
 ]);
 
-export function parseSlashCommandName(content: string | undefined | null): string | undefined {
+function parseSlashCommandName(content: string | undefined | null): string | undefined {
   const trimmed = (content ?? "").trim();
   if (!trimmed.startsWith("/")) {
     return undefined;

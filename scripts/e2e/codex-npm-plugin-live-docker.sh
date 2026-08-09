@@ -20,6 +20,9 @@ PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFI
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
+CODEX_PLUGIN_REGISTRY_PACKAGE=""
+CODEX_PLUGIN_REGISTRY_TARBALL=""
+CODEX_PLUGIN_REGISTRY_VERSION=""
 ASSERT_MAX_TEXT_FILE_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES 1048576
 )"
@@ -38,6 +41,24 @@ ASSERT_MAX_TRANSCRIPT_SCAN_BYTES="$(
 AGENT_TURN_TIMEOUT_SECONDS="$(
   docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420
 )"
+SESSION_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT:-}"
+if [[ -z "$SESSION_STORE_CONTRACT" ]]; then
+  if [[ -f "$CANDIDATE_ROOT/src/config/sessions/session-accessor.sqlite.ts" ]]; then
+    SESSION_STORE_CONTRACT="sqlite"
+  else
+    # Trusted current harnesses also validate frozen targets from before the SQLite cutover.
+    SESSION_STORE_CONTRACT="legacy-json"
+  fi
+fi
+BINDING_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:-}"
+if [[ -z "$BINDING_STORE_CONTRACT" ]]; then
+  if [[ -f "$CANDIDATE_ROOT/extensions/codex/src/app-server/session-binding-meta.ts" ]]; then
+    BINDING_STORE_CONTRACT="plugin-kv"
+  else
+    # Frozen targets before the binding-store migration persist a session sidecar.
+    BINDING_STORE_CONTRACT="legacy-sidecar"
+  fi
+fi
 run_log=""
 
 cleanup() {
@@ -72,9 +93,39 @@ prepare_package_tgz() {
 
 prepare_package_tgz
 
+configure_codex_plugin_registry_candidate() {
+  local source_path="$1"
+  local container_path="/tmp/$(basename "$source_path")"
+  local package_json
+
+  # Local npm-pack installs must stay untrusted. Serve the exact candidate through the
+  # fixture registry so this lane exercises the post-publish official install shape.
+  package_json="$(tar -xOf "$source_path" package/package.json)"
+  CODEX_PLUGIN_REGISTRY_PACKAGE="$(
+    node -e '
+const pkg = JSON.parse(process.argv[1]);
+if (pkg.name !== "@openclaw/codex") {
+  throw new Error(`unexpected Codex package name: ${String(pkg.name)}`);
+}
+process.stdout.write(pkg.name);
+' "$package_json"
+  )"
+  CODEX_PLUGIN_REGISTRY_VERSION="$(
+    node -e '
+const pkg = JSON.parse(process.argv[1]);
+if (typeof pkg.version !== "string" || pkg.version.length === 0) {
+  throw new Error("packed Codex plugin is missing a version");
+}
+process.stdout.write(pkg.version);
+' "$package_json"
+  )"
+  CODEX_PLUGIN_REGISTRY_TARBALL="$container_path"
+  CODEX_PLUGIN_MOUNT=(-v "$source_path":"$container_path":ro)
+  CODEX_PLUGIN_SPEC="npm:${CODEX_PLUGIN_REGISTRY_PACKAGE}@${CODEX_PLUGIN_REGISTRY_VERSION}"
+}
+
 prepare_codex_plugin_spec() {
   local source_path
-  local container_path
   local pack_output
 
   if [ -z "$CODEX_PLUGIN_SPEC" ]; then
@@ -95,9 +146,7 @@ prepare_codex_plugin_spec() {
       exit 1
     fi
     source_path="${pack_output[0]}"
-    container_path="/tmp/$(basename "$source_path")"
-    CODEX_PLUGIN_MOUNT=(-v "$source_path":"$container_path":ro)
-    CODEX_PLUGIN_SPEC="npm-pack:$container_path"
+    configure_codex_plugin_registry_candidate "$source_path"
     return 0
   fi
 
@@ -110,9 +159,7 @@ prepare_codex_plugin_spec() {
       echo "Codex plugin npm-pack tarball not found: $source_path" >&2
       exit 1
     fi
-    container_path="/tmp/$(basename "$source_path")"
-    CODEX_PLUGIN_MOUNT=(-v "$source_path":"$container_path":ro)
-    CODEX_PLUGIN_SPEC="npm-pack:$container_path"
+    configure_codex_plugin_registry_candidate "$source_path"
   fi
 }
 
@@ -144,8 +191,13 @@ if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS="${OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS:-0}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
-  -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-codex/gpt-5.4}" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-openai/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_PACKAGE="$CODEX_PLUGIN_REGISTRY_PACKAGE" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL="$CODEX_PLUGIN_REGISTRY_TARBALL" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION="$CODEX_PLUGIN_REGISTRY_VERSION" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT="$BINDING_STORE_CONTRACT" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT="$SESSION_STORE_CONTRACT" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES=$ASSERT_MAX_ERROR_TAIL_BYTES" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES=$ASSERT_MAX_TRANSCRIPT_FILES" \
@@ -190,8 +242,11 @@ if [ -n "${OPENAI_BASE_URL:-}" ]; then
 fi
 
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:?missing OPENCLAW_CODEX_NPM_PLUGIN_SPEC}"
+CODEX_PLUGIN_REGISTRY_PACKAGE="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_PACKAGE:-}"
+CODEX_PLUGIN_REGISTRY_TARBALL="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL:-}"
+CODEX_PLUGIN_REGISTRY_VERSION="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION:-}"
 MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_MODEL}"
-POST_UNINSTALL_MODEL_REF="codex/${MODEL_REF#*/}"
+POST_UNINSTALL_MODEL_REF="$MODEL_REF"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
 AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS:-420}"
@@ -202,9 +257,11 @@ fi
 
 dump_debug_logs() {
   local status="$1"
+  debug_logs_dumped=1
   echo "Codex npm plugin live scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-registry.log \
     /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-codex-plugin-enable.log \
     /tmp/openclaw-codex-plugins-list.json \
@@ -216,12 +273,28 @@ dump_debug_logs() {
     /tmp/openclaw-codex-agent-turn1.err \
     /tmp/openclaw-codex-agent-turn2.json \
     /tmp/openclaw-codex-agent-turn2.err \
+    /tmp/openclaw-codex-followthrough.json \
+    /tmp/openclaw-codex-followthrough.log \
+    /tmp/openclaw-codex-followthrough.err \
     /tmp/openclaw-codex-plugin-uninstall.log \
     /tmp/openclaw-codex-plugins-list-after-uninstall.json \
     /tmp/openclaw-codex-agent-after-uninstall.json \
     /tmp/openclaw-codex-agent-after-uninstall.err
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+
+registry_pid=""
+debug_logs_dumped=0
+cleanup_scenario() {
+  local status=$?
+  trap - EXIT
+  set +e
+  openclaw_e2e_stop_process "${registry_pid:-}"
+  if [ "$status" -ne 0 ] && [ "$debug_logs_dumped" -eq 0 ]; then
+    dump_debug_logs "$status"
+  fi
+  exit "$status"
+}
+trap cleanup_scenario EXIT
 
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
@@ -229,6 +302,36 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
+
+if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
+  registry_port_file=/tmp/openclaw-codex-plugin-registry.port
+  rm -f "$registry_port_file"
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
+    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+      "$registry_port_file" \
+      "$CODEX_PLUGIN_REGISTRY_PACKAGE" \
+      "$CODEX_PLUGIN_REGISTRY_VERSION" \
+      "$CODEX_PLUGIN_REGISTRY_TARBALL" \
+      >/tmp/openclaw-codex-plugin-registry.log 2>&1 &
+  registry_pid=$!
+  for _ in $(seq 1 100); do
+    if [ -s "$registry_port_file" ]; then
+      break
+    fi
+    if ! kill -0 "$registry_pid" 2>/dev/null; then
+      openclaw_e2e_print_log /tmp/openclaw-codex-plugin-registry.log >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [ ! -s "$registry_port_file" ]; then
+    openclaw_e2e_print_log /tmp/openclaw-codex-plugin-registry.log >&2
+    echo "Timed out waiting for Codex plugin npm fixture registry." >&2
+    exit 1
+  fi
+  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"
+  export npm_config_registry="$NPM_CONFIG_REGISTRY"
+fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
 openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
@@ -330,6 +433,70 @@ run_agent_turn \
   /tmp/openclaw-codex-agent.err
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$SESSION_ID" "$MODEL_REF"
+
+FOLLOWTHROUGH_SESSION_ID="${SESSION_ID}-followthrough"
+FOLLOWTHROUGH_PROGRESS_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-PROGRESS"
+FOLLOWTHROUGH_COMPLETE_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-COMPLETE"
+FOLLOWTHROUGH_WORKSPACE="${OPENCLAW_STATE_DIR:?missing OPENCLAW_STATE_DIR}/workspace"
+FOLLOWTHROUGH_ARTIFACT="$FOLLOWTHROUGH_WORKSPACE/codex-progress-followthrough.txt"
+FOLLOWTHROUGH_SUFFIX="$(node -e 'process.stdout.write(crypto.randomUUID().replaceAll("-", "").slice(0, 12))')"
+mkdir -p "$FOLLOWTHROUGH_WORKSPACE"
+printf 'qa_alpha=amber-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_ALPHA.md"
+printf 'qa_beta=violet-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_BETA.md"
+printf 'qa_gamma=silver-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_GAMMA.md"
+rm -f "$FOLLOWTHROUGH_ARTIFACT"
+
+FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
+Live release follow-through check.
+
+First call message(action=send) without passing final and send exactly
+$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. The final field must be
+omitted, not false. Make this progress send your only tool call in this step,
+and wait for its result before calling any other tool.
+
+Only after that send succeeds, read FOLLOWTHROUGH_ALPHA.md,
+FOLLOWTHROUGH_BETA.md, and FOLLOWTHROUGH_GAMMA.md from the workspace. Write
+their three complete file lines byte-for-byte, including each key= prefix, to
+./codex-progress-followthrough.txt in alpha, beta, gamma order. Write exactly
+one newline after each line, including the final line.
+
+Only after the artifact write succeeds, call message(action=send) with
+final=true and send exactly $FOLLOWTHROUGH_COMPLETE_MARKER. Do not expose the
+hidden values in either visible message.
+PROMPT
+)"
+
+echo "Running Codex progress follow-through regression turn..."
+OPENCLAW_PACKAGE_ROOT="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
+if node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
+  "$OPENCLAW_PACKAGE_ROOT" \
+  "$FOLLOWTHROUGH_SESSION_ID" \
+  "$MODEL_REF" \
+  "$AGENT_TURN_TIMEOUT_SECONDS" \
+  /tmp/openclaw-codex-followthrough.json \
+  "$FOLLOWTHROUGH_PROMPT" \
+  >/tmp/openclaw-codex-followthrough.log \
+  2>/tmp/openclaw-codex-followthrough.err </dev/null; then
+  followthrough_status=0
+else
+  followthrough_status=$?
+fi
+echo "followthrough_agent_status: $followthrough_status stdout_bytes=$(wc -c </tmp/openclaw-codex-followthrough.json 2>/dev/null || printf 0) stderr_bytes=$(wc -c </tmp/openclaw-codex-followthrough.err 2>/dev/null || printf 0)"
+if [ "$followthrough_status" -ne 0 ]; then
+  dump_debug_logs "$followthrough_status"
+  exit "$followthrough_status"
+fi
+node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs \
+  assert-followthrough \
+  "$FOLLOWTHROUGH_PROGRESS_MARKER" \
+  "$FOLLOWTHROUGH_COMPLETE_MARKER" \
+  "$FOLLOWTHROUGH_SESSION_ID" \
+  "$MODEL_REF" \
+  "$FOLLOWTHROUGH_ARTIFACT" \
+  "$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_ALPHA.md" \
+  "$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_BETA.md" \
+  "$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_GAMMA.md"
+echo "followthrough_reply: ${FOLLOWTHROUGH_PROGRESS_MARKER} -> ${FOLLOWTHROUGH_COMPLETE_MARKER}"
 echo "TRANSCRIPT_END"
 
 echo "Uninstalling Codex plugin and verifying the configured harness now fails..."
@@ -345,15 +512,11 @@ if openclaw agent --local \
   --thinking low \
   --timeout 120 \
   --json >/tmp/openclaw-codex-agent-after-uninstall.json 2>/tmp/openclaw-codex-agent-after-uninstall.err; then
-  echo "Expected OpenClaw agent to fail after Codex uninstall, got status 0" >&2
-  exit 1
+  post_uninstall_status=0
+else
+  post_uninstall_status=$?
 fi
-if ! grep -Fq 'Requested agent harness "codex" is not registered' /tmp/openclaw-codex-agent-after-uninstall.err &&
-  ! grep -Fq 'Unknown model: codex/' /tmp/openclaw-codex-agent-after-uninstall.err; then
-  echo "Unexpected post-uninstall agent error:" >&2
-  tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err >&2 || true
-  exit 1
-fi
+node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-error "$post_uninstall_status"
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF

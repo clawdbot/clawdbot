@@ -74,11 +74,11 @@ private func swabbleHandlers(parsed: ParsedValues) -> [String: () async throws -
             try await cmd.run()
         },
         "health": {
-            var cmd = HealthCommand(parsed: parsed)
+            var cmd = HealthCommand()
             try await cmd.run()
         },
         "tail-log": {
-            var cmd = TailLogCommand(parsed: parsed)
+            var cmd = TailLogCommand()
             try await cmd.run()
         },
         "start": {
@@ -94,7 +94,7 @@ private func swabbleHandlers(parsed: ParsedValues) -> [String: () async throws -
             try await cmd.run()
         },
         "status": {
-            var cmd = StatusCommand()
+            var cmd = StatusCommand(parsed: parsed)
             try await cmd.run()
         },
     ]
@@ -106,7 +106,7 @@ private func dispatchMic(parsed: ParsedValues, path: [String]) async throws {
     let micSub = try subcommand(path, index: 2, command: "mic")
     switch micSub {
     case "list":
-        var cmd = MicList(parsed: parsed)
+        var cmd = MicList()
         try await cmd.run()
     case "set":
         var cmd = MicSet(parsed: parsed)

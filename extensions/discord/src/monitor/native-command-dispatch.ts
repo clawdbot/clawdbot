@@ -1,6 +1,7 @@
 // Discord plugin module implements native command dispatch behavior.
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type {
   ButtonInteraction,
@@ -11,7 +12,7 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
-export type DispatchDiscordCommandInteractionParams = {
+type DispatchDiscordCommandInteractionParams = {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;
@@ -29,6 +30,7 @@ export type DispatchDiscordCommandInteractionParams = {
 export type DispatchDiscordCommandInteractionResult = {
   accepted: boolean;
   effectiveRoute?: ResolvedAgentRoute;
+  hiddenFinalReply?: ReplyPayload;
 };
 
 export type DispatchDiscordCommandInteraction = (

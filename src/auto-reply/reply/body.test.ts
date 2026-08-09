@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadSessionStore } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applySessionHints } from "./body.js";
 
@@ -28,7 +28,6 @@ describe("applySessionHints", () => {
         abortedLastRun: true,
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       const body = await applySessionHints({
         baseBody: "continue",
@@ -39,7 +38,7 @@ describe("applySessionHints", () => {
         storePath,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionEntry({ storePath, sessionKey });
       expect(body).toContain("previous agent run was aborted");
       expect(sessionStore[sessionKey]?.sessionId).toBe("hint-session");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   linkOpenClawPeerDependencies,
+  reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -50,6 +51,94 @@ describe("plugin peer links", () => {
     expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
     expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
+  });
+
+  it("relinks openclaw runtime dependencies in the managed npm root", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-plugin",
+        version: "1.0.0",
+        dependencies: {
+          openclaw: "2026.7.1",
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      logger: {},
+    });
+
+    const linkPath = path.join(packageDir, "node_modules", "openclaw");
+    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
+    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+  });
+
+  it("reports one unreadable package and continues repairing its sibling", async () => {
+    const npmRoot = makeTempDir();
+    const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
+    const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    fs.mkdirSync(unreadableDir, { recursive: true });
+    fs.mkdirSync(peerDir, { recursive: true });
+    fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
+    fs.writeFileSync(
+      path.join(peerDir, "package.json"),
+      JSON.stringify({
+        name: "peer-plugin",
+        peerDependencies: { openclaw: ">=2026.0.0" },
+      }),
+      "utf8",
+    );
+    const failures: Array<{ error: unknown; packageDir: string }> = [];
+
+    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      logger: {},
+      onPackageReadError: (error, packageDir) => failures.push({ error, packageDir }),
+    });
+
+    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.packageDir).toBe(unreadableDir);
+    expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
+    expect(fs.lstatSync(path.join(peerDir, "node_modules", "openclaw")).isSymbolicLink()).toBe(
+      true,
+    );
+  });
+
+  it("reports one unreadable package and continues auditing its sibling", async () => {
+    const npmRoot = makeTempDir();
+    const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
+    const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    fs.mkdirSync(unreadableDir, { recursive: true });
+    fs.mkdirSync(peerDir, { recursive: true });
+    fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
+    fs.writeFileSync(
+      path.join(peerDir, "package.json"),
+      JSON.stringify({
+        name: "peer-plugin",
+        peerDependencies: { openclaw: ">=2026.0.0" },
+      }),
+      "utf8",
+    );
+    const failures: Array<{ error: unknown; packageDir: string }> = [];
+
+    const result = await auditOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      onPackageReadError: (error, packageDir) => failures.push({ error, packageDir }),
+    });
+
+    expect(result.checked).toBe(1);
+    expect(result.broken).toBe(1);
+    expect(result.issues[0]?.packageName).toBe("peer-plugin");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.packageDir).toBe(unreadableDir);
   });
 
   it("audits missing managed npm openclaw peer links without relinking", async () => {
@@ -155,4 +244,98 @@ describe("plugin peer links", () => {
     expect(fs.existsSync(path.join(existingOpenClawDir, "package.json"))).toBe(true);
     expect(warnings.join("\n")).toContain("already exists and is not a symlink");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not follow a registered plugin manifest symlink outside its package root",
+    async () => {
+      const root = makeTempDir();
+      const extensionsDir = path.join(root, "extensions");
+      const packageDir = path.join(extensionsDir, "email");
+      const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
+      const outsideManifest = path.join(root, "outside-package.json");
+      fs.mkdirSync(staleHostDir, { recursive: true });
+      fs.writeFileSync(
+        outsideManifest,
+        JSON.stringify({ name: "email", peerDependencies: { openclaw: "*" } }),
+      );
+      fs.symlinkSync(outsideManifest, path.join(packageDir, "package.json"), "file");
+      fs.writeFileSync(path.join(staleHostDir, "package.json"), '{"name":"openclaw"}');
+      const failures: Array<{ error: unknown; packageDir: string }> = [];
+
+      const result = await reconcileRegisteredOpenClawHostLinks({
+        extensionsDir,
+        installRecords: { email: { source: "npm", installPath: packageDir } },
+        mode: "repair",
+        onPackageReadError: (error, failedPackageDir) => {
+          failures.push({ error, packageDir: failedPackageDir });
+        },
+      });
+
+      expect(result.repaired).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(failures[0]?.packageDir).toBe(packageDir);
+      expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "repairs a registered npm plugin when the operator-owned extensions root is a symlink",
+    async () => {
+      const root = makeTempDir();
+      const realExtensionsDir = path.join(root, "real-extensions");
+      const extensionsDir = path.join(root, "extensions");
+      fs.mkdirSync(realExtensionsDir, { recursive: true });
+      fs.symlinkSync(realExtensionsDir, extensionsDir, "dir");
+      const packageDir = path.join(extensionsDir, "email");
+      const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
+      fs.mkdirSync(staleHostDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "email", dependencies: { openclaw: "2026.7.1" } }),
+      );
+      fs.writeFileSync(path.join(staleHostDir, "package.json"), '{"name":"openclaw"}');
+
+      const result = await reconcileRegisteredOpenClawHostLinks({
+        extensionsDir,
+        installRecords: { email: { source: "npm", installPath: packageDir } },
+        mode: "repair",
+      });
+
+      expect(result.repaired).toBe(1);
+      expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not follow a registered plugin node_modules symlink outside its package root",
+    async () => {
+      const root = makeTempDir();
+      const extensionsDir = path.join(root, "extensions");
+      const packageDir = path.join(extensionsDir, "email");
+      const outsideModules = path.join(root, "outside-node-modules");
+      const outsideHost = path.join(outsideModules, "openclaw");
+      fs.mkdirSync(packageDir, { recursive: true });
+      fs.mkdirSync(outsideHost, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "email", peerDependencies: { openclaw: "*" } }),
+      );
+      fs.writeFileSync(path.join(outsideHost, "package.json"), '{"name":"openclaw"}');
+      fs.symlinkSync(outsideModules, path.join(packageDir, "node_modules"), "dir");
+      const warnings: string[] = [];
+
+      const result = await reconcileRegisteredOpenClawHostLinks({
+        extensionsDir,
+        installRecords: { email: { source: "npm", installPath: packageDir } },
+        mode: "repair",
+        logger: { warn: (message) => warnings.push(message) },
+      });
+
+      expect(result.repaired).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(fs.lstatSync(outsideHost).isDirectory()).toBe(true);
+      expect(warnings.join("\n")).toContain("is not a real directory");
+    },
+  );
 });

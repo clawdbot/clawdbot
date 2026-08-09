@@ -36,7 +36,7 @@ type ScoredNodeMatch = {
 };
 
 /** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
-export function normalizeNodeKey(value: string) {
+function normalizeNodeKey(value: string) {
   // Emoji components can also be marks (variation selectors and keycaps); drop
   // them so decorated and plain display-name selectors stay equivalent.
   // Retain script marks only when attached to a surviving letter/number; marks

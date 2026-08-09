@@ -8,6 +8,7 @@ import type {
   PluginHookToolContext,
   PluginHookToolInputKind,
   PluginHookToolKind,
+  PluginToolMatcher,
 } from "./hook-types.js";
 import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue, PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
@@ -16,6 +17,12 @@ import type {
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import {
+  createPluginToolMatcherScope,
+  normalizePluginToolMatcher,
+  pluginToolMatcherCoversTool,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
 type TrustedToolPolicyRegistry =
@@ -24,7 +31,7 @@ type TrustedToolPolicyRegistry =
   | undefined;
 
 /** Diagnostic entry for an installed trusted tool policy. */
-export type TrustedToolPolicyDiagnosticEntry = {
+type TrustedToolPolicyDiagnosticEntry = {
   id: string;
   pluginId: string;
   pluginName?: string;
@@ -106,6 +113,34 @@ function readTrustedPolicy(registration: TrustedPolicyRegistration):
   } catch {
     return { ok: false };
   }
+}
+
+function readTrustedPolicyMatcher(policy: PluginTrustedToolPolicyRegistration):
+  | { ok: true; matcher: PluginToolMatcher | undefined }
+  | {
+      ok: false;
+    } {
+  try {
+    return { ok: true, matcher: normalizePluginToolMatcher(policy.matcher) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function getTrustedToolPolicyMatcherScope(
+  registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
+): PluginToolMatcherScope | undefined {
+  return createPluginToolMatcherScope(
+    copyTrustedPolicyRegistrations(registry).map((registration) => {
+      const policy = readTrustedPolicy(registration);
+      if (!policy.ok) {
+        return undefined;
+      }
+      const matcher = readTrustedPolicyMatcher(policy.policy);
+      // Relay every tool so malformed trusted policy state reaches the fail-closed runtime check.
+      return matcher.ok ? matcher.matcher : undefined;
+    }),
+  );
 }
 
 function readTrustedPolicyId(registration: TrustedPolicyRegistration): string {
@@ -264,6 +299,13 @@ export async function runTrustedToolPolicies(
     const policy = readTrustedPolicy(registration);
     if (!policy.ok) {
       return trustedPolicyFailureResult(registration, "policy is unreadable");
+    }
+    const matcher = readTrustedPolicyMatcher(policy.policy);
+    if (!matcher.ok) {
+      return trustedPolicyFailureResult(registration, "policy matcher is unreadable");
+    }
+    if (!pluginToolMatcherCoversTool(matcher.matcher, event.toolName)) {
+      continue;
     }
 
     let decision: Awaited<ReturnType<PluginTrustedToolPolicyRegistration["evaluate"]>>;

@@ -1,7 +1,7 @@
 // Policy doctor shared types.
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../policy-state.js";
-import type { POLICY_CHECK_IDS } from "./metadata.js";
+import type { POLICY_CHECK_IDS } from "./check-ids.js";
 
 export type PolicyEvaluation = {
   readonly policyPath: string;

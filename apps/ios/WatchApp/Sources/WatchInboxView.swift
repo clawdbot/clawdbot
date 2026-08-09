@@ -1,5 +1,20 @@
+import Foundation
 import SwiftUI
 import WatchKit
+
+private enum WatchTextValue {
+    case localized(LocalizedStringResource)
+    case verbatim(String)
+
+    var text: Text {
+        switch self {
+        case let .localized(resource):
+            Text(resource)
+        case let .verbatim(value):
+            Text(verbatim: value)
+        }
+    }
+}
 
 struct WatchInboxView: View {
     var store: WatchInboxStore
@@ -36,7 +51,7 @@ private struct WatchControlSurfaceView: View {
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
     var onSendChatMessage: ((String) -> String?)?
-    @State private var selectedFace = 0
+    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
         TabView(selection: self.$selectedFace) {
@@ -77,10 +92,9 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Now",
-                title: self.greetingText,
-                subtitle: self.connectionLine,
-                isOnline: self.store.appSnapshot?.gatewayConnected == true,
+                section: .localized("Now"),
+                title: .verbatim(self.greetingText),
+                subtitle: .verbatim(self.connectionLine),
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -88,10 +102,10 @@ private struct WatchControlSurfaceView: View {
                 self.primaryDestination
             } label: {
                 WatchHeroCard(
-                    label: self.primaryLabel,
-                    title: self.primaryTitle,
-                    subtitle: self.primarySubtitle,
-                    accessory: self.store.talkSummaryText)
+                    label: .verbatim(self.primaryLabel),
+                    title: .verbatim(self.primaryTitle),
+                    subtitle: .verbatim(self.primarySubtitle),
+                    accessory: .verbatim(self.store.talkSummaryText))
             }
             .buttonStyle(.plain)
 
@@ -115,10 +129,9 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Inbox",
-                title: "What needs you",
-                subtitle: self.inboxSubtitle,
-                isOnline: self.chatCount > 0 || self.approvalCount > 0,
+                section: .localized("Inbox"),
+                title: .localized("What needs you"),
+                subtitle: .verbatim(self.inboxSubtitle),
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
@@ -132,11 +145,23 @@ private struct WatchControlSurfaceView: View {
                 }
                 self.inboxPromptBlock
             } else {
+                // The decorative mascot belongs only to the empty or waiting inbox surface.
+                WatchMascot(
+                    mood: watchInboxMascotMood(
+                        hasSnapshot: self.store.hasAppSnapshot,
+                        hasApprovals: self.approvalCount > 0,
+                        hasChats: self.chatCount > 0),
+                    size: 72)
+                    .frame(maxWidth: .infinity)
+
                 WatchHeroCard(
-                    label: "Clear",
-                    title: "Caught up",
-                    subtitle: self.store.hasAppSnapshot ? "No chats or approvals need you" : "Waiting for iPhone sync",
-                    accessory: "Ready")
+                    label: .localized("Clear"),
+                    title: .localized("Caught up"),
+                    subtitle: .localized(
+                        self.store.hasAppSnapshot
+                            ? "No chats or approvals need you"
+                            : "Waiting for iPhone sync"),
+                    accessory: .localized("Ready"))
             }
 
             Button {
@@ -154,10 +179,10 @@ private struct WatchControlSurfaceView: View {
                 self.chatTimelineDestination
             } label: {
                 WatchStackCard(
-                    label: "Chat",
-                    title: self.chatPreviewTitle,
-                    subtitle: self.chatPreviewSubtitle,
-                    badge: "\(self.chatCount)",
+                    label: .localized("Chat"),
+                    title: .verbatim(self.chatPreviewTitle),
+                    subtitle: .verbatim(self.chatPreviewSubtitle),
+                    badge: self.chatCount.formatted(),
                     isProminent: self.approvalCount == 0)
             }
             .buttonStyle(.plain)
@@ -170,10 +195,10 @@ private struct WatchControlSurfaceView: View {
                 WatchExecApprovalListView(store: self.store, onDecision: self.onExecApprovalDecision)
             } label: {
                 WatchStackCard(
-                    label: "Approvals",
-                    title: self.approvalHeadline,
-                    subtitle: self.approvalSubtitle,
-                    badge: "\(self.approvalCount)",
+                    label: .localized("Approvals"),
+                    title: .verbatim(self.approvalHeadline),
+                    subtitle: .verbatim(self.approvalSubtitle),
+                    badge: self.approvalCount.formatted(),
                     isProminent: true)
             }
             .buttonStyle(.plain)
@@ -183,13 +208,13 @@ private struct WatchControlSurfaceView: View {
     @ViewBuilder private var inboxPromptBlock: some View {
         if self.store.hasMessagePrompt {
             WatchHeroCard(
-                label: self.store.kind ?? "Latest",
-                title: self.store.title,
-                subtitle: self.store.body,
-                accessory: self.updatedText)
+                label: .verbatim(self.store.kind ?? String(localized: "Latest")),
+                title: .verbatim(self.store.title),
+                subtitle: .verbatim(self.store.body),
+                accessory: .verbatim(self.updatedText))
 
             if let details = promptDetails {
-                WatchDetailText(text: details)
+                WatchDetailText(text: .verbatim(details))
             }
 
             ForEach(self.store.actions) { action in
@@ -219,74 +244,84 @@ private struct WatchControlSurfaceView: View {
 
     private var inboxSubtitle: String {
         if self.approvalCount > 0 {
-            return "Approval waiting"
+            return String(localized: "Approval waiting")
         }
         if self.chatCount > 0 {
             return self.chatStatusText
         }
         if self.store.hasMessagePrompt {
-            return self.store.kind ?? "Latest update"
+            return self.store.kind ?? String(localized: "Latest update")
         }
-        return self.store.hasAppSnapshot ? "Nothing waiting" : "Waiting for iPhone"
+        return self.store.hasAppSnapshot
+            ? String(localized: "Nothing waiting")
+            : String(localized: "Waiting for iPhone")
     }
 
     private var approvalsFace: some View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Approvals",
-                title: self.approvalHeadline,
-                subtitle: self.approvalHeaderSubtitle,
-                isOnline: self.approvalCount > 0,
+                section: .localized("Approvals"),
+                title: .verbatim(self.approvalHeadline),
+                subtitle: .verbatim(self.approvalHeaderSubtitle),
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
             if let record = self.store.activeExecApproval {
                 WatchHeroCard(
-                    label: "Approval needed",
-                    title: record.approval.commandPreview ?? record.approval.commandText,
-                    subtitle: self.approvalDecisionSubtitle(record),
-                    accessory: self.approvalAccessory(record))
+                    label: .localized("Approval needed"),
+                    title: .verbatim(record.approval.commandPreview ?? record.approval.commandText),
+                    subtitle: .verbatim(self.approvalDecisionSubtitle(record)),
+                    accessory: .verbatim(self.approvalAccessory(record)))
 
-                if record.isResolving {
-                    WatchTinyStatus(text: record.statusText ?? "Sending decision...")
-                } else {
-                    HStack(spacing: 8) {
-                        if record.approval.allowedDecisions.contains(.allowOnce) {
-                            WatchDecisionButton(title: "Approve", color: .green) {
-                                self.onExecApprovalDecision?(
-                                    record.id,
-                                    record.approval.gatewayStableID,
-                                    .allowOnce)
-                            }
-                        }
-
-                        if record.approval.allowedDecisions.contains(.deny) {
-                            WatchDecisionButton(title: "Deny", color: WatchClawStyle.accent) {
-                                self.onExecApprovalDecision?(
-                                    record.id,
-                                    record.approval.gatewayStableID,
-                                    .deny)
-                            }
-                        }
-                    }
+                if let warningText = WatchExecApprovalDisplay.warningText(record.approval.warningText) {
+                    WatchApprovalWarning(text: warningText)
                 }
 
-                if let statusText = record.statusText, !statusText.isEmpty, !record.isResolving {
+                if let statusText = WatchExecApprovalDisplay.statusText(for: record) {
                     WatchTinyStatus(text: statusText)
+                }
+
+                if !record.isResolving {
+                    NavigationLink {
+                        WatchExecApprovalDetailView(
+                            store: self.store,
+                            record: record,
+                            onDecision: self.onExecApprovalDecision)
+                    } label: {
+                        WatchSecondaryLabel(title: "Review Command")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens the full command before decisions are available")
+                }
+            } else if self.store.isExecApprovalReviewLoading {
+                WatchHeroCard(
+                    label: .localized("Loading"),
+                    title: .localized("Loading approval"),
+                    subtitle: .verbatim(
+                        self.store.execApprovalReviewStatusText
+                            ?? String(localized: "Waiting for your iPhone")),
+                    accessory: .localized("Syncing"))
+            } else if self.approvalCount > 0 || self.store.shouldShowExecApprovalReviewStatus {
+                WatchHeroCard(
+                    label: .localized("Unavailable"),
+                    title: .localized("Approval not loaded"),
+                    subtitle: .verbatim(
+                        self.store.execApprovalReviewStatusText
+                            ?? String(localized: "Approval details have not loaded")),
+                    accessory: .localized("Retry"))
+
+                WatchSecondaryButton(title: "Review again") {
+                    self.onRefreshExecApprovalReview?()
                 }
             } else {
                 WatchHeroCard(
-                    label: "Clear",
-                    title: "No approvals waiting",
-                    subtitle: self.store.lastExecApprovalOutcomeText ?? "You are caught up",
-                    accessory: "Ready")
-
-                if self.store.shouldShowExecApprovalReviewStatus {
-                    WatchSecondaryButton(title: "Review again") {
-                        self.onRefreshExecApprovalReview?()
-                    }
-                }
+                    label: .localized("Clear"),
+                    title: .localized("No approvals waiting"),
+                    subtitle: .verbatim(
+                        self.store.lastExecApprovalOutcomeText
+                            ?? String(localized: "You are caught up")),
+                    accessory: .localized("Ready"))
             }
 
             if self.approvalCount > 1 {
@@ -304,26 +339,33 @@ private struct WatchControlSurfaceView: View {
         WatchFaceScroll {
             self.pageRail
             WatchFaceHeader(
-                section: "Connection",
-                title: self.directNode.isConnected ? "Watch node online" : "Direct Gateway",
-                subtitle: self.directNode.statusText,
-                isOnline: self.directNode.isConnected,
+                section: .localized("Connection"),
+                title: .verbatim(self.directNode.isConnected
+                    ? String(localized: "Watch node online")
+                    : String(localized: "Direct Gateway")),
+                subtitle: .verbatim(self.directNode.statusText),
                 avatarImageSource: self.avatarImageSource,
                 avatarText: self.avatarText)
 
             WatchHeroCard(
-                label: self.directNode.isConnected ? "Direct" : "Setup",
-                title: self.directNode.endpointText ?? "Enable from iPhone",
-                subtitle: self.directNode.isConfigured
-                    ? "Uses Wi-Fi or cellular while OpenClaw is active"
-                    : "Open iPhone Settings → Apple Watch",
-                accessory: self.directNode.isConnected ? "Online" : "Offline")
+                label: .verbatim(self.directNode.isConnected
+                    ? String(localized: "Direct")
+                    : String(localized: "Setup")),
+                title: .verbatim(
+                    self.directNode.endpointText ?? String(localized: "Enable from iPhone")),
+                subtitle: .localized(
+                    self.directNode.isConfigured
+                        ? "Uses Wi-Fi or cellular while OpenClaw is active"
+                        : "Open iPhone Settings → Apple Watch"),
+                accessory: .verbatim(self.directNode.isConnected
+                    ? String(localized: "Online")
+                    : String(localized: "Offline")))
 
             WatchDetailText(
-                text: """
+                text: .verbatim(String(localized: """
                 Direct mode supports device info, status, and notifications. \
                 Chat, Talk, and approvals still use the iPhone.
-                """)
+                """)))
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
@@ -341,7 +383,8 @@ private struct WatchControlSurfaceView: View {
                 }
             } else {
                 WatchDetailText(
-                    text: "The iPhone securely sends a one-time setup code. Existing relay features stay available.")
+                    text: .localized(
+                        "The iPhone securely sends a one-time setup code. Existing relay features stay available."))
             }
         }
     }
@@ -352,13 +395,12 @@ private struct WatchControlSurfaceView: View {
 
     private var chatTimelineDestination: some View {
         WatchChatTimelineView(
+            store: self.store,
             items: self.chatItems,
             statusText: self.chatStatusText,
             sendStatusText: self.chatSendStatusText,
             avatarImageSource: self.avatarImageSource,
             avatarText: self.avatarText,
-            completedChatCommandId: self.store.chatCompletion?.commandId,
-            completedChatReplyText: self.store.chatCompletion?.replyText,
             onRefresh: self.onRefreshAppSnapshot,
             onSendMessage: self.onSendChatMessage)
     }
@@ -383,23 +425,27 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var chatCountText: String {
-        self.chatCount == 0 ? "0" : "\(self.chatCount)"
+        self.chatCount.formatted()
     }
 
     private var approvalCountText: String {
-        self.approvalCount == 0 ? "0" : "\(self.approvalCount)"
+        self.approvalCount.formatted()
     }
 
     private var connectionLine: String {
         if let snapshot = store.appSnapshot {
-            return snapshot.gatewayConnected ? "AI agent online" : "Reconnect on iPhone"
+            return snapshot.gatewayConnected
+                ? String(localized: "AI agent online")
+                : String(localized: "Reconnect on iPhone")
         }
-        return "Pair iPhone"
+        return String(localized: "Pair iPhone")
     }
 
     private var primaryLabel: String {
-        if self.store.activeExecApproval != nil { return "Next up" }
-        return self.store.appSnapshot?.gatewayConnected == true ? "Running" : "Pairing"
+        if self.store.activeExecApproval != nil { return String(localized: "Next up") }
+        return self.store.appSnapshot?.gatewayConnected == true
+            ? String(localized: "Running")
+            : String(localized: "Pairing")
     }
 
     private var primaryTitle: String {
@@ -414,66 +460,77 @@ private struct WatchControlSurfaceView: View {
 
     private var primarySubtitle: String {
         if self.store.activeExecApproval != nil {
-            return "Approval waiting on your wrist"
+            return String(localized: "Approval waiting on your wrist")
         }
         if self.chatCount > 0 {
             return self.chatStatusText
         }
-        return self.store.hasAppSnapshot ? "Ready for quick actions" : "Waiting for iPhone sync"
+        return self.store.hasAppSnapshot
+            ? String(localized: "Ready for quick actions")
+            : String(localized: "Waiting for iPhone sync")
     }
 
     private var approvalHeadline: String {
-        self.approvalCount == 1 ? "1 approval waiting" : "\(self.approvalCount) approvals"
+        let count = self.approvalCount
+        return String(
+            AttributedString(localized: "^[\(count) approval](inflect: true) waiting").characters)
     }
 
     private var approvalSubtitle: String {
-        guard let record = store.activeExecApproval else { return "No approvals waiting" }
+        guard let record = store.activeExecApproval else {
+            return String(localized: "No approvals waiting")
+        }
         return record.approval.commandPreview ?? record.approval.commandText
     }
 
     private var approvalHeaderSubtitle: String {
-        self.approvalCount > 0 ? "Decide from watch" : "No approvals"
+        self.approvalCount > 0
+            ? String(localized: "Decide from watch")
+            : String(localized: "No approvals")
     }
 
     private func approvalDecisionSubtitle(_ record: WatchExecApprovalRecord) -> String {
         var parts: [String] = []
         if let expiresText = expiryText(record.approval.expiresAtMs) {
-            parts.append("Expires in \(expiresText)")
+            parts.append(
+                String(
+                    format: String(localized: "Expires in %@"),
+                    expiresText))
         }
         if let host = record.approval.host, !host.isEmpty {
             parts.append(host)
         }
         if parts.isEmpty {
-            parts.append("Review before it runs")
+            parts.append(String(localized: "Review before it runs"))
         }
         return parts.joined(separator: " · ")
     }
 
     private func approvalAccessory(_ record: WatchExecApprovalRecord) -> String {
         if record.isResolving {
-            return "Sending"
+            return String(localized: "Sending")
         }
         if let risk = approvalRiskText(record.approval.risk) {
             return risk
         }
-        return "Review"
+        return String(localized: "Review")
     }
 
     private func approvalRiskText(_ risk: WatchRiskLevel?) -> String? {
         switch risk {
         case .high:
-            "High risk"
+            String(localized: "High risk")
         case .medium:
-            "Medium risk"
+            String(localized: "Medium risk")
         case .low:
-            "Low risk"
+            String(localized: "Low risk")
         case nil:
             nil
         }
     }
 
     private var chatPreviewTitle: String {
-        guard let item = chatItems.last else { return "No chat synced" }
+        guard let item = chatItems.last else { return String(localized: "No chat synced") }
         return self.roleTitle(item.role)
     }
 
@@ -482,20 +539,17 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var chatStatusText: String {
-        if let status = store.appSnapshot?.chatStatusText, !status.isEmpty {
-            return status
-        }
-        if self.chatCount > 0 {
-            return self.chatCount == 1 ? "1 recent message" : "\(self.chatCount) recent messages"
-        }
-        return self.store.hasAppSnapshot ? "No messages synced" : "Waiting for iPhone"
+        WatchAppSnapshotMessage.localizedChatStatusText(
+            status: self.store.appSnapshot?.chatStatus,
+            chatCount: self.chatCount,
+            hasAppSnapshot: self.store.hasAppSnapshot)
     }
 
     private var chatSendStatusText: String? {
-        guard let status = store.appCommandStatusText, status.hasPrefix("Chat:") else {
+        guard self.store.appCommandStatus?.command == .sendChat else {
             return nil
         }
-        return status
+        return self.store.appCommandStatusText
     }
 
     private var greetingText: String {
@@ -503,9 +557,9 @@ private struct WatchControlSurfaceView: View {
             return greetingTextOverride
         }
         let hour = Calendar.current.component(.hour, from: Date())
-        if hour < 12 { return "Good morning" }
-        if hour < 18 { return "Good afternoon" }
-        return "Good evening"
+        if hour < 12 { return String(localized: "Good morning") }
+        if hour < 18 { return String(localized: "Good afternoon") }
+        return String(localized: "Good evening")
     }
 
     private var statusLine: String {
@@ -518,20 +572,22 @@ private struct WatchControlSurfaceView: View {
         if let replyStatus = store.replyStatusText, !replyStatus.isEmpty {
             return replyStatus
         }
-        return self.store.hasAppSnapshot ? "Synced" : "Waiting for iPhone"
+        return self.store.hasAppSnapshot
+            ? String(localized: "Synced")
+            : String(localized: "Waiting for iPhone")
     }
 
     private var updatedText: String {
-        guard let updatedAt = store.updatedAt else { return "Just now" }
+        guard let updatedAt = store.updatedAt else { return String(localized: "Just now") }
         return updatedAt.formatted(date: .omitted, time: .shortened)
     }
 
     private func roleTitle(_ role: String) -> String {
         switch role.lowercased() {
         case "user":
-            "You"
+            String(localized: "You")
         case "system":
-            "System"
+            String(localized: "System")
         default:
             "OpenClaw"
         }
@@ -540,11 +596,11 @@ private struct WatchControlSurfaceView: View {
     private func actionSubtitle(_ action: WatchPromptAction) -> String {
         switch action.style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "destructive":
-            "Requires confirmation"
+            String(localized: "Requires confirmation")
         case "cancel":
-            "Dismiss this update"
+            String(localized: "Dismiss this update")
         default:
-            "Send from watch"
+            String(localized: "Send from watch")
         }
     }
 
@@ -552,13 +608,15 @@ private struct WatchControlSurfaceView: View {
         guard let expiresAtMs else { return nil }
         let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
-            return "<1m"
+            return String(localized: "less than 1 min")
         }
-        return "\(deltaSeconds / 60)m"
+        return String(
+            format: String(localized: "%@ min"),
+            (deltaSeconds / 60).formatted())
     }
 }
 
-private enum WatchClawStyle {
+enum WatchClawStyle {
     static let accent = Color(red: 1.0, green: 0.2, blue: 0.22)
     static let background = Color(red: 0.015, green: 0.015, blue: 0.02)
     static let surface = Color.white.opacity(0.075)
@@ -686,10 +744,9 @@ private struct WatchClawAvatar: View {
 }
 
 private struct WatchFaceHeader: View {
-    let section: String
-    let title: String
-    let subtitle: String
-    let isOnline: Bool
+    let section: WatchTextValue
+    let title: WatchTextValue
+    let subtitle: WatchTextValue
     var avatarImageSource: String?
     var avatarText: String?
 
@@ -700,15 +757,15 @@ private struct WatchFaceHeader: View {
                 imageSource: self.avatarImageSource,
                 text: self.avatarText)
             VStack(alignment: .leading, spacing: 1) {
-                Text(self.section)
+                self.section.text
                     .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
-                Text(self.title)
+                self.title.text
                     .font(WatchClawType.title(size: 18))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                Text(self.subtitle)
+                self.subtitle.text
                     .font(WatchClawType.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -718,29 +775,29 @@ private struct WatchFaceHeader: View {
 }
 
 private struct WatchHeroCard: View {
-    let label: String
-    let title: String
-    let subtitle: String
-    let accessory: String
+    let label: WatchTextValue
+    let title: WatchTextValue
+    let subtitle: WatchTextValue
+    let accessory: WatchTextValue
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text(self.label)
+                self.label.text
                     .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Text(self.accessory)
+                self.accessory.text
                     .font(WatchClawType.label(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Text(self.title)
+            self.title.text
                 .font(WatchClawType.title(size: 19))
                 .lineLimit(3)
                 .minimumScaleFactor(0.75)
-            Text(self.subtitle)
+            self.subtitle.text
                 .font(WatchClawType.body(size: 13))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -759,10 +816,10 @@ private struct WatchHeroCard: View {
 }
 
 private struct WatchDetailText: View {
-    let text: String
+    let text: WatchTextValue
 
     var body: some View {
-        Text(self.text)
+        self.text.text
             .font(WatchClawType.body(size: 12))
             .foregroundStyle(.secondary)
             .lineLimit(5)
@@ -803,7 +860,7 @@ private struct WatchCompactStatusStrip: View {
 }
 
 private struct WatchCompactMetric: View {
-    let label: String
+    let label: LocalizedStringKey
     let value: String
 
     var body: some View {
@@ -900,23 +957,23 @@ private struct WatchSecondaryButton: View {
 }
 
 private struct WatchStackCard: View {
-    let label: String
-    let title: String
-    let subtitle: String
+    let label: WatchTextValue
+    let title: WatchTextValue
+    let subtitle: WatchTextValue
     let badge: String?
     var isProminent = false
 
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(self.label)
+                self.label.text
                     .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
-                Text(self.title)
+                self.title.text
                     .font(WatchClawType.title(size: 17))
                     .lineLimit(1)
-                Text(self.subtitle)
+                self.subtitle.text
                     .font(WatchClawType.body(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -960,9 +1017,9 @@ private struct WatchActionCard: View {
     var body: some View {
         Button(action: self.action) {
             WatchStackCard(
-                label: "OpenClaw",
-                title: self.title,
-                subtitle: self.subtitle,
+                label: .localized("OpenClaw"),
+                title: .verbatim(self.title),
+                subtitle: .verbatim(self.subtitle),
                 badge: nil)
         }
         .buttonStyle(.plain)
@@ -978,7 +1035,8 @@ private struct WatchDecisionButton: View {
         Button(action: self.action) {
             Text(self.title)
                 .font(WatchClawType.captionBold)
-                .lineLimit(1)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
                 .background {
@@ -987,6 +1045,7 @@ private struct WatchDecisionButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(self.title)
     }
 }
 
@@ -999,6 +1058,62 @@ private struct WatchTinyStatus: View {
             .foregroundStyle(.secondary)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct WatchApprovalWarning: View {
+    let text: String
+
+    var body: some View {
+        Text(self.text)
+            .font(WatchClawType.body(size: 11))
+            .foregroundStyle(WatchClawStyle.accent)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct WatchApprovalCommandReview: View {
+    let commandText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Command")
+                .font(WatchClawType.label(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+            Text(verbatim: self.commandText)
+                .font(WatchClawType.command)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.055))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
+                }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Command to review")
+        .accessibilityValue(self.commandText)
+    }
+}
+
+private enum WatchExecApprovalDisplay {
+    static func warningText(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func statusText(for record: WatchExecApprovalRecord) -> String? {
+        let statusText = record.status?.localizedText()
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !statusText.isEmpty {
+            return statusText
+        }
+        return record.isResolving ? String(localized: "Sending decision...") : nil
     }
 }
 
@@ -1050,9 +1165,9 @@ private struct WatchChatBubble: View {
     private var roleTitle: String {
         switch self.item.role.lowercased() {
         case "user":
-            "You"
+            String(localized: "You")
         case "system":
-            "System"
+            String(localized: "System")
         default:
             "OpenClaw"
         }
@@ -1060,16 +1175,14 @@ private struct WatchChatBubble: View {
 }
 
 private struct WatchChatTimelineView: View {
+    var store: WatchInboxStore
     let items: [WatchChatItem]
     let statusText: String
     let sendStatusText: String?
     var avatarImageSource: String?
     var avatarText: String?
-    var completedChatCommandId: String?
-    var completedChatReplyText: String?
     var onRefresh: (() -> Void)?
     var onSendMessage: ((String) -> String?)?
-    @State private var voiceTurnTracker = WatchVoiceTurnTracker()
     @State private var speechPlayback = WatchSpeechPlayback()
     @State private var voiceReplyTimeout: Task<Void, Never>?
 
@@ -1122,7 +1235,7 @@ private struct WatchChatTimelineView: View {
                 onStartVoiceTurn: {
                     self.startVoiceTurn()
                 },
-                isAwaitingVoiceReply: self.voiceTurnTracker.isAwaitingReply,
+                isAwaitingVoiceReply: self.store.isAwaitingVoiceReply,
                 onCancelVoiceTurn: {
                     self.cancelVoiceTurn()
                 },
@@ -1135,11 +1248,15 @@ private struct WatchChatTimelineView: View {
         }
         .background(WatchClawStyle.background.ignoresSafeArea())
         .navigationTitle("Chat")
-        .onChange(of: self.completedChatCommandId) { _, commandId in
-            self.handleCompletedVoiceTurn(commandId: commandId)
+        .onChange(of: self.store.chatCompletion?.commandId) { _, _ in
+            self.handleCompletedVoiceTurn()
+        }
+        .onAppear {
+            self.handleCompletedVoiceTurn()
+            self.scheduleVoiceReplyTimeout()
         }
         .onDisappear {
-            self.cancelVoiceTurn()
+            self.voiceReplyTimeout?.cancel()
             self.speechPlayback.stop()
         }
     }
@@ -1152,10 +1269,10 @@ private struct WatchChatTimelineView: View {
 
     private var voiceStatusText: String? {
         if self.speechPlayback.isSpeaking {
-            return "Speaking reply…"
+            return String(localized: "Speaking reply…")
         }
-        if self.voiceTurnTracker.isAwaitingReply {
-            return "Waiting for spoken reply…"
+        if self.store.isAwaitingVoiceReply {
+            return String(localized: "Waiting for spoken reply…")
         }
         return nil
     }
@@ -1163,33 +1280,29 @@ private struct WatchChatTimelineView: View {
     private func startVoiceTurn() {
         WatchNativeTextInput.present(suggestions: []) { text in
             guard let commandId = self.sendMessage(text) else { return }
-            self.voiceTurnTracker.begin(commandId: commandId)
+            self.store.beginVoiceTurn(commandId: commandId)
             self.scheduleVoiceReplyTimeout()
         }
     }
 
-    private func handleCompletedVoiceTurn(commandId: String?) {
-        guard let reply = voiceTurnTracker.takeReply(
-            completedCommandId: commandId,
-            text: completedChatReplyText)
-        else {
-            return
-        }
+    private func handleCompletedVoiceTurn() {
+        guard let reply = self.store.takeVoiceReply() else { return }
         self.voiceReplyTimeout?.cancel()
         self.speechPlayback.speak(reply)
     }
 
     private func cancelVoiceTurn() {
         self.voiceReplyTimeout?.cancel()
-        self.voiceTurnTracker.cancel()
+        self.store.cancelVoiceTurn()
     }
 
     private func scheduleVoiceReplyTimeout() {
         self.voiceReplyTimeout?.cancel()
+        guard let delayNanoseconds = self.store.voiceReplyTimeoutNanoseconds() else { return }
         self.voiceReplyTimeout = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(90))
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
-            self.voiceTurnTracker.cancel()
+            self.store.cancelVoiceTurn()
         }
     }
 }
@@ -1312,12 +1425,12 @@ private struct WatchChatComposer: View {
 
     private var voiceButtonAccessibilityLabel: String {
         if self.isSpeaking {
-            return "Stop speaking"
+            return String(localized: "Stop speaking")
         }
         if self.isAwaitingVoiceReply {
-            return "Cancel voice turn"
+            return String(localized: "Cancel voice turn")
         }
-        return "Start voice turn"
+        return String(localized: "Start voice turn")
     }
 }
 
@@ -1360,10 +1473,12 @@ private struct WatchExecApprovalListView: View {
         WatchDetailScroll(title: "Approvals") {
             if self.store.sortedExecApprovals.isEmpty {
                 WatchHeroCard(
-                    label: "Clear",
-                    title: "No approvals waiting",
-                    subtitle: self.store.lastExecApprovalOutcomeText ?? "You are caught up",
-                    accessory: "Ready")
+                    label: .localized("Clear"),
+                    title: .localized("No approvals waiting"),
+                    subtitle: .verbatim(
+                        self.store.lastExecApprovalOutcomeText
+                            ?? String(localized: "You are caught up")),
+                    accessory: .localized("Ready"))
             } else {
                 ForEach(self.store.sortedExecApprovals) { record in
                     NavigationLink {
@@ -1373,9 +1488,9 @@ private struct WatchExecApprovalListView: View {
                             onDecision: self.onDecision)
                     } label: {
                         WatchStackCard(
-                            label: "Approval",
-                            title: record.approval.commandPreview ?? record.approval.commandText,
-                            subtitle: self.metadataLine(for: record),
+                            label: .localized("Approval"),
+                            title: .verbatim(record.approval.commandPreview ?? record.approval.commandText),
+                            subtitle: .verbatim(self.metadataLine(for: record)),
                             badge: nil)
                     }
                     .buttonStyle(.plain)
@@ -1399,19 +1514,21 @@ private struct WatchExecApprovalListView: View {
         if let expiresText = Self.expiresText(record.approval.expiresAtMs) {
             parts.append(expiresText)
         }
-        if let statusText = record.statusText, !statusText.isEmpty {
+        if let statusText = record.status?.localizedText(), !statusText.isEmpty {
             parts.append(statusText)
         }
-        return parts.isEmpty ? "Pending review" : parts.joined(separator: " · ")
+        return parts.isEmpty ? String(localized: "Pending review") : parts.joined(separator: " · ")
     }
 
     private static func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
         let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
-            return "Expires in <1m"
+            return String(localized: "Expires in less than 1 min")
         }
-        return "Expires in \(deltaSeconds / 60)m"
+        return String(
+            format: String(localized: "Expires in %@ min"),
+            (deltaSeconds / 60).formatted())
     }
 }
 
@@ -1421,27 +1538,37 @@ private struct WatchExecApprovalDetailView: View {
     var onDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
 
     var body: some View {
-        WatchDetailScroll(title: "Approval") {
+        WatchDetailScroll(title: "Review Command") {
             WatchHeroCard(
-                label: self.riskText(self.currentRecord?.approval.risk ?? self.record.approval.risk) ?? "Review",
-                title: self.currentRecord?.approval.commandText ?? self.record.approval.commandText,
-                subtitle: self.metadataSummary,
-                accessory: Self
-                    .expiresText(self.currentRecord?.approval.expiresAtMs ?? self.record.approval.expiresAtMs) ?? "Now")
+                label: .verbatim(
+                    self.riskText(self.currentRecord?.approval.risk ?? self.record.approval.risk)
+                        ?? String(localized: "Review")),
+                title: .localized("Command execution"),
+                subtitle: .verbatim(self.metadataSummary),
+                accessory: .verbatim(
+                    Self.expiresText(
+                        self.currentRecord?.approval.expiresAtMs ?? self.record.approval.expiresAtMs)
+                        ?? String(localized: "Now")))
 
-            if let statusText = self.currentRecord?.statusText, !statusText.isEmpty {
-                WatchTinyStatus(text: statusText)
+            WatchApprovalCommandReview(commandText: self.commandText)
+
+            if let warningText = WatchExecApprovalDisplay.warningText(
+                self.currentRecord?.approval.warningText ?? self.record.approval.warningText)
+            {
+                WatchApprovalWarning(text: warningText)
             }
 
             if let currentRecord {
-                if currentRecord.isResolving {
-                    WatchTinyStatus(text: "Sending decision...")
-                } else {
-                    HStack(spacing: 8) {
+                if let statusText = WatchExecApprovalDisplay.statusText(for: currentRecord) {
+                    WatchTinyStatus(text: statusText)
+                }
+
+                if !currentRecord.isResolving {
+                    VStack(spacing: 8) {
                         if currentRecord.approval.allowedDecisions.contains(.allowOnce) {
-                            WatchDecisionButton(title: "Approve", color: .green) {
+                            WatchDecisionButton(title: "Allow Once", color: .green) {
                                 self.onDecision?(
-                                    currentRecord.id,
+                                    currentRecord.approvalID,
                                     currentRecord.approval.gatewayStableID,
                                     .allowOnce)
                             }
@@ -1450,22 +1577,33 @@ private struct WatchExecApprovalDetailView: View {
                         if currentRecord.approval.allowedDecisions.contains(.deny) {
                             WatchDecisionButton(title: "Deny", color: WatchClawStyle.accent) {
                                 self.onDecision?(
-                                    currentRecord.id,
+                                    currentRecord.approvalID,
                                     currentRecord.approval.gatewayStableID,
                                     .deny)
                             }
                         }
                     }
                 }
+            } else if let terminalOutcomeText = self.store.terminalExecApprovalOutcomeText(
+                approvalId: self.record.approvalID,
+                gatewayStableID: self.record.approval.gatewayStableID)
+            {
+                WatchTinyStatus(text: terminalOutcomeText)
             }
         }
         .onAppear {
-            self.store.selectExecApproval(id: self.record.id)
+            self.store.selectExecApproval(
+                id: self.record.approvalID,
+                gatewayStableID: self.record.approval.gatewayStableID)
         }
     }
 
     private var currentRecord: WatchExecApprovalRecord? {
         self.store.execApprovals.first(where: { $0.id == self.record.id })
+    }
+
+    private var commandText: String {
+        self.currentRecord?.approval.commandText ?? self.record.approval.commandText
     }
 
     private var metadataSummary: String {
@@ -1480,17 +1618,19 @@ private struct WatchExecApprovalDetailView: View {
         if let agentId = approval.agentId, !agentId.isEmpty {
             parts.append(agentId)
         }
-        return parts.isEmpty ? "Tap to decide" : parts.joined(separator: " · ")
+        return parts.isEmpty
+            ? String(localized: "Review command below")
+            : parts.joined(separator: " · ")
     }
 
     private func riskText(_ risk: WatchRiskLevel?) -> String? {
         switch risk {
         case .high:
-            "High risk"
+            String(localized: "High risk")
         case .medium:
-            "Medium risk"
+            String(localized: "Medium risk")
         case .low:
-            "Low risk"
+            String(localized: "Low risk")
         case nil:
             nil
         }
@@ -1500,27 +1640,10 @@ private struct WatchExecApprovalDetailView: View {
         guard let expiresAtMs else { return nil }
         let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
-            return "<1 minute"
+            return String(localized: "less than 1 minute")
         }
-        return "\(deltaSeconds / 60) minutes"
-    }
-}
-
-private struct WatchDetailScroll<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 9) {
-                self.content
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 9)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .background(WatchClawStyle.background.ignoresSafeArea())
-        .navigationTitle(self.title)
+        let minutes = deltaSeconds / 60
+        return String(
+            AttributedString(localized: "^[\(minutes) minute](inflect: true)").characters)
     }
 }

@@ -21,7 +21,7 @@ lost.
 <Note>
 The tool only appears when at least one image-generation provider is
 available. If you do not see `image_generate` in your agent's tools,
-configure `agents.defaults.imageGenerationModel`, set up a provider API key,
+configure `agents.defaults.mediaModels.image`, set up a provider API key,
 or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
 
@@ -83,7 +83,7 @@ internal image endpoints remain blocked by default.
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
 | Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                    | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
@@ -94,6 +94,11 @@ provider does not declare support. Bundled transparent-background support is
 OpenAI-specific; other providers may still preserve PNG alpha if their
 backend emits it.
 
+OpenAI supports `low` and `auto` moderation for both text-to-image generation
+and reference-image edits through the direct Images API or the Codex Responses
+backend. For CLI requests, pass `--openai-moderation low|auto` to either
+`openclaw infer image generate` or `openclaw infer image edit`.
+
 ## Supported providers
 
 | Provider          | Default model                           | Edit support                       | Auth                                                  |
@@ -101,7 +106,7 @@ backend emits it.
 | ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
 | fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google            | `gemini-3.1-flash-image-preview`        | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| Google            | `gemini-3.1-flash-image`                | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
 | MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
@@ -209,7 +214,7 @@ translation.
         timeoutMs: 180_000,
         fallbacks: [
           "openrouter/google/gemini-3.1-flash-image-preview",
-          "google/gemini-3.1-flash-image-preview",
+          "google/gemini-3.1-flash-image",
           "fal/fal-ai/flux/dev",
         ],
       },
@@ -240,12 +245,11 @@ from each attempt.
   </Accordion>
   <Accordion title="Auto-detection is auth-aware">
     A provider default only enters the candidate list when OpenClaw can
-    actually authenticate that provider. Set
-    `agents.defaults.mediaGenerationAutoProviderFallback: false` to use only
-    explicit `model`, `primary`, and `fallbacks` entries.
+    actually authenticate that provider. Automatic fallback across authenticated
+    providers is always enabled; a per-call `model` remains authoritative.
   </Accordion>
   <Accordion title="Timeouts">
-    Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
+    Set `agents.defaults.mediaModels.image.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
     default, and configured defaults override plugin-authored provider
     defaults. Google and OpenRouter hosted image providers use 180 second
@@ -304,6 +308,15 @@ and ComfyUI support 1.
     `aspectRatio` or `resolution` directly; when possible OpenClaw maps
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
+
+    For direct OpenAI Images API requests, `gpt-image-2` and its
+    `gpt-image-2-2026-04-21` snapshot preserve valid explicit
+    `WIDTHxHEIGHT` sizes instead of snapping them to presets. Both
+    dimensions must be multiples of 16, neither may exceed 3840 pixels,
+    the aspect ratio cannot exceed 3:1, and the image must contain
+    between 655,360 and 8,294,400 pixels. For example, `1024x640` is
+    valid. When only `aspectRatio` is specified, OpenClaw still selects
+    the closest supported size.
 
     OpenAI-specific options live under the `openai` object:
 
@@ -398,8 +411,8 @@ and ComfyUI support 1.
     OpenClaw forwards `prompt`, `count`, reference images, and
     Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter.
     Current built-in OpenRouter image model shortcuts include
-    `google/gemini-3.1-flash-image-preview`,
-    `google/gemini-3-pro-image-preview`, and `openai/gpt-5.4-image-2`. Use
+    `google/gemini-3.1-flash-image`,
+    `google/gemini-3-pro-image`, and `openai/gpt-5.4-image-2`. Use
     `action: "list"` to see what your configured plugin exposes.
 
   </Accordion>
@@ -534,11 +547,14 @@ openclaw infer image generate \
   </Tab>
 </Tabs>
 
-The same `--output-format`, `--background`, `--quality`, and
-`--openai-moderation` flags are available on `openclaw infer image edit`;
-`--openai-background` remains as an OpenAI-specific alias. Bundled providers
-other than OpenAI do not declare explicit background control today, so
-`background: "transparent"` is reported as ignored for them.
+The same `--output-format`, `--background`, and `--quality` flags are available
+on `openclaw infer image edit`; `--openai-background` remains as an
+OpenAI-specific alias. Use `--openai-moderation low|auto` with both OpenAI image
+generation and reference-image edits. The direct OpenAI Images API and the
+ChatGPT/Codex OAuth Responses backend both support the moderation hint.
+Bundled providers other than OpenAI do not declare
+explicit background control today, so `background: "transparent"` is reported
+as ignored for them.
 
 ## Related
 

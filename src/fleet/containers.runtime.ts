@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -11,27 +12,26 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
+import { createRedactingStreamWriter } from "./containers.redaction.js";
 
-export type { CellContainerProfile, FleetContainerRuntimeName } from "./cell-profile.js";
-
-export type FleetContainerCommandOptions = {
+type FleetContainerCommandOptions = {
   allowFailure?: boolean;
   redactValues?: readonly string[];
 };
 
-export type FleetContainerCommandResult = {
+type FleetContainerCommandResult = {
   stdout: string;
   stderr: string;
   code: number;
 };
 
-export type FleetContainerCommandExecutor = (
+type FleetContainerCommandExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
   options: FleetContainerCommandOptions,
 ) => Promise<FleetContainerCommandResult>;
 
-export type FleetContainerStreamResult = {
+type FleetContainerStreamResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
 };
@@ -47,20 +47,22 @@ const DELIBERATE_STREAM_STOP_SIGNALS = new Set<NodeJS.Signals>([
   "SIGPIPE",
 ]);
 
-export type FleetContainerStreamExecutor = (
+type FleetContainerStreamExecutor = (
   runtime: FleetContainerRuntimeName,
   args: string[],
+  options: { redactValues: readonly string[] },
 ) => Promise<FleetContainerStreamResult>;
 
-export type FleetContainerLogsOptions = {
+type FleetContainerLogsOptions = {
   follow?: boolean;
   tail?: number;
   since?: string;
+  redactValues: readonly string[];
 };
-
 export type FleetContainerInspectResult =
   | {
       kind: "ok";
+      containerId: string;
       state: string;
       running: boolean;
       labels: Record<string, string>;
@@ -69,6 +71,15 @@ export type FleetContainerInspectResult =
       memory: string;
       cpus: string;
       pidsLimit: number | undefined;
+      storageOpt: Record<string, string>;
+      capDrop: string[];
+      // Podman-only top-level inspect field: null means every capability is
+      // dropped, a list means caps remain, and Docker omits the field entirely.
+      effectiveCaps: string[] | undefined;
+      securityOpt: string[];
+      init: boolean | undefined;
+      restartPolicy: string | undefined;
+      portBindings: Array<{ containerPort: string; hostIp: string; hostPort: string }>;
       user?: string;
       usernsMode?: string;
     }
@@ -80,6 +91,7 @@ export type FleetNetworkInspectResult =
       kind: "ok";
       labels: Record<string, string>;
       attachedContainers: Array<{ id: string; name?: string }>;
+      internal: boolean;
     }
   | { kind: "missing" }
   | { kind: "unavailable"; error: string };
@@ -93,10 +105,6 @@ class InvalidInspectOutputError extends Error {
   constructor() {
     super("container inspect returned an invalid response");
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -150,6 +158,66 @@ function readLabels(value: unknown): Record<string, string> {
     labels[key] = label;
   }
   return labels;
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  const record = requireRecord(value);
+  for (const entry of Object.values(record)) {
+    if (typeof entry !== "string") {
+      throw new InvalidInspectOutputError();
+    }
+  }
+  return record as Record<string, string>;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+    throw new InvalidInspectOutputError();
+  }
+  return value;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return requireBoolean(value);
+}
+
+function readRestartPolicy(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return readOptionalString(requireRecord(value).Name);
+}
+
+function readPortBindings(
+  value: unknown,
+): Array<{ containerPort: string; hostIp: string; hostPort: string }> {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  const bindings: Array<{ containerPort: string; hostIp: string; hostPort: string }> = [];
+  for (const [containerPort, rawEntries] of Object.entries(requireRecord(value))) {
+    if (!containerPort || !Array.isArray(rawEntries)) {
+      throw new InvalidInspectOutputError();
+    }
+    for (const rawEntry of rawEntries) {
+      const entry = requireRecord(rawEntry);
+      bindings.push({
+        containerPort,
+        hostIp: requireString(entry.HostIp),
+        hostPort: requireString(entry.HostPort),
+      });
+    }
+  }
+  return bindings;
 }
 
 function readNetworkAttachments(value: unknown): Array<{ id: string; name?: string }> {
@@ -211,7 +279,6 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-
   const inspected = requireRecord(parsed[0]);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
@@ -222,6 +289,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
 
   return {
     kind: "ok",
+    containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
     labels: readLabels(config.Labels),
@@ -230,6 +298,14 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     memory: String(requireNonNegativeNumber(hostConfig.Memory)),
     cpus: String(nanoCpus / 1_000_000_000),
     pidsLimit: readPidsLimit(hostConfig.PidsLimit),
+    storageOpt: readStringRecord(hostConfig.StorageOpt),
+    capDrop: readStringArray(hostConfig.CapDrop),
+    effectiveCaps:
+      inspected.EffectiveCaps === undefined ? undefined : readStringArray(inspected.EffectiveCaps),
+    securityOpt: readStringArray(hostConfig.SecurityOpt),
+    init: readOptionalBoolean(hostConfig.Init),
+    restartPolicy: readRestartPolicy(hostConfig.RestartPolicy),
+    portBindings: readPortBindings(hostConfig.PortBindings),
     ...(user ? { user } : {}),
     ...(usernsMode ? { usernsMode } : {}),
   };
@@ -253,6 +329,7 @@ function parseNetworkInspectOutput(
     kind: "ok",
     labels: readLabels(inspected.Labels ?? inspected.labels),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
+    internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
   };
 }
 
@@ -408,16 +485,51 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   return normalized;
 };
 
-const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (runtime, args) =>
+const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
+  runtime,
+  args,
+  options,
+) =>
   new Promise<FleetContainerStreamResult>((resolve, reject) => {
-    // Logs carry no environment or token arguments, so this narrow inherited-stdio seam needs no redaction.
-    const child = spawn(runtime, args, { stdio: ["ignore", "inherit", "inherit"] });
+    // Pipe instead of inheriting stdio so the cell's Gateway token can be
+    // redacted from live log content; argv itself carries no secrets.
+    const child = spawn(runtime, args, { stdio: ["ignore", "pipe", "pipe"] });
     // Forward every termination signal (SIGINT/SIGTERM/SIGHUP/...), not just Ctrl-C:
-    // a supervisor signaling only the CLI PID must never orphan a follow stream that
-    // holds the inherited stdio descriptors. The bridge detaches itself on child exit.
+    // a supervisor signaling only the CLI PID must never orphan a follow stream.
+    // The bridge detaches itself on child exit.
     attachChildProcessBridge(child);
+    const stdout = createRedactingStreamWriter(process.stdout, options.redactValues);
+    const stderr = createRedactingStreamWriter(process.stderr, options.redactValues);
+    // A downstream reader closing our stdout (e.g. `| head`) surfaces as a
+    // stream error here rather than SIGPIPE on the child; end the child so a
+    // follow stream terminates instead of writing into a broken pipe forever.
+    const onTargetError = (): void => {
+      child.kill("SIGTERM");
+    };
+    process.stdout.once("error", onTargetError);
+    process.stderr.once("error", onTargetError);
+    // Honor target backpressure: pause the child stream while the terminal or
+    // pipe drains so a noisy follow stream cannot buffer without bound.
+    const pipeWithBackpressure = (
+      source: typeof child.stdout,
+      targetStream: NodeJS.WriteStream,
+      writer: ReturnType<typeof createRedactingStreamWriter>,
+    ): void => {
+      source?.on("data", (chunk: Buffer) => {
+        if (!writer.write(chunk)) {
+          source.pause();
+          targetStream.once("drain", () => source.resume());
+        }
+      });
+    };
+    pipeWithBackpressure(child.stdout, process.stdout, stdout);
+    pipeWithBackpressure(child.stderr, process.stderr, stderr);
     child.once("error", reject);
     child.once("close", (code, signal) => {
+      stdout.flush();
+      stderr.flush();
+      process.stdout.removeListener("error", onTargetError);
+      process.stderr.removeListener("error", onTargetError);
       resolve({ code, signal });
     });
   });
@@ -450,6 +562,14 @@ function validateNetworkName(networkName: string): string {
   return normalized;
 }
 
+function validateContainerName(containerName: string): string {
+  const normalized = containerName.trim();
+  if (!normalized || normalized.startsWith("-")) {
+    throw new Error("Fleet container name is invalid.");
+  }
+  return normalized;
+}
+
 function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions): string[] {
   const args = ["logs"];
   if (options.follow) {
@@ -469,10 +589,9 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
     }
     args.push("--since", options.since);
   }
-  args.push(containerName);
+  args.push(validateContainerName(containerName));
   return args;
 }
-
 export function createFleetContainerRuntime(
   executor: FleetContainerCommandExecutor = defaultFleetContainerCommandExecutor,
   streamExecutor: FleetContainerStreamExecutor = defaultFleetContainerStreamExecutor,
@@ -518,7 +637,7 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       containerName: string,
     ): Promise<FleetContainerInspectResult> {
-      const args = ["container", "inspect", containerName];
+      const args = ["container", "inspect", validateContainerName(containerName)];
       let result: FleetContainerCommandResult;
       try {
         result = await execute(runtime, args, { allowFailure: true });
@@ -617,6 +736,7 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       networkName: string,
       labels: Readonly<Record<string, string>>,
+      options: { internal: boolean },
     ): Promise<void> {
       const labelArgs = Object.entries(labels)
         .toSorted(([left], [right]) => left.localeCompare(right))
@@ -626,6 +746,7 @@ export function createFleetContainerRuntime(
         "create",
         "--driver",
         "bridge",
+        ...(options.internal ? ["--internal"] : []),
         ...labelArgs,
         validateNetworkName(networkName),
       ]);
@@ -636,15 +757,15 @@ export function createFleetContainerRuntime(
     },
 
     async start(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["start", containerName]);
+      await execute(runtime, ["start", validateContainerName(containerName)]);
     },
 
     async stop(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["stop", containerName]);
+      await execute(runtime, ["stop", validateContainerName(containerName)]);
     },
 
     async restart(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["restart", containerName]);
+      await execute(runtime, ["restart", validateContainerName(containerName)]);
     },
 
     async logs(
@@ -652,7 +773,9 @@ export function createFleetContainerRuntime(
       containerName: string,
       options: FleetContainerLogsOptions,
     ): Promise<void> {
-      const result = await streamExecutor(runtime, buildLogsArgs(containerName, options));
+      const result = await streamExecutor(runtime, buildLogsArgs(containerName, options), {
+        redactValues: options.redactValues,
+      });
       if (result.code === 0) {
         return;
       }
@@ -676,7 +799,12 @@ export function createFleetContainerRuntime(
       containerName: string,
       force: boolean,
     ): Promise<void> {
-      await execute(runtime, ["rm", ...(force ? ["--force"] : []), containerName]);
+      await execute(runtime, [
+        "rm",
+        ...(force ? ["--force"] : []),
+        validateContainerName(containerName),
+      ]);
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

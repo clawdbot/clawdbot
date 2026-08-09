@@ -1,14 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Covers exec approval forwarding to channel plugins.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  buildExecApprovalRequestMessage,
-  createExecApprovalForwarder,
-} from "./exec-approval-forwarder.js";
+import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }));
@@ -216,12 +216,7 @@ function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
   return firstCall.payloads?.[0]?.text ?? "";
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireFirstCallArg(
   mock: ReturnType<typeof vi.fn>,
@@ -406,6 +401,71 @@ describe("exec approval forwarder", () => {
 
     await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps pending delivery ahead of a resolution received during route lookup", async () => {
+    const target = createDeferred<{ channel: "slack"; to: string }>();
+    const pendingDelivery = createDeferred();
+    const deliveryOrder: string[] = [];
+    const deliver = vi.fn(async (deliveryParams: { payloads?: Array<{ text?: string }> }) => {
+      const text = deliveryParams.payloads?.[0]?.text ?? "";
+      const kind = text.includes("required") ? "pending" : "resolved";
+      deliveryOrder.push(kind);
+      if (kind === "pending") {
+        await pendingDelivery.promise;
+      }
+      return [];
+    });
+    const resolveSessionTarget = vi.fn(() => target.promise);
+    const { forwarder } = createForwarder({
+      cfg: makeSessionCfg(),
+      deliver,
+      resolveSessionTarget,
+    });
+
+    const requested = forwarder.handleRequested(baseRequest);
+    await vi.waitFor(() => expect(resolveSessionTarget).toHaveBeenCalledOnce());
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "slack:U1",
+      ts: 2000,
+    });
+
+    target.resolve({ channel: "slack", to: "U1" });
+    await expect(requested).resolves.toBe(true);
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    expect(deliveryOrder).toEqual(["pending"]);
+
+    pendingDelivery.resolve();
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+    expect(deliveryOrder).toEqual(["pending", "resolved"]);
+    expect(resolveSessionTarget).toHaveBeenCalledOnce();
+  });
+
+  it("keeps pending delivery ahead of expiry", async () => {
+    vi.useFakeTimers();
+    const pendingDelivery = createDeferred();
+    const deliveryOrder: string[] = [];
+    const deliver = vi.fn(async (deliveryParams: { payloads?: Array<{ text?: string }> }) => {
+      const text = deliveryParams.payloads?.[0]?.text ?? "";
+      const kind = text.includes("required") ? "pending" : "expired";
+      deliveryOrder.push(kind);
+      if (kind === "pending") {
+        await pendingDelivery.promise;
+      }
+      return [];
+    });
+    const { forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliveryOrder).toEqual(["pending"]);
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - 1000);
+    expect(deliveryOrder).toEqual(["pending"]);
+
+    pendingDelivery.resolve();
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2));
+    expect(deliveryOrder).toEqual(["pending", "expired"]);
   });
 
   it("forwards to explicit targets and expires", async () => {
@@ -636,26 +696,6 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
-  it("includes command analysis warnings in fallback delivery text", () => {
-    const text = buildExecApprovalRequestMessage(
-      {
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          commandAnalysis: {
-            commandCount: 1,
-            nestedCommandCount: 0,
-            riskKinds: ["inline-eval"],
-            warningLines: ["Contains inline-eval: python3 -c"],
-          },
-        },
-      },
-      1000,
-    );
-    expect(text).toContain("Command analysis:");
-    expect(text).toContain("- Contains inline-eval: python3 -c");
-  });
-
   it("omits allow-always from forwarded fallback text when ask=always", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
@@ -794,8 +834,11 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       const expiryText =
-        (deliver.mock.calls[0][0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]?.text ??
-        "";
+        (
+          expectDefined(deliver.mock.calls[0], "deliver.mock.calls[0] test invariant")[0] as {
+            payloads?: Array<{ text?: string }>;
+          }
+        ).payloads?.[0]?.text ?? "";
       expect(expiryText).toContain("expired");
 
       // After expiry, the pending entry should be cleaned up.

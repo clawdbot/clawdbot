@@ -14,7 +14,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { slackPlugin } from "./channel.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
+import { setSlackRuntime } from "./runtime.js";
 
 const CONVERSATION = {
   channel: "slack",
@@ -42,7 +42,7 @@ describe("Slack Enterprise Grid runtime conversation bindings", () => {
   afterEach(async () => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     closeOpenClawStateDatabaseForTest();
-    clearSlackRuntime();
+    setSlackRuntime(null as never);
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {

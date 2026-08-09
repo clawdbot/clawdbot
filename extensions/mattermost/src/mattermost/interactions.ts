@@ -183,7 +183,7 @@ export function setInteractionSecret(accountIdOrBotToken: string, botToken?: str
   defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
 }
 
-export function getInteractionSecret(accountId?: string): string {
+function getInteractionSecret(accountId?: string): string {
   const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
   if (scoped) {
     return scoped;
@@ -217,16 +217,13 @@ function canonicalizeInteractionContext(value: unknown): unknown {
   return value;
 }
 
-export function generateInteractionToken(
-  context: Record<string, unknown>,
-  accountId?: string,
-): string {
+function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
   const secret = getInteractionSecret(accountId);
   const payload = JSON.stringify(canonicalizeInteractionContext(context));
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-export function verifyInteractionToken(
+function verifyInteractionToken(
   context: Record<string, unknown>,
   token: string,
   accountId?: string,

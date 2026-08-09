@@ -3,7 +3,9 @@ import {
   GITHUB_RELEASE_BODY_MAX_BYTES,
   GITHUB_RELEASE_BODY_MAX_CHARACTERS,
   extractChangelogSection,
+  formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
+  parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
@@ -40,6 +42,67 @@ function changelogFor(record: string): string {
 }
 
 describe("GitHub release-note rendering", () => {
+  it("round-trips canonical contribution provenance and accepts published legacy lines", () => {
+    const target = "a".repeat(40);
+    const singular = formatContributionRecordProvenance({
+      base: "v2026.7.2-beta.7",
+      target,
+      inRangePullRequests: 1,
+      retainedSeedOnlyPullRequests: 0,
+      uniquePullRequests: 1,
+    });
+    const commaSeparated = formatContributionRecordProvenance({
+      base: "v2026.7.2-beta.7",
+      target,
+      inRangePullRequests: 1_234,
+      retainedSeedOnlyPullRequests: 56,
+      uniquePullRequests: 1_290,
+    });
+
+    expect(singular).toContain("1 in-range PR + 0 retained seed-only PRs = 1 unique PR.");
+    expect(commaSeparated).toContain(
+      "1,234 in-range PRs + 56 retained seed-only PRs = 1,290 unique PRs.",
+    );
+    expect(
+      parseContributionRecordProvenance(
+        [singular, "", "#### Pull requests", "", "- **PR #123** fix: canonical example."].join(
+          "\n",
+        ),
+      ),
+    ).toEqual({
+      base: "v2026.7.2-beta.7",
+      target,
+      inRangePullRequests: 1,
+      retainedSeedOnlyPullRequests: 0,
+      uniquePullRequests: 1,
+    });
+    const legacy = parseContributionRecordProvenance(
+      [
+        `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 1 merged PR. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
+        "",
+        "#### Pull requests",
+        "",
+        "- **PR #123** fix: legacy example.",
+      ].join("\n"),
+    );
+    expect(legacy).toMatchObject({ uniquePullRequests: 1 });
+    expect(() => formatContributionRecordProvenance(legacy!)).toThrow("requires split PR counts");
+    expect(() =>
+      parseContributionRecordProvenance(
+        commaSeparated.replace("= 1,290 unique PRs", "= 1,291 unique PRs"),
+      ),
+    ).toThrow("provenance arithmetic is invalid");
+    expect(() =>
+      parseContributionRecordProvenance(commaSeparated.replace("1,234", "1234")),
+    ).toThrow("provenance is malformed");
+    expect(() =>
+      parseContributionRecordProvenance(singular.replace("1 in-range", "001 in-range")),
+    ).toThrow("provenance is malformed");
+    expect(() => parseContributionRecordProvenance(singular)).toThrow(
+      "positive contribution record requires a Pull requests section",
+    );
+  });
+
   it("emits the complete matching section including its version heading when it fits", () => {
     const rendered = renderGithubReleaseNotes({
       changelog: changelogFor("- **PR #123** fix: example. Thanks @contributor."),

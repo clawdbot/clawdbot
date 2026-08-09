@@ -9,6 +9,7 @@ What you can do:
 - Review Gateway action approvals from your iPhone
 - Share text, links, and media directly from iOS into OpenClaw
 - Enable device capabilities such as camera, screen, location, photos, contacts, calendar, and reminders when you choose
+- Create read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts
 - Receive push wakes and node status updates for connected workflows
 
 OpenClaw is local-first: you control your gateway, keys, configuration, and permissions. Device access is managed by iOS permissions and can be enabled only for the capabilities you want to use.

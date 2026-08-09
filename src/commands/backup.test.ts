@@ -2,17 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import * as backupShared from "./backup-shared.js";
 import {
+  buildBackupArchivePath,
   buildBackupArchiveRoot,
-  encodeAbsolutePathForBackupArchive,
-  formatBackupArchiveTimestamp,
   type BackupAsset,
-  resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import {
@@ -21,6 +20,7 @@ import {
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
+  resolveBackupPlanFromPaths,
   tarCreateMock,
 } from "./backup.test-support.js";
 
@@ -54,7 +54,7 @@ describe("backup commands", () => {
       throw new Error(`expected ${label} call`);
     }
     const [arg] = call;
-    return arg;
+    return expectDefined(arg, "arg test invariant");
   }
 
   async function mockWorkspaceBackupPlan(stateDir: string, workspaceDir: string, nowMs: number) {
@@ -129,11 +129,7 @@ describe("backup commands", () => {
         kind: "state",
         sourcePath: stateSourcePath,
         displayPath: included.displayPath,
-        archivePath: path.posix.join(
-          buildBackupArchiveRoot(123),
-          "payload",
-          encodeAbsolutePathForBackupArchive(stateSourcePath),
-        ),
+        archivePath: buildBackupArchivePath(buildBackupArchiveRoot(123), stateSourcePath),
       },
     ]);
     const workspaceSourcePath = path.join(included.sourcePath, "workspace");
@@ -164,13 +160,20 @@ describe("backup commands", () => {
     ]);
   }
 
-  it("formats backup archive timestamps in local time with an explicit offset", () => {
-    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), 8 * 60)).toBe(
-      "2026-03-14T09-02-03.456+08-00",
-    );
-    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), -5 * 60)).toBe(
-      "2026-03-13T20-02-03.456-05-00",
-    );
+  it("formats backup archive timestamps in local time", () => {
+    const envSnapshot = captureEnv(["TZ"]);
+    try {
+      setTestEnvValue("TZ", "Asia/Shanghai");
+      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
+        "2026-03-14T09-02-03.456+08-00-openclaw-backup",
+      );
+      setTestEnvValue("TZ", "America/New_York");
+      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
+        "2026-03-13T21-02-03.456-04-00-openclaw-backup",
+      );
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
@@ -271,7 +274,10 @@ describe("backup commands", () => {
           createMockTarStream({
             beforeRead: async () => {
               capturedManifest = JSON.parse(
-                await fs.readFile(entryPaths[0], "utf8"),
+                await fs.readFile(
+                  expectDefined(entryPaths[0], "entryPaths[0] test invariant"),
+                  "utf8",
+                ),
               ) as CapturedBackupManifest;
               capturedEntryPaths = entryPaths;
               capturedOnWriteEntry = options.onWriteEntry ?? null;
@@ -325,7 +331,7 @@ describe("backup commands", () => {
       }
       expect(capturedEntryPaths).toHaveLength(result.assets.length + 1);
 
-      const manifestPath = capturedEntryPaths[0];
+      const manifestPath = expectDefined(capturedEntryPaths[0], "manifest archive path");
       const remappedManifestEntry = { path: manifestPath };
       onWriteEntry(remappedManifestEntry);
       expect(remappedManifestEntry.path).toBe(
@@ -335,21 +341,13 @@ describe("backup commands", () => {
       const remappedStateEntry = { path: stateAsset.sourcePath };
       onWriteEntry(remappedStateEntry);
       expect(remappedStateEntry.path).toBe(
-        path.posix.join(
-          buildBackupArchiveRoot(nowMs),
-          "payload",
-          encodeAbsolutePathForBackupArchive(stateAsset.sourcePath),
-        ),
+        buildBackupArchivePath(buildBackupArchiveRoot(nowMs), stateAsset.sourcePath),
       );
 
       const remappedWorkspaceEntry = { path: workspaceAsset.sourcePath };
       onWriteEntry(remappedWorkspaceEntry);
       expect(remappedWorkspaceEntry.path).toBe(
-        path.posix.join(
-          buildBackupArchiveRoot(nowMs),
-          "payload",
-          encodeAbsolutePathForBackupArchive(workspaceAsset.sourcePath),
-        ),
+        buildBackupArchivePath(buildBackupArchiveRoot(nowMs), workspaceAsset.sourcePath),
       );
     } finally {
       envSnapshot.restore();

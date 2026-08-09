@@ -1,7 +1,5 @@
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -16,6 +14,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderCreateResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { formatLlamaCppSetupError, resolveNodeLlamaCppImportUrl } from "./node-llama.runtime.js";
 
 type LlamaCppLocalOptions = {
   modelPath?: string;
@@ -29,7 +28,7 @@ type LlamaCppEmbeddingProviderRuntimeOptions = {
 
 const LLAMA_CPP_EMBEDDING_PROVIDER_ID = "local";
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
-export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
+const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
 const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_CACHE_FILE_NAME =
   "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
@@ -118,48 +117,6 @@ function toMemoryEmbeddingInput(input: EmbeddingInput): MemoryEmbeddingInput {
   return typeof input === "string" ? { text: input } : input;
 }
 
-function isNodeLlamaCppMissing(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const code = (err as Error & { code?: unknown }).code;
-  return code === "ERR_MODULE_NOT_FOUND" && err.message.includes("node-llama-cpp");
-}
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
-
-export function formatLlamaCppSetupError(err: unknown): string {
-  const detail = formatErrorMessage(err);
-  const missing = isNodeLlamaCppMissing(err);
-  return [
-    "Local llama.cpp embeddings unavailable.",
-    missing
-      ? "Reason: node-llama-cpp is missing or failed to install."
-      : detail
-        ? `Reason: ${detail}`
-        : undefined,
-    missing && detail ? `Detail: ${detail}` : null,
-    "To enable local GGUF embeddings:",
-    "1) Install the official provider plugin: openclaw plugins install @openclaw/llama-cpp-provider",
-    "2) Use Node 24 for native installs/updates.",
-    "3) If you use pnpm from source: pnpm approve-builds, then pnpm rebuild node-llama-cpp.",
-    'Or set agents.defaults.memorySearch.provider to a remote embedding provider such as "openai", "ollama", "lmstudio", or "voyage".',
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-const requireFromPlugin = createRequire(import.meta.url);
-
-function resolveNodeLlamaCppImportUrl(): string {
-  return pathToFileURL(requireFromPlugin.resolve("node-llama-cpp")).href;
-}
-
 function copyLocalRuntimeFacts(source: object, target: object): void {
   const getRuntimeFacts = Reflect.get(source, LOCAL_EMBEDDING_RUNTIME_FACTS);
   if (typeof getRuntimeFacts === "function") {
@@ -195,7 +152,7 @@ function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): Embedd
   return adapted;
 }
 
-export async function createLlamaCppMemoryEmbeddingProvider(
+async function createLlamaCppMemoryEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
   runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
 ): Promise<MemoryEmbeddingProviderCreateResult> {

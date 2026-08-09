@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
@@ -90,6 +91,33 @@ function createBundledPluginFixture(params: {
     "utf8",
   );
   return { bundledPluginsDir, pluginId, pluginRoot };
+}
+
+function createBundledChannelConfigFixtures(): string {
+  const bundledPluginsDir = path.join(
+    packageRoot,
+    "dist",
+    nextTrustedPluginId("openclaw-channel-config-fixtures-"),
+  );
+  trustedBundledPluginFixtureRoots.push(bundledPluginsDir);
+  for (const [pluginId, exportName] of [
+    ["telegram", "TelegramConfigSchema"],
+    ["imessage", "IMessageConfigSchema"],
+  ] as const) {
+    const pluginRoot = path.join(bundledPluginsDir, pluginId);
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    writeFixturePackageJson(pluginRoot, pluginId);
+    fs.writeFileSync(
+      path.join(pluginRoot, "config-api.js"),
+      [
+        'import { z } from "zod";',
+        `export const ${exportName} = z.object({ dmPolicy: z.literal("pairing").default("pairing") });`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
+  return bundledPluginsDir;
 }
 
 function createPackageSourcePluginFixture(params: {
@@ -187,6 +215,21 @@ afterEach(() => {
 });
 
 describe("plugin-sdk facade loader", () => {
+  it("resolves channel config facades lazily from generated plugin fixtures", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createBundledChannelConfigFixtures();
+    const { IMessageConfigSchema, TelegramConfigSchema } =
+      await import("./bundled-channel-config-schema.js");
+
+    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(TelegramConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    const extended = TelegramConfigSchema.safeExtend({ testOnly: z.literal(true) });
+    expect(extended.safeParse({ dmPolicy: "pairing", testOnly: true }).success).toBe(true);
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["telegram"]);
+
+    expect(IMessageConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["imessage", "telegram"]);
+  });
+
   it("honors trusted bundled plugin dir overrides under the package root", () => {
     const pluginId = nextTrustedPluginId("openclaw-facade-loader-override-");
     const overrideA = createBundledPluginFixture({

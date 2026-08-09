@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Test registry fixture for command authorization across Discord and phone-based channels. */
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -24,12 +25,16 @@ function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): stri
       }
       if (/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i);
-        return match ? normalizeE164(match[1]) : null;
+        return match
+          ? normalizeE164(expectDefined(match[1], "command auth registry fixture regex capture 1"))
+          : null;
       }
       // WhatsApp LID values are numeric identifiers; test fixtures map them like phone ids.
       if (/^(\d+)@lid$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)@lid$/i);
-        return match ? normalizeE164(match[1]) : null;
+        return match
+          ? normalizeE164(expectDefined(match[1], "command auth registry fixture regex capture 1"))
+          : null;
       }
       if (stripped.includes("@")) {
         return null;

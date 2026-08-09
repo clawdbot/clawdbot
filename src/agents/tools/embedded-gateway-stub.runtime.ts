@@ -1,11 +1,16 @@
 /**
  * Runtime dependency barrel for the embedded Gateway stub.
  *
- * Tests mock this module to exercise local sessions.list/sessions.resolve/chat.history
+ * Tests mock this module to exercise local sessions.list/sessions.resolve/sessions.search/chat.history
  * behavior without importing the full Gateway server graph.
  */
-export { resolveSessionAgentId } from "../../agents/agent-scope.js";
+export { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 export { getRuntimeConfig } from "../../config/config.js";
+export { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
+export {
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "../../gateway/session-store-key.js";
 export {
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessages,
@@ -29,7 +34,7 @@ export {
 export {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
+  loadSessionEntryReadOnly as loadSessionEntry,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
 export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";

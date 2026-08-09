@@ -16,7 +16,7 @@ Adds OpenCode Go model provider support to OpenClaw.
 
 ## Surface
 
-providers: opencode-go; contracts: mediaUnderstandingProviders
+providers: `opencode-go`; contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 

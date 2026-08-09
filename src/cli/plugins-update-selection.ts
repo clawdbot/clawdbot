@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Plugin and hook-pack update selectors for id and npm-spec command inputs.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -26,26 +27,18 @@ export function resolvePluginUpdateSelection(params: {
 
   const parsedSpec = parseRegistryNpmSpec(params.rawId);
   if (!parsedSpec) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
   const matches = Object.entries(params.installs).filter(([, install]) => {
     return extractInstalledNpmPackageName(install) === parsedSpec.name;
   });
   if (matches.length !== 1) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
 
-  const [pluginId] = matches[0];
+  const [pluginId] = expectDefined(matches[0], "matches capture group 0");
   if (!pluginId) {
-    return { pluginIds: [params.rawId] };
-  }
-  if (parsedSpec.selectorKind === "none") {
-    return {
-      pluginIds: [pluginId],
-      specOverrides: {
-        [pluginId]: parsedSpec.raw,
-      },
-    };
+    return { pluginIds: [] };
   }
   return {
     pluginIds: [pluginId],
@@ -83,7 +76,7 @@ export function resolveHookPackUpdateSelection(params: {
     return { hookIds: [] };
   }
 
-  const [hookId] = matches[0];
+  const [hookId] = expectDefined(matches[0], "matches capture group 0");
   if (!hookId) {
     return { hookIds: [] };
   }

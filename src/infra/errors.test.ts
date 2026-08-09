@@ -1,13 +1,14 @@
-// Tests shared infra error formatting and classification.
+// Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
+import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import {
   collectErrorGraphCandidates,
-  detectErrorKind,
   extractErrorCode,
   formatErrorMessage,
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
+  isMissingPathError,
   readErrorName,
 } from "./errors.js";
 
@@ -54,12 +55,62 @@ describe("error helpers", () => {
     expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
   });
 
+  it("walks every canonical wrapper edge once despite duplicates and cycles", () => {
+    const cause = { name: "cause" } as { name: string; cause?: unknown };
+    const reason = { name: "reason" };
+    const original = { name: "original" };
+    const error = { name: "error" };
+    const data = { name: "data" };
+    const aggregate = { name: "aggregate" };
+    const root = {
+      name: "root",
+      cause,
+      reason,
+      original,
+      error,
+      data,
+      errors: [aggregate, cause],
+    };
+    cause.cause = root;
+
+    expect(collectNestedErrorCandidates(root)).toEqual([
+      root,
+      cause,
+      reason,
+      original,
+      error,
+      data,
+      aggregate,
+    ]);
+  });
+
+  it.each([
+    { value: { code: " econnreset " }, expected: "ECONNRESET" },
+    { value: { errno: " eai_again " }, expected: "EAI_AGAIN" },
+    { value: { errno: -3001 }, expected: "-3001" },
+    { value: { errno: false }, expected: undefined },
+  ])("normalizes error code or errno from %#", ({ value, expected }) => {
+    expect(extractErrorCodeOrErrno(value)).toBe(expected);
+  });
+
   it("matches errno-shaped errors by code", () => {
     const err = Object.assign(new Error("busy"), { code: "EADDRINUSE" });
     expect(isErrno(err)).toBe(true);
     expect(hasErrnoCode(err, "EADDRINUSE")).toBe(true);
     expect(hasErrnoCode(err, "ENOENT")).toBe(false);
     expect(isErrno("busy")).toBe(false);
+  });
+
+  it.each(["ENOENT", "ENOTDIR", "not-found"])(
+    "classifies %s as a missing path without requiring Error identity",
+    (code) => {
+      expect(isMissingPathError({ code })).toBe(true);
+    },
+  );
+
+  it("does not classify other fs-safe or errno failures as missing paths", () => {
+    expect(isMissingPathError({ code: "path-alias" })).toBe(false);
+    expect(isMissingPathError(new Error("ENOENT"))).toBe(false);
   });
 
   it.each([
@@ -120,43 +171,6 @@ describe("error helpers", () => {
     expect(formatted).toContain("authorization:");
     expect(formatted).not.toContain(appSecret);
     expect(formatted).not.toContain(tenantToken);
-  });
-
-  it.each([
-    {
-      value: new Error("Unhandled stop reason: refusal_policy"),
-      expected: "refusal",
-    },
-    {
-      value: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
-      expected: "timeout",
-    },
-    {
-      value: Object.assign(new Error("Too many requests"), { code: 429 }),
-      expected: "rate_limit",
-    },
-    {
-      value: new Error("Rate limit exceeded, timeout: 30s"),
-      expected: "rate_limit",
-    },
-    {
-      value: Object.assign(new Error("HTTP 429 Too Many Requests"), { code: "ETIMEDOUT" }),
-      expected: "rate_limit",
-    },
-    {
-      value: new Error("context_window exceeded with too many tokens"),
-      expected: "context_length",
-    },
-    {
-      value: new Error("plain provider failure"),
-      expected: undefined,
-    },
-    {
-      value: undefined,
-      expected: undefined,
-    },
-  ] as const)("detects error kind for case %#", ({ value, expected }) => {
-    expect(detectErrorKind(value)).toBe(expected);
   });
 
   it("uses message-only formatting for INVALID_CONFIG and stack formatting otherwise", () => {

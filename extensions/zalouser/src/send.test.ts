@@ -1,4 +1,5 @@
 // Zalouser tests cover send plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
@@ -60,12 +61,7 @@ function sendFailure(error: string, threadId = "thread") {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -294,6 +290,42 @@ describe("zalouser send helpers", () => {
       textStyles: undefined,
     });
     expectResultFields(result, { ok: true, messageId: "mid-2d-4" });
+  });
+
+  it.each([
+    {
+      name: "fenced code with hard limits",
+      text: "```ts\nconst alpha = 1;\nconst beta = 2;\n```",
+      textChunkLimit: 16,
+      textChunkMode: "length" as const,
+      expected: ["const alpha = 1;", "\nconst beta = 2;"],
+    },
+    {
+      name: "tables with newline-preferred limits",
+      text: "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
+      textChunkLimit: 24,
+      textChunkMode: "newline" as const,
+      expected: ["| A | B |\n| --- | --- |\n", "| 1 | 2 |\n| 3 | 4 |"],
+    },
+    {
+      name: "repeated whitespace around paragraph boundaries",
+      text: "alpha  beta\n\ngamma delta",
+      textChunkLimit: 12,
+      textChunkMode: "newline" as const,
+      expected: ["alpha  beta\n", "\ngamma delta"],
+    },
+  ])("preserves exact rendered chunks for $name", async (fixture) => {
+    mockSendText.mockResolvedValue(sendResult("mid-parity", "thread-parity"));
+
+    await sendMessageZalouser("thread-parity", fixture.text, {
+      textMode: "markdown",
+      textChunkLimit: fixture.textChunkLimit,
+      textChunkMode: fixture.textChunkMode,
+    });
+
+    const renderedChunks = mockSendText.mock.calls.map((call) => call[1]);
+    expect(renderedChunks).toEqual(fixture.expected);
+    expect(renderedChunks.join("")).toBe(parseZalouserTextStyles(fixture.text).text);
   });
 
   it("respects an explicit text chunk limit when splitting formatted markdown", async () => {

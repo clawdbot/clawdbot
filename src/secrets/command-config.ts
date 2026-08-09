@@ -13,12 +13,6 @@ export type CommandSecretAssignment = {
   value: unknown;
 };
 
-/** Resolved command assignments plus non-fatal diagnostics. */
-export type ResolveAssignmentsFromSnapshotResult = {
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-};
-
 /** Active or inactive command target that could not be materialized. */
 export type UnresolvedCommandSecretAssignment = {
   path: string;
@@ -26,7 +20,7 @@ export type UnresolvedCommandSecretAssignment = {
 };
 
 /** Full command assignment analysis before unresolved active refs are rejected. */
-export type AnalyzeAssignmentsFromSnapshotResult = {
+type AnalyzeAssignmentsFromSnapshotResult = {
   assignments: CommandSecretAssignment[];
   diagnostics: string[];
   unresolved: UnresolvedCommandSecretAssignment[];
@@ -102,33 +96,4 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   }
 
   return { assignments, diagnostics, unresolved, inactive };
-}
-
-/**
- * Returns resolved command assignments and throws when an active required ref is unresolved.
- */
-export function collectCommandSecretAssignmentsFromSnapshot(params: {
-  sourceConfig: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  commandName: string;
-  targetIds: ReadonlySet<string>;
-  inactiveRefPaths?: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-}): ResolveAssignmentsFromSnapshotResult {
-  const analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-    sourceConfig: params.sourceConfig,
-    resolvedConfig: params.resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths: params.inactiveRefPaths,
-    allowedPaths: params.allowedPaths,
-  });
-  if (analyzed.unresolved.length > 0) {
-    throw new Error(
-      `${params.commandName}: ${analyzed.unresolved[0]?.path ?? "target"} is unresolved in the active runtime snapshot.`,
-    );
-  }
-  return {
-    assignments: analyzed.assignments,
-    diagnostics: analyzed.diagnostics,
-  };
 }

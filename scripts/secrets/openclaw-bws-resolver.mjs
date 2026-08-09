@@ -81,9 +81,9 @@ const main = async () => {
     if (matches.length === 1) {
       values[id] = matches[0];
     } else if (matches.length > 1) {
-      errors[id] = { message: "ambiguous duplicate key" };
+      errors[id] = { code: "AMBIGUOUS_DUPLICATE_KEY" };
     } else {
-      errors[id] = { message: "not found" };
+      errors[id] = { code: "NOT_FOUND" };
     }
   }
 

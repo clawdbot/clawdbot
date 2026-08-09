@@ -2,6 +2,9 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
+
+const PROBE_REQUEST_TIMEOUT_MS = 100;
 
 export async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -98,9 +101,9 @@ export function readProcessTreeCpuMs(rootPid: number | undefined): number | null
     if (!match) {
       continue;
     }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
+    const pid = Number(expectDefined(match[1], "process id from ps output"));
+    const ppid = Number(expectDefined(match[2], "parent process id from ps output"));
+    const cpuMs = parsePsCpuTimeMs(expectDefined(match[3], "CPU time from ps output"));
     if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
       continue;
     }
@@ -132,17 +135,28 @@ export function readProcessTreeCpuMs(rootPid: number | undefined): number | null
 
 function requestStatus(port: number, pathname: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request(
-      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 100 },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("probe timeout"));
+    let settled = false;
+    const settle = (run: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      run();
+    };
+    const req = request({ host: "127.0.0.1", method: "HEAD", path: pathname, port }, (res) => {
+      const status = res.statusCode ?? 0;
+      // Gateway probe HEAD responses carry the same status without a body to drain.
+      settle(() => resolve(status));
     });
+    req.on("error", (error) => settle(() => reject(error)));
+    // Socket timeouts reset on activity, so enforce the attempt budget as wall-clock time.
+    const timer = setTimeout(() => {
+      const error = new Error("probe timeout");
+      settle(() => reject(error));
+      req.destroy(error);
+    }, PROBE_REQUEST_TIMEOUT_MS);
+    timer.unref?.();
     req.end();
   });
 }
@@ -153,10 +167,21 @@ function parsePsCpuTimeMs(raw: string): number | null {
     return null;
   }
   if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+    const [minutes, seconds] = parts;
+    return Math.round(
+      (expectDefined(minutes, "process CPU minutes") * 60 +
+        expectDefined(seconds, "process CPU seconds")) *
+        1000,
+    );
   }
   if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+    const [hours, minutes, seconds] = parts;
+    return Math.round(
+      (expectDefined(hours, "process CPU hours") * 60 * 60 +
+        expectDefined(minutes, "process CPU minutes") * 60 +
+        expectDefined(seconds, "process CPU seconds")) *
+        1000,
+    );
   }
   return null;
 }

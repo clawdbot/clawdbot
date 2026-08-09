@@ -1,5 +1,9 @@
+import { initialState, Task } from "@lit/task";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ReactiveElement } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 
 const GITHUB_HOST = "github.com";
@@ -34,10 +38,6 @@ type CacheEntry = {
 
 let nextHovercardId = 0;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (typeof value !== "string" || !value.trim()) {
@@ -65,7 +65,7 @@ function decodePathSegment(value: string): string | null {
   }
 }
 
-export function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
+function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
   let url: URL;
   try {
     url = new URL(href, globalThis.location?.href ?? "http://localhost/");
@@ -91,6 +91,10 @@ export function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarge
     return null;
   }
   return { href: url.href, kind, number: Number(numberText), owner, repo };
+}
+
+export function isGitHubPullRequestLink(href: string): boolean {
+  return parseGitHubIssueOrPullRequestLink(href)?.kind === "pull";
 }
 
 function safeAvatarDataUrl(value: unknown): string | undefined {
@@ -139,21 +143,21 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
 function previewState(preview: GitHubPreview): PreviewState {
   if (preview.kind === "pull") {
     if (preview.mergedAt) {
-      return { label: "Merged", tone: "purple" };
+      return { label: t("githubPreview.states.merged"), tone: "purple" };
     }
     if (preview.draft && preview.state === "open") {
-      return { label: "Draft", tone: "muted" };
+      return { label: t("githubPreview.states.draft"), tone: "muted" };
     }
     return preview.state === "open"
-      ? { label: "Open", tone: "open" }
-      : { label: "Closed", tone: "danger" };
+      ? { label: t("githubPreview.states.open"), tone: "open" }
+      : { label: t("githubPreview.states.closed"), tone: "danger" };
   }
   if (preview.state === "open") {
-    return { label: "Open", tone: "open" };
+    return { label: t("githubPreview.states.open"), tone: "open" };
   }
   return preview.stateReason === "not_planned"
-    ? { label: "Not planned", tone: "muted" }
-    : { label: "Closed", tone: "purple" };
+    ? { label: t("githubPreview.states.notPlanned"), tone: "muted" }
+    : { label: t("githubPreview.states.closed"), tone: "purple" };
 }
 
 function appendTextElement(
@@ -177,7 +181,7 @@ function renderLoading(card: HTMLDivElement): void {
   card.replaceChildren();
   card.dataset.loading = "true";
   card.removeAttribute("data-state");
-  appendTextElement(card, "div", "github-link-hovercard__loading", "Loading GitHub details…");
+  appendTextElement(card, "div", "github-link-hovercard__loading", t("githubPreview.loading"));
 }
 
 function renderUnavailable(card: HTMLDivElement): void {
@@ -188,7 +192,7 @@ function renderUnavailable(card: HTMLDivElement): void {
     card,
     "div",
     "github-link-hovercard__unavailable",
-    "GitHub preview unavailable",
+    t("githubPreview.unavailable"),
   );
 }
 
@@ -247,16 +251,35 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     appendMetric(metrics, "github-link-hovercard__metric--additions", `+${preview.additions ?? 0}`);
     appendMetric(metrics, "github-link-hovercard__metric--deletions", `−${preview.deletions ?? 0}`);
     const files = preview.changedFiles ?? 0;
-    appendMetric(metrics, "", `${files} ${files === 1 ? "file" : "files"}`);
+    appendMetric(
+      metrics,
+      "",
+      t(files === 1 ? "githubPreview.file" : "githubPreview.files", {
+        count: String(files),
+      }),
+    );
   } else {
     const comments = preview.comments ?? 0;
-    appendMetric(metrics, "", `${comments} ${comments === 1 ? "comment" : "comments"}`);
+    appendMetric(
+      metrics,
+      "",
+      t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
+        count: String(comments),
+      }),
+    );
   }
   footer.append(metrics);
   card.append(header, title, footer);
   card.setAttribute(
     "aria-label",
-    `${state.label} ${preview.kind === "pull" ? "pull request" : "issue"} ${preview.owner}/${preview.repo} #${preview.number}: ${preview.title}, by ${preview.login}`,
+    t("githubPreview.ariaLabel", {
+      state: state.label,
+      kind: preview.kind === "pull" ? t("githubPreview.pullRequest") : t("githubPreview.issue"),
+      repo: `${preview.owner}/${preview.repo}`,
+      number: String(preview.number),
+      title: preview.title,
+      author: preview.login,
+    }),
   );
 }
 
@@ -272,7 +295,7 @@ function anchorFromEvent(event: Event): HTMLAnchorElement | null {
   return null;
 }
 
-export class GitHubLinkHovercardProvider extends HTMLElement {
+export class GitHubLinkHovercardProvider extends ReactiveElement {
   client: GatewayBrowserClient | null = null;
 
   private readonly cache = new Map<string, CacheEntry>();
@@ -283,9 +306,47 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
   private focusInside = false;
   private openTimer: number | null = null;
   private pointerInside = false;
-  private requestVersion = 0;
+  private renderedPreview: GitHubPreview | null = null;
+  private renderedUnavailable = false;
+  private stopI18n: (() => void) | null = null;
+  private readonly previewTask = new Task(this, {
+    autoRun: false,
+    args: () => [this.activeTarget] as const,
+    task: ([target], { signal }) => (target ? this.loadPreview(target, signal) : initialState),
+    onComplete: (preview) => {
+      const card = this.card;
+      if (!card) {
+        return;
+      }
+      this.renderedPreview = preview;
+      renderPreview(card, preview);
+      this.positionCard();
+    },
+    onError: () => {
+      const card = this.card;
+      if (!card) {
+        return;
+      }
+      this.renderedUnavailable = true;
+      renderUnavailable(card);
+      this.positionCard();
+    },
+  });
+  private readonly activeAnchorObserver = new MutationObserver(() => {
+    const anchor = this.activeAnchor;
+    // The card is portaled outside the routed tree, whose replacement can remove
+    // a hovered link without a pointer event reaching this delegated handler.
+    if (anchor && !this.contains(anchor)) {
+      this.close();
+    }
+  });
 
-  connectedCallback(): void {
+  protected override createRenderRoot(): HTMLElement | DocumentFragment {
+    return this;
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
     this.style.display = "contents";
     this.addEventListener("pointerover", this.handlePointerOver);
     this.addEventListener("pointerout", this.handlePointerOut);
@@ -293,17 +354,36 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.addEventListener("focusout", this.handleFocusOut);
     this.addEventListener("keydown", this.handleKeyDown);
     this.addEventListener("click", this.handleClick);
+    this.stopI18n ??= i18n.subscribe(this.handleLocaleChange);
   }
 
-  disconnectedCallback(): void {
+  override disconnectedCallback(): void {
     this.removeEventListener("pointerover", this.handlePointerOver);
     this.removeEventListener("pointerout", this.handlePointerOut);
     this.removeEventListener("focusin", this.handleFocusIn);
     this.removeEventListener("focusout", this.handleFocusOut);
     this.removeEventListener("keydown", this.handleKeyDown);
     this.removeEventListener("click", this.handleClick);
+    this.stopI18n?.();
+    this.stopI18n = null;
     this.close();
+    super.disconnectedCallback();
   }
+
+  private readonly handleLocaleChange = () => {
+    const card = this.card;
+    if (!card) {
+      return;
+    }
+    if (this.renderedPreview) {
+      renderPreview(card, this.renderedPreview);
+    } else if (this.renderedUnavailable) {
+      renderUnavailable(card);
+    } else {
+      renderLoading(card);
+    }
+    this.positionCard();
+  };
 
   private readonly handlePointerOver = (event: Event) => {
     const pointer = event as PointerEvent;
@@ -374,17 +454,17 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.activeAnchor = anchor;
     this.activeTarget = target;
     this.describedBy = anchor.getAttribute("aria-describedby");
+    this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
     this.openTimer = window.setTimeout(() => {
       this.openTimer = null;
-      void this.show(anchor, target);
+      this.show(anchor, target);
     }, delay);
   }
 
-  private async show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): Promise<void> {
+  private show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): void {
     if (this.activeAnchor !== anchor || this.activeTarget?.href !== target.href) {
       return;
     }
-    const version = ++this.requestVersion;
     const card = document.createElement("div");
     nextHovercardId += 1;
     card.id = `openclaw-github-hovercard-${nextHovercardId}`;
@@ -392,6 +472,8 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     card.dataset.open = "true";
     card.setAttribute("role", "tooltip");
     card.setAttribute("aria-live", "polite");
+    this.renderedPreview = null;
+    this.renderedUnavailable = false;
     renderLoading(card);
     document.body.append(card);
     this.card = card;
@@ -402,22 +484,10 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.listenForViewportChanges();
     this.positionCard();
 
-    try {
-      const preview = await this.loadPreview(target);
-      if (version !== this.requestVersion || card !== this.card) {
-        return;
-      }
-      renderPreview(card, preview);
-    } catch {
-      if (version !== this.requestVersion || card !== this.card) {
-        return;
-      }
-      renderUnavailable(card);
-    }
-    this.positionCard();
+    void this.previewTask.run([target]);
   }
 
-  private loadPreview(target: GitHubLinkTarget): Promise<GitHubPreview> {
+  private loadPreview(target: GitHubLinkTarget, signal: AbortSignal): Promise<GitHubPreview> {
     const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
     const now = Date.now();
     const cached = this.cache.get(key);
@@ -442,6 +512,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
           owner: target.owner,
           repo: target.repo,
         },
+        { signal },
       );
       return parsePreviewResponse(target, response);
     };
@@ -471,7 +542,8 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
       window.clearTimeout(this.openTimer);
       this.openTimer = null;
     }
-    this.requestVersion += 1;
+    this.activeAnchorObserver.disconnect();
+    void this.previewTask.run([null]);
     if (this.activeAnchor) {
       if (this.describedBy === null) {
         this.activeAnchor.removeAttribute("aria-describedby");
@@ -481,6 +553,8 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     }
     this.card?.remove();
     this.card = null;
+    this.renderedPreview = null;
+    this.renderedUnavailable = false;
     this.activeAnchor = null;
     this.activeTarget = null;
     this.describedBy = null;
@@ -528,8 +602,4 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
     card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
   }
-}
-
-if (!customElements.get("openclaw-github-link-hovercard-provider")) {
-  customElements.define("openclaw-github-link-hovercard-provider", GitHubLinkHovercardProvider);
 }

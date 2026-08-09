@@ -16,7 +16,7 @@ Adds Venice model provider support to OpenClaw.
 
 ## Surface
 
-providers: venice; contracts: usageProviders
+providers: `venice`; contracts: `usageProviders`
 
 ## Related docs
 

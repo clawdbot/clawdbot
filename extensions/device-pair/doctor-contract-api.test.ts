@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -9,7 +10,7 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
@@ -73,7 +74,7 @@ describe("device-pair doctor notify migration", () => {
       "utf8",
     );
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
     await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
       preview: [expect.stringContaining("Device Pair notify subscribers")],
     });
@@ -108,7 +109,7 @@ describe("device-pair doctor notify migration", () => {
       "utf8",
     );
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
 
     await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({

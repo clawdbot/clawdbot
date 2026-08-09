@@ -1,5 +1,5 @@
 /** Parsed command-line option token, preserving whether `=` appeared in the original token. */
-export type InlineOptionToken =
+type InlineOptionToken =
   | {
       name: string;
       hasInlineValue: false;

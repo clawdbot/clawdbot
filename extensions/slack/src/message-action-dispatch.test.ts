@@ -148,6 +148,34 @@ describe("handleSlackMessageAction", () => {
     expect(elementAt(actionsBlock, 0).value).toBe("approve");
   });
 
+  it("sends an exact mirrored portable control row once", async () => {
+    const invoke = createInvokeSpy();
+    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: { blocks: [{ type: "buttons", buttons }] },
+          interactive: { blocks: [{ type: "buttons", buttons }] },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action).not.toHaveProperty("blocks");
+    const message = preparedMessages(invoke)[0]!;
+    const blocks = message.blocks as Array<Record<string, unknown>> | undefined;
+    const actions = blocks?.filter((block) => block.type === "actions") ?? [];
+    expect(actions).toHaveLength(1);
+    expect(elementAt(actions[0]!, 0).value).toBe("approve");
+  });
+
   it("sends native charts with a complete accessible text representation", async () => {
     const invoke = createInvokeSpy();
 
@@ -443,7 +471,7 @@ describe("handleSlackMessageAction", () => {
         } as never,
         invoke: invoke as never,
       }),
-    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -478,7 +506,7 @@ describe("handleSlackMessageAction", () => {
         } as never,
         invoke: invoke as never,
       }),
-    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -828,25 +856,25 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
-  it("rejects fractional read limits before invoking Slack actions", async () => {
-    const invoke = createInvokeSpy();
+  it.each([2.5, "20"])(
+    "forwards raw read limit %s to the authorized action owner",
+    async (limit) => {
+      const invoke = createInvokeSpy();
 
-    await expect(
-      handleSlackMessageAction({
+      await handleSlackMessageAction({
         providerId: "slack",
         ctx: {
           action: "read",
           cfg: {},
-          params: {
-            channelId: "C1",
-            limit: 2.5,
-          },
+          params: { channelId: "C1", limit },
         } as never,
         invoke: invoke as never,
-      }),
-    ).rejects.toThrow("limit must be a positive integer.");
-    expect(invoke).not.toHaveBeenCalled();
-  });
+      });
+
+      expect(firstAction(invoke)).toMatchObject({ action: "readMessages", limit });
+      expect(invoke).toHaveBeenCalledOnce();
+    },
+  );
 
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
@@ -1178,3 +1206,4 @@ describe("extractSlackToolSend", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

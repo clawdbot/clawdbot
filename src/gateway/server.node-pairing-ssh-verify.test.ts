@@ -7,7 +7,6 @@ import {
   listDevicePairing,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
-import { resetNodePairingSshVerifyStateForTests } from "./node-pairing-ssh-verify.js";
 import type {
   NodeIdentityProbeParams,
   NodeIdentityProbeResult,
@@ -21,6 +20,12 @@ const probeMock = vi.hoisted(() =>
 
 vi.mock("./node-pairing-ssh-verify.runtime.js", () => ({
   runNodeIdentityProbe: (params: NodeIdentityProbeParams) => probeMock(params),
+}));
+
+vi.mock("../skills/runtime/remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/remote.js")>()),
+  // Pairing coverage does not need the unrelated 5s connect-time bin refresh.
+  refreshRemoteNodeBins: vi.fn(async () => {}),
 }));
 
 installGatewayTestHooks({ scope: "suite" });
@@ -37,7 +42,7 @@ async function waitFor<T>(
       return value;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`timed out waiting for ${what}`);
@@ -51,8 +56,8 @@ type PairingRequiredDetails = {
 
 describe("gateway ssh-verified node pairing auto-approve", () => {
   beforeEach(() => {
+    // Each case uses a distinct identityName, matching the host+device cooldown key.
     probeMock.mockReset();
-    resetNodePairingSshVerifyStateForTests();
   });
 
   test("approves device pairing and the first capability surface on a key match", async () => {

@@ -7,7 +7,7 @@
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 
 /** Type of the Playwright-backed browser helper module. */
-export type PwAiModule = typeof import("./pw-ai.js");
+export type PwAiModule = (typeof import("./pw-ai.js"))["pwAi"];
 
 type PwAiLoadMode = "soft" | "strict";
 
@@ -32,9 +32,9 @@ function isModuleNotFoundError(err: unknown): boolean {
 
 async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
   try {
-    const loaded = await import("./pw-ai.js");
-    loadedPwAiModule = loaded;
-    return loaded;
+    const { pwAi } = await import("./pw-ai.js");
+    loadedPwAiModule = pwAi;
+    return pwAi;
   } catch (err) {
     if (mode === "soft") {
       loadedPwAiModule = null;

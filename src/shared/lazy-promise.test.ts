@@ -4,7 +4,105 @@ import {
   createLazyImportLoader,
   createLazyPromise,
   createLazyPromiseLoader,
+  getOrCreatePromise,
 } from "./lazy-promise.js";
+
+describe("getOrCreatePromise", () => {
+  it("dedupes each key and leaves cache lifecycle to the caller", async () => {
+    const cache = new Map<string, Promise<string>>();
+    const create = vi.fn(async (key: string) => `loaded-${key}`);
+
+    const first = getOrCreatePromise(cache, "a", async () => await create("a"));
+    expect(getOrCreatePromise(cache, "a", async () => await create("a"))).toBe(first);
+    await expect(first).resolves.toBe("loaded-a");
+    await expect(getOrCreatePromise(cache, "b", async () => await create("b"))).resolves.toBe(
+      "loaded-b",
+    );
+    expect(create).toHaveBeenCalledTimes(2);
+
+    cache.clear();
+    await expect(getOrCreatePromise(cache, "a", async () => await create("a"))).resolves.toBe(
+      "loaded-a",
+    );
+    expect(create).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps rejected loads cached by default", async () => {
+    const cache = new Map<string, Promise<string>>();
+    const create = vi.fn(async () => {
+      throw new Error("sticky");
+    });
+
+    const first = getOrCreatePromise(cache, "a", create);
+    await expect(first).rejects.toThrow("sticky");
+    expect(getOrCreatePromise(cache, "a", create)).toBe(first);
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it("evicts only rejected loads when rejection caching is disabled", async () => {
+    const cache = new Map<string, Promise<string>>();
+    const create = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValue("recovered");
+
+    await expect(
+      getOrCreatePromise(cache, "a", create, { cacheRejections: false }),
+    ).rejects.toThrow("transient");
+    await expect(getOrCreatePromise(cache, "a", create, { cacheRejections: false })).resolves.toBe(
+      "recovered",
+    );
+    await expect(getOrCreatePromise(cache, "a", create, { cacheRejections: false })).resolves.toBe(
+      "recovered",
+    );
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts settled in-flight work without deleting a replacement", async () => {
+    const cache = new Map<string, Promise<string>>();
+    let resolveFirst!: (value: string) => void;
+    const first = getOrCreatePromise(
+      cache,
+      "a",
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
+      { evictOnSettled: true },
+    );
+    const replacement = Promise.resolve("replacement");
+    cache.set("a", replacement);
+
+    resolveFirst("first");
+    await expect(first).resolves.toBe("first");
+    expect(cache.get("a")).toBe(replacement);
+
+    await expect(
+      getOrCreatePromise(cache, "b", async () => "settled", { evictOnSettled: true }),
+    ).resolves.toBe("settled");
+    expect(cache.has("b")).toBe(false);
+  });
+
+  it("does not let a stale rejection delete a replacement", async () => {
+    const cache = new Map<string, Promise<string>>();
+    let rejectFirst!: (reason: Error) => void;
+    const first = getOrCreatePromise(
+      cache,
+      "a",
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+      { cacheRejections: false },
+    );
+    const replacement = Promise.resolve("replacement");
+    cache.set("a", replacement);
+
+    rejectFirst(new Error("stale"));
+    await expect(first).rejects.toThrow("stale");
+    expect(cache.get("a")).toBe(replacement);
+  });
+});
 
 describe("createLazyPromise", () => {
   it("returns a reusable single-flight loader", async () => {

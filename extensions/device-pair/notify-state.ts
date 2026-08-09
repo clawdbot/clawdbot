@@ -15,6 +15,8 @@ export type NotifySubscription = {
   messageThreadId?: string | number;
   mode: "persistent" | "once";
   addedAtMs: number;
+  /** Unique for new arms; absent only on subscriptions imported from legacy state. */
+  armId?: string;
 };
 
 export type NotifySeenRequest = {

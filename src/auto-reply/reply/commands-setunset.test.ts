@@ -1,11 +1,7 @@
 // Tests set/unset command parsing and config mutation replies.
 import { describe, expect, it } from "vitest";
 import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
-import {
-  parseSetUnsetCommand,
-  parseSetUnsetCommandAction,
-  parseSlashCommandWithSetUnset,
-} from "./commands-setunset.js";
+import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
 
 type ParsedSetUnsetAction =
   | { action: "set"; path: string; value: unknown }
@@ -34,52 +30,6 @@ function createSlashParams(params: {
   };
 }
 
-describe("parseSetUnsetCommand", () => {
-  it("parses unset values", () => {
-    expect(
-      parseSetUnsetCommand({
-        slash: "/config",
-        action: "unset",
-        args: "foo.bar",
-      }),
-    ).toEqual({ kind: "unset", path: "foo.bar" });
-  });
-
-  it("parses set values", () => {
-    expect(
-      parseSetUnsetCommand({
-        slash: "/config",
-        action: "set",
-        args: 'foo.bar={"x":1}',
-      }),
-    ).toEqual({ kind: "set", path: "foo.bar", value: { x: 1 } });
-  });
-});
-
-describe("parseSetUnsetCommandAction", () => {
-  it("returns null for non set/unset actions", () => {
-    const mappers = createActionMappers();
-    const result = parseSetUnsetCommandAction<ParsedSetUnsetAction>({
-      slash: "/config",
-      action: "show",
-      args: "",
-      ...mappers,
-    });
-    expect(result).toBeNull();
-  });
-
-  it("maps parse errors through onError", () => {
-    const mappers = createActionMappers();
-    const result = parseSetUnsetCommandAction<ParsedSetUnsetAction>({
-      slash: "/config",
-      action: "set",
-      args: "",
-      ...mappers,
-    });
-    expect(result).toEqual({ action: "error", message: "Usage: /config set path=value" });
-  });
-});
-
 describe("parseSlashCommandWithSetUnset", () => {
   it("returns null when the input does not match the slash command", () => {
     const result = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
@@ -95,6 +45,11 @@ describe("parseSlashCommandWithSetUnset", () => {
       }),
     );
     expect(setResult).toEqual({ action: "set", path: "a.b", value: { ok: true } });
+
+    const unsetResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({ raw: "/config unset a.b" }),
+    );
+    expect(unsetResult).toEqual({ action: "unset", path: "a.b" });
 
     const showResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
       createSlashParams({
@@ -113,6 +68,14 @@ describe("parseSlashCommandWithSetUnset", () => {
       }),
     );
     expect(unknownAction).toEqual({ action: "error", message: "Usage: /config show|set|unset" });
+
+    const invalidSet = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({ raw: "/config set" }),
+    );
+    expect(invalidSet).toEqual({
+      action: "error",
+      message: "Usage: /config set path=value",
+    });
   });
 });
 

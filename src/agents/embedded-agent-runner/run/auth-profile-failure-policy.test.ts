@@ -95,6 +95,11 @@ describe("resolveAuthProfileFailureReason", () => {
         failoverReason: "server_error",
       }),
     ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "tls_certificate",
+      }),
+    ).toBeNull();
   });
 
   it("does not persist empty responses as auth-profile health", () => {

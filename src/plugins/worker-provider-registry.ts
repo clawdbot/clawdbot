@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
-import type { PluginWorkerProviderRegistration, PluginRegistry } from "./registry-types.js";
+import type { PluginRegistry } from "./registry-types.js";
 import type { WorkerProvider } from "./types.js";
 
 type WorkerProviderRegistryView = Pick<PluginRegistry, "workerProviders">;
@@ -95,16 +95,6 @@ export function validateWorkerProviderContract(
     ? { ok: true, id }
     : { ok: false, message: `plugin must declare contracts.workerProviders for provider: ${id}` };
 }
-
-/** Returns provider registrations in stable provider-id order. */
-export function listWorkerProviderRegistrations(
-  registry: WorkerProviderRegistryView,
-): PluginWorkerProviderRegistration[] {
-  return [...registry.workerProviders.entries()]
-    .toSorted(([leftId], [rightId]) => compareText(leftId, rightId))
-    .map(([, registration]) => registration);
-}
-
 /** Resolves one provider by its normalized manifest capability id. */
 export function resolveWorkerProvider(
   registry: WorkerProviderRegistryView,

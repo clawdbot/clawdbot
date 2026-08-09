@@ -2,6 +2,8 @@
 import {
   renderSlackDataTableFallbackText,
   renderSlackDataTableMrkdwnFallbackText,
+  renderSlackTableFallbackText,
+  renderSlackTableMrkdwnFallbackText,
 } from "./data-table.js";
 import {
   renderSlackDataVisualizationFallbackText,
@@ -9,7 +11,7 @@ import {
 } from "./data-visualization.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
-export type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
+type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
 type RenderSlackBlockFallbackOptions = {
   nativeDataFormat?: SlackNativeDataFallbackFormat;
@@ -266,6 +268,10 @@ export function renderSlackBlockFallbackText(
       return options.nativeDataFormat === "plain"
         ? renderSlackDataTableFallbackText(block)
         : renderSlackDataTableMrkdwnFallbackText(block);
+    case "table":
+      return options.nativeDataFormat === "plain"
+        ? renderSlackTableFallbackText(block)
+        : renderSlackTableMrkdwnFallbackText(block);
     default:
       return undefined;
   }

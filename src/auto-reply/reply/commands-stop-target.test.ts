@@ -1,4 +1,5 @@
 // Tests stop command target resolution across active sessions and channel routes.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -20,7 +21,9 @@ const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: undefined })),
 );
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
-const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
+const stopSubagentsForRequesterMock = vi.hoisted(() =>
+  vi.fn(async () => ({ stopped: 0, failed: 0 })),
+);
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
   vi.fn(() => ({ active: false, aborted: false })),
 );
@@ -165,23 +168,33 @@ describe("handleStopCommand target fallback", () => {
       sessionId: undefined,
     });
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
-    const [[persistAbortTargetParams]] = persistAbortTargetEntryMock.mock.calls as unknown as Array<
-      [
-        {
-          key?: string;
-          entry?: unknown;
-          sessionStore?: unknown;
-          storePath?: string;
-        },
-      ]
-    >;
+    const [persistAbortTargetParams] = expectDefined(
+      (
+        persistAbortTargetEntryMock.mock.calls as unknown as Array<
+          [
+            {
+              key?: string;
+              entry?: unknown;
+              sessionStore?: unknown;
+              storePath?: string;
+            },
+          ]
+        >
+      )[0],
+      "(persistAbortTargetEntryMock.mock.calls as unknown as Array<\n        [\n          {\n            key?: string;\n            entry?: unknown;\n            sessionStore?: unknown;\n            storePath?: string;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
     expect(persistAbortTargetParams?.entry).toBeUndefined();
     expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
     expect(persistAbortTargetParams?.storePath).toBe("/tmp/sessions.json");
-    const [[stopSubagentsParams]] = stopSubagentsForRequesterMock.mock.calls as unknown as Array<
-      [{ cfg?: unknown; requesterSessionKey?: string }]
-    >;
+    const [stopSubagentsParams] = expectDefined(
+      (
+        stopSubagentsForRequesterMock.mock.calls as unknown as Array<
+          [{ cfg?: unknown; requesterSessionKey?: string }]
+        >
+      )[0],
+      "(stopSubagentsForRequesterMock.mock.calls as unknown as Array<\n        [{ cfg?: unknown; requesterSessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(stopSubagentsParams?.cfg).toBe(params.cfg);
     expect(stopSubagentsParams?.requesterSessionKey).toBe("agent:target:telegram:direct:123");
     expect(createInternalHookEventMock).toHaveBeenCalledWith(
@@ -210,8 +223,26 @@ describe("handleStopCommand target fallback", () => {
       shouldContinue: false,
       reply: { text: "Agent reply is already finalizing and can no longer be aborted." },
     });
-    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing");
+    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing", 0);
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces child stop failures in the stop reply", async () => {
+    const params = buildStopParams();
+    stopSubagentsForRequesterMock.mockResolvedValueOnce({ stopped: 0, failed: 1 });
+    formatAbortReplyTextMock.mockReturnValueOnce(
+      "⚙️ Agent was aborted. One sub-agent could not be stopped. Retry /stop.",
+    );
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Agent was aborted. One sub-agent could not be stopped. Retry /stop.",
+      },
+    });
+    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, undefined, 1);
   });
 
   it("rejects native stop commands from non-owner senders when the plugin enforces owner-only commands", async () => {

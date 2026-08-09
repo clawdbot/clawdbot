@@ -28,7 +28,7 @@ const OPENAI_TO_POLLY_MAP: Record<string, string> = {
 /**
  * Default Polly voice when no mapping is found.
  */
-export const DEFAULT_POLLY_VOICE = "Polly.Joanna";
+const DEFAULT_POLLY_VOICE = "Polly.Joanna";
 
 /**
  * Map OpenAI voice names to Twilio Polly equivalents.

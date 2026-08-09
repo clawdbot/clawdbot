@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 // Builds browser runtime bundles for the diffs viewer assets.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { writeGeneratedTextAsset } from "./lib/generated-text-asset.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(modulePath), "..");
@@ -73,8 +73,6 @@ async function buildDiffsViewerRuntime(targetName) {
   }
 
   const outputPath = path.join(repoRoot, target.output);
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
-
   const result = await build({
     entryPoints: [path.join(repoRoot, target.entry)],
     bundle: true,
@@ -112,18 +110,7 @@ async function buildDiffsViewerRuntime(targetName) {
   }
 
   const runtime = outputFile.text.replace(/[ \t]+$/gm, "");
-  let previousRuntime = null;
-  try {
-    previousRuntime = await fs.readFile(outputPath, "utf8");
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  if (previousRuntime !== runtime) {
-    await fs.writeFile(outputPath, runtime);
-  }
+  await writeGeneratedTextAsset(outputPath, runtime);
 }
 
 if (process.argv[1] === modulePath) {

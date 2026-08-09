@@ -1,5 +1,6 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -203,7 +204,11 @@ describe("google prompt cache", () => {
     );
 
     const headers = fetchInit(fetchMock).headers as Record<string, string>;
-    expect(resolveSecretSentinel(headers.Authorization)).toBe("Bearer google-oauth-token");
+    expect(
+      resolveSecretSentinel(
+        expectDefined(headers.Authorization, "headers.Authorization test invariant"),
+      ),
+    ).toBe("Bearer google-oauth-token");
     expect(headers["x-goog-api-key"]).toBeUndefined();
     expect(headers["Content-Type"]).toBe("application/json");
   });
@@ -236,7 +241,11 @@ describe("google prompt cache", () => {
 
       const headers = fetchInit(fetchMock).headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer google-kill-switch-token");
-      expect(isSecretValueRegisteredForRedaction(headers.Authorization)).toBe(true);
+      expect(
+        isSecretValueRegisteredForRedaction(
+          expectDefined(headers.Authorization, "headers.Authorization test invariant"),
+        ),
+      ).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -345,6 +354,56 @@ describe("google prompt cache", () => {
           expireTime,
         },
       },
+    ]);
+  });
+
+  it("reuses managed cached content when tool discovery order changes", async () => {
+    const now = 1_000_000;
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/stable-tool-order",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn, getCapturedPayload } = createCapturingStreamFn();
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn,
+    });
+    const tools = [
+      {
+        name: "zeta_lookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "alpha_lookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ];
+
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      await Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          { systemPrompt: "Follow policy.", messages: [], tools: orderedTools } as never,
+          { toolChoice: "auto" } as never,
+        ),
+      );
+      expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/stable-tool-order");
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(entries).toHaveLength(1);
+    const createBody = JSON.parse(fetchInit(fetchMock).body as string) as {
+      tools: Array<{ functionDeclarations: Array<{ name: string }> }>;
+    };
+    expect(createBody.tools[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+      "alpha_lookup",
+      "zeta_lookup",
     ]);
   });
 

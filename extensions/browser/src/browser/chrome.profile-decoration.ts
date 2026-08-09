@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import { asRecord } from "../record-shared.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -19,20 +20,11 @@ function decoratedMarkerPath(userDataDir: string) {
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
-  const parsed = loadJsonFile(filePath);
-  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : null;
+  return asRecord(loadJsonFile(filePath));
 }
 
 function safeWriteJson(filePath: string, data: Record<string, unknown>) {
   saveJsonFile(filePath, data);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function readNestedRecord(root: unknown, key: string): Record<string, unknown> | null {
@@ -55,7 +47,10 @@ function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
     }
     node = node[key] as Record<string, unknown>;
   }
-  node[keys[keys.length - 1]] = value;
+  const lastKey = keys.at(-1);
+  if (lastKey !== undefined) {
+    node[lastKey] = value;
+  }
 }
 
 function parseHexRgbToSignedArgbInt(hex: string): number | null {

@@ -168,16 +168,6 @@ export function collectProviderApiKeys(
   return Array.from(seen);
 }
 
-/** Collect Anthropic API keys for live cache/model tests when OAuth is unavailable. */
-export function collectAnthropicApiKeys(options: CollectProviderApiKeysOptions = {}): string[] {
-  const env = options.env ?? process.env;
-  if (normalizeOptionalString(env.ANTHROPIC_OAUTH_TOKEN)) {
-    // OAuth is a separate auth mode; API-key rotation would overwrite it.
-    return [];
-  }
-  return collectProviderApiKeys("anthropic", { ...options, env });
-}
-
 /** Return whether a provider error message indicates API-key rate limiting. */
 export function isApiKeyRateLimitError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
@@ -197,34 +187,6 @@ export function isApiKeyRateLimitError(message: string): boolean {
     return true;
   }
   if (lower.includes("too many requests")) {
-    return true;
-  }
-  return false;
-}
-
-/** Return whether an Anthropic error message indicates billing exhaustion. */
-export function isAnthropicBillingError(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  if (lower.includes("credit balance")) {
-    return true;
-  }
-  if (lower.includes("insufficient credit")) {
-    return true;
-  }
-  if (lower.includes("insufficient credits")) {
-    return true;
-  }
-  if (lower.includes("payment required")) {
-    return true;
-  }
-  if (lower.includes("billing") && lower.includes("disabled")) {
-    return true;
-  }
-  if (
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\spayment/i.test(
-      lower,
-    )
-  ) {
     return true;
   }
   return false;

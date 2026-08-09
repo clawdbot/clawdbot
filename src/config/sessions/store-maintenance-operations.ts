@@ -52,7 +52,7 @@ type RemovedSessionArtifactCleanup = {
   }) => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceParams = {
+type FileBackedSessionStoreMaintenanceParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   activeSessionKey?: string;
@@ -62,9 +62,10 @@ export type FileBackedSessionStoreMaintenanceParams = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   log: SessionMaintenanceLogger;
   artifacts: RemovedSessionArtifactCleanup;
+  commitReducedStore?: () => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceResult = {
+type FileBackedSessionStoreMaintenanceResult = {
   changedStore: boolean;
 };
 
@@ -91,8 +92,8 @@ function rememberRemovedSessionFile(
   removedSessionFiles: RemovedSessionFiles,
   entry: SessionEntry,
 ): void {
-  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  if (!removedSessionFiles.has(entry.sessionId)) {
+    removedSessionFiles.set(entry.sessionId, undefined);
   }
 }
 
@@ -167,26 +168,30 @@ async function cleanupRemovedSessionArtifacts(params: {
       restrictToStoreDir: true,
     });
   }
-  if (archivedDirs.size === 0 && params.maintenance.resetArchiveRetentionMs == null) {
+  // null retention keeps archived transcripts: they are conversation history,
+  // and the disk budget (not a wall-clock timer) is the only eviction path.
+  if (params.maintenance.resetArchiveRetentionMs == null) {
     return;
   }
   const targetDirs =
     archivedDirs.size > 0
       ? [...archivedDirs]
       : [path.dirname(path.resolve(params.operation.storePath))];
-  // Both retention reasons ride one cleanup call so each save enumerates the
-  // sessions dir at most once; reset retention defaults on, so a listing per
-  // reason would scan twice per save.
-  await params.operation.artifacts.cleanupArchivedSessionTranscripts({
-    directories: targetDirs,
-    rules:
-      params.maintenance.resetArchiveRetentionMs != null
-        ? [
-            { reason: "deleted", olderThanMs: params.maintenance.pruneAfterMs },
-            { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-          ]
-        : [{ reason: "deleted", olderThanMs: params.maintenance.pruneAfterMs }],
-  });
+  // Both reasons ride one advisory cleanup call: earlier artifact moves may
+  // have committed, so retention failure must not block the primary store save.
+  await params.operation.artifacts
+    .cleanupArchivedSessionTranscripts({
+      directories: targetDirs,
+      rules: [
+        { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+        { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+      ],
+    })
+    .catch((error: unknown) => {
+      params.operation.log.warn("session transcript archive retention cleanup failed", {
+        error: String(error),
+      });
+    });
 }
 
 async function applyEnforcedMaintenance(params: {
@@ -253,6 +258,7 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     warnOnly: false,
     log: params.operation.log,
+    commitEvictedIndex: params.operation.commitReducedStore,
   });
   await params.operation.onMaintenanceApplied?.({
     mode: params.maintenance.mode,

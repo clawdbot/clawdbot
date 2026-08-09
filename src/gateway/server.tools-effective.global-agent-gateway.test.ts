@@ -15,6 +15,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { rpcReq, testState } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -58,11 +59,6 @@ async function configureNonGlobalMainSession(): Promise<() => Promise<void>> {
   testState.sessionConfig = undefined;
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
-    storePath,
-    `${JSON.stringify({ "agent:main:abc": { sessionId: "sess-main-agent", updatedAt: 1 } }, null, 2)}\n`,
-    "utf-8",
-  );
-  await fs.writeFile(
     configPath,
     `${JSON.stringify(
       {
@@ -77,6 +73,10 @@ async function configureNonGlobalMainSession(): Promise<() => Promise<void>> {
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await replaceSessionEntry(
+    { storePath, sessionKey: "agent:main:abc" },
+    { sessionId: "sess-main-agent", updatedAt: 1 },
+  );
   return async () => {
     testState.sessionStorePath = undefined;
     await fs.writeFile(configPath, "{}\n", "utf-8");

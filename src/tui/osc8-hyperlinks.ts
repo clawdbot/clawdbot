@@ -1,4 +1,5 @@
 // Regex patterns for ANSI escape sequences (constructed from strings to
+import { expectDefined } from "@openclaw/normalization-core";
 // satisfy the no-control-regex lint rule).
 const SGR_PATTERN = "\\x1b\\[[0-9;]*m";
 const OSC8_PATTERN = "\\x1b\\]8;;.*?(?:\\x07|\\x1b\\\\)";
@@ -9,7 +10,8 @@ const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 /** Allow one level of balanced parentheses inside a URL so markdown link
  *  targets like `https://en.wikipedia.org/wiki/URL_(disambiguation)` are
  *  fully captured instead of truncated at the first `)`. */
-const URL_PATH_WITH_PARENS = /https?:\/\/[^()\s<>]+(?:\([^()\s<>]*\)[^()\s<>]*)*/g;
+const URL_PATH_WITH_PARENS =
+  /https?:\/\/[^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+(?:\([^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*\)[^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)*/g;
 
 /** Strip the suffix starting at a `)` without a matching `(` in the URL.
  *  Bare URLs in prose can pick up a trailing `)` that belongs to surrounding
@@ -32,7 +34,10 @@ function trimUnbalancedTrailingParens(url: string): string {
 }
 
 function hasUrlContent(url: string): boolean {
-  const authority = url.slice(url.indexOf("://") + 3).split(/[/?#]/, 1)[0];
+  const authority = expectDefined(
+    url.slice(url.indexOf("://") + 3).split(/[/?#]/, 1)[0],
+    'url.slice(url.index of("://") + 3).split(/[/?#]/, 1) entry at 0',
+  );
   return /[\p{L}\p{N}]/u.test(authority) || /^\[[0-9a-f:.]+\](?::\d+)?$/i.test(authority);
 }
 
@@ -50,14 +55,15 @@ export function extractUrls(markdown: string): string[] {
   );
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
-    if (hasUrlContent(m[1])) {
-      urls.add(m[1]);
+    if (hasUrlContent(expectDefined(m[1], "m capture group 1"))) {
+      urls.add(expectDefined(m[1], "m capture group 1"));
     }
   }
 
   // Bare URLs (remove markdown links first to avoid double-matching)
   const stripped = markdown.replace(mdLinkRe, "");
-  const bareRe = /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>]*|[^\s[\]>]+)/gi;
+  const bareRe =
+    /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+)/gi;
   while ((m = bareRe.exec(stripped)) !== null) {
     const url = trimUnbalancedTrailingParens(m[0]);
     if (hasUrlContent(url)) {
@@ -122,7 +128,8 @@ function findUrlRanges(
   }
 
   // Find new URL starts in visible text
-  const urlRe = /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>]*|[^\s[\]>]*)/gi;
+  const urlRe =
+    /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
   urlRe.lastIndex = searchFrom;
   let match: RegExpExecArray | null;
 
@@ -143,7 +150,10 @@ function findUrlRanges(
       if (!hasUnpunctuatedSchemeAtLineEnd) {
         continue;
       }
-      const nextToken = nextVisibleText?.trimStart().match(/^[^\s\]>]+/)?.[0] ?? "";
+      const nextToken =
+        nextVisibleText
+          ?.trimStart()
+          .match(/^[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/)?.[0] ?? "";
       const nextFragment = trimUnbalancedTrailingParens(nextToken);
       for (const known of knownUrls) {
         if (!known.startsWith(fragment)) {
@@ -238,7 +248,7 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
       // Existing OSC 8 sequence (pass through)
       const osc = line.slice(i).match(OSC8_START_RE);
       if (osc) {
-        result += osc[0];
+        result += osc[0].replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
         i += osc[0].length;
         continue;
       }
@@ -284,7 +294,12 @@ export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
   const visibleLines = lines.map(stripAnsi);
 
   return lines.map((line, index) => {
-    const result = findUrlRanges(visibleLines[index], urls, pending, visibleLines[index + 1]);
+    const result = findUrlRanges(
+      expectDefined(visibleLines[index], "visible lines entry at index"),
+      urls,
+      pending,
+      visibleLines[index + 1],
+    );
     pending = result.pending;
     return applyOsc8Ranges(line, result.ranges);
   });

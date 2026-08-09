@@ -1,7 +1,7 @@
 // QA Lab web_search metadata shared by runtime and contract-only loading.
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 
-export const QA_LAB_WEB_SEARCH_PROVIDER_ID = "qa-lab-search";
+const QA_LAB_WEB_SEARCH_PROVIDER_ID = "qa-lab-search";
 export const QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY = "OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT";
 
 export function createQaLabWebSearchProviderBase(): Omit<WebSearchProviderPlugin, "createTool"> {

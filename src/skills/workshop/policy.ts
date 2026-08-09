@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
+import { logDebug } from "../../logger.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { resolvePendingSkillProposal } from "./service.js";
@@ -127,7 +128,12 @@ async function resolveLifecycleApprovalDescription(params: {
       }),
       proposalId: record.id,
     };
-  } catch {
+  } catch (error) {
+    // Approving blind is the failure this record exists to make diagnosable:
+    // the card otherwise looks identical to "there is no more detail".
+    logDebug(
+      `skill-workshop: approval detail unavailable, using generic text: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return { description: params.fallback };
   }
 }
@@ -147,7 +153,7 @@ function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefi
     return config;
   }
   // Explicit hook config wins. Missing hook config may happen on agent paths;
-  // unreadable runtime config keeps the default pending approval gate.
+  // unreadable runtime config cannot supply an explicit pending override.
   try {
     return getRuntimeConfig();
   } catch {

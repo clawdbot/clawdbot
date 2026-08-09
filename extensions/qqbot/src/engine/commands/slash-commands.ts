@@ -49,6 +49,8 @@ export interface SlashCommandContext {
   groupCommandLevel?: QQBotGroupCommandLevel;
   /** Queue snapshot for the current sender. */
   queueSnapshot: QueueSnapshot;
+  /** Durable guard for non-idempotent effects during ingress drain dispatch. */
+  runIngressEffectOnce?: SlashCommandIngressEffectRunner;
 }
 
 /** Queue status snapshot. */
@@ -58,6 +60,11 @@ export interface QueueSnapshot {
   maxConcurrentUsers: number;
   senderPending: number;
 }
+
+type SlashCommandIngressEffectRunner = <T>(params: {
+  effect: string;
+  run: () => Promise<T>;
+}) => Promise<{ kind: "executed"; value: T } | { kind: "replayed" }>;
 
 /** Slash command result: text, a text+file result, or null to skip handling. */
 export type SlashCommandResult = string | SlashCommandFileResult | null;

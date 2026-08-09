@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -9,9 +10,37 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  stateMigrations,
+} from "./doctor-contract-api.js";
+
+it("removes the retired QMD override while preserving Active Memory siblings", () => {
+  expect(legacyConfigRules).toEqual([
+    expect.objectContaining({
+      path: ["plugins", "entries", "active-memory", "config", "qmd"],
+      message: expect.stringContaining("doctor --fix"),
+    }),
+  ]);
+  const cfg = {
+    plugins: {
+      entries: {
+        "active-memory": {
+          config: { enabled: true, qmd: { searchMode: "search" } },
+        },
+      },
+    },
+  };
+
+  const result = normalizeCompatibilityConfig({ cfg });
+
+  expect(result.config).toHaveProperty("plugins.entries.active-memory.config.enabled", true);
+  expect(result.config).not.toHaveProperty("plugins.entries.active-memory.config.qmd");
+  expect(result.changes).toEqual(["Removed retired Active Memory QMD search-mode configuration."]);
+});
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -35,6 +64,7 @@ describe("active-memory doctor state migration", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -51,7 +81,7 @@ describe("active-memory doctor state migration", () => {
       }),
     );
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
     await expect(
       migration.detectLegacyState({
         config: {},
@@ -93,6 +123,43 @@ describe("active-memory doctor state migration", () => {
           sessionKey: "telegram:dm:123",
           disabled: true,
           updatedAt: 1700,
+        },
+      },
+    ]);
+  });
+
+  it("normalizes malformed legacy updatedAt values before importing toggles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      '{"sessions":{"telegram:dm:bad":{"disabled":true,"updatedAt":1e999}}}',
+    );
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toMatchObject([
+      {
+        value: {
+          sessionKey: "telegram:dm:bad",
+          disabled: true,
+          updatedAt: Date.parse("2026-07-10T00:00:00.000Z"),
         },
       },
     ]);

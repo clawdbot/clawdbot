@@ -1,16 +1,12 @@
 // Policy doctor metadata tests cover rule metadata.
 import { describe, expect, it } from "vitest";
-import {
-  POLICY_FIX_METADATA,
-  POLICY_FIX_METADATA_BY_CHECK_ID,
-  type PolicyFixMetadata,
-} from "./fix-metadata.js";
-import {
-  CHECK_IDS,
-  POLICY_CHECK_IDS,
-  POLICY_RULE_METADATA,
-  type PolicyRuleMetadata,
-} from "./metadata.js";
+import { scanPolicyDataHandling } from "../policy-state-data.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
+
+const POLICY_FIX_METADATA = [...POLICY_FIX_METADATA_BY_CHECK_ID.values()];
+type PolicyFixMetadata = (typeof POLICY_FIX_METADATA)[number];
 
 describe("policy doctor metadata", () => {
   it("describes strictness for agent-scoped policy fields", () => {
@@ -212,16 +208,10 @@ describe("policy doctor metadata", () => {
         .get("unsupported")
         ?.map((rule) => rule.checkId)
         .toSorted(),
-      validateOnly:
-        grouped
-          .get("validateOnly")
-          ?.map((rule) => rule.checkId)
-          .toSorted() ?? [],
     }).toEqual({
       automatic: [
         "policy/agents-tool-not-denied",
         "policy/channels-denied-provider",
-        "policy/data-handling-redaction-disabled",
         "policy/data-handling-telemetry-content-capture",
         "policy/gateway-control-ui-insecure",
         "policy/gateway-http-endpoint-enabled",
@@ -248,6 +238,7 @@ describe("policy doctor metadata", () => {
         "policy/policy-jsonc-missing",
         "policy/sandbox-browser-cdp-source-range-missing",
         "policy/secrets-unmanaged-provider",
+        "policy/tools-md-migration-required",
         "policy/tools-missing-owner",
         "policy/tools-missing-risk-level",
         "policy/tools-missing-sensitivity-token",
@@ -270,6 +261,10 @@ describe("policy doctor metadata", () => {
         "policy/models-denied-provider",
         "policy/models-unapproved-provider",
         "policy/network-private-access-enabled",
+        "policy/routing-agent-mismatch",
+        "policy/routing-binding-channel-unconfigured",
+        "policy/routing-bindings-required",
+        "policy/routing-match-kind-mismatch",
         "policy/sandbox-backend-unapproved",
         "policy/sandbox-container-host-network-denied",
         "policy/sandbox-container-mount-mode-required",
@@ -288,7 +283,33 @@ describe("policy doctor metadata", () => {
         "policy/tools-profile-unapproved",
       ],
       unsupported: ["policy/sandbox-container-posture-unobservable"],
-      validateOnly: [],
     });
+  });
+
+  it("declares how every policy rule is enforced", () => {
+    const rules = POLICY_RULE_METADATA as readonly PolicyRuleMetadata[];
+    // Every rule names either its doctor checks or the invariant that satisfies it, never
+    // both and never neither, so an accepted policy key cannot enforce nothing in silence.
+    expect(
+      rules
+        .filter((rule) => rule.checkIds.length > 0 === (rule.satisfiedByInvariant !== undefined))
+        .map((rule) => rule.policyPath.join(".")),
+    ).toEqual([]);
+    const invariantSources = new Set(scanPolicyDataHandling({}).map((entry) => entry.source));
+    expect(
+      rules
+        .filter((rule) => rule.satisfiedByInvariant !== undefined)
+        .map((rule) => [
+          rule.policyPath.join("."),
+          rule.satisfiedByInvariant,
+          invariantSources.has(rule.satisfiedByInvariant ?? ""),
+        ]),
+    ).toEqual([
+      [
+        "dataHandling.sensitiveLogging.requireRedaction",
+        "oc://openclaw.invariant/logging/redaction",
+        true,
+      ],
+    ]);
   });
 });

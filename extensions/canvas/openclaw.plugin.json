@@ -1,5 +1,8 @@
 {
   "id": "canvas",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },
@@ -8,7 +11,7 @@
   "description": "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
   "skills": ["./skills"],
   "contracts": {
-    "tools": ["canvas", "show_widget"]
+    "tools": ["canvas"]
   },
   "configContracts": {
     "compatibilityMigrationPaths": ["canvasHost"]

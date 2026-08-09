@@ -1,18 +1,23 @@
 /** Mutates and persists isolated cron session state around one run. */
-import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
 
 /** Mutable cron session entry updated by an isolated run before persistence. */
-export type MutableCronSessionEntry = SessionEntry;
+type MutableCronSessionEntry = SessionEntry;
 /** Resolved cron session plus its mutable backing store and active entry. */
 export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
   store: MutableSessionStore;
@@ -21,11 +26,19 @@ export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
 /** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
 
-type UpdateSessionStore = (
-  storePath: string,
-  update: (store: MutableSessionStore) => void,
-  options?: { activeSessionKey?: string; requireWriteSuccess?: boolean },
-) => Promise<void>;
+/**
+ * Accessor-backed guarded write: `update` receives the freshest persisted row
+ * (undefined when absent), may throw to reject a stale lifecycle claim, and
+ * returns the full entry to commit. `fallbackEntry` seeds creation when the
+ * row does not exist yet.
+ */
+type PersistSessionEntry = (params: {
+  fallbackEntry: SessionEntry;
+  resetBoundaryReason?: "cron-stale";
+  sessionKey: string;
+  storePath: string;
+  update: (currentEntry: SessionEntry | undefined) => SessionEntry;
+}) => Promise<void>;
 
 /** Persists the currently selected mutable cron session entry to the session store. */
 export type PersistCronSessionEntry = () => Promise<void>;
@@ -39,8 +52,13 @@ export type CronRunContinuationSession = {
 };
 
 export class CronSessionLifecycleClaimError extends Error {
-  constructor(sessionKey: string) {
-    super(`Session "${sessionKey}" changed while starting work. Retry.`);
+  readonly admissionDisposition = "session-conflict" as const;
+
+  constructor(
+    sessionKey: string,
+    message = `Session "${sessionKey}" changed while starting work. Retry.`,
+  ) {
+    super(message);
     this.name = "CronSessionLifecycleClaimError";
   }
 }
@@ -49,9 +67,26 @@ export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string):
   return `cron-lifecycle-revision:${lifecycleRevision}`;
 }
 
-function cronTranscriptExists(entry: SessionEntry): boolean {
-  const sessionFile = entry.sessionFile?.trim();
-  return Boolean(sessionFile && fs.existsSync(sessionFile));
+function cronTranscriptExists(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): boolean {
+  const sessionId = params.entry.sessionId?.trim();
+  if (!sessionId) {
+    return false;
+  }
+  try {
+    return (
+      readTranscriptStatsSync({
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }).eventCount > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeSessionField(value: string | undefined): string | undefined {
@@ -71,8 +106,6 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   const next = { ...entry } as Partial<SessionEntry>;
   // If the transcript never materialized, do not persist stale resume handles
   // that would make the next cron run believe a resumable CLI session exists.
-  delete next.sessionId;
-  delete next.sessionFile;
   delete next.sessionStartedAt;
   delete next.lastInteractionAt;
   delete next.cliSessionIds;
@@ -83,28 +116,39 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
 
 /** Creates the persistence callback that stores cron session metadata after a run. */
 export function createPersistCronSessionEntry(params: {
-  isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   agentSessionKey: string;
-  updateSessionStore: UpdateSessionStore;
+  persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
-    if (params.isFastTestEnv) {
-      return;
-    }
+    const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     const liveEntry = params.cronSession.sessionEntry;
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
-      !cronTranscriptExists(liveEntry)
+      !cronTranscriptExists({
+        entry: liveEntry,
+        sessionKey: params.agentSessionKey,
+        storePath: params.cronSession.storePath,
+      })
         ? toNonResumableCronSessionEntry(liveEntry)
         : liveEntry;
     let committedEntry = persistedEntry;
     let mergedLiveEntry = liveEntry;
-    await params.updateSessionStore(
-      params.cronSession.storePath,
-      (store) => {
-        const currentEntry = store[params.agentSessionKey];
+    const persistPromise = params.persistSessionEntry({
+      storePath: params.cronSession.storePath,
+      sessionKey: params.agentSessionKey,
+      fallbackEntry: persistedEntry,
+      ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
+      update: (currentEntry) => {
+        if (!currentEntry) {
+          const creationStamp = buildSessionCreationStamp({
+            via: "cron",
+            actor: { type: "system" },
+          });
+          committedEntry = { ...persistedEntry, ...creationStamp };
+          mergedLiveEntry = { ...liveEntry, ...creationStamp };
+        }
         const ownsCurrentRevision =
           currentEntry?.lifecycleRevision === params.cronSession.lifecycleRevision;
         const currentRevisionActive = Boolean(
@@ -120,8 +164,23 @@ export function createPersistCronSessionEntry(params: {
             projectCronOwnershipFields(currentEntry),
             projectCronOwnershipFields(params.cronSession.initialSessionEntry),
           );
+        // Same-generation continuation: the row still carries the lifecycle
+        // revision this run resolved from, so no competing run has claimed it
+        // since. Benign concurrent field writes (delivery, token, status) then
+        // merge into the claim instead of aborting it. Exact ownership-field
+        // equality alone spuriously rejected these on large, busy stores where
+        // such an update lands between resolve and this first persist.
+        const initialEntry = params.cronSession.initialSessionEntry;
+        const initialLifecycleRevision = initialEntry?.lifecycleRevision;
+        const currentContinuesInitialGeneration =
+          currentEntry !== undefined &&
+          initialEntry !== undefined &&
+          initialLifecycleRevision !== undefined &&
+          currentEntry.lifecycleRevision === initialLifecycleRevision &&
+          currentEntry.sessionId === initialEntry.sessionId;
         const canClaimInitialRevision = params.cronSession.initialSessionEntry
-          ? !currentRevisionActive && initialEntryMatchesOwnershipFields
+          ? !currentRevisionActive &&
+            (initialEntryMatchesOwnershipFields || currentContinuesInitialGeneration)
           : currentEntry === undefined;
         // Concurrent persistent runs can resolve the same initial row. Once one
         // revision claims it, older owners must not reclaim it and delete newer state.
@@ -144,10 +203,15 @@ export function createPersistCronSessionEntry(params: {
             current: currentEntry,
           });
         }
-        store[params.agentSessionKey] = committedEntry;
+        return committedEntry;
       },
-      { activeSessionKey: params.agentSessionKey, requireWriteSuccess: true },
-    );
+    });
+    await persistPromise;
+    clearBootstrapSnapshotOnSessionBoundary({
+      boundaryAppended: resetBoundaryPending,
+      sessionKey: params.agentSessionKey,
+    });
+    params.cronSession.resetBoundaryPending = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergedLiveEntry;
@@ -158,24 +222,29 @@ export function createPersistCronSessionEntry(params: {
 
 /** Creates the hidden exact-run session owner used by detached media wakes. */
 export function createCronRunContinuationSession(params: {
-  isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   runSessionKey: string;
   thinkingLevel?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
+  scheduledToolPolicy?: CronScheduledToolPolicy;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     requireExplicitMessageTarget?: boolean;
   };
-  updateSessionStore: UpdateSessionStore;
+  persistSessionEntry: PersistSessionEntry;
 }): CronRunContinuationSession {
+  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+    toolsAllow: params.toolsAllow,
+    scheduledToolPolicy: params.scheduledToolPolicy,
+  });
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
     ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
+    ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
@@ -183,28 +252,40 @@ export function createCronRunContinuationSession(params: {
   const owns = (entry: SessionEntry | undefined) =>
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
   const persist = async (create: boolean, phase: "running" | "ready", basePersisted = false) => {
-    if (params.isFastTestEnv) {
-      return;
-    }
     const source = structuredClone(params.cronSession.sessionEntry);
+    delete source.createdVia;
+    delete source.createdActor;
+    delete source.createdAt;
+    // Node-local lineage must not leak across keys: the base row's generation
+    // chain and fork ancestry describe the cron root, not this :run: node.
+    delete source.previousSessionId;
+    delete source.forkSource;
     let persisted = false;
     let alreadySealed = false;
-    await params.updateSessionStore(
-      params.cronSession.storePath,
-      (store) => {
-        const current = store[params.runSessionKey];
+    await params.persistSessionEntry({
+      storePath: params.cronSession.storePath,
+      sessionKey: params.runSessionKey,
+      fallbackEntry: source,
+      update: (current) => {
         if ((current && !owns(current)) || (!current && !create)) {
-          return;
+          throw new CronSessionLifecycleClaimError(params.runSessionKey);
         }
         // Leaving running transfers ownership to gateway continuation turns.
         // The initial cron owner must never overwrite their newer state.
         if (current && current.cronRunContinuation?.phase !== "running") {
           alreadySealed = phase === "ready" && current.cronRunContinuation?.phase === "ready";
-          return;
+          if (alreadySealed) {
+            return current;
+          }
+          throw new CronSessionLifecycleClaimError(params.runSessionKey);
         }
-        store[params.runSessionKey] = {
+        persisted = true;
+        return {
           ...current,
           ...source,
+          ...(!current
+            ? buildSessionCreationStamp({ via: "cron", actor: { type: "system" } })
+            : {}),
           ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
           cronRunContinuation: {
             ...continuation,
@@ -212,10 +293,8 @@ export function createCronRunContinuationSession(params: {
             ...(phase === "ready" ? { basePersisted } : {}),
           },
         };
-        persisted = true;
       },
-      { activeSessionKey: params.runSessionKey, requireWriteSuccess: true },
-    );
+    });
     if (!persisted && !alreadySealed) {
       throw new CronSessionLifecycleClaimError(params.runSessionKey);
     }
@@ -236,7 +315,7 @@ export function createCronRunContinuationSession(params: {
   };
 }
 
-/** Adopts the session id/file produced by a run and preserves usage-family lineage. */
+/** Adopts the session id produced by a run and preserves usage-family lineage. */
 export function adoptCronRunSessionMetadata(params: {
   entry: MutableCronSessionEntry;
   sessionKey: string;
@@ -246,8 +325,7 @@ export function adoptCronRunSessionMetadata(params: {
   };
 }): boolean {
   const nextSessionId = normalizeSessionField(params.runMeta?.sessionId);
-  const nextSessionFile = normalizeSessionField(params.runMeta?.sessionFile);
-  if (!nextSessionFile) {
+  if (!nextSessionId) {
     return false;
   }
 
@@ -263,11 +341,6 @@ export function adoptCronRunSessionMetadata(params: {
         nextSessionId,
       ]),
     );
-    changed = true;
-  }
-
-  if (nextSessionFile !== params.entry.sessionFile) {
-    params.entry.sessionFile = nextSessionFile;
     changed = true;
   }
 
@@ -320,11 +393,15 @@ export function syncCronSessionLiveSelection(params: {
     delete params.entry.agentRuntimeOverride;
   }
   if (params.liveSelection.authProfileId) {
+    const source =
+      params.liveSelection.authProfileIdSource ??
+      (params.entry.authProfileOverride?.trim() === params.liveSelection.authProfileId.trim()
+        ? resolveSessionAuthProfileOverrideSource(params.entry)
+        : "user");
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
-    params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;
-    if (params.liveSelection.authProfileIdSource === "auto") {
-      // Auto-selected profiles are tied to the compaction generation that
-      // resolved them; manual overrides should survive later compactions.
+    params.entry.authProfileOverrideSource = source;
+    if (source === "auto") {
+      // Auto pins track their compaction generation; manual pins do not.
       params.entry.authProfileOverrideCompactionCount = params.entry.compactionCount ?? 0;
     } else {
       delete params.entry.authProfileOverrideCompactionCount;

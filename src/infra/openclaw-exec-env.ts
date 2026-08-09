@@ -2,7 +2,7 @@
 export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 
 /** Stable marker value used for OpenClaw-launched subprocess detection. */
-export const OPENCLAW_CLI_ENV_VALUE = "1";
+const OPENCLAW_CLI_ENV_VALUE = "1";
 
 /** Returns a cloned env object with the OpenClaw CLI marker set. */
 export function markOpenClawExecEnv<T extends Record<string, string | undefined>>(

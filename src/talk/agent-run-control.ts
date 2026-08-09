@@ -37,7 +37,6 @@ export {
   type RealtimeVoiceAgentControlIntent,
   type RealtimeVoiceAgentControlProviderResult,
   type RealtimeVoiceAgentControlResult,
-  type RealtimeVoiceAgentRunActivity,
 } from "./agent-run-control-shared.js";
 
 type RealtimeVoiceAgentControlDeps = {

@@ -1,5 +1,6 @@
 // Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -17,6 +18,7 @@ import {
   isGatewayTransportError,
   type GatewayConnectionDetails,
 } from "../gateway/call.js";
+import { projectGatewayConnectionDetailsForDiagnostics } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -25,6 +27,7 @@ import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -493,9 +496,11 @@ async function emitGatewayError(
 ) {
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
-  const errorText = formatErrorMessage(err);
+  const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
 
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const details = projectGatewayConnectionDetailsForDiagnostics(
+    buildGatewayConnectionDetails({ url: opts.url }),
+  );
   if (mode === "json") {
     if (
       !emitJsonLine(
@@ -682,7 +687,11 @@ export function registerLogsCli(program: Command) {
           emitJsonLine,
           errorLine,
         );
-        process.exit(1);
+        // Route terminal reset to stderr in JSON mode so structured
+        // stdout stays parseable. Text mode resets to stdout by default.
+        defaultRuntime.exit(1, {
+          resetStream: jsonMode ? process.stderr : undefined,
+        });
         return;
       }
       if (followRetryAttempt > 0) {
@@ -827,3 +836,4 @@ export function registerLogsCli(program: Command) {
     }
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

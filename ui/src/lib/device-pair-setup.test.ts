@@ -1,10 +1,15 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
   closeDevicePairSetup,
+  createDevicePairSetupState,
+  openDevicePairSetup,
   refreshDevicePairSetup,
+  setDevicePairSetupAccess,
   type DevicePairSetup,
-  type DevicePairSetupState,
 } from "./device-pair-setup.ts";
+
+type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,27 +19,41 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function setupResult(setupCode: string): DevicePairSetup {
+function setupResult(
+  setupCode: string,
+  access?: "full" | "limited",
+  accessDowngraded?: boolean,
+): DevicePairSetup {
   return {
     setupCode,
     gatewayUrl: "wss://gateway.example.com",
     auth: "token",
     urlSource: "test",
+    ...(access ? { access } : {}),
+    ...(accessDowngraded ? { accessDowngraded: true } : {}),
   };
 }
 
 function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetupState {
-  return {
-    client,
-    connected: true,
-    devicePairSetupOpen: true,
-    devicePairSetupLoading: false,
-    devicePairSetupError: null,
-    devicePairSetup: null,
-  };
+  const state = createDevicePairSetupState({ client, connected: true });
+  state.devicePairSetupOpen = true;
+  return state;
 }
 
 describe("device pairing setup state", () => {
+  it("opens without minting a setup credential", async () => {
+    const request = vi.fn();
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+    });
+
+    await openDevicePairSetup(state);
+
+    expect(state.devicePairSetupOpen).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("ignores a setup response from a replaced Gateway client", async () => {
     const oldResponse = deferred<DevicePairSetup>();
     const newResponse = deferred<DevicePairSetup>();
@@ -102,5 +121,37 @@ describe("device pairing setup state", () => {
     expect(state.devicePairSetupLoading).toBe(false);
     expect(state.devicePairSetupError).toBeNull();
     expect(state.devicePairSetup).toBeNull();
+    expect(state.devicePairSetupAccess).toBe("full");
+  });
+
+  it("selects limited access before issuing a setup code", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("LIMITED"));
+    const client = {
+      request,
+    } as unknown as DevicePairSetupState["client"];
+    const state = stateWithClient(client);
+
+    await setDevicePairSetupAccess(state, "limited");
+
+    expect(request).not.toHaveBeenCalled();
+    await refreshDevicePairSetup(state);
+
+    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
+      bootstrapProfile: "limited",
+    });
+    expect(state.devicePairSetupAccess).toBe("limited");
+    expect(state.devicePairSetup?.setupCode).toBe("LIMITED");
+  });
+
+  it("reflects a server-side plaintext downgrade", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("LIMITED", "limited", true));
+    const state = stateWithClient({
+      request,
+    } as unknown as DevicePairSetupState["client"]);
+
+    await refreshDevicePairSetup(state);
+
+    expect(state.devicePairSetupAccess).toBe("limited");
+    expect(state.devicePairSetup?.accessDowngraded).toBe(true);
   });
 });

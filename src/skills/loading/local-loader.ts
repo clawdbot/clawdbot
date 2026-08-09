@@ -12,6 +12,11 @@ type LoadedLocalSkill = {
   frontmatter: ParsedSkillFrontmatter;
 };
 
+export type LocalSkillLoadDiagnostic = {
+  path: string;
+  message: string;
+};
+
 // Read SKILL.md through the root boundary helper so symlinks cannot escape the skill root.
 function readSkillFileSync(params: {
   rootRealPath: string;
@@ -23,6 +28,9 @@ function readSkillFileSync(params: {
     rootPath: params.rootRealPath,
     rootRealPath: params.rootRealPath,
     boundaryLabel: "skill root",
+    // Operator skill roots are commonly symlinked; fs-safe still rejects hops
+    // whose canonical target escapes the skill root.
+    rejectSymlinks: false,
     maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
@@ -40,6 +48,7 @@ function loadSingleSkillDirectory(params: {
   source: string;
   rootRealPath: string;
   maxBytes?: number;
+  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedLocalSkill | null {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
   const raw = readSkillFileSync({
@@ -54,7 +63,9 @@ function loadSingleSkillDirectory(params: {
   let frontmatter: Record<string, string>;
   try {
     frontmatter = parseFrontmatter(raw);
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
+    params.onDiagnostic?.({ path: skillFilePath, message });
     return null;
   }
 
@@ -104,7 +115,12 @@ function listCandidateSkillDirs(dir: string): string[] {
 }
 
 /** Loads skills from a local directory while turning read/parse failures into diagnostics. */
-export function loadSkillsFromDirSafe(params: { dir: string; source: string; maxBytes?: number }): {
+export function loadSkillsFromDirSafe(params: {
+  dir: string;
+  source: string;
+  maxBytes?: number;
+  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
+}): {
   skills: Skill[];
   frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
 } {
@@ -121,6 +137,7 @@ export function loadSkillsFromDirSafe(params: { dir: string; source: string; max
     source: params.source,
     rootRealPath,
     maxBytes: params.maxBytes,
+    onDiagnostic: params.onDiagnostic,
   });
   if (rootSkill) {
     return {
@@ -136,6 +153,7 @@ export function loadSkillsFromDirSafe(params: { dir: string; source: string; max
         source: params.source,
         rootRealPath,
         maxBytes: params.maxBytes,
+        onDiagnostic: params.onDiagnostic,
       }),
     )
     .filter((skill): skill is LoadedLocalSkill => skill !== null);

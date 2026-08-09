@@ -69,8 +69,9 @@ function abortDueToTimeout(
   startedAtMs: number,
   operation?: string,
   url?: string,
+  combinedSignal?: AbortSignal,
 ) {
-  if (controller.signal.aborted) {
+  if (combinedSignal?.aborted ?? controller.signal.aborted) {
     return;
   }
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
@@ -113,15 +114,18 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   cleanup: () => void;
   refresh: () => void;
 } {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
+  const { timeoutMs, signal: parentSignal } = params;
+  if (!timeoutMs && !parentSignal) {
     return { signal: undefined, cleanup: () => {}, refresh: () => {} };
   }
   if (!timeoutMs) {
-    return { signal, cleanup: () => {}, refresh: () => {} };
+    return { signal: parentSignal, cleanup: () => {}, refresh: () => {} };
   }
 
   const controller = new AbortController();
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
   const normalizedTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   let active = true;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -134,22 +138,15 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       Date.now(),
       params.operation,
       params.url,
+      signal,
     );
   };
   scheduleTimeout();
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
 
   return {
-    signal: controller.signal,
+    signal,
     refresh: () => {
-      if (!active || controller.signal.aborted) {
+      if (!active || signal.aborted) {
         return;
       }
       if (timeoutId) {
@@ -161,9 +158,6 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       active = false;
       if (timeoutId) {
         clearTimeout(timeoutId);
-      }
-      if (signal) {
-        signal.removeEventListener("abort", onAbort);
       }
     },
   };

@@ -2,7 +2,7 @@
  * Browser config mutation helpers.
  *
  * Persists browser-control credentials and profile config changes through the
- * canonical config writer while preserving port/color allocation rules.
+ * canonical config writer while preserving port allocation rules.
  */
 import { isDeepStrictEqual } from "node:util";
 import { mutateConfigFile } from "../config/config.js";
@@ -10,13 +10,17 @@ import type { BrowserProfileConfig } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
-import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
+import {
+  getOwnBrowserProfile,
+  resolveBrowserConfig,
+  type ResolvedBrowserConfig,
+} from "./config.js";
 import {
   BrowserConflictError,
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
-import { allocateCdpPort, allocateColor, getUsedColors, getUsedPorts } from "./profiles.js";
+import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
 type BrowserControlCredential =
   | {
@@ -90,9 +94,7 @@ export async function createBrowserProfileConfig(params: {
           ? rawDraftBrowser.cdpPortRangeEnd
           : undefined;
       const useRebasedPortRange =
-        draft.gateway?.port !== undefined ||
-        draft.browser?.cdpPortRangeStart !== undefined ||
-        draftCdpPortRangeEnd !== undefined;
+        draft.gateway?.port !== undefined || draftCdpPortRangeEnd !== undefined;
       const latestResolved = resolveBrowserConfig(
         {
           ...params.resolved,
@@ -104,12 +106,12 @@ export async function createBrowserProfileConfig(params: {
       const latestRootResolved = resolveBrowserConfig(draft.browser, draft);
       const latestProfileSource = useRebasedPortRange ? latestRootResolved : latestResolved;
       const latestProfiles = draft.browser?.profiles ?? {};
-      if (params.name in latestProfiles || params.name in latestProfileSource.profiles) {
+      if (
+        getOwnBrowserProfile(latestProfiles, params.name) ||
+        getOwnBrowserProfile(latestProfileSource.profiles, params.name)
+      ) {
         throw new BrowserConflictError(`profile "${params.name}" already exists`);
       }
-
-      const profileColor =
-        params.color ?? allocateColor(getUsedColors(latestProfileSource.profiles));
 
       let nextProfileConfig: BrowserProfileConfig;
       if (params.parsedCdpUrl) {
@@ -122,14 +124,12 @@ export async function createBrowserProfileConfig(params: {
           cdpUrl: params.parsedCdpUrl,
           ...(params.driver ? { driver: params.driver } : {}),
           ...(params.driver === "existing-session" ? { attachOnly: true } : {}),
-          color: profileColor,
         };
       } else if (params.driver === "existing-session") {
         nextProfileConfig = {
           driver: params.driver,
           attachOnly: true,
           ...(params.userDataDir ? { userDataDir: params.userDataDir } : {}),
-          color: profileColor,
         };
       } else {
         const usedPorts = getUsedPorts(latestProfileSource.profiles);
@@ -146,7 +146,6 @@ export async function createBrowserProfileConfig(params: {
         nextProfileConfig = {
           cdpPort,
           ...(params.driver ? { driver: params.driver } : {}),
-          color: profileColor,
         };
       }
 
@@ -176,7 +175,7 @@ export async function deleteBrowserProfileConfig(params: {
           `cannot delete the default profile "${params.name}"; change browser.defaultProfile first`,
         );
       }
-      const currentProfile = draft.browser?.profiles?.[params.name];
+      const currentProfile = getOwnBrowserProfile(draft.browser?.profiles, params.name);
       if (!isDeepStrictEqual(currentProfile, params.expected)) {
         throw new BrowserConflictError(
           `profile "${params.name}" changed while deletion was pending; retry the delete request`,
@@ -196,7 +195,7 @@ export async function setDefaultBrowserProfile(name: string): Promise<void> {
   await mutateConfigFile({
     afterWrite: { mode: "auto" },
     mutate: (draft) => {
-      if (!(name in (draft.browser?.profiles ?? {}))) {
+      if (!getOwnBrowserProfile(draft.browser?.profiles, name)) {
         throw new BrowserValidationError(`profile "${name}" does not exist`);
       }
       draft.browser = {

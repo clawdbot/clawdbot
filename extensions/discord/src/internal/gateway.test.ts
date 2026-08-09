@@ -1,5 +1,6 @@
 // Discord tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   GatewayCloseCodes,
   GatewayDispatchEvents,
@@ -49,11 +50,12 @@ function firstSentGatewayPayload(send: ReturnType<typeof attachOpenSocket>): unk
 
 function presenceUpdate(
   status: PresenceUpdateStatus.Online | PresenceUpdateStatus.Idle = PresenceUpdateStatus.Online,
+  since: number | null = null,
 ): GatewaySendPayload {
   return {
     op: GatewayOpcodes.PresenceUpdate,
     d: {
-      since: null,
+      since,
       activities: [],
       status,
       afk: false,
@@ -304,7 +306,7 @@ describe("GatewayPlugin", () => {
     expect(thirdResolved).toBe(true);
   });
 
-  it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
+  it("passes the raw MESSAGE_CREATE envelope to durable ingress", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (_eventValue: string, _dataValue: unknown) => {});
     (gateway as unknown as { client: unknown }).client = {
@@ -336,10 +338,120 @@ describe("GatewayPlugin", () => {
     const dispatched = firstDispatchedData(dispatchGatewayEvent) as {
       author?: { id: string };
       message?: { author?: { id: string } | null; content?: string };
+      content?: string;
     };
     expect(dispatched.author?.id).toBe("u1");
-    expect(dispatched.message?.author?.id).toBe("u1");
-    expect(dispatched.message?.content).toBe("hello");
+    expect(dispatched.content).toBe("hello");
+    expect(dispatched.message).toBeUndefined();
+  });
+
+  it("tracks the live voice roster across guild snapshots and voice updates", async () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    (gateway as unknown as { client: unknown }).client = {
+      dispatchGatewayEvent: vi.fn(async () => {}),
+      getPlugin: vi.fn(() => undefined),
+    };
+    const handleDispatch = (payload: { t: string; d: unknown }): Promise<void> =>
+      (
+        gateway as unknown as {
+          handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+        }
+      ).handleDispatch(payload);
+
+    await handleDispatch({
+      t: GatewayDispatchEvents.GuildCreate,
+      d: {
+        id: "g1",
+        voice_states: [
+          { user_id: "u1", channel_id: "c1" },
+          { user_id: "u2", channel_id: "c1" },
+          { user_id: "u3", channel_id: "c2" },
+        ],
+        members: [
+          { user: { id: "u1", username: "owner", bot: false } },
+          { user: { id: "u2", username: "friend", bot: false } },
+          { user: { id: "u3", username: "helper", bot: true } },
+        ],
+      },
+    });
+
+    const initialStates = gateway.listVoiceChannelStates("g1", "c1");
+    expect(initialStates.map((state) => state.user_id)).toEqual(["u1", "u2"]);
+    expect(initialStates.map((state) => state.member?.user.username)).toEqual(["owner", "friend"]);
+
+    const moveState = { guild_id: "g1", user_id: "u1", channel_id: "c2" };
+    await handleDispatch({
+      t: GatewayDispatchEvents.VoiceStateUpdate,
+      d: moveState,
+    });
+    const leaveState = { guild_id: "g1", user_id: "u2", channel_id: null };
+    await handleDispatch({
+      t: GatewayDispatchEvents.VoiceStateUpdate,
+      d: leaveState,
+    });
+    expect(gateway.takeVoiceStateTransition(moveState as never)).toEqual({
+      previous: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u1",
+        channel_id: "c1",
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "owner" }) }),
+      }),
+      current: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u1",
+        channel_id: "c2",
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "owner" }) }),
+      }),
+    });
+    expect(gateway.takeVoiceStateTransition(moveState as never)).toBeNull();
+    expect(gateway.takeVoiceStateTransition(leaveState as never)).toEqual({
+      previous: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u2",
+        channel_id: "c1",
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "friend" }) }),
+      }),
+      current: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u2",
+        channel_id: null,
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "friend" }) }),
+      }),
+    });
+
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
+    expect(gateway.listVoiceChannelStates("g1", "c2").map((state) => state.user_id)).toEqual([
+      "u1",
+      "u3",
+    ]);
+
+    await handleDispatch({ t: GatewayDispatchEvents.GuildDelete, d: { id: "g1" } });
+    expect(gateway.listVoiceChannelStates("g1", "c2")).toEqual([]);
+  });
+
+  it("clears cached voice states when a fresh gateway session becomes ready", async () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    (gateway as unknown as { client: unknown }).client = {
+      dispatchGatewayEvent: vi.fn(async () => {}),
+      getPlugin: vi.fn(() => undefined),
+    };
+    const handleDispatch = (payload: { t: string; d: unknown }): Promise<void> =>
+      (
+        gateway as unknown as {
+          handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+        }
+      ).handleDispatch(payload);
+
+    await handleDispatch({
+      t: GatewayDispatchEvents.GuildCreate,
+      d: { id: "g1", voice_states: [{ user_id: "u1", channel_id: "c1" }] },
+    });
+    await handleDispatch({
+      t: GatewayDispatchEvents.Ready,
+      d: { session_id: "session-2", resume_gateway_url: "wss://gateway.discord.gg" },
+    });
+
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
   });
 
   it("marks successful gateway resumes connected", async () => {
@@ -384,6 +496,7 @@ describe("GatewayPlugin", () => {
       resetTime: 60_000,
       currentEventCount: 120,
       queuedEvents: 1,
+      droppedEvents: 0,
     });
 
     vi.advanceTimersByTime(59_999);
@@ -396,7 +509,41 @@ describe("GatewayPlugin", () => {
       resetTime: 120_000,
       currentEventCount: 1,
       queuedEvents: 0,
+      droppedEvents: 0,
     });
+  });
+
+  it("drops the oldest queued events and warns once per saturation episode", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const send = attachOpenSocket(gateway);
+    const warningSpy = vi.fn();
+    gateway.emitter.on("warning", warningSpy);
+
+    for (let index = 0; index < 242; index += 1) {
+      gateway.send(presenceUpdate(PresenceUpdateStatus.Online, index));
+    }
+
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 0,
+      resetTime: 60_000,
+      currentEventCount: 120,
+      queuedEvents: 120,
+      droppedEvents: 2,
+    });
+    expect(warningSpy).toHaveBeenCalledTimes(1);
+    expect(warningSpy).toHaveBeenCalledWith(
+      "Gateway outbound queue overflow policy=drop-oldest droppedEvents=1 queuedEvents=120 maxQueuedEvents=120",
+    );
+
+    vi.advanceTimersByTime(60_000);
+
+    const flushedSinceValues = send.mock.calls.slice(120).map(([serialized]) => {
+      const payload = JSON.parse(String(serialized)) as { d?: { since?: number } };
+      return payload.d?.since;
+    });
+    expect(flushedSinceValues).toEqual(Array.from({ length: 120 }, (_, index) => index + 122));
   });
 
   it("sends critical gateway events immediately even when regular sends are queued", () => {
@@ -421,6 +568,7 @@ describe("GatewayPlugin", () => {
       resetTime: 60_000,
       currentEventCount: 121,
       queuedEvents: 1,
+      droppedEvents: 0,
     });
   });
 
@@ -454,7 +602,7 @@ describe("GatewayPlugin", () => {
     });
 
     gateway.connect(false);
-    const oldSocket = gateway.sockets[0];
+    const oldSocket = expectDefined(gateway.sockets[0], "old Discord gateway socket");
     oldSocket.emit("open");
     gateway.connect(false);
     const heartbeat = setInterval(() => {}, 1_000);

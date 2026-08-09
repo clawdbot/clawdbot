@@ -1,4 +1,6 @@
 // Performs lightweight safe-regex checks for user-supplied patterns.
+import { expectDefined } from "@openclaw/normalization-core";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 type QuantifierRead = {
   consumed: number;
   minRepeat: number;
@@ -102,7 +104,7 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   }
 
   let i = index + 1;
-  while (i < source.length && /\d/.test(source[i])) {
+  while (i < source.length && /\d/.test(source.charAt(i))) {
     i += 1;
   }
   if (i === index + 1) {
@@ -114,7 +116,7 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   if (source[i] === ",") {
     i += 1;
     const maxStart = i;
-    while (i < source.length && /\d/.test(source[i])) {
+    while (i < source.length && /\d/.test(source.charAt(i))) {
       i += 1;
     }
     maxRepeat = i === maxStart ? null : Number.parseInt(source.slice(maxStart, i), 10);
@@ -196,7 +198,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
   const frames: ParseFrame[] = [createParseFrame()];
 
   const emitToken = (token: TokenState) => {
-    const frame = frames[frames.length - 1];
+    const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
     frame.lastToken = token;
     if (token.containsRepetition) {
       frame.containsRepetition = true;
@@ -252,7 +254,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     }
 
     if (token.kind === "alternation") {
-      const frame = frames[frames.length - 1];
+      const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
       frame.hasAlternation = true;
       recordAlternative(frame);
       frame.branchMinLength = 0;
@@ -261,7 +263,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
       continue;
     }
 
-    const frame = frames[frames.length - 1];
+    const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
     const previousToken = frame.lastToken;
     if (!previousToken) {
       continue;
@@ -317,7 +319,7 @@ export function testRegexWithBoundedInput(
   return testRegexFromStart(regex, input.slice(-maxWindow));
 }
 
-export function hasNestedRepetition(source: string): boolean {
+function hasNestedRepetition(source: string): boolean {
   // Conservative parser: tokenize first, then check if repeated tokens/groups are repeated again.
   // Non-goal: complete regex AST support; keep strict enough for config safety checks.
   return analyzeTokensForNestedRepetition(tokenizePattern(source));
@@ -352,12 +354,7 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   safeRegexCache.set(cacheKey, result);
-  if (safeRegexCache.size > SAFE_REGEX_CACHE_MAX) {
-    const oldestKey = safeRegexCache.keys().next().value;
-    if (oldestKey) {
-      safeRegexCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(safeRegexCache, SAFE_REGEX_CACHE_MAX);
   return result;
 }
 

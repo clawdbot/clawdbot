@@ -15,6 +15,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import {
   avoidTrailingHighSurrogateBreak,
   chunkTextByBreakResolver,
+  normalizeChunkLimit,
 } from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
@@ -34,12 +35,8 @@ const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
-  chunkMode?: ChunkMode;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { textChunkLimit?: number; chunkMode?: ChunkMode; streaming?: unknown }
-  >;
+  accounts?: Record<string, { textChunkLimit?: number; streaming?: unknown }>;
 };
 
 function resolveChunkLimitForProvider(
@@ -101,7 +98,7 @@ function resolveChunkModeForProvider(
       return directMode;
     }
   }
-  return resolveChannelStreamingChunkMode(cfgSection) ?? cfgSection.chunkMode;
+  return resolveChannelStreamingChunkMode(cfgSection);
 }
 
 export function resolveChunkMode(
@@ -136,7 +133,8 @@ export function chunkByNewline(
   if (!text) {
     return [];
   }
-  if (maxLineLength <= 0) {
+  const lineLimit = normalizeChunkLimit(maxLineLength);
+  if (lineLimit <= 0) {
     return text.trim() ? [text] : [];
   }
   const splitLongLines = opts?.splitLongLines !== false;
@@ -152,26 +150,26 @@ export function chunkByNewline(
       continue;
     }
 
-    const maxPrefix = Math.max(0, maxLineLength - 1);
+    const maxPrefix = Math.max(0, lineLimit - 1);
     const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
     const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
     pendingBlankLines = 0;
 
     const lineValue = trimLines ? trimmed : line;
-    if (!splitLongLines || lineValue.length + prefix.length <= maxLineLength) {
+    if (!splitLongLines || lineValue.length + prefix.length <= lineLimit) {
       chunks.push(prefix + lineValue);
       continue;
     }
 
     // Back the head cut off to a code-point boundary so an over-long line never splits a surrogate
     // pair; the recursive chunkText below is already surrogate-safe, only this first cut was raw.
-    const rawLimit = Math.max(1, maxLineLength - prefix.length);
+    const rawLimit = Math.max(1, lineLimit - prefix.length);
     const firstLimit = avoidTrailingHighSurrogateBreak(lineValue, 0, rawLimit);
     const first = lineValue.slice(0, firstLimit);
     chunks.push(prefix + first);
     const remaining = lineValue.slice(firstLimit);
     if (remaining) {
-      chunks.push(...chunkText(remaining, maxLineLength));
+      chunks.push(...chunkText(remaining, lineLimit));
     }
   }
 
@@ -204,8 +202,10 @@ export function chunkByParagraph(
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
 
-  // Normalize to \n so blank line detection is consistent.
-  const normalized = text.replace(/\r\n?/g, "\n");
+  // U+2029 PARAGRAPH SEPARATOR maps to a blank-line boundary; U+2028 LINE
+  // SEPARATOR and CR/CRLF map to a single newline.
+  // Normalize in two steps so consecutive U+2028\u2029 also produces a blank line.
+  const normalized = text.replace(/\u2029/g, "\n\n").replace(/\r\n?|\u2028/g, "\n");
 
   // Fast-path: if there are no blank-line paragraph separators, do not split.
   // (We *do not* early-return based on `limit` — newline mode is about paragraph
@@ -295,21 +295,24 @@ export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode):
 }
 
 export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+  const normalizedLimit = normalizeChunkLimit(limit);
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const paragraphChunks = chunkByParagraph(text, normalizedLimit, {
+      splitLongParagraphs: false,
+    });
     const out: string[] = [];
     for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
-      paragraphChunk.length > limit
+      paragraphChunk.length > normalizedLimit
         ? splitPackedFenceParagraphChunk(paragraphChunk)
         : paragraphChunk,
     )) {
-      out.push(...chunkMarkdownText(chunk, limit));
+      out.push(...chunkMarkdownText(chunk, normalizedLimit));
     }
     return out;
   }
-  return chunkMarkdownText(text, limit);
+  return chunkMarkdownText(text, normalizedLimit);
 }
 
 function splitByNewline(
@@ -383,7 +386,8 @@ export function chunkText(text: string, limit: number): string[] {
 }
 
 export function chunkMarkdownText(text: string, limit: number): string[] {
-  const early = resolveChunkEarlyReturn(text, limit);
+  const normalizedLimit = normalizeChunkLimit(limit);
+  const early = resolveChunkEarlyReturn(text, normalizedLimit);
   if (early) {
     return early;
   }
@@ -395,7 +399,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
   while (start < text.length) {
     const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
-    const contentLimit = Math.max(1, limit - reopenPrefix.length);
+    const contentLimit = Math.max(1, normalizedLimit - reopenPrefix.length);
     if (text.length - start <= contentLimit) {
       const finalChunk = `${reopenPrefix}${text.slice(start)}`;
       if (finalChunk.length > 0) {
@@ -472,7 +476,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     }
 
     let rawChunk = `${reopenPrefix}${rawContent}`;
-    const brokeOnSeparator = breakIdx < text.length && /\s/.test(text[breakIdx]);
+    const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
     let nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
 
     if (fenceToSplit) {
@@ -531,7 +535,7 @@ function scanParenAwareBreakpoints(
     if (!isAllowed(i)) {
       continue;
     }
-    const char = text[i];
+    const char = text.charAt(i);
     if (char === "(") {
       depth += 1;
       continue;

@@ -1,4 +1,4 @@
-// Qa Lab plugin module embeds profile scorecard context into QA evidence.
+// QA Lab plugin module embeds profile scorecard context into QA evidence.
 import fs from "node:fs/promises";
 import {
   attachQaEvidenceScorecard,
@@ -7,6 +7,7 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import type {
   QaScorecardCategoryCoverageReport,
   QaScorecardEvidenceMode,
@@ -84,12 +85,14 @@ function featureCounts(
   };
 }
 
-export function buildQaProfileScorecardEvidence(params: {
+function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
 }): QaEvidenceScorecardJson {
-  const primaryCoverageIds = coverageIdsForRole(params.evidence.entries, "primary");
+  // Only passing primary evidence fulfills coverage; secondary evidence remains diagnostic.
+  const passingEntries = params.evidence.entries.filter((entry) => entry.result.status === "pass");
+  const primaryCoverageIds = coverageIdsForRole(passingEntries, "primary");
   const secondaryCoverageIds = coverageIdsForRole(params.evidence.entries, "secondary");
   const categoryInputs = params.categories.map((category) => ({
     category,
@@ -174,6 +177,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   evidencePath: string;
   evidenceMode?: QaScorecardEvidenceMode;
   profile: string;
+  profilePlan: QaProfileEvidencePlan;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
 }) {
@@ -189,6 +193,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
     summary: evidence,
     evidenceMode: params.evidenceMode,
     profile: params.profile,
+    profilePlan: params.profilePlan,
     scorecard,
   });
   await fs.writeFile(params.evidencePath, `${JSON.stringify(nextEvidence, null, 2)}\n`, "utf8");

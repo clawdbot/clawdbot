@@ -10,13 +10,13 @@
 
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   readProviderTextResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
@@ -323,8 +323,8 @@ export async function executeChannelApi(
 
     debugLog(`[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`);
 
-    let res: Response;
     let release: (() => Promise<void>) | undefined;
+    let receivedResponse = false;
     try {
       const guarded = await fetchWithSsrFGuard({
         url,
@@ -332,32 +332,19 @@ export async function executeChannelApi(
         auditContext: "qqbot-channel-api",
         policy: resolveChannelApiSsrfPolicy(url),
       });
-      res = guarded.response;
       release = guarded.release;
-    } catch (err) {
-      clearTimeout(timeoutId);
-      if (err instanceof Error && err.name === "AbortError") {
-        debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
-        return json({
-          error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
-          path: params.path,
-        });
-      }
-      debugError("[qqbot-channel-api] <<< Network error:", err);
-      return json({
-        error: `Network error: ${formatErrorMessage(err)}`,
-        path: params.path,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+      receivedResponse = true;
+      const res = guarded.response;
 
-    try {
       debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
       const rawBody = res.ok
-        ? await readProviderTextResponse(res, "QQ channel API response")
-        : await readResponseTextLimited(res, CHANNEL_API_ERROR_BODY_LIMIT_BYTES);
+        ? await readProviderTextResponse(res, "QQ channel API response", {
+            chunkTimeoutMs: DEFAULT_TIMEOUT_MS,
+          })
+        : await readResponseTextLimited(res, CHANNEL_API_ERROR_BODY_LIMIT_BYTES, {
+            chunkTimeoutMs: DEFAULT_TIMEOUT_MS,
+          });
       if (!rawBody || rawBody.trim() === "") {
         if (res.ok) {
           return json({ success: true, status: res.status, path: params.path });
@@ -396,7 +383,27 @@ export async function executeChannelApi(
         path: params.path,
         data: parsed,
       });
+    } catch (err) {
+      if (controller.signal.aborted && err instanceof Error && err.name === "AbortError") {
+        debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
+        return json({
+          error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+          path: params.path,
+        });
+      }
+      if (!receivedResponse) {
+        debugError("[qqbot-channel-api] <<< Network error:", err);
+        return json({
+          error: `Network error: ${formatErrorMessage(err)}`,
+          path: params.path,
+        });
+      }
+      return json({
+        error: formatErrorMessage(err),
+        path: params.path,
+      });
     } finally {
+      clearTimeout(timeoutId);
       await release?.();
     }
   } catch (err) {

@@ -4,11 +4,15 @@
 // helpers, and GitHub Actions all prepare the exact same npm tarball.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import * as tar from "tar";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
@@ -27,6 +31,8 @@ const PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES = [
   "OPENCLAW_EXTENSIONS",
   "OPENCLAW_DOCKER_BUILD_EXTENSIONS",
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  // Public package builds must not inherit a smoke lane's private QA entrypoints.
+  "OPENCLAW_BUILD_PRIVATE_QA",
 ];
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -218,11 +224,21 @@ function run(command, args, cwd, options = {}) {
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
-    const child = spawn(command, args, {
+    const env = options.env ?? process.env;
+    // Keep POSIX command selection stable; only Windows needs explicit npm/pnpm shim handling.
+    const invocation =
+      process.platform === "win32" && command === "pnpm"
+        ? resolvePnpmRunner({ cwd, env, npmExecPath: env.npm_execpath, pnpmArgs: args })
+        : process.platform === "win32" && command === "npm"
+          ? resolveNpmRunner({ env, npmArgs: args })
+          : { args, command, shell: false };
+    const child = spawn(invocation.command, invocation.args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: options.env ?? process.env,
+      env: invocation.env ?? env,
       detached: useProcessGroup,
+      shell: invocation.shell,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
     let timedOut = false;
     let outputLimitExceeded = false;
@@ -257,15 +273,7 @@ function run(command, args, cwd, options = {}) {
       resolve(value);
     };
     const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The direct child may already have exited; fall back to child.kill.
-        }
-      }
-      child.kill(signal);
+      terminateManagedChild(child, signal);
     };
     const processGroupAlive = () => {
       if (!useProcessGroup || !child.pid) {
@@ -368,7 +376,10 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
     command: "node",
-    args: ["scripts/build-all.mjs", "ciArtifacts"],
+    // The full profile keeps canonical declaration emission; ciArtifacts is a
+    // PR-CI-only profile whose step env forces dts off and would clobber the
+    // OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 this packaging path requires.
+    args: ["scripts/build-all.mjs", "full"],
   },
 ];
 
@@ -406,15 +417,13 @@ async function newestOpenClawTarball(outputDir, packOutput) {
   let fromOutput = "";
   try {
     const parsed = JSON.parse(packOutput);
-    if (Array.isArray(parsed)) {
-      for (const entry of parsed) {
-        if (typeof entry?.filename !== "string") {
-          continue;
-        }
-        const filename = resolvePackedOpenClawFileName(entry.filename);
-        if (filename) {
-          fromOutput = filename;
-        }
+    for (const entry of resolveNpmJsonEntries(parsed)) {
+      if (typeof entry?.filename !== "string") {
+        continue;
+      }
+      const filename = resolvePackedOpenClawFileName(entry.filename);
+      if (filename) {
+        fromOutput = filename;
       }
     }
   } catch {}
@@ -455,18 +464,22 @@ async function writePackJson(packOutput, tarball, packJsonPath, sourceDir) {
   } catch (error) {
     throw new Error("npm pack --json output was not valid JSON", { cause: error });
   }
-  if (!Array.isArray(parsed)) {
-    throw new Error("npm pack --json output must be an array");
+  const entries = resolveNpmJsonEntries(parsed);
+  if (
+    entries.length === 0 ||
+    entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))
+  ) {
+    throw new Error("npm pack --json output did not contain package results");
   }
   const filename = path.basename(tarball);
-  for (const entry of parsed) {
+  for (const entry of entries) {
     if (entry && typeof entry === "object" && typeof entry.filename === "string") {
       entry.filename = filename;
     }
   }
   const target = path.resolve(sourceDir, packJsonPath);
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, `${JSON.stringify(parsed, null, 2)}\n`);
+  await fs.writeFile(target, `${JSON.stringify(entries, null, 2)}\n`);
 }
 
 async function cleanPackedOpenClawTarballs(outputDir) {
@@ -515,7 +528,14 @@ export async function prepareBundledAiRuntimePackage(
   const extractAiRuntime =
     options.extractAiRuntime ??
     ((tarballPath, destination) =>
-      Promise.resolve(tar.x({ cwd: destination, file: tarballPath, strip: 1 })));
+      // Source-ref validation runs this trusted harness outside the candidate's dependency tree.
+      // Keep extraction on the system tar contract so only the candidate checkout needs install.
+      run("tar", ["-xzf", tarballPath, "-C", destination, "--strip-components=1"], destination, {
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      }));
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
   let packageJson;
   try {
@@ -654,6 +674,40 @@ export async function prepareBundledAiRuntimePackage(
   }
 }
 
+async function restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog) {
+  await restoreChangelog(sourceDir);
+  // Release the lifecycle receipt only after every other source mutation settles.
+  await restoreDocsMap(sourceDir);
+}
+
+async function loadSourceDocsMapLifecycle(sourceDir) {
+  const modulePath = path.join(sourceDir, "scripts", "package-docs-map.mjs");
+  try {
+    await fs.access(modulePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  const lifecycle = await import(pathToFileURL(modulePath).href);
+  if (
+    typeof lifecycle.preparePackageDocsMap !== "function" ||
+    typeof lifecycle.restorePackageDocsMap !== "function"
+  ) {
+    throw new Error(`source package docs-map lifecycle is invalid: ${modulePath}`);
+  }
+  return lifecycle;
+}
+
+function packagePreparationRestoreError(error, restoreError) {
+  return new AggregateError(
+    [error, restoreError],
+    "Package preparation failed and source artifacts could not be restored.",
+    { cause: error },
+  );
+}
+
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
   const prepareChangelog =
@@ -663,13 +717,33 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
         allowUnreleased: options.allowUnreleasedChangelog,
       }));
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
+  // Frozen refs own their package contents. Only refs carrying this lifecycle ship a generated map.
+  const sourceDocsMapLifecycle =
+    options.prepareDocsMap && options.restoreDocsMap
+      ? null
+      : await loadSourceDocsMapLifecycle(sourceDir);
+  const prepareDocsMap =
+    options.prepareDocsMap ?? sourceDocsMapLifecycle?.preparePackageDocsMap ?? (async () => false);
+  const restoreDocsMap =
+    options.restoreDocsMap ?? sourceDocsMapLifecycle?.restorePackageDocsMap ?? (async () => false);
   const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
   const packTool = options.pnpmPack ? "pnpm" : "npm";
   if (options.packJsonPath && options.pnpmPack) {
     throw new Error("packJsonPath cannot be combined with pnpmPack");
   }
   console.error("==> Packing OpenClaw package");
-  await prepareChangelog(sourceDir);
+  // This receipt is the package lifecycle lock; acquire it before touching CHANGELOG.md.
+  await prepareDocsMap(sourceDir);
+  try {
+    await prepareChangelog(sourceDir);
+  } catch (error) {
+    try {
+      await restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog);
+    } catch (restoreError) {
+      throw packagePreparationRestoreError(error, restoreError);
+    }
+    throw error;
+  }
   let packOutput;
   let cleanupBundledAiRuntime = async () => {};
   try {
@@ -697,7 +771,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
     try {
       await cleanupBundledAiRuntime();
     } finally {
-      await restoreChangelog(sourceDir);
+      await restorePackageSourceArtifacts(sourceDir, restoreDocsMap, restoreChangelog);
     }
   }
   // pnpm reports an absolute destination path. The directory was emptied before packing,
@@ -715,6 +789,24 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   return tarball;
 }
 
+export async function writePackageInventoryForDocker(sourceDir, runImpl = run) {
+  // Frozen release refs own their inventory shape; run their writer instead of importing current-main helpers.
+  // Resolve the loader from that checkout too: the workflow harness may install production deps only.
+  const sourceRequire = createRequire(path.join(sourceDir, "package.json"));
+  const tsxModuleUrl = pathToFileURL(sourceRequire.resolve("tsx")).href;
+  await runImpl(
+    "node",
+    ["--import", tsxModuleUrl, path.join(sourceDir, "scripts/write-package-dist-inventory.ts")],
+    sourceDir,
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
+        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
+      ),
+    },
+  );
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const sourceDir = path.resolve(ROOT_DIR, options.sourceDir || ROOT_DIR);
@@ -729,23 +821,7 @@ async function main() {
   }
 
   console.error("==> Writing OpenClaw package inventory");
-  await run(
-    "node",
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "-e",
-      "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
-    ],
-    sourceDir,
-    {
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
-        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
-      ),
-    },
-  );
+  await writePackageInventoryForDocker(sourceDir);
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
@@ -778,7 +854,10 @@ async function main() {
   process.stdout.write(`${tarball}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  (await fs.realpath(process.argv[1])) === (await fs.realpath(fileURLToPath(import.meta.url)))
+) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

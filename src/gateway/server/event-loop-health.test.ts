@@ -1,10 +1,7 @@
 // Event-loop health tests cover delay, CPU, and utilization degradation classification.
 import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
-import {
-  classifyGatewayEventLoopHealthReasons,
-  createGatewayEventLoopHealthMonitor,
-} from "./event-loop-health.js";
+import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
 /**
  * Event-loop health regression tests for delay, CPU, and utilization signals.
@@ -96,6 +93,7 @@ function expectSnapshotFields(snapshot: unknown, expected: Record<string, unknow
 function expectSaturatedLoadSnapshot(snapshot: unknown) {
   return expectSnapshotFields(snapshot, {
     degraded: true,
+    degradedSinceMs: 0,
     reasons: ["event_loop_utilization", "cpu"],
     intervalMs: 1_000,
     delayP99Ms: 30,
@@ -104,90 +102,6 @@ function expectSaturatedLoadSnapshot(snapshot: unknown) {
     cpuCoreRatio: 1,
   });
 }
-
-describe("classifyGatewayEventLoopHealthReasons", () => {
-  it("does not degrade on utilization or CPU from a sub-second sample", () => {
-    expect(
-      classifyGatewayEventLoopHealthReasons({
-        intervalMs: 250,
-        delayP99Ms: 20,
-        delayMaxMs: 25,
-        utilization: 1,
-        cpuCoreRatio: 1,
-      }),
-    ).toEqual([]);
-  });
-
-  it("does not degrade on utilization or CPU without delay co-evidence", () => {
-    expect(
-      classifyGatewayEventLoopHealthReasons({
-        intervalMs: 1_000,
-        delayP99Ms: 0,
-        delayMaxMs: 0,
-        utilization: 1,
-        cpuCoreRatio: 1,
-      }),
-    ).toEqual([]);
-  });
-
-  it("degrades on utilization and CPU after a sustained sample window with delay co-evidence", () => {
-    expect(
-      classifyGatewayEventLoopHealthReasons({
-        intervalMs: 1_000,
-        delayP99Ms: 20,
-        delayMaxMs: 25,
-        utilization: 0.99,
-        cpuCoreRatio: 0.95,
-      }),
-    ).toEqual(["event_loop_utilization", "cpu"]);
-  });
-
-  it.each([
-    {
-      cpuCoreRatio: 0.1,
-      expected: ["event_loop_utilization"],
-      name: "utilization only",
-      utilization: 0.99,
-    },
-    {
-      cpuCoreRatio: 0.95,
-      expected: ["cpu"],
-      name: "CPU only",
-      utilization: 0.1,
-    },
-    {
-      cpuCoreRatio: 0.1,
-      expected: [],
-      name: "neither load counter",
-      utilization: 0.1,
-    },
-  ] as const)(
-    "classifies delay-backed sustained load when $name is saturated",
-    ({ cpuCoreRatio, expected, utilization }) => {
-      expect(
-        classifyGatewayEventLoopHealthReasons({
-          intervalMs: 1_000,
-          delayP99Ms: 30,
-          delayMaxMs: 0,
-          utilization,
-          cpuCoreRatio,
-        }),
-      ).toEqual(expected);
-    },
-  );
-
-  it("still degrades on event-loop delay from a short sample", () => {
-    expect(
-      classifyGatewayEventLoopHealthReasons({
-        intervalMs: 250,
-        delayP99Ms: 20,
-        delayMaxMs: 1_500,
-        utilization: 0.1,
-        cpuCoreRatio: 0.1,
-      }),
-    ).toEqual(["event_loop_delay"]);
-  });
-});
 
 describe("createGatewayEventLoopHealthMonitor", () => {
   it("waits for delay co-evidence before reporting load-only saturation", () => {
@@ -201,6 +115,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setNow(1_000);
     expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
+      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1_000,
       delayP99Ms: 0,
@@ -238,10 +153,58 @@ describe("createGatewayEventLoopHealthMonitor", () => {
 
     expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
+      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1_000,
       utilization: 0.2,
       cpuCoreRatio: 0.1,
+    });
+  });
+
+  it("tracks continuous degradation and clears it on the first healthy snapshot", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setNow(1_000);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      degradedSinceMs: null,
+    });
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(2_000);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: true,
+      degradedSinceMs: 0,
+    });
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(3_500);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: true,
+      degradedSinceMs: 1_500,
+    });
+
+    harness.setNow(4_500);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      degradedSinceMs: null,
+    });
+  });
+
+  it("exposes persistent degradation only after the warning threshold", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(1_000);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(60_999);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(61_000);
+    expectSnapshotFields(harness.monitor.persistentDegradationSnapshot(), {
+      degraded: true,
+      degradedSinceMs: 60_000,
     });
   });
 

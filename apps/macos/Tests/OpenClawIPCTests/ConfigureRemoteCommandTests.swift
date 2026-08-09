@@ -198,6 +198,35 @@ struct ConfigureRemoteCommandTests {
         }
     }
 
+    @Test @MainActor func `configure remote writes state dir config when config path is unset`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-state-\(UUID().uuidString)", isDirectory: true)
+        let configURL = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withIsolatedState(env: [
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            try #require(resolveOpenClawConfigURL().path == configURL.path)
+            let output = try configureRemote(
+                .init(
+                    directUrl: "ws://192.168.0.203:18789",
+                    token: "state-dir-token"), // pragma: allowlist secret
+                defaultsSuites: [])
+
+            #expect(output.configPath == configURL.path)
+            let data = try Data(contentsOf: configURL)
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let gateway = try #require(root["gateway"] as? [String: Any])
+            let remote = try #require(gateway["remote"] as? [String: Any])
+            #expect(gateway["mode"] as? String == "remote")
+            #expect(remote["transport"] as? String == "direct")
+            #expect(remote["url"] as? String == "ws://192.168.0.203:18789")
+            #expect(remote["token"] as? String == "state-dir-token") // pragma: allowlist secret
+        }
+    }
+
     @Test @MainActor func `configure remote rejects plaintext public prefix bypass`() async {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-direct-reject-\(UUID().uuidString).json")
@@ -211,5 +240,100 @@ struct ConfigureRemoteCommandTests {
                 try configureRemote(.init(directUrl: "ws://192.168.0.202.attacker.example:18789"))
             }
         }
+    }
+}
+
+@Suite(.serialized)
+struct GatewayConfigTests {
+    @Test @MainActor func `config path wins when both config and state dir are set`() async throws {
+        let rootDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-cli-config-precedence-\(UUID().uuidString)", isDirectory: true)
+        let explicitConfigURL = rootDir.appendingPathComponent("explicit.json")
+        let stateConfigURL = rootDir.appendingPathComponent("state/openclaw.json")
+        defer { try? FileManager().removeItem(at: rootDir) }
+
+        try self.writeGatewayConfig(
+            to: explicitConfigURL,
+            port: 19101,
+            remoteURL: "wss://explicit-config.example:19101",
+            token: "explicit-config-token") // pragma: allowlist secret
+        try self.writeGatewayConfig(
+            to: stateConfigURL,
+            port: 19102,
+            remoteURL: "wss://state-config.example:19102",
+            token: "state-config-token") // pragma: allowlist secret
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": explicitConfigURL.path,
+            "OPENCLAW_STATE_DIR": stateConfigURL.deletingLastPathComponent().path,
+        ]) {
+            let config = loadGatewayConfig()
+
+            #expect(config.port == 19101)
+            #expect(config.remoteUrl == "wss://explicit-config.example:19101")
+            #expect(config.remoteToken == "explicit-config-token") // pragma: allowlist secret
+        }
+    }
+
+    @Test @MainActor func `config path trims surrounding whitespace and expands tilde`() async {
+        let relativePath = ".openclaw-cli-config-\(UUID().uuidString)/openclaw.json"
+        let expectedURL = FileManager().homeDirectoryForCurrentUser.appendingPathComponent(relativePath)
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": "  ~/\(relativePath)\n",
+            "OPENCLAW_STATE_DIR": "/tmp/openclaw-unused-state-dir",
+        ]) {
+            #expect(resolveOpenClawConfigURL().path == expectedURL.path)
+        }
+    }
+
+    @Test @MainActor func `state dir trims surrounding whitespace for connect and wizard`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw cli state profile \(UUID().uuidString)", isDirectory: true)
+        let configURL = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try self.writeGatewayConfig(
+            to: configURL,
+            port: 19201,
+            remoteURL: "wss://state-profile.example:19202",
+            remotePort: 19203,
+            token: "state-profile-token") // pragma: allowlist secret
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": "\t\(stateDir.path)  ",
+        ]) {
+            let config = loadGatewayConfig()
+
+            #expect(config.mode == "remote")
+            #expect(config.port == 19201)
+            #expect(config.remoteUrl == "wss://state-profile.example:19202")
+            #expect(config.remotePort == 19203)
+            #expect(config.remoteToken == "state-profile-token") // pragma: allowlist secret
+        }
+    }
+
+    private func writeGatewayConfig(
+        to url: URL,
+        port: Int,
+        remoteURL: String,
+        remotePort: Int = 18789,
+        token: String) throws
+    {
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "port": port,
+                "remote": [
+                    "url": remoteURL,
+                    "remotePort": remotePort,
+                    "token": token,
+                ],
+            ],
+        ]
+        try FileManager().createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: [.atomic])
     }
 }

@@ -1,68 +1,62 @@
 /**
  * Gateway session preview resolve tests.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, test } from "vitest";
+import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
-  getMainPreviewEntry,
   directSessionReq,
-  createLinearSessionTranscript,
+  seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-async function writeTranscriptMessage(
-  dir: string,
-  sessionId: string,
-  content: string,
-): Promise<void> {
-  await fs.writeFile(
-    path.join(dir, `${sessionId}.jsonl`),
-    [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "assistant", content } }),
-    ].join("\n"),
-    "utf-8",
-  );
-}
-
-async function previewMainAliasFromStore(params: {
-  transcripts: Record<string, string>;
-  store: Record<string, { sessionId: string; updatedAt: number }>;
-}): Promise<Awaited<ReturnType<typeof getMainPreviewEntry>>> {
-  const { dir, storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-
-  for (const [sessionId, content] of Object.entries(params.transcripts)) {
-    await writeTranscriptMessage(dir, sessionId, content);
-  }
-  await fs.writeFile(storePath, JSON.stringify(params.store, null, 2), "utf-8");
-
-  const { ws } = await openClient();
-  try {
-    return await getMainPreviewEntry(ws);
-  } finally {
-    ws.close();
-  }
+function identifiedClient(profileId: string, scopes: string[] = ["operator.read"]): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "openclaw-control-ui",
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+      },
+      role: "operator",
+      scopes,
+    },
+    authenticatedUserId: `${profileId}@example.com`,
+    authenticatedUserProfile: {
+      profileId,
+      displayName: profileId,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
 }
 
 test("sessions.preview returns transcript previews", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
-  await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
 
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry(sessionId),
+      "agent:main:main": sessionStoreEntry(sessionId),
     },
+  });
+  await seedSessionTranscript({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: lines
+      .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
+      .map((record) => record.message)
+      .filter((message): message is Record<string, unknown> => Boolean(message))
+      .map((message) => Object.assign({ role: String(message.role) }, message)),
   });
 
   const preview = await directSessionReq<{
@@ -78,118 +72,6 @@ test("sessions.preview returns transcript previews", async () => {
   expect(entry?.status).toBe("ok");
   expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
   expect(entry?.items[1]?.text).toContain("call weather");
-});
-
-test("sessions.preview resolves legacy main alias with custom mainKey", async () => {
-  const sessionId = "sess-legacy-main";
-
-  const entry = await previewMainAliasFromStore({
-    transcripts: {
-      [sessionId]: "Legacy alias transcript",
-    },
-    store: {
-      "agent:ops:main": {
-        sessionId,
-        updatedAt: Date.now(),
-      },
-    },
-  });
-  expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
-});
-
-test("sessions.preview prefers the freshest duplicate row for a legacy main alias", async () => {
-  const entry = await previewMainAliasFromStore({
-    transcripts: {
-      "sess-stale-main": "stale preview",
-      "sess-fresh-main": "fresh preview",
-    },
-    store: {
-      "agent:ops:work": {
-        sessionId: "sess-stale-main",
-        updatedAt: 1,
-      },
-      "agent:ops:main": {
-        sessionId: "sess-fresh-main",
-        updatedAt: 2,
-      },
-    },
-  });
-  expect(entry?.items[0]?.text).toContain("fresh preview");
-});
-
-test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-  const sessionId = "sess-alias-cleanup";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-  await fs.writeFile(
-    transcriptPath,
-    createLinearSessionTranscript(
-      sessionId,
-      Array.from({ length: 8 }, (_, index) => `line ${index}`),
-    ),
-    "utf-8",
-  );
-
-  const writeRawStore = async (store: Record<string, unknown>) => {
-    await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  };
-  const readStore = async () =>
-    JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
-
-  await writeRawStore({
-    "agent:ops:main": { sessionId, updatedAt: Date.now() - 1_000 },
-  });
-
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
-    key: "main",
-  });
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload?.key).toBe("agent:ops:work");
-  let store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
-
-  await writeRawStore({
-    ...store,
-    "agent:ops:main": { ...store["agent:ops:work"] },
-  });
-  const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
-    key: "main",
-    thinkingLevel: "medium",
-  });
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.key).toBe("agent:ops:work");
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
-  expect(store["agent:ops:work"]?.thinkingLevel).toBe("medium");
-
-  await writeRawStore({
-    ...store,
-    "agent:ops:main": { ...store["agent:ops:work"] },
-  });
-  const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 3,
-  });
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.compacted).toBe(true);
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
-
-  await writeRawStore({
-    ...store,
-    "agent:ops:main": { ...store["agent:ops:work"] },
-  });
-  const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.key).toBe("agent:ops:work");
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
-
-  ws.close();
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
@@ -230,6 +112,163 @@ test("sessions.resolve can probe a missing selector without returning an RPC err
 
   expect(resolved.ok).toBe(true);
   expect(resolved.payload).toEqual({ ok: false });
+});
+
+test("sessions.resolve returns short-id ambiguity as a protocol-success result", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:thread:12345678-0aaa-4000-8000-000000000001": {
+        sessionId: "sess-short-newer",
+        displayName: "Newer",
+        updatedAt: 20,
+      },
+      "agent:main:thread:12345678-0bbb-4000-8000-000000000002": {
+        sessionId: "sess-short-older",
+        displayName: "Older",
+        updatedAt: 10,
+      },
+    },
+  });
+
+  const resolved = await directSessionReq<{
+    ok: false;
+    candidates: Array<{ key: string; displayName?: string }>;
+  }>("sessions.resolve", { shortId: "12345678" });
+
+  expect(resolved.ok).toBe(true);
+  expect(resolved.payload).toEqual({
+    ok: false,
+    candidates: [
+      {
+        key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
+        displayName: "Newer",
+      },
+      {
+        key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
+        displayName: "Older",
+      },
+    ],
+  });
+});
+
+test("sessions.resolve filters discovery selectors with sessions.list visibility", async () => {
+  await createSessionStoreDir();
+  const visibleKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+  const secondVisibleKey = "agent:main:thread:12345678-0ccc-4000-8000-000000000005";
+  const hiddenCollisionKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
+  const hiddenOnlyKey = "agent:main:thread:deadbeef-0aaa-4000-8000-000000000003";
+  const incognitoKey = "agent:main:thread:cafebabe-0aaa-4000-8000-000000000004";
+  await writeSessionStore({
+    entries: {
+      [visibleKey]: {
+        sessionId: "sess-collision",
+        label: "collision-label",
+        displayName: "Visible session",
+        updatedAt: 40,
+        visibility: "shared",
+        createdActor: { type: "human", id: "owner" },
+      },
+      [hiddenCollisionKey]: {
+        sessionId: "sess-collision",
+        label: "collision-label",
+        displayName: "Hidden collision",
+        updatedAt: 30,
+        visibility: "draft",
+        createdActor: { type: "human", id: "owner" },
+      },
+      [secondVisibleKey]: {
+        sessionId: "sess-second-visible",
+        label: "second-visible",
+        displayName: "Second visible session",
+        updatedAt: 35,
+        visibility: "shared",
+        createdActor: { type: "human", id: "owner" },
+      },
+      [hiddenOnlyKey]: {
+        sessionId: "sess-hidden-only",
+        label: "hidden-only",
+        displayName: "Hidden only",
+        updatedAt: 20,
+        visibility: "draft",
+        createdActor: { type: "human", id: "owner" },
+      },
+      [incognitoKey]: {
+        sessionId: "sess-incognito",
+        label: "incognito-only",
+        displayName: "Incognito only",
+        updatedAt: 10,
+        visibility: "shared",
+        incognito: true,
+        createdActor: { type: "human", id: "viewer" },
+      },
+    },
+  });
+  const client = identifiedClient("viewer");
+
+  for (const params of [
+    { shortId: "deadbeef" },
+    { shortId: "cafebabe" },
+    { sessionId: "sess-hidden-only" },
+    { label: "hidden-only" },
+  ]) {
+    const hidden = await directSessionReq("sessions.resolve", params, { client });
+    expect(hidden.ok).toBe(false);
+    expect(hidden.error?.message).toContain("No session found");
+  }
+
+  const ambiguous = await directSessionReq<{
+    ok: false;
+    candidates: Array<{ key: string; displayName?: string }>;
+  }>("sessions.resolve", { shortId: "12345678" }, { client });
+  expect(ambiguous).toMatchObject({
+    ok: true,
+    payload: {
+      ok: false,
+      candidates: [{ key: visibleKey }, { key: secondVisibleKey }],
+    },
+  });
+
+  for (const params of [{ sessionId: "sess-collision" }, { label: "collision-label" }]) {
+    const resolved = await directSessionReq<{ ok: true; key: string }>("sessions.resolve", params, {
+      client,
+    });
+    expect(resolved).toMatchObject({ ok: true, payload: { ok: true, key: visibleKey } });
+  }
+
+  const exactKey = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { key: hiddenOnlyKey },
+    { client },
+  );
+  expect(exactKey).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
+
+  const ownerDraft = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { shortId: "deadbeef" },
+    { client: identifiedClient("owner") },
+  );
+  expect(ownerDraft).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
+
+  const adminIncognito = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { shortId: "cafebabe" },
+    { client: identifiedClient("admin", ["operator.admin"]) },
+  );
+  expect(adminIncognito).toMatchObject({ ok: true, payload: { ok: true, key: incognitoKey } });
+});
+
+test.each([
+  { params: { shortId: "xyz" }, message: "shortId must be 8-32 hexadecimal characters" },
+  { params: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
+])("sessions.resolve rejects invalid short-ref params: $message", async ({ params, message }) => {
+  await createSessionStoreDir();
+
+  const resolved = await directSessionReq("sessions.resolve", params);
+
+  expect(resolved.ok).toBe(false);
+  expect(resolved.error?.code).toBe("INVALID_REQUEST");
+  expect(resolved.error?.message).toBe(message);
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {

@@ -9,12 +9,6 @@ cat > "$workspace/IDENTITY.md" <<'IDENTITY_EOF'
 - Name: OpenClaw
 - Purpose: ${purpose}
 IDENTITY_EOF
-cat > "$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
 rm -f "$workspace/BOOTSTRAP.md"`;
 }
 
@@ -29,11 +23,5 @@ New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 - Name: OpenClaw
 - Purpose: ${purpose}
 '@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
-@'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
 Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue`;
 }

@@ -78,5 +78,13 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "جریان بازبینی Pull request"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "پایپ‌لاین CI"
   }
 ]

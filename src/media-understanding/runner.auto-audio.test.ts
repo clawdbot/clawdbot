@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaUnderstandingConfig } from "../config/types.tools.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { clearMediaUnderstandingBinaryCacheForTests, runCapability } from "./runner.js";
+import { runCapability } from "./runner.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
@@ -380,6 +381,15 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                prompt: "entry prompt",
+                language: "de",
+                capabilities: ["audio"],
+              },
+            ],
             audio: {
               enabled: false,
             },
@@ -401,9 +411,7 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "openai", model: "whisper-1" }],
-            },
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
           },
         },
       },
@@ -431,14 +439,6 @@ describe("runCapability auto audio entries", () => {
               language: "fr",
               _requestPromptOverride: "Focus on names",
               _requestLanguageOverride: "en",
-              models: [
-                {
-                  provider: "openai",
-                  model: "whisper-1",
-                  prompt: "entry prompt",
-                  language: "de",
-                },
-              ],
             },
           },
         },
@@ -462,10 +462,10 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
             audio: {
               enabled: true,
               language: "ru",
-              models: [{ provider: "openai", model: "whisper-1" }],
             },
           },
         },

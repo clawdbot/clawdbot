@@ -55,13 +55,13 @@ State lives in the OpenClaw state directory: `~/.openclaw` by default, or
 | `state/openclaw.sqlite`                        | Shared runtime state database                                      |
 | `agents/<agentId>/agent/openclaw-agent.sqlite` | Per-agent model auth profiles (API keys + OAuth) and runtime state |
 | `credentials/`                                 | Provider/channel credentials outside the auth profile store        |
-| `agents/<agentId>/sessions/`                   | Session transcripts plus the `sessions.json` index                 |
+| `agents/<agentId>/sessions/`                   | Transcript history and legacy session migration sources            |
 | `sessions/`                                    | Legacy single-agent session store (old installs only)              |
 | `workspace/`                                   | Default agent workspace (extra agents use `workspace-<agentId>`)   |
 
 Delete those paths for a full reset. Narrower resets:
 
-- Sessions only: delete `agents/<agentId>/sessions/` for that agent.
+- Sessions only: do not delete `agents/<agentId>/agent/openclaw-agent.sqlite`; session rows live there alongside other per-agent state. Use `/new` or `/reset` to start a fresh session for one chat, and `openclaw sessions cleanup` for session maintenance.
 - Keep auth: leave `agents/<agentId>/agent/openclaw-agent.sqlite` and `credentials/` in place.
 
 Legacy `auth-profiles.json` files are no longer read at runtime;

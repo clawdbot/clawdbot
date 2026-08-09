@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EnvironmentsCreateResultSchema,
   EnvironmentsDestroyResultSchema,
+  EnvironmentsListResultSchema,
   EnvironmentSummarySchema,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
@@ -67,7 +68,7 @@ describe("worker environment protocol schemas", () => {
     ).toBe(false);
     expect(validateEnvironmentsDestroyParams({ environmentId: "" })).toBe(false);
     expect(validateEnvironmentsDestroyParams({ environmentId: "environment-1", force: true })).toBe(
-      false,
+      true,
     );
   });
 
@@ -87,12 +88,28 @@ describe("worker environment protocol schemas", () => {
         ...destroyedBase.worker,
         leaseId: "lease-1",
         idleMs: 50,
+        error: "provider teardown failed",
       },
     };
 
     expect(Value.Check(EnvironmentSummarySchema, requested)).toBe(true);
     expect(Value.Check(EnvironmentsCreateResultSchema, requested)).toBe(true);
     expect(Value.Check(EnvironmentsDestroyResultSchema, destroyed)).toBe(true);
+  });
+
+  it("lists configured worker profiles without provider settings", () => {
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox" }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", settings: { token: "hidden" } }],
+      }),
+    ).toBe(false);
   });
 
   it("preserves summaries without worker metadata and rejects malformed worker metadata", () => {
@@ -116,6 +133,12 @@ describe("worker environment protocol schemas", () => {
           ...workerSummary("attached", "available").worker,
           attachedSessionIds: [""],
         },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...workerSummary("failed"),
+        worker: { ...workerSummary("failed").worker, error: "" },
       }),
     ).toBe(false);
   });

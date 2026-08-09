@@ -62,20 +62,21 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
 ## Storage (where tokens live)
 
-Secrets live per agent, keyed by the logical name `auth-profiles.json` (the
-underlying store is the agent's SQLite database; the JSON name is kept for
-compatibility and tooling display):
+Secrets and auth-routing state live in each agent's canonical SQLite database:
 
-- Auth profiles (OAuth + API keys + optional value-level refs):
-  `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
-  (static `api_key` entries are scrubbed when discovered)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Credential rows: `auth_profile_store`
+- Order, last-good, cooldown, and usage rows: `auth_profile_state`
 
-Legacy import-only file (still supported, but not the main store):
+Older installations may still contain `auth-profiles.json`, `auth-state.json`,
+per-agent `auth.json`, or shared `credentials/oauth.json`. Run
+`openclaw doctor --fix` once after upgrading. Doctor imports verified values,
+records a migration receipt, and renames the original file to a timestamped
+archive. Runtime never reads these retired files and reports
+`AUTH_PROFILE_MIGRATION_REQUIRED` when a legacy credential source has not been
+migrated.
 
-- `~/.openclaw/credentials/oauth.json` (imported into the auth profile store on first use)
-
-All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
+The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
@@ -121,7 +122,7 @@ OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.t
 
 Flow shape:
 
-1. start Anthropic setup-token or paste-token from OpenClaw
+1. create the token by running `claude setup-token` on any machine with Claude Code, then start Anthropic setup-token or paste-token from OpenClaw
 2. OpenClaw stores the resulting Anthropic credential in an auth profile
 3. model selection stays on `anthropic/...`
 4. existing Anthropic auth profiles remain available for rollback/order control
@@ -197,11 +198,11 @@ The auth profile store supports multiple profile IDs for the same provider.
 Pick which one is used:
 
 - globally via config ordering (`auth.order`)
-- per-session via `/model ...@<profileId>`
+- per-session via `/model ...@<profileId> -s`
 
 Example (session override):
 
-- `/model Opus@anthropic:work`
+- `/model Opus@anthropic:work -s`
 
 List existing profile IDs with:
 

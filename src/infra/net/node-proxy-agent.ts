@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-proxy-tls.js";
 
-export const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
+const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
   "Unsupported proxy protocol. SOCKS and PAC proxy URLs are not supported; use an HTTP or HTTPS proxy URL.";
 
 type NodeProxyProtocol = "http" | "https";

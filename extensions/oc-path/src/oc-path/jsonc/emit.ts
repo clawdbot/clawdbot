@@ -14,7 +14,7 @@
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
 
-export interface JsoncEmitOptions {
+interface JsoncEmitOptions {
   readonly mode?: "roundtrip" | "render";
   readonly fileNameForGuard?: string;
   readonly acceptPreExistingSentinel?: boolean;

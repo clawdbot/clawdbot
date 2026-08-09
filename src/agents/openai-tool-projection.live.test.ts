@@ -7,9 +7,11 @@ import type { Context, Model } from "../llm/types.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   buildOpenAICompletionsParams,
-  buildOpenAIResponsesParams,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-transport-stream.js";
+import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
+
+const { buildOpenAIResponsesParams } = openAITransportTesting;
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && Boolean(OPENAI_KEY);

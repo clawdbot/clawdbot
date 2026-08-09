@@ -8,5 +8,7 @@
 	<array>
 		<string>$(OPENCLAW_ACTIVE_APP_GROUP_ID)</string>
 	</array>
+	<key>com.apple.developer.healthkit</key>
+	<true/>
 </dict>
 </plist>

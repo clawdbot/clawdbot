@@ -23,11 +23,6 @@ _CLR_MAGENTA='\033[0;35m'
 _CLR_CYAN='\033[0;36m'
 _CLR_RED='\033[0;31m'
 
-# Styled command output (green + bold)
-_clr_cmd() {
-  echo -e "${_CLR_GREEN}${_CLR_BOLD}$1${_CLR_RESET}"
-}
-
 # Inline command for use in sentences
 _cmd() {
   echo "${_CLR_GREEN}${_CLR_BOLD}$1${_CLR_RESET}"

@@ -1,5 +1,6 @@
 // Deterministic image buffers for plugin SDK media tests.
 import { deflateSync } from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core";
 import { encodePngRgb, encodePngRgba } from "../../media/png-encode.js";
 
 type Rgba = {
@@ -30,7 +31,9 @@ const CRC_TABLE = (() => {
 function crc32(buffer: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of buffer) {
-    crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+    crc =
+      expectDefined(CRC_TABLE[(crc ^ byte) & 0xff], "crc table entry at (crc ^ byte) & 0xff") ^
+      (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
 }

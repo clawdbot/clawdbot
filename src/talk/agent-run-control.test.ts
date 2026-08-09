@@ -1,12 +1,12 @@
 // Agent run control tests cover talk-driven agent pause and resume behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { RealtimeVoiceAgentRunActivity } from "./agent-run-control-shared.js";
 import {
   classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   parseRealtimeVoiceAgentControlToolArgs,
   resolveRealtimeVoiceAgentControlIntent,
   shouldAutoControlRealtimeVoiceAgentText,
-  type RealtimeVoiceAgentRunActivity,
 } from "./agent-run-control.js";
 import type { TalkEvent } from "./talk-events.js";
 

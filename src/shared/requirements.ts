@@ -38,7 +38,7 @@ type RequirementsEvaluationRemoteContext = {
 };
 
 /** Returns required binaries absent from both the local host and optional remote target. */
-export function resolveMissingBins(params: {
+function resolveMissingBins(params: {
   required: string[];
   hasLocalBin: (bin: string) => boolean;
   hasRemoteBin?: (bin: string) => boolean;
@@ -56,7 +56,7 @@ export function resolveMissingBins(params: {
 }
 
 /** Treats an any-bin requirement as satisfied when any listed binary exists locally or remotely. */
-export function resolveMissingAnyBins(params: {
+function resolveMissingAnyBins(params: {
   required: string[];
   hasLocalBin: (bin: string) => boolean;
   hasRemoteAnyBin?: (bins: string[]) => boolean;
@@ -74,7 +74,7 @@ export function resolveMissingAnyBins(params: {
 }
 
 /** Resolves OS requirements against local and remote platforms, accepting macos as darwin. */
-export function resolveMissingOs(params: {
+function resolveMissingOs(params: {
   required: string[];
   localPlatform: string;
   remotePlatforms?: string[];
@@ -105,7 +105,7 @@ function normalizeOsRequirementPlatform(platform: string): string {
 }
 
 /** Returns environment variable names whose caller-provided satisfaction check fails. */
-export function resolveMissingEnv(params: {
+function resolveMissingEnv(params: {
   required: string[];
   isSatisfied: (envName: string) => boolean;
 }): string[] {
@@ -120,7 +120,7 @@ export function resolveMissingEnv(params: {
 }
 
 /** Builds per-config-path status while preserving every declared path for UI diagnostics. */
-export function buildConfigChecks(params: {
+function buildConfigChecks(params: {
   required: string[];
   isSatisfied: (pathStr: string) => boolean;
 }): RequirementConfigCheck[] {
@@ -131,7 +131,7 @@ export function buildConfigChecks(params: {
 }
 
 /** Evaluates normalized requirements and returns missing categories plus config diagnostics. */
-export function evaluateRequirements(
+function evaluateRequirements(
   params: RequirementsEvaluationContext &
     RequirementsEvaluationRemoteContext & {
       required: Requirements;
@@ -185,7 +185,7 @@ export function evaluateRequirements(
 }
 
 /** Converts entry metadata into the canonical requirement shape before evaluation. */
-export function evaluateRequirementsFromMetadata(
+function evaluateRequirementsFromMetadata(
   params: RequirementsEvaluationContext &
     RequirementsEvaluationRemoteContext & {
       metadata?: RequirementsMetadata;

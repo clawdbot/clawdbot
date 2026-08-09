@@ -12,11 +12,11 @@ const JSON_ARTIFACT_MAX_BYTES = readPositiveIntEnv(
   1024 * 1024,
 );
 
-export function stateDir() {
+function stateDir() {
   return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
 }
 
-export function configPath() {
+function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
 }
 

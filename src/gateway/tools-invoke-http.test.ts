@@ -2,6 +2,7 @@
 // filtering, plugin metadata, payload validation, and response shaping.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
@@ -140,9 +141,9 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
-      name: "cron",
+      name: "automations",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "cron" }),
+      execute: async () => ({ ok: true, result: "automations" }),
     },
     {
       name: "exec",
@@ -433,7 +434,10 @@ const invokeToolsRpc = async (
   caps?: string[],
 ) => {
   const respond = vi.fn();
-  await toolsInvokeHandlers["tools.invoke"]({
+  await expectDefined(
+    toolsInvokeHandlers["tools.invoke"],
+    'toolsInvokeHandlers["tools.invoke"] test invariant',
+  )({
     params,
     respond,
     context: { getRuntimeConfig: () => cfg } as never,
@@ -793,7 +797,7 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.inheritedToolDenylist).toEqual(
-      expect.arrayContaining(["cron", "gateway", "nodes"]),
+      expect.arrayContaining(["automations", "gateway", "nodes"]),
     );
   });
 
@@ -1223,7 +1227,8 @@ describe("tools.invoke Gateway RPC", () => {
 
       expect(call?.[0], tool).toBe(true);
       expect(call?.[1]?.ok, tool).toBe(false);
-      expect(call?.[1]?.toolName, tool).toBe(tool);
+      // Legacy "cron" requests canonicalize before dispatch and report the canonical id.
+      expect(call?.[1]?.toolName, tool).toBe(tool === "cron" ? "automations" : tool);
       const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
       expect(error?.code, tool).toBe("not_found");
     }
@@ -1309,3 +1314,4 @@ describe("tools.invoke Gateway RPC", () => {
     expect(error?.message).toContain("invalid tools.invoke params");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

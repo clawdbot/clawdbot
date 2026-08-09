@@ -23,17 +23,15 @@ export {
   listNodes,
   readPositiveIntegerParam,
   readStringParam,
-  resolveNodeIdFromList,
   saveMediaBuffer,
-  selectDefaultNodeFromList,
 } from "./sdk-setup-tools.js";
-export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
+export type { AnyAgentTool } from "./sdk-setup-tools.js";
 export { wrapExternalContent } from "./sdk-security-runtime.js";
 export {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export { BrowserToolSchema } from "./browser-tool.schema.js";
+export { BrowserToolOutputSchema, BrowserToolSchema } from "./browser-tool.schema.js";
 export {
   browserAct,
   browserArmDialog,
@@ -59,6 +57,7 @@ export {
   browserStop,
   browserTabs,
 } from "./browser/client.js";
+export { fetchBrowserJson } from "./browser/client-fetch.js";
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";

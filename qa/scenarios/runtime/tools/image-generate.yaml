@@ -3,17 +3,17 @@ title: "Runtime tool fixture — image_generate"
 scenario:
   id: runtime-tool-image-generate
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
-      - tools.image-generate
+      - media.image-tool-image-generate
   objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
   successCriteria:
     - Scenario is mock-openai only because live image generation uses async task lifecycle proof outside this direct failure-path fixture.
     - Effective tools expose image_generate after QA image-generation config is applied.
     - The mock provider plans exactly one happy-path image_generate call.
     - The mock provider plans one denied-input failure-path image_generate call.
-    - Runtime parity coverage records async image start/result drift outside the standard direct-loading gate.
+    - Runtime parity coverage records async image start/result drift outside the core direct-loading lane.
   docsRefs:
     - docs/tools/image-generation.md
   codeRefs:
@@ -35,8 +35,8 @@ scenario:
         required: false
         codexDefaultImpact: P4
         qaImpact: P1
-        action: optional runtime parity gate with async image completion coverage
-        reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so standard direct call/result parity would compare different lifecycle phases.
+        action: extended runtime-pair coverage with async image completion proof
+        reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so the core lane's direct call/result parity would compare different lifecycle phases.
       promptSnippet: "target=image_generate"
       failurePromptSnippet: "failure target=image_generate"
       happyPathOutputRequired: false

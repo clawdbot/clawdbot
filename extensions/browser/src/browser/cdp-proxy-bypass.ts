@@ -40,7 +40,7 @@ export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | un
  * Returns `true` when any proxy-related env var is set that could
  * interfere with loopback connections.
  */
-export function hasProxyEnv(): boolean {
+function hasProxyEnv(): boolean {
   return hasProxyEnvConfigured();
 }
 

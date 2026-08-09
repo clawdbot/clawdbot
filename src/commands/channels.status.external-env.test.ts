@@ -60,6 +60,10 @@ function writeExternalEnvChannelPlugin() {
         version: "1.0.0",
         openclaw: {
           extensions: ["./index.cjs"],
+          channel: {
+            id: "external-env-channel",
+            configuredState: { env: { anyOf: ["EXTERNAL_ENV_CHANNEL_TOKEN"] } },
+          },
         },
       },
       null,
@@ -74,9 +78,6 @@ function writeExternalEnvChannelPlugin() {
         id: "external-env-channel-plugin",
         configSchema: EMPTY_PLUGIN_SCHEMA,
         channels: ["external-env-channel"],
-        channelEnvVars: {
-          "external-env-channel": ["EXTERNAL_ENV_CHANNEL_TOKEN"],
-        },
       },
       null,
       2,

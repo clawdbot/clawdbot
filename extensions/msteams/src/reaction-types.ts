@@ -8,7 +8,7 @@ const TEAMS_REACTION_EMOJI: Record<string, string> = {
   angry: "\u{1F621}",
 };
 
-export const TEAMS_REACTION_TYPES = Object.keys(TEAMS_REACTION_EMOJI);
+const TEAMS_REACTION_TYPES = Object.keys(TEAMS_REACTION_EMOJI);
 
 export function getMSTeamsReactionEmoji(raw: string): string | undefined {
   return TEAMS_REACTION_EMOJI[raw.trim().toLowerCase()];

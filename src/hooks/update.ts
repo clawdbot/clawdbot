@@ -10,19 +10,19 @@ import {
   type HookNpmIntegrityDriftParams,
   resolveHookInstallDir,
 } from "./install.js";
-import { recordHookInstall } from "./installs.js";
+import { readHookInstalls, recordHookInstall } from "./installs.js";
 
 /** Logger contract for hook pack update operations. */
-export type HookPackUpdateLogger = {
+type HookPackUpdateLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
 /** Per-pack update status emitted by updateNpmInstalledHookPacks. */
-export type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
+type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
 /** Outcome for one hook pack update attempt. */
-export type HookPackUpdateOutcome = {
+type HookPackUpdateOutcome = {
   hookId: string;
   status: HookPackUpdateStatus;
   message: string;
@@ -31,14 +31,14 @@ export type HookPackUpdateOutcome = {
 };
 
 /** Aggregate update result with the possibly updated config. */
-export type HookPackUpdateSummary = {
+type HookPackUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
   outcomes: HookPackUpdateOutcome[];
 };
 
 /** Integrity drift payload enriched with hook pack identity and dry-run state. */
-export type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
+type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
   hookId: string;
   resolvedSpec?: string;
   resolvedVersion?: string;
@@ -82,7 +82,7 @@ export async function updateNpmInstalledHookPacks(params: {
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
-  const installs = params.config.hooks?.internal?.installs ?? {};
+  const installs = readHookInstalls();
   const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
   const outcomes: HookPackUpdateOutcome[] = [];
   let next = params.config;

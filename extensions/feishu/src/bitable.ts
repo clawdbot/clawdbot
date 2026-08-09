@@ -3,12 +3,12 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
+import { feishuExternalToolResult as json } from "./tool-result.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
@@ -82,13 +82,19 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
     // Wiki format: /wiki/XXXXX?table=YYY
     const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
     if (wikiMatch) {
-      return { token: wikiMatch[1], tableId, isWiki: true };
+      const wikiPathSegment = wikiMatch[1];
+      return wikiPathSegment === undefined
+        ? null
+        : { token: wikiPathSegment, tableId, isWiki: true };
     }
 
     // Base format: /base/XXXXX?table=YYY
     const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
     if (baseMatch) {
-      return { token: baseMatch[1], tableId, isWiki: false };
+      const basePathSegment = baseMatch[1];
+      return basePathSegment === undefined
+        ? null
+        : { token: basePathSegment, tableId, isWiki: false };
     }
 
     return null;
@@ -407,7 +413,7 @@ async function createApp(
       path: { app_token: appToken },
     });
     if (tablesRes.code === 0 && tablesRes.data?.items && tablesRes.data.items.length > 0) {
-      tableId = tablesRes.data.items[0].table_id ?? undefined;
+      tableId = tablesRes.data.items.at(0)?.table_id;
       if (tableId) {
         const cleanup = await cleanupNewBitable(client, appToken, tableId, name, log);
         cleanedRows = cleanup.cleanedRows;
@@ -615,6 +621,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => ({
         name: params.name,
+        resultContentSource: "network",
         label: params.label,
         description: params.description,
         parameters: params.parameters,

@@ -3,9 +3,9 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-export const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
-export const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
-export const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES = 512 * 1024 * 1024;
+const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
+const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES = 512 * 1024 * 1024;
 
 const DEFAULT_MAX_JSON_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -13,6 +13,7 @@ const ARTIFACT_DIGEST_RE = /^sha256:[0-9a-f]{64}$/u;
 const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
 const COMMIT_SHA_RE = /^[0-9a-f]{40}$/u;
 const REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+const ACTIVE_SAME_RUN_STATUSES = new Set(["in_progress", "waiting"]);
 const SUPPORTED_ZIP_FLAGS = 0x0808;
 const ZIP_DATA_DESCRIPTOR_FLAG = 0x0008;
 const ZIP_UTF8_FLAG = 0x0800;
@@ -736,8 +737,10 @@ export function validateActionsArtifactBinding(params) {
       throw new Error("Actions workflow run does not match the immutable publication tuple.");
     }
   } else if (expected.runAttempt === expected.consumerRunAttempt) {
-    if (run.status !== "in_progress" || run.conclusion !== null) {
-      throw new Error("Current producer workflow attempt must still be in progress.");
+    // Environment protection reports the active workflow as waiting until the
+    // approval transition propagates, even while the approved consumer runs.
+    if (!ACTIVE_SAME_RUN_STATUSES.has(run.status) || run.conclusion !== null) {
+      throw new Error("Current producer workflow attempt must still be active.");
     }
   } else if (
     run.status !== "completed" ||

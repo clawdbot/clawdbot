@@ -16,7 +16,7 @@ OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routi
 
 ## Surface
 
-providers: amazon-bedrock-mantle
+providers: `amazon-bedrock-mantle`
 
 ## Related docs
 

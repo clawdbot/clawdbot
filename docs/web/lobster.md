@@ -56,7 +56,7 @@ Hover a filled slot and it will tell you who visited first, and when. The Lobste
 
 Collected observations from people who spend too much time watching their sidebar:
 
-- Lobsters visit the [Dreams page](/concepts/memory) too, where they are asleep. Observers report the sleeping lobster looks suspiciously familiar.
+- Lobsters visit the [dream scene](/concepts/memory) too — the Memory tab on the Agents page — where they are asleep. Observers report the sleeping lobster looks suspiciously familiar.
 - Night-shift users report their visitors yawn a lot after 10pm.
 - Lobsters have been seen shedding. Witnesses describe the experience as "a lot" and the lobster afterwards as "noticeably bigger."
 - Some visitors do not come alone.
@@ -73,7 +73,7 @@ Collected observations from people who spend too much time watching their sideba
 - After bad news, some lobsters tidy the ledge. It seems to help them.
 - Lobsters remember anniversaries even when you do not. If yours shows up in a party hat on an unremarkable day, check the Lobsterdex for the date you met.
 - Devoted hosts report their lobsters acquiring titles over the years. There is no known ceremony.
-- The Dreams-page sleeper is not entirely asleep. Press gently and see.
+- The dream-scene sleeper is not entirely asleep. Press gently and see.
 
 ## Privacy
 

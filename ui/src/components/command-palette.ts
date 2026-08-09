@@ -12,7 +12,9 @@ import { getVisibleSessionRows } from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
+import "./modal-dialog.ts";
 
 type PaletteItem = {
   id: string;
@@ -29,13 +31,6 @@ const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
-export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
-
-export type CommandPaletteTargetDetail = {
-  owner: Element;
-  onSlashCommand: ((command: string) => void) | null;
-};
-
 function getPaletteBaseItems(): PaletteItem[] {
   return [
     {
@@ -46,50 +41,50 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "nav:new-session",
     },
     {
-      id: "nav-overview",
-      label: t("overview.palette.items.overview"),
-      icon: "barChart",
-      category: "navigation",
-      action: "nav:overview",
-    },
-    {
       id: "nav-sessions",
-      label: t("overview.palette.items.sessions"),
+      label: t("palette.items.sessions"),
       icon: "fileText",
       category: "navigation",
       action: "nav:sessions",
     },
     {
       id: "nav-cron",
-      label: t("overview.palette.items.scheduled"),
+      label: t("palette.items.scheduled"),
       icon: "scrollText",
       category: "navigation",
       action: "nav:cron",
     },
     {
       id: "nav-skills",
-      label: t("overview.palette.items.skills"),
+      label: t("palette.items.skills"),
       icon: "zap",
       category: "navigation",
       action: "nav:skills",
     },
     {
       id: "nav-plugins",
-      label: t("overview.palette.items.plugins"),
+      label: t("palette.items.plugins"),
       icon: "puzzle",
       category: "navigation",
       action: "nav:plugins",
     },
     {
+      id: "nav-apps",
+      label: t("palette.items.apps"),
+      icon: "layoutGrid",
+      category: "navigation",
+      action: "nav:apps",
+    },
+    {
       id: "nav-config",
-      label: t("overview.palette.items.settings"),
+      label: t("palette.items.settings"),
       icon: "settings",
       category: "navigation",
       action: "nav:config",
     },
     {
       id: "nav-agents",
-      label: t("overview.palette.items.agents"),
+      label: t("palette.items.agents"),
       icon: "folder",
       category: "navigation",
       action: "nav:agents",
@@ -100,7 +95,7 @@ function getPaletteBaseItems(): PaletteItem[] {
       icon: "terminal",
       category: "search",
       action: "/verbose full",
-      description: "Toggle verbose mode.",
+      description: t("palette.descriptions.verboseMode"),
     },
   ];
 }
@@ -120,7 +115,6 @@ type CommandPaletteProps = {
   onNavigate: (routeId: RouteId) => void;
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
-  onDialogRef: (element: Element | undefined) => void;
   onInputRef: (element: Element | undefined) => void;
 };
 
@@ -156,42 +150,9 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
   return [...map.entries()];
 }
 
-let previouslyFocused: Element | null = null;
-let activeDialog: HTMLDialogElement | null = null;
-
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "summary",
-  "[tabindex]:not([tabindex='-1'])",
-].join(",");
-
 const paletteDialogLabelId = "cmd-palette-label";
 const paletteInputId = "cmd-palette-input";
 const paletteListboxId = "cmd-palette-listbox";
-
-function saveFocus() {
-  if (previouslyFocused) {
-    return;
-  }
-  previouslyFocused = document.activeElement;
-}
-
-function restoreFocus() {
-  const target = previouslyFocused;
-  previouslyFocused = null;
-  activeDialog = null;
-  if (target instanceof HTMLElement && target.isConnected) {
-    requestAnimationFrame(() => {
-      if (target.isConnected) {
-        target.focus();
-      }
-    });
-  }
-}
 
 function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   if (item.action.startsWith("nav:")) {
@@ -202,15 +163,10 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     props.onSlashCommand?.(item.action);
   }
   props.onToggle();
-  restoreFocus();
 }
 
 function closePalette(props: CommandPaletteProps) {
-  if (!activeDialog) {
-    return;
-  }
   props.onToggle();
-  restoreFocus();
 }
 
 function scrollActiveIntoView() {
@@ -220,41 +176,7 @@ function scrollActiveIntoView() {
   });
 }
 
-function trapFocus(event: KeyboardEvent, root: HTMLElement) {
-  const focusable = [...root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
-    (element) => element.isConnected && element.tabIndex >= 0 && !element.closest("[hidden]"),
-  );
-  if (focusable.length === 0) {
-    event.preventDefault();
-    root.focus();
-    return;
-  }
-
-  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  const focusInside = active ? focusable.includes(active) : false;
-
-  if (event.shiftKey && (!focusInside || active === first)) {
-    event.preventDefault();
-    last.focus();
-    return;
-  }
-  if (!event.shiftKey && (!focusInside || active === last)) {
-    event.preventDefault();
-    first.focus();
-  }
-}
-
 function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  if (e.key === "Tab") {
-    const dialog = (e.currentTarget as HTMLElement | null)?.closest("dialog");
-    if (dialog instanceof HTMLElement) {
-      trapFocus(e, dialog);
-    }
-    return;
-  }
-
   const items = filteredItems(props.query, Boolean(props.onSlashCommand), props.sessionItems);
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
@@ -272,8 +194,11 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
       break;
     case "Enter":
       e.preventDefault();
-      if (items[props.activeIndex]) {
-        selectItem(items[props.activeIndex], props);
+      {
+        const item = items[props.activeIndex];
+        if (item) {
+          selectItem(item, props);
+        }
       }
       break;
     case "Escape":
@@ -287,11 +212,11 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
 function getCategoryLabel(category: string): string {
   switch (category) {
     case "search":
-      return t("overview.palette.categories.search");
+      return t("palette.categories.search");
     case "navigation":
-      return t("overview.palette.categories.navigation");
+      return t("palette.categories.navigation");
     case "skills":
-      return t("overview.palette.categories.skills");
+      return t("palette.categories.skills");
     case "chats":
       return t("sessionsView.title");
     default:
@@ -301,33 +226,6 @@ function getCategoryLabel(category: string): string {
 
 function getOptionId(item: PaletteItem): string {
   return `cmd-palette-option-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-}
-
-function syncDialog(el: Element | undefined) {
-  if (!(el instanceof HTMLDialogElement)) {
-    if (activeDialog) {
-      restoreFocus();
-    }
-    return;
-  }
-  if (activeDialog !== el) {
-    saveFocus();
-    activeDialog = el;
-  }
-  if (el.open) {
-    return;
-  }
-  if (typeof el.showModal === "function") {
-    try {
-      el.removeAttribute("aria-modal");
-      el.showModal();
-      return;
-    } catch {
-      // Fall through to the open attribute fallback below.
-    }
-  }
-  el.setAttribute("aria-modal", "true");
-  el.setAttribute("open", "");
 }
 
 function focusInput(el: Element | undefined) {
@@ -348,22 +246,14 @@ function renderCommandPalette(props: CommandPaletteProps) {
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
   const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
-  const paletteLabel = t("overview.palette.placeholder");
+  const paletteLabel = t("palette.placeholder");
 
   return html`
-    <dialog
-      ${ref(props.onDialogRef)}
-      class="cmd-palette-overlay"
-      aria-labelledby=${paletteDialogLabelId}
-      @cancel=${(e: Event) => {
-        e.preventDefault();
-        closePalette(props);
-      }}
-      @click=${(e: Event) => {
-        if (e.target === e.currentTarget) {
-          closePalette(props);
-        }
-      }}
+    <openclaw-modal-dialog
+      class="cmd-palette-overlay palette"
+      label=${paletteLabel}
+      style="--openclaw-modal-width: min(640px, calc(100vw - 32px));"
+      @modal-cancel=${() => closePalette(props)}
     >
       <div
         class="cmd-palette"
@@ -375,6 +265,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
         >
         <input
           ${ref(props.onInputRef)}
+          autofocus
           id=${paletteInputId}
           class="cmd-palette__input"
           role="combobox"
@@ -395,7 +286,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                   >${icons.search}</span
                 >
-                <span>${t("overview.palette.noResults")}</span>
+                <span>${t("palette.noResults")}</span>
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
@@ -429,12 +320,12 @@ function renderCommandPalette(props: CommandPaletteProps) {
               )}
         </div>
         <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> ${t("overview.palette.footer.navigate")}</span>
-          <span><kbd>↵</kbd> ${t("overview.palette.footer.select")}</span>
-          <span><kbd>esc</kbd> ${t("overview.palette.footer.close")}</span>
+          <span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
+          <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>
+          <span><kbd>esc</kbd> ${t("palette.footer.close")}</span>
         </div>
       </div>
-    </dialog>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -479,10 +370,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.activeIndex = 0;
     this.clearSessionSearch();
     this.sessionSearchSource = undefined;
-    if (activeDialog) {
-      activeDialog.close();
-      restoreFocus();
-    }
     super.disconnectedCallback();
   }
 
@@ -497,22 +384,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     return this.open;
   }
 
-  private readonly togglePalette = () => {
+  readonly togglePalette = () => {
     if (this.open) {
       this.open = false;
       this.clearSessionSearch();
-      restoreFocus();
       return;
     }
     this.openPalette();
-  };
-
-  private readonly handleDialogRef = (element: Element | undefined) => {
-    if (!this.open) {
-      syncDialog(undefined);
-      return;
-    }
-    syncDialog(element);
   };
 
   private readonly handleInputRef = (element: Element | undefined) => {
@@ -526,19 +404,19 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const previous = this.sessionSearchSource;
     const sourceChanged = previous?.gateway !== gateway;
     const clientChanged = previous?.client !== snapshot.client;
-    const reconnected = previous?.connected === false && snapshot.connected;
+    const reconnected = previous?.connected === false && snapshot.phase === "connected";
     this.sessionSearchSource = {
       gateway,
       client: snapshot.client,
-      connected: snapshot.connected,
+      connected: snapshot.phase === "connected",
     };
 
-    if (sourceChanged || clientChanged || !snapshot.connected) {
+    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
       // Query results belong to one runtime/client connection. Discard them as
       // soon as that owner changes so detached or reconnecting rows stay inert.
       this.clearSessionSearch();
     }
-    if (snapshot.connected && (sourceChanged || clientChanged || reconnected)) {
+    if (snapshot.phase === "connected" && (sourceChanged || clientChanged || reconnected)) {
       this.scheduleSessionSearch(this.query);
     }
   }
@@ -576,7 +454,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const sessions = context?.sessions;
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
-    if (!sessions || !gateway?.snapshot.connected || !client) {
+    if (!sessions || gateway?.snapshot.phase !== "connected" || !client) {
       return;
     }
     const requestId = ++this.sessionSearchId;
@@ -601,7 +479,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           this.context?.sessions !== sessions ||
           this.context?.gateway !== gateway ||
           gateway.snapshot.client !== client ||
-          !gateway.snapshot.connected ||
+          gateway.snapshot.phase !== "connected" ||
           !result
         ) {
           return;
@@ -653,7 +531,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.togglePalette();
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
+    if (isCommandPaletteShortcut(event)) {
       event.preventDefault();
       this.togglePalette();
     }
@@ -677,7 +555,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onNavigate: (routeId) => this.onNavigate?.(routeId),
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
-      onDialogRef: this.handleDialogRef,
       onInputRef: this.handleInputRef,
     });
   }

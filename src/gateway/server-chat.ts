@@ -1,17 +1,34 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
-import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import type {
+  ChatEvent,
+  ChatRunStartupPhase,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
-import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import {
+  type AgentEventPayload,
+  type AgentEventRuntimePayload,
+  getAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
+import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -20,12 +37,12 @@ import {
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
-  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
   resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -35,14 +52,15 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
-import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -63,6 +81,25 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
+  success: "done",
+  timeout: "error",
+  cancellation: "aborted",
+  failure: "error",
+} as const;
+
+function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
+  switch (value) {
+    case "preparing_workspace":
+    case "provisioning_environment":
+    case "preparing_context":
+    case "starting_model":
+      return value;
+    default:
+      return undefined;
+  }
+}
 
 function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
   const data = payload.data;
@@ -100,15 +137,7 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
 }
 
 function resolveHeartbeatAckMaxChars(): number {
-  try {
-    const cfg = getRuntimeConfig();
-    return Math.max(
-      0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    );
-  } catch {
-    return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  }
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
@@ -161,6 +190,10 @@ function shouldMirrorAssistantEventToHiddenSessionMessages(data: unknown): boole
   return resolveAssistantEventPhase(data) === "commentary";
 }
 
+function shouldMirrorAgentEventToHiddenSessionMessages(evt: AgentEventPayload): boolean {
+  return evt.stream === "thinking" || evt.stream === "approval" || evt.stream === "lifecycle";
+}
+
 function normalizeHeartbeatChatFinalText(params: {
   runId: string;
   sourceRunId?: string;
@@ -188,16 +221,16 @@ function normalizeHeartbeatChatFinalText(params: {
  * do not finalize a run before fallback or retry reuses the same runId.
  */
 const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const CHAT_DELTA_THROTTLE_MS = 150;
 
-export type ChatEventBroadcast = (
-  event: string,
-  payload: unknown,
-  opts?: { dropIfSlow?: boolean },
-) => void;
+export type ChatEventBroadcast = GatewayBroadcastFn;
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
-const CHAT_ERROR_KINDS = new Set<ErrorKind>([
+// Derived from ChatErrorEventSchema.errorKind (gateway-protocol); keep set in sync.
+type ChatErrorKind = NonNullable<Extract<ChatEvent, { state: "error" }>["errorKind"]>;
+
+const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "refusal",
   "timeout",
   "rate_limit",
@@ -205,23 +238,36 @@ const CHAT_ERROR_KINDS = new Set<ErrorKind>([
   "unknown",
 ]);
 
-function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefined {
-  const raw = error ? formatForLog(error).trim() : "";
-  if (!raw) {
-    return undefined;
-  }
-  const text = raw.startsWith("⚠️") || raw.startsWith("Error:") ? raw : `Error: ${raw}`;
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: Date.now(),
-  };
+function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
+  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
+    ? (value as ChatErrorKind)
+    : undefined;
 }
 
-function readChatErrorKind(value: unknown): ErrorKind | undefined {
-  return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ErrorKind)
-    ? (value as ErrorKind)
-    : undefined;
+// Refusal first (stop-reason fact, not FailoverReason); then canonical failover map.
+export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | undefined {
+  if (error === undefined) {
+    return undefined;
+  }
+  const message = formatErrorMessage(error).toLowerCase();
+  if (
+    message.includes("refusal") ||
+    message.includes("content_filter") ||
+    message.includes("sensitive") ||
+    message.includes("unhandled stop reason: refusal_policy")
+  ) {
+    return "refusal";
+  }
+  const reason = resolveFailoverReasonFromError(error);
+  if (reason === "rate_limit" || reason === "overloaded") {
+    return "rate_limit";
+  }
+  if (reason === "context_overflow") {
+    return "context_length";
+  }
+  // FailoverReason "timeout" is the retryable-transient bucket and deliberately
+  // swallows generic 5xx; only genuinely timeout-shaped errors get the badge.
+  return isTimeoutError(error) ? "timeout" : undefined;
 }
 
 function excludeConnIds(
@@ -262,21 +308,20 @@ function resolveBroadcastDelta(params: {
 
 export type AgentEventHandlerOptions = {
   broadcast: ChatEventBroadcast;
-  broadcastToConnIds: (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
-  clearAgentRunContext: (runId: string) => void;
+  clearAgentRunContext: (
+    runId: string,
+    lifecycleGeneration?: string,
+    contextClaimId?: string,
+  ) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
-  loadGatewaySessionRowForSnapshot?: typeof loadGatewaySessionRow;
+  loadGatewaySessionLifecycleSnapshotForEvent?: typeof loadGatewaySessionLifecycleSnapshot;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
   clearTrackedActiveRun?: (params: {
@@ -311,6 +356,20 @@ export type AgentEventHandlerOptions = {
   }) => { active: boolean; runIds: string[] };
 };
 
+type AgentEventHandler = ((event: AgentEventPayload) => void) & {
+  dispose: () => void;
+};
+
+type InternalChatRunRecord = ReturnType<ChatRunState["getOrCreate"]> & {
+  pendingDeltaFlush?: { timer: NodeJS.Timeout; flush: () => void };
+};
+
+function internalChatRunRecord(
+  record: ReturnType<ChatRunState["getOrCreate"]>,
+): InternalChatRunRecord {
+  return record;
+}
+
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -326,7 +385,7 @@ export function createAgentEventHandler({
   toolEventRecipients,
   sessionEventSubscribers,
   sessionMessageSubscribers,
-  loadGatewaySessionRowForSnapshot = loadGatewaySessionRow,
+  loadGatewaySessionLifecycleSnapshotForEvent = loadGatewaySessionLifecycleSnapshot,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
@@ -335,7 +394,27 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions) {
+}: AgentEventHandlerOptions): AgentEventHandler {
+  const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
+    const claimId = evt.contextClaimId;
+    if (!claimId) {
+      return true;
+    }
+    const lifecycleGeneration = evt.lifecycleGeneration;
+    if (!lifecycleGeneration || lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+      return false;
+    }
+    // A missing claim means detach or supersession revoked this terminal event.
+    return getAgentRunContextOwnerStatus(evt.runId, claimId, lifecycleGeneration) === "active";
+  };
+  const clearRunContextForEvent = (evt: AgentEventRuntimePayload): void => {
+    if (evt.contextClaimId) {
+      clearAgentRunContext(evt.runId, evt.lifecycleGeneration, evt.contextClaimId);
+      return;
+    }
+    clearAgentRunContext(evt.runId);
+  };
+
   type TerminalLifecycleOptions = {
     skipChatErrorFinal?: boolean;
     suppressRestartRecoveryProjection?: boolean;
@@ -343,7 +422,7 @@ export function createAgentEventHandler({
   };
   type PendingTerminalLifecycleError = {
     timer: NodeJS.Timeout;
-    event: AgentEventPayload;
+    event: AgentEventRuntimePayload;
     opts?: TerminalLifecycleOptions;
   };
 
@@ -351,14 +430,17 @@ export function createAgentEventHandler({
 
   type AgentTextThrottleStream = "assistant" | "thinking";
 
-  const agentTextThrottleKey = (clientRunId: string, stream: AgentTextThrottleStream) =>
-    `${clientRunId}:${stream}`;
+  const agentTextThrottleStreams = ["assistant", "thinking"] as const;
 
-  const agentTextThrottleKeys = (clientRunId: string) => [
-    clientRunId,
-    agentTextThrottleKey(clientRunId, "assistant"),
-    agentTextThrottleKey(clientRunId, "thinking"),
-  ];
+  const cancelPendingChatDeltaFlush = (clientRunId: string) => {
+    const record = chatRunState.runs.get(clientRunId);
+    const pending = record ? internalChatRunRecord(record).pendingDeltaFlush : undefined;
+    if (!pending || !record) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    delete internalChatRunRecord(record).pendingDeltaFlush;
+  };
 
   const clearBufferedChatState = (clientRunId: string) => {
     chatRunState.clearRun(clientRunId);
@@ -386,7 +468,7 @@ export function createAgentEventHandler({
     event: AgentEventPayload,
   ): { suppress: boolean } => {
     try {
-      const { entry } = loadSessionEntry(sessionKey, {
+      const { entry } = loadSessionEntryReadOnly(sessionKey, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
@@ -396,9 +478,9 @@ export function createAgentEventHandler({
     }
   };
 
-  // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
-  // sessions-patch.ts). Short-circuit everyone else so high-volume chat streams
-  // do not touch the session store. Results are cached per sessionKey because
+  // Native, ACP, and spawn-owned dashboard sessions can carry spawnedBy.
+  // Short-circuit everyone else so high-volume chat streams do not touch the
+  // session store. Results are cached per sessionKey because
   // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
   // path (delta, flush, final, agent, seq-gap).
   const spawnedByCache = new Map<string, string | null>();
@@ -406,14 +488,16 @@ export function createAgentEventHandler({
     if (spawnedByCache.has(sessionKey)) {
       return spawnedByCache.get(sessionKey)!;
     }
-    // Non-lineage keys return null without polluting the cache; only
-    // subagent/ACP results (positive or null) are worth memoising.
-    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey)) {
+    // Non-lineage keys return null without polluting the cache; only eligible
+    // child-session results (positive or null) are worth memoising.
+    const isDashboardSession =
+      parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey) && !isDashboardSession) {
       return null;
     }
     let result: string | null = null;
     try {
-      result = loadGatewaySessionRow(sessionKey)?.spawnedBy ?? null;
+      result = loadGatewaySessionLifecycleSnapshotForEvent(sessionKey).row?.spawnedBy ?? null;
     } catch {
       // result stays null
     }
@@ -427,19 +511,29 @@ export function createAgentEventHandler({
     agentId?: string,
     includeActiveRunState = false,
   ) => {
-    const row = loadGatewaySessionRowForSnapshot(sessionKey, agentId ? { agentId } : undefined);
+    const snapshotOptions = agentId ? { agentId } : undefined;
+    const lifecycleSnapshot = loadGatewaySessionLifecycleSnapshotForEvent(
+      sessionKey,
+      snapshotOptions,
+    );
+    const { lifecycleRunId, row } = lifecycleSnapshot;
     const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
     const lifecyclePatch =
       evt &&
       !isStaleLifecycleEventForSession({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
+        eventRunId: evt.runId,
+        currentRunId: lifecycleRunId,
+        eventStartedAt: evt.data?.startedAt,
+        currentStartedAt: row?.startedAt,
       })
         ? deriveGatewaySessionLifecycleProjectionPatch({
             entry: row
               ? {
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
+                  lastRunError: row.lastRunError,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -462,7 +556,18 @@ export function createAgentEventHandler({
     const activeRunFields = activeRunState
       ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
       : {};
-    const session = row ? { ...row, ...lifecyclePatch, ...activeRunFields } : undefined;
+    const clearsLastRunError =
+      Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const session = row
+      ? {
+          ...row,
+          ...lifecyclePatch,
+          ...activeRunFields,
+          // JSON drops undefined values, so a start/success must send null to
+          // evict a prior failure reason from the subscribed client row.
+          ...(clearsLastRunError ? { lastRunError: null } : {}),
+        }
+      : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
     }
@@ -481,7 +586,7 @@ export function createAgentEventHandler({
       spawnedBy: row?.spawnedBy,
       spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
       spawnedCwd: row?.spawnedCwd,
-      forkedFromParent: row?.forkedFromParent,
+      forkedFromParent: sessionEntryForkedFromParent(row ?? undefined) ? true : undefined,
       spawnDepth: row?.spawnDepth,
       subagentRole: row?.subagentRole,
       subagentControlScope: row?.subagentControlScope,
@@ -492,6 +597,7 @@ export function createAgentEventHandler({
       childSessions: row?.childSessions,
       thinkingLevel: row?.thinkingLevel,
       fastMode: row?.fastMode,
+      toolOverrides: row?.toolOverrides,
       verboseLevel: row?.verboseLevel,
       traceLevel: row?.traceLevel,
       reasoningLevel: row?.reasoningLevel,
@@ -517,6 +623,7 @@ export function createAgentEventHandler({
       model: row?.model,
       ...activeRunFields,
       status: snapshotSource.status,
+      lastRunError: snapshotSource.lastRunError ?? null,
       startedAt: snapshotSource.startedAt,
       endedAt: snapshotSource.endedAt,
       runtimeMs: snapshotSource.runtimeMs,
@@ -581,7 +688,13 @@ export function createAgentEventHandler({
     );
   };
 
-  const finalizeLifecycleEvent = (evt: AgentEventPayload, opts?: TerminalLifecycleOptions) => {
+  const finalizeLifecycleEvent = (
+    evt: AgentEventRuntimePayload,
+    opts?: TerminalLifecycleOptions,
+  ) => {
+    if (!shouldProcessOwnedEvent(evt)) {
+      return;
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
     if (lifecyclePhase !== "end" && lifecyclePhase !== "error") {
@@ -593,11 +706,15 @@ export function createAgentEventHandler({
     const currentLifecycleGeneration =
       activeLifecycleGeneration ?? currentRunContext?.lifecycleGeneration;
 
-    const chatLink = chatRunState.registry.peek(evt.runId);
+    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
     const eventSessionKey =
-      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const isControlUiVisible = currentRunContext?.isControlUiVisible ?? true;
+      evt.deliverySessionKey ??
+      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
+    const isControlUiVisible =
+      evt.controlUiVisible ?? currentRunContext?.isControlUiVisible ?? true;
+    const projectSessionLifecycle =
+      evt.projectSessionLifecycle ?? currentRunContext?.projectSessionLifecycle ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
@@ -605,8 +722,8 @@ export function createAgentEventHandler({
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
-      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
-      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
+      isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
+      isChatAbortMarkerCurrent(chatRunState.runs.get(evt.runId)?.abortMarker, chatLink);
     const lifecycleAborted = evt.data?.aborted === true;
     const deliverySessionKey = sessionKey
       ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
@@ -646,36 +763,32 @@ export function createAgentEventHandler({
         (deliverySessionKey ? sessionMessageSubscribers.get(deliverySessionKey).size > 0 : false))
     ) {
       if (!isAborted) {
-        const evtStopReason =
-          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
         if (chatLink && !finished) {
-          clearAgentRunContext(evt.runId);
+          clearRunContextForEvent(evt);
           return;
         }
 
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;
-        // Some local lifecycle sources only carry the aborted flag. Preserve
-        // that terminal state instead of misclassifying the run as a timeout.
-        const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
-        const terminalOutcome = buildAgentRunTerminalOutcome({
-          status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
-          error: evt.data?.error,
-          stopReason: terminalStopReason,
-          livenessState: evt.data?.livenessState,
-          timeoutPhase: evt.data?.timeoutPhase,
-          providerStarted: evt.data?.providerStarted,
-          startedAt: evt.data?.startedAt,
+        const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase: lifecyclePhase,
+          data: evt.data,
           endedAt: evt.data?.endedAt ?? evt.ts,
         });
+        const yieldedWaiting = isAgentLifecycleYieldedWaiting({
+          phase: lifecyclePhase,
+          yielded: evt.data?.yielded,
+          livenessState: evt.data?.livenessState,
+          stopReason: terminalOutcome.stopReason,
+          aborted: lifecycleAborted,
+          status: evt.data?.status,
+          timeoutPhase: evt.data?.timeoutPhase,
+          error: evt.data?.error,
+        });
         const terminalState =
-          terminalOutcome.reason === "completed"
-            ? "done"
-            : terminalOutcome.reason === "cancelled" || terminalOutcome.reason === "aborted"
-              ? "aborted"
-              : "error";
+          CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
         if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
           emitChatTerminal(
             terminalSessionKey,
@@ -685,12 +798,14 @@ export function createAgentEventHandler({
             terminalState,
             terminalOutcome.error ?? evt.data?.error,
             terminalOutcome.stopReason,
-            readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error),
+            readChatErrorKind(evt.data?.errorKind) ??
+              resolveChatErrorKindFromError(evt.data?.error),
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+              yielded: yieldedWaiting ? true : undefined,
             },
           );
         }
@@ -707,13 +822,13 @@ export function createAgentEventHandler({
     if (suppressRestartRecoveryProjection && chatLink) {
       chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
     }
-    clearAgentRunContext(evt.runId);
+    clearRunContextForEvent(evt);
     agentRunSeq.delete(evt.runId);
     agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
-      if (!suppressRestartRecoveryProjection) {
+      if (!suppressRestartRecoveryProjection && projectSessionLifecycle) {
         const persistence = persistGatewaySessionLifecycleEvent({
           sessionKey,
           agentId: sessionAgentId,
@@ -732,7 +847,7 @@ export function createAgentEventHandler({
             return;
           }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
-          if (sessionEventConnIds.size === 0) {
+          if (!hasSessionChangeReceivers(sessionEventConnIds)) {
             return;
           }
           broadcastToConnIds(
@@ -777,7 +892,7 @@ export function createAgentEventHandler({
   };
 
   const scheduleTerminalLifecycleError = (
-    evt: AgentEventPayload,
+    evt: AgentEventRuntimePayload,
     opts?: TerminalLifecycleOptions,
   ) => {
     clearPendingTerminalLifecycleError(evt.runId);
@@ -793,54 +908,27 @@ export function createAgentEventHandler({
     pendingTerminalLifecycleErrors.set(evt.runId, { timer, event: evt, opts });
   };
 
-  const emitChatDelta = (
+  const broadcastChatDelta = (
     sessionKey: string,
     agentId: string | undefined,
     clientRunId: string,
     sourceRunId: string,
     seq: number,
     text: string,
-    delta?: unknown,
-    opts?: { controlUiVisible?: boolean },
+    opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
   ) => {
-    const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
-    const mergedRawText = resolveMergedAssistantText({
-      previousText: previousRawText,
-      nextText: text,
-      nextDelta: typeof delta === "string" ? delta : "",
-    });
-    if (!mergedRawText) {
-      return;
-    }
-    const now = Date.now();
-    chatRunState.rawBuffers.set(clientRunId, mergedRawText);
-    chatRunState.bufferUpdatedAt.set(clientRunId, now);
-    // Sanitize only after merging. Protected blocks and directive tags can span
-    // delta frames; cleaning each frame independently can expose their contents.
-    const normalizedText = normalizeLiveAssistantBufferedText(mergedRawText);
-    const projected = projectLiveAssistantBufferedText(normalizedText);
-    const mergedText = projected.text;
-    chatRunState.buffers.set(clientRunId, mergedText);
-    if (projected.suppress) {
-      return;
-    }
-    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
-      return;
-    }
-    const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
-      return;
-    }
+    cancelPendingChatDeltaFlush(clientRunId);
+    const run = chatRunState.getOrCreate(clientRunId);
     const broadcastDelta = resolveBroadcastDelta({
-      text: mergedText,
-      previousBroadcastText: chatRunState.deltaLastBroadcastText.get(clientRunId),
+      text,
+      previousBroadcastText: run.deltaLastBroadcastText,
     });
     if (!broadcastDelta) {
       return;
     }
-    chatRunState.deltaSentAt.set(clientRunId, now);
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
-    chatRunState.deltaLastBroadcastText.set(clientRunId, mergedText);
+    const now = Date.now();
+    run.deltaSentAt = now;
+    run.deltaLastBroadcastText = text;
     const spawnedBy = resolveSpawnedBy(sessionKey);
     const payload = {
       runId: clientRunId,
@@ -853,11 +941,13 @@ export function createAgentEventHandler({
       ...(broadcastDelta.replace ? { replace: true as const } : {}),
       message: {
         role: "assistant",
-        content: [{ type: "text", text: mergedText }],
+        content: [{ type: "text", text }],
         timestamp: now,
       },
     };
-    emitFirstAssistantChatSendTiming(chatRunState.registry.peek(sourceRunId));
+    emitFirstAssistantChatSendTiming(
+      opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
+    );
     sendChatPayload(sessionKey, payload, {
       agentId,
       controlUiVisible: opts?.controlUiVisible ?? true,
@@ -865,12 +955,92 @@ export function createAgentEventHandler({
     });
   };
 
+  const scheduleChatDeltaFlush = (
+    sessionKey: string,
+    agentId: string | undefined,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    delayMs: number,
+    controlUiVisible: boolean | undefined,
+  ) => {
+    const run = internalChatRunRecord(chatRunState.getOrCreate(clientRunId));
+    const flush = () => {
+      const projected = chatRunState.resolveBuffer(clientRunId);
+      if (projected.suppress || shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
+        return;
+      }
+      broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, projected.text, {
+        controlUiVisible,
+      });
+    };
+    const existing = run.pendingDeltaFlush;
+    if (existing) {
+      existing.flush = flush;
+      return;
+    }
+    const timer = setSafeTimeout(() => {
+      const pending = run.pendingDeltaFlush;
+      if (!pending || pending.timer !== timer) {
+        return;
+      }
+      cancelPendingChatDeltaFlush(clientRunId);
+      pending.flush();
+    }, delayMs);
+    timer.unref?.();
+    run.pendingDeltaFlush = { timer, flush };
+  };
+
+  const emitChatDelta = (
+    sessionKey: string,
+    agentId: string | undefined,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    text: string,
+    delta?: unknown,
+    opts?: { controlUiVisible?: boolean },
+  ) => {
+    const run = chatRunState.getOrCreate(clientRunId);
+    const previousRawText = run.rawBuffer ?? "";
+    const mergedRawText = resolveMergedAssistantText({
+      previousText: previousRawText,
+      nextText: text,
+      nextDelta: typeof delta === "string" ? delta : "",
+    });
+    if (!mergedRawText) {
+      return;
+    }
+    const now = Date.now();
+    run.rawBuffer = mergedRawText;
+    run.bufferUpdatedAt = now;
+    const waitedMs = now - (run.deltaSentAt ?? 0);
+    if (waitedMs < CHAT_DELTA_THROTTLE_MS) {
+      scheduleChatDeltaFlush(
+        sessionKey,
+        agentId,
+        clientRunId,
+        sourceRunId,
+        seq,
+        CHAT_DELTA_THROTTLE_MS - waitedMs,
+        opts?.controlUiVisible,
+      );
+      return;
+    }
+    const projected = chatRunState.resolveBuffer(clientRunId);
+    const mergedText = projected.text;
+    if (projected.suppress || shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
+      return;
+    }
+    broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, mergedText, opts);
+  };
+
   const resolveBufferedChatTextState = (
     clientRunId: string,
     sourceRunId: string,
     options?: { suppressLeadFragments?: boolean },
   ) => {
-    const bufferedText = (chatRunState.buffers.get(clientRunId) ?? "").trim();
+    const bufferedText = chatRunState.resolveBuffer(clientRunId).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -893,6 +1063,7 @@ export function createAgentEventHandler({
     seq: number,
     opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
   ) => {
+    cancelPendingChatDeltaFlush(clientRunId);
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: true,
     });
@@ -904,41 +1075,7 @@ export function createAgentEventHandler({
       return;
     }
 
-    const now = Date.now();
-    const delta = resolveBroadcastDelta({
-      text,
-      previousBroadcastText: chatRunState.deltaLastBroadcastText.get(clientRunId),
-    });
-    if (!delta) {
-      return;
-    }
-    const spawnedBy = resolveSpawnedBy(sessionKey);
-    const flushPayload = {
-      runId: clientRunId,
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      ...(spawnedBy && { spawnedBy }),
-      seq,
-      state: "delta" as const,
-      deltaText: delta.deltaText,
-      ...(delta.replace ? { replace: true as const } : {}),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        timestamp: now,
-      },
-    };
-    emitFirstAssistantChatSendTiming(
-      opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
-    );
-    sendChatPayload(sessionKey, flushPayload, {
-      agentId,
-      controlUiVisible: opts?.controlUiVisible ?? true,
-      dropIfSlow: true,
-    });
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
-    chatRunState.deltaLastBroadcastText.set(clientRunId, text);
-    chatRunState.deltaSentAt.set(clientRunId, now);
+    broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, text, opts);
   };
 
   const sendChatPayload = (
@@ -948,13 +1085,19 @@ export function createAgentEventHandler({
   ) => {
     const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
-      broadcast("chat", payload, { dropIfSlow: opts?.dropIfSlow });
+      broadcast("chat", payload, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
       sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
       return;
     }
     const recipients = sessionMessageSubscribers.get(deliverySessionKey);
     if (recipients.size > 0) {
-      broadcastToConnIds("chat", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
+      broadcastToConnIds("chat", payload, recipients, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
     }
   };
 
@@ -966,12 +1109,13 @@ export function createAgentEventHandler({
     jobState: "done" | "error" | "aborted",
     error?: unknown,
     stopReason?: string,
-    errorKind?: ErrorKind,
+    errorKind?: ChatErrorKind,
     opts?: {
       agentId?: string;
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
+      yielded?: true;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -996,6 +1140,7 @@ export function createAgentEventHandler({
           ? { errorMessage: opts.abortErrorMessage }
           : {}),
         ...(stopReason && { stopReason }),
+        ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
           text && !shouldSuppressSilent
             ? {
@@ -1016,7 +1161,6 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
-      message: buildChatErrorMessage(error),
       ...(errorKind && { errorKind }),
       ...(stopReason && { stopReason }),
     };
@@ -1029,7 +1173,11 @@ export function createAgentEventHandler({
     opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
   ) => {
     if (opts?.controlUiVisible ?? true) {
-      broadcast("agent", payload);
+      broadcast("agent", payload, {
+        sessionKeys: sessionKey
+          ? [resolveSessionDeliveryKey(sessionKey, opts?.agentId)]
+          : undefined,
+      });
       if (sessionKey) {
         sendNodeSessionPayloadForAgent(sessionKey, "agent", payload, opts?.agentId);
       }
@@ -1038,11 +1186,13 @@ export function createAgentEventHandler({
     if (!sessionKey) {
       return;
     }
-    const recipients = sessionMessageSubscribers.get(
-      resolveSessionDeliveryKey(sessionKey, opts?.agentId),
-    );
+    const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
+    const recipients = sessionMessageSubscribers.get(deliverySessionKey);
     if (recipients.size > 0) {
-      broadcastToConnIds("agent", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
+      broadcastToConnIds("agent", payload, recipients, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
     }
   };
 
@@ -1060,21 +1210,23 @@ export function createAgentEventHandler({
     clientRunId: string,
     stream?: AgentTextThrottleStream,
   ) => {
-    const keys = stream
-      ? [agentTextThrottleKey(clientRunId, stream)]
-      : agentTextThrottleKeys(clientRunId);
-    const bufferedEntries = keys.flatMap((key) => {
-      const buffered = chatRunState.bufferedAgentEvents.get(key);
+    const run = chatRunState.runs.get(clientRunId);
+    const streams = stream ? [stream] : agentTextThrottleStreams;
+    const bufferedEntries = streams.flatMap((currentStream) => {
+      const buffered = run?.agentText?.[currentStream]?.bufferedEvent;
       if (!buffered) {
         return [];
       }
-      return [{ key, buffered }];
+      return [{ stream: currentStream, buffered }];
     });
     bufferedEntries.sort((a, b) => a.buffered.payload.seq - b.buffered.payload.seq);
-    for (const { key, buffered } of bufferedEntries) {
+    for (const { stream: currentStream, buffered } of bufferedEntries) {
       sendAgentPayload(buffered.sessionKey, buffered.payload, { agentId: buffered.agentId });
-      chatRunState.bufferedAgentEvents.delete(key);
-      chatRunState.agentDeltaSentAt.set(key, Date.now());
+      const state = run?.agentText?.[currentStream];
+      if (state) {
+        delete state.bufferedEvent;
+        state.lastSentAt = Date.now();
+      }
     }
     return bufferedEntries.length > 0;
   };
@@ -1149,20 +1301,20 @@ export function createAgentEventHandler({
       return;
     }
     const now = Date.now();
-    const key = agentTextThrottleKey(clientRunId, stream);
-    const last = chatRunState.agentDeltaSentAt.get(key);
+    const run = chatRunState.getOrCreate(clientRunId);
+    const agentText = (run.agentText ??= {});
+    const state = (agentText[stream] ??= {});
+    const last = state.lastSentAt;
     if (last !== undefined && now - last < 150) {
       const nextBuffered = buildBufferedAgentEvent(sessionKey, agentId, payload);
-      const buffered = chatRunState.bufferedAgentEvents.get(key);
-      chatRunState.bufferedAgentEvents.set(
-        key,
-        buffered ? mergeBufferedAgentPayload(buffered, nextBuffered) : nextBuffered,
-      );
+      state.bufferedEvent = state.bufferedEvent
+        ? mergeBufferedAgentPayload(state.bufferedEvent, nextBuffered)
+        : nextBuffered;
       return;
     }
     flushBufferedAgentDeltaIfNeeded(clientRunId);
     sendAgentPayload(sessionKey, payload, { agentId });
-    chatRunState.agentDeltaSentAt.set(key, now);
+    state.lastSentAt = now;
   };
 
   const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
@@ -1172,7 +1324,7 @@ export function createAgentEventHandler({
       return runVerbose ?? "off";
     }
     try {
-      const { cfg, entry } = loadSessionEntry(sessionKey);
+      const { cfg, entry } = loadSessionEntryReadOnly(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1192,17 +1344,24 @@ export function createAgentEventHandler({
     }
   };
 
-  return (evt: AgentEventPayload) => {
+  const handleEvent = (event: AgentEventPayload) => {
+    const evt = event as AgentEventRuntimePayload;
+    if (!shouldProcessOwnedEvent(evt)) {
+      return;
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
-    const chatLink = chatRunState.registry.peek(evt.runId);
+    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
     const eventSessionKey =
-      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
+      evt.deliverySessionKey ??
+      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
     const runContext = getAgentRunContext(evt.runId);
     const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
-    const isControlUiVisible = runContext?.isControlUiVisible ?? true;
+    const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
+    const projectSessionLifecycle =
+      evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
@@ -1212,8 +1371,8 @@ export function createAgentEventHandler({
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
-      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
-      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
+      isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
+      isChatAbortMarkerCurrent(chatRunState.runs.get(evt.runId)?.abortMarker, chatLink);
 
     const restartRecoveryState = restartRecoverySessionKey
       ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
@@ -1278,23 +1437,70 @@ export function createAgentEventHandler({
         : agentPayload;
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
-      broadcast("agent", {
-        runId: eventRunId,
-        stream: "error",
-        ts: Date.now(),
-        sessionKey,
-        ...(spawnedBy && { spawnedBy }),
-        ...(isHeartbeat !== undefined && { isHeartbeat }),
-        data: {
-          reason: "seq gap",
-          expected: last + 1,
-          received: evt.seq,
+      broadcast(
+        "agent",
+        {
+          runId: eventRunId,
+          stream: "error",
+          ts: Date.now(),
+          sessionKey,
+          ...(spawnedBy && { spawnedBy }),
+          ...(isHeartbeat !== undefined && { isHeartbeat }),
+          data: {
+            reason: "seq gap",
+            expected: last + 1,
+            received: evt.seq,
+          },
         },
-      });
+        {
+          sessionKeys: sessionKey
+            ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+            : undefined,
+        },
+      );
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (evt.stream === "assistant") {
       updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    }
+    if (evt.stream === "plan" && evt.data?.phase === "update") {
+      const steps = normalizeAgentPlanSteps(evt.data.steps) ?? [];
+      const explanation =
+        typeof evt.data.explanation === "string" ? evt.data.explanation.trim() : "";
+      chatRunState.getOrCreate(clientRunId).planSnapshot = {
+        steps,
+        ...(explanation ? { explanation } : {}),
+      };
+    }
+    if (
+      chatLink &&
+      isControlUiVisible &&
+      !isAborted &&
+      ((isToolEvent && !suppressHeartbeatToolEvents) || isItemEvent)
+    ) {
+      // Persist the client-facing identity after run/session remapping. Route
+      // changes discard transient UI rows, so history replay must use the same
+      // payload identity as live delivery or tool results cannot reconcile.
+      chatRunState.recordProgressEvent(clientRunId, agentPayload);
+    }
+    if (evt.stream === "run_status") {
+      const phase = readChatRunStartupPhase(evt.data?.phase);
+      if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {
+        const payload = {
+          runId: clientRunId,
+          sessionKey,
+          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+          ...(spawnedBy && { spawnedBy }),
+          seq: evt.seq,
+          state: "status" as const,
+          phase,
+        } satisfies ChatEvent;
+        sendChatPayload(sessionKey, payload, {
+          agentId: sessionAgentId,
+          controlUiVisible: true,
+          dropIfSlow: true,
+        });
+      }
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
@@ -1331,7 +1537,8 @@ export function createAgentEventHandler({
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.).
+      // messages to messaging surfaces (Telegram, Discord, etc.). Carry the
+      // delivery key so scoped clients must also own the session subscription.
       const runToolRecipients = toolEventRecipients.get(evt.runId);
       if (
         isControlUiVisible &&
@@ -1348,6 +1555,11 @@ export function createAgentEventHandler({
               }
             : agentPayload,
           runToolRecipients,
+          {
+            sessionKeys: sessionKey
+              ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+              : undefined,
+          },
         );
       }
       if (!isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
@@ -1411,18 +1623,17 @@ export function createAgentEventHandler({
           });
           const textThrottleStream = resolveAgentTextThrottleStream(evt);
           if (textThrottleStream && shouldAdvanceAgentTextThrottle(evt)) {
-            chatRunState.agentDeltaSentAt.set(
-              agentTextThrottleKey(clientRunId, textThrottleStream),
-              Date.now(),
-            );
+            const agentText = (chatRunState.getOrCreate(clientRunId).agentText ??= {});
+            (agentText[textThrottleStream] ??= {}).lastSentAt = Date.now();
           }
         }
       } else if (
-        !isAborted &&
         sessionKey &&
         hasSessionMessageSubscribers &&
-        evt.stream === "assistant" &&
-        shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)
+        (shouldMirrorAgentEventToHiddenSessionMessages(evt) ||
+          (!isAborted &&
+            evt.stream === "assistant" &&
+            shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)))
       ) {
         sendAgentPayload(
           sessionKey,
@@ -1480,15 +1691,31 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "error") {
-      clearBufferedChatState(clientRunId);
       const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
       const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
       // Per-attempt provider errors keep the retry grace so fallback can reuse
       // the runId. Once the runner marks fallback as exhausted, clear chat state
       // immediately so webchat sessions do not stay in progress until the timer.
       if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
+        // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
+        // has flushed the throttled tail and resolved the terminal message.
         finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
       } else {
+        // Deliver the throttled tail before isolating the buffer so a fallback
+        // attempt cannot merge onto the failed attempt's text.
+        if (sessionKey) {
+          flushBufferedChatDeltaIfNeeded(
+            sessionKey,
+            sessionAgentId,
+            clientRunId,
+            evt.runId,
+            evt.seq,
+            {
+              controlUiVisible: isControlUiVisible,
+            },
+          );
+        }
+        clearBufferedChatState(clientRunId);
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
       }
       return;
@@ -1499,7 +1726,7 @@ export function createAgentEventHandler({
       return;
     }
 
-    if (sessionKey && lifecyclePhase === "start") {
+    if (projectSessionLifecycle && sessionKey && lifecyclePhase === "start") {
       void persistGatewaySessionLifecycleEvent({
         sessionKey,
         agentId: sessionAgentId,
@@ -1513,7 +1740,7 @@ export function createAgentEventHandler({
         );
       });
       const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
+      if (hasSessionChangeReceivers(sessionEventConnIds)) {
         broadcastToConnIds(
           "sessions.changed",
           {
@@ -1531,4 +1758,16 @@ export function createAgentEventHandler({
       }
     }
   };
+
+  return Object.assign(handleEvent, {
+    dispose: () => {
+      // Deferred provider errors belong to this gateway subscription. Letting
+      // them outlive shutdown can project stale terminal state into a successor.
+      for (const pending of pendingTerminalLifecycleErrors.values()) {
+        clearTimeout(pending.timer);
+      }
+      pendingTerminalLifecycleErrors.clear();
+    },
+  });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

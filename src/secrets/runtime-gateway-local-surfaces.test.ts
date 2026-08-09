@@ -56,7 +56,6 @@ describe("secrets runtime gateway local surfaces", () => {
             password: "local-password",
           },
           remote: {
-            enabled: true,
             token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
             password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
           },
@@ -181,7 +180,6 @@ describe("secrets runtime gateway local surfaces", () => {
           password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
         },
         remote: {
-          enabled: true,
           token: "remote-token",
         },
       },
@@ -199,7 +197,6 @@ describe("secrets runtime gateway local surfaces", () => {
               mode,
             },
             remote: {
-              enabled: true,
               token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN_REF" },
               password: {
                 source: "env",
@@ -234,7 +231,6 @@ describe("secrets runtime gateway local surfaces", () => {
         gateway: {
           mode: "local",
           remote: {
-            enabled: true,
             token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN_REF" },
           },
         },
@@ -256,7 +252,6 @@ describe("secrets runtime gateway local surfaces", () => {
         gateway: {
           mode: "local",
           remote: {
-            enabled: true,
             password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD_REF" },
           },
         },
@@ -281,7 +276,6 @@ describe("secrets runtime gateway local surfaces", () => {
           mode: "local",
           tailscale: { mode: "serve" },
           remote: {
-            enabled: true,
             token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
             password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
           },

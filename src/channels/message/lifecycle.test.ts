@@ -5,12 +5,12 @@ import {
   defineFinalizableLivePreviewAdapter,
   deliverFinalizableLivePreview,
   deliverWithFinalizableLivePreviewAdapter,
-  markLiveMessageCancelled,
-  markLiveMessageFinalized,
   markLiveMessagePreviewUpdated,
 } from "./live.js";
-import { createMessageReceiveContext, shouldAckMessageAfterStage } from "./receive.js";
-import { classifyDurableSendRecoveryState, createDurableMessageStateRecord } from "./state.js";
+import { createMessageReceiveContext } from "./receive.js";
+
+type LivePreviewMediaPayload = { text?: string; mediaUrl: string };
+type LivePreviewMediaEdit = { text?: string };
 
 function requireMockCall(
   mock: { mock: { calls: unknown[][] } },
@@ -26,27 +26,6 @@ function requireMockCall(
 }
 
 describe("message lifecycle primitives", () => {
-  it("tracks live preview finalization state", () => {
-    const receipt = {
-      primaryPlatformMessageId: "m1",
-      platformMessageIds: ["m1"],
-      parts: [],
-      sentAt: 123,
-    };
-
-    const preview = createLiveMessageState({ receipt });
-    expect(preview.phase).toBe("previewing");
-    expect(preview.canFinalizeInPlace).toBe(true);
-
-    const finalized = markLiveMessageFinalized(preview, receipt);
-    expect(finalized.phase).toBe("finalized");
-    expect(finalized.canFinalizeInPlace).toBe(false);
-
-    const cancelled = markLiveMessageCancelled(preview);
-    expect(cancelled.phase).toBe("cancelled");
-    expect(cancelled.canFinalizeInPlace).toBe(false);
-  });
-
   it("tracks live preview rendered batch updates", () => {
     const preview = createLiveMessageState();
     const rendered = {
@@ -116,9 +95,9 @@ describe("message lifecycle primitives", () => {
     const deliverSupplemental = vi.fn(async () => true);
 
     const result = await deliverFinalizableLivePreview<
-      { text?: string; mediaUrl: string },
+      LivePreviewMediaPayload,
       string,
-      { text?: string }
+      LivePreviewMediaEdit
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
@@ -139,6 +118,78 @@ describe("message lifecycle primitives", () => {
     expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
     expect(deliverNormally).not.toHaveBeenCalled();
     expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
+  it("falls back to normal supplemental delivery when its dedicated sender reports no send", async () => {
+    const deliverNormally = vi.fn(async () => true);
+    const deliverSupplemental = vi.fn(async () => false);
+
+    const result = await deliverFinalizableLivePreview<
+      LivePreviewMediaPayload,
+      string,
+      LivePreviewMediaEdit
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-supplement-fallback",
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      editFinal: vi.fn(async () => undefined),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      deliverSupplemental,
+      deliverNormally,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+    expect(deliverNormally).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
+  it("uses normal delivery when a finalized preview has no supplemental sender", async () => {
+    const deliverNormally = vi.fn(async () => true);
+
+    const result = await deliverFinalizableLivePreview<
+      LivePreviewMediaPayload,
+      string,
+      LivePreviewMediaEdit
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-no-supplement-sender",
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      editFinal: vi.fn(async () => undefined),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      deliverNormally,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(deliverNormally).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
+  it("surfaces supplemental delivery failure after both sender paths report no send", async () => {
+    await expect(
+      deliverFinalizableLivePreview<LivePreviewMediaPayload, string, LivePreviewMediaEdit>({
+        kind: "final",
+        payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+        draft: {
+          flush: vi.fn(async () => undefined),
+          id: () => "preview-supplement-unsent",
+          clear: vi.fn(async () => undefined),
+        },
+        buildFinalEdit: (payload) => ({ text: payload.text }),
+        editFinal: vi.fn(async () => undefined),
+        buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+        deliverSupplemental: vi.fn(async () => false),
+        deliverNormally: vi.fn(async () => false),
+      }),
+    ).rejects.toThrow("Live preview supplemental payload was not delivered");
   });
 
   it("treats live preview fallback delivery as terminal state", async () => {
@@ -367,50 +418,60 @@ describe("message lifecycle primitives", () => {
 
     const nackError = new Error("offset failed");
     await ctx.nack(nackError);
+    await ctx.nack(new Error("duplicate failure"));
+    expect(onNack).toHaveBeenCalledTimes(1);
     expect(onNack).toHaveBeenCalledWith(nackError);
     expect(ctx.ackState).toBe("nacked");
     expect(ctx.nackErrorMessage).toBe("offset failed");
   });
 
-  it("maps ack policies to lifecycle stages", () => {
-    expect(shouldAckMessageAfterStage("after_receive_record", "receive_record")).toBe(true);
-    expect(shouldAckMessageAfterStage("after_receive_record", "agent_dispatch")).toBe(false);
-    expect(shouldAckMessageAfterStage("after_agent_dispatch", "agent_dispatch")).toBe(true);
-    expect(shouldAckMessageAfterStage("after_durable_send", "durable_send")).toBe(true);
-    expect(shouldAckMessageAfterStage("manual", "manual")).toBe(false);
-  });
-
-  it("classifies unknown-after-send recovery only after platform send may have started", () => {
-    expect(
-      classifyDurableSendRecoveryState({
-        hasIntent: true,
-        hasReceipt: false,
-        platformSendMayHaveStarted: true,
-      }),
-    ).toBe("unknown_after_send");
-    expect(
-      classifyDurableSendRecoveryState({
-        hasIntent: true,
-        hasReceipt: false,
-        platformSendMayHaveStarted: false,
-      }),
-    ).toBe("pending");
-  });
-
-  it("creates durable message state records with normalized errors", () => {
-    const record = createDurableMessageStateRecord({
-      intent: {
-        id: "intent-1",
-        channel: "telegram",
-        to: "12345",
-        durability: "required",
-      },
-      state: "failed",
-      error: new Error("network"),
-      updatedAt: 123,
+  it("retries nack callbacks after a failed attempt", async () => {
+    const onNack = vi
+      .fn<(error: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce();
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-retry",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
     });
-    expect(record.state).toBe("failed");
-    expect(record.errorMessage).toBe("network");
-    expect(record.updatedAt).toBe(123);
+
+    await expect(ctx.nack(new Error("first failure"))).rejects.toThrow("temporary failure");
+    expect(ctx.ackState).toBe("pending");
+
+    const retryError = new Error("retry failure");
+    await ctx.nack(retryError);
+
+    expect(onNack).toHaveBeenCalledTimes(2);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("retry failure");
+  });
+
+  it("coalesces overlapping nack callbacks and retains the first error", async () => {
+    let resolveNack: (() => void) | undefined;
+    const onNack = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveNack = resolve;
+        }),
+    );
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-overlap",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+    const firstError = new Error("first failure");
+
+    const first = ctx.nack(firstError);
+    const duplicate = ctx.nack(new Error("duplicate failure"));
+    await vi.waitFor(() => expect(onNack).toHaveBeenCalledOnce());
+    resolveNack?.();
+    await Promise.all([first, duplicate]);
+
+    expect(onNack).toHaveBeenCalledWith(firstError);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("first failure");
   });
 });

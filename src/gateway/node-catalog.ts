@@ -5,12 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { NodePairingPendingRequest, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import {
   sameNodeApprovalSurfaceSet,
   sameNodePermissionSurface,
 } from "../infra/node-pairing-surface.js";
-import type { NodePairingPairedNode, NodePairingPendingRequest } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -116,7 +116,7 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
   };
 }
 
-function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprovedSource {
+function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSource {
   return {
     nodeId: entry.nodeId,
     displayName: entry.displayName,
@@ -223,8 +223,10 @@ function buildEffectiveKnownNode(entry: {
   return {
     nodeId,
     displayName: firstNormalizedString(
-      live?.displayName,
+      // The approved surface owns the operator's rename. Live metadata is a
+      // fallback only, or every reconnect would temporarily undo that choice.
       nodePairing?.displayName,
+      live?.displayName,
       devicePairing?.displayName,
       pendingNodePairing?.displayName,
     ),
@@ -294,6 +296,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastActiveAtMs: live?.lastActiveAtMs,
+    presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
     lastSeenReason: lastSeen.lastSeenReason,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
@@ -320,7 +324,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 /** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
-  pairedNodes?: readonly NodePairingPairedNode[];
+  pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
@@ -389,10 +393,7 @@ export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
 }
 
 /** Returns the merged catalog entry for diagnostics that need source details. */
-export function getKnownNodeEntry(
-  catalog: KnownNodeCatalog,
-  nodeId: string,
-): KnownNodeEntry | null {
+function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNodeEntry | null {
   return catalog.entriesById.get(nodeId) ?? null;
 }
 

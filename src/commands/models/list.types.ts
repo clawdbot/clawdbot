@@ -24,7 +24,7 @@ export type ModelRow = {
 export type ProviderAuthOverview = {
   provider: string;
   effective: {
-    kind: "profiles" | "env" | "models.json" | "synthetic" | "missing";
+    kind: "profiles" | "env" | "models.json" | "synthetic" | "runtime" | "missing";
     detail: string;
   };
   profiles: {

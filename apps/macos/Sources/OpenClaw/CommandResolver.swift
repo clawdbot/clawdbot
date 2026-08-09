@@ -3,6 +3,8 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    /// Version probes may queue under machine load; keep command resolution tolerant but bounded.
+    static let versionProbeTimeout: TimeInterval = 10
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -14,12 +16,8 @@ enum CommandResolver {
         return nil
     }
 
-    static func runtimeResolution() -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: self.preferredPaths())
-    }
-
-    static func runtimeResolution(searchPaths: [String]?) -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
+    static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
+        await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
 
     static func makeRuntimeCommand(
@@ -83,6 +81,13 @@ enum CommandResolver {
             current: current,
             projectRoot: projectRoot,
             validatedExecutable: validatedExecutable)
+    }
+
+    /// Version-manager trees can make discovery arbitrarily slow. Async callers
+    /// must leave their actor before touching the filesystem or the UI can stall.
+    @concurrent
+    static func preferredPathsAsync() async -> [String] {
+        self.preferredPaths()
     }
 
     static func preferredPaths(
@@ -238,33 +243,38 @@ enum CommandResolver {
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
-        return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        if FileManager().isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        // pnpm does not create a self-referential node_modules/.bin link for
+        // this package. Source builds still need the checkout CLI, not a stale
+        // globally installed binary with a different private command surface.
+        let sourceEntrypoint = root.appendingPathComponent("openclaw.mjs").path
+        return FileManager().isExecutableFile(atPath: sourceEntrypoint) ? sourceEntrypoint : nil
         #else
         return nil
         #endif
     }
 
-    static func nodeCliPath() -> String? {
-        let root = self.projectRoot()
-        let candidates = [
-            root.appendingPathComponent("openclaw.mjs").path,
-            root.appendingPathComponent("bin/openclaw.js").path,
-        ]
-        for candidate in candidates where FileManager().isReadableFile(atPath: candidate) {
-            return candidate
+    static func projectNodeHostWorkerLaunch(
+        projectRoot: URL? = nil,
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch?
+    {
+        #if DEBUG
+        let root = projectRoot ?? self.projectRoot()
+        let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else { return nil }
+        switch await self.runtimeResolution(searchPaths: searchPaths) {
+        case let .success(runtime):
+            return MacNodeHostWorkerLaunch(
+                command: [runtime.path, sourceRunner.path, "node", "worker"],
+                currentDirectoryURL: root)
+        case let .failure(error):
+            throw error
         }
+        #else
         return nil
-    }
-
-    static func hasAnyOpenClawInvoker(searchPaths: [String]? = nil) -> Bool {
-        if self.openclawExecutable(searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
-           self.nodeCliPath() != nil
-        {
-            return true
-        }
-        return false
+        #endif
     }
 
     static func openclawNodeCommand(
@@ -273,7 +283,7 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil) async -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, settings.transport == .ssh {
@@ -295,7 +305,7 @@ enum CommandResolver {
             return [openclawPath, subcommand] + extraArgs
         }
 
-        let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
+        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
             if let entry = gatewayEntrypoint(in: root) {
@@ -317,7 +327,7 @@ enum CommandResolver {
         switch runtimeResult {
         case .success:
             let missingEntry = """
-            openclaw entrypoint missing (looked for dist/index.js or openclaw.mjs); run pnpm build.
+            openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.
             """
             return self.errorCommand(with: missingEntry)
         case let .failure(error):
@@ -331,9 +341,9 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil) async -> [String]
     {
-        self.openclawNodeCommand(
+        await self.openclawNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,

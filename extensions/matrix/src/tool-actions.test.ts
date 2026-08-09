@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   reactMatrixMessage: vi.fn(),
   editMatrixMessage: vi.fn(),
   deleteMatrixMessage: vi.fn(),
+  readMatrixMessages: vi.fn(),
   listMatrixReactions: vi.fn(),
   removeMatrixReactions: vi.fn(),
   sendMatrixMessage: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("./matrix/actions.js", () => {
     unpinMatrixMessage: mocks.unpinMatrixMessage,
     listMatrixPins: mocks.listMatrixPins,
     removeMatrixReactions: mocks.removeMatrixReactions,
+    readMatrixMessages: mocks.readMatrixMessages,
     sendMatrixMessage: mocks.sendMatrixMessage,
     voteMatrixPoll: mocks.voteMatrixPoll,
   };
@@ -77,6 +79,10 @@ describe("handleMatrixAction pollVote", () => {
     mocks.pinMatrixMessage.mockResolvedValue({ pinned: ["$existing", "$pin"] });
     mocks.unpinMatrixMessage.mockResolvedValue({ pinned: ["$existing"] });
     mocks.removeMatrixReactions.mockResolvedValue({ removed: 1 });
+    mocks.readMatrixMessages.mockResolvedValue({
+      messages: [{ eventId: "$message" }],
+      nextBatch: "next",
+    });
     mocks.sendMatrixMessage.mockResolvedValue({
       messageId: "$sent",
       roomId: "!room:example",
@@ -367,27 +373,128 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it.each(["sendMessage", "editMessage"] as const)(
+    "preserves indented Markdown when handling %s",
+    async (action) => {
+      const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+      const markdown = "    @room";
+
+      await handleMatrixAction(
+        {
+          action,
+          to: "room:!room:example",
+          roomId: "!room:example",
+          messageId: "$original",
+          content: markdown,
+        },
+        cfg,
+      );
+
+      const providerCall =
+        action === "sendMessage"
+          ? mocks.sendMatrixMessage.mock.lastCall?.[1]
+          : mocks.editMatrixMessage.mock.lastCall?.[2];
+      expect(providerCall).toBe(markdown);
+    },
+  );
+
+  it("returns the authorized room and thread with message reads", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    const result = await handleMatrixAction(
+      {
+        action: "readMessages",
+        accountId: "ops",
+        roomId: "room:!room:example",
+        threadId: "$thread",
+        limit: 5,
+      },
+      cfg,
+    );
+
+    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!room:example", {
+      cfg,
+      accountId: "ops",
+      client: mocks.matrixClient,
+      limit: 5,
+      before: undefined,
+      after: undefined,
+      threadId: "$thread",
+    });
+    expect(result.details).toEqual({
+      ok: true,
+      roomId: "!room:example",
+      threadId: "$thread",
+      messages: [{ eventId: "$message", id: "$message" }],
+      nextBatch: "next",
+    });
+  });
+
+  it("projects Matrix message summaries for human-readable CLI output", async () => {
+    mocks.readMatrixMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          eventId: "$message",
+          sender: "@alice:example.org",
+          body: "hello from Matrix",
+          msgtype: "m.text",
+          timestamp: 1_750_000_000_000,
+        },
+      ],
+      nextBatch: "next",
+    });
+
+    const result = await handleMatrixAction({ action: "readMessages", roomId: "!room:example" }, {
+      channels: { matrix: { actions: { messages: true } } },
+    } as CoreConfig);
+
+    expect(result.details).toEqual({
+      ok: true,
+      roomId: "!room:example",
+      messages: [
+        {
+          eventId: "$message",
+          sender: "@alice:example.org",
+          body: "hello from Matrix",
+          msgtype: "m.text",
+          timestamp: 1_750_000_000_000,
+          id: "$message",
+          authorTag: "@alice:example.org",
+          content: "hello from Matrix",
+          ts: "2025-06-15T15:06:40.000Z",
+        },
+      ],
+      nextBatch: "next",
+    });
+  });
+
   it("accepts media-only message sends", async () => {
     const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
     await handleMatrixAction(
       {
         action: "sendMessage",
         accountId: "ops",
         to: "room:!room:example",
-        mediaUrl: "file:///tmp/photo.png",
+        mediaUrl: "chart.png",
       },
       cfg,
-      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
     );
 
     expect(mocks.sendMatrixMessage).toHaveBeenCalledWith("room:!room:example", undefined, {
       cfg,
       accountId: "ops",
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
       replyToId: undefined,
       threadId: undefined,
     });
+    expect(mocks.sendMatrixMessage.mock.lastCall?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
   it("accepts shared media aliases and voice-send flags", async () => {
@@ -452,6 +559,35 @@ describe("handleMatrixAction pollVote", () => {
       cfg,
       accountId: "ops",
       client: mocks.matrixClient,
+    });
+  });
+
+  it("projects pinned Matrix events without removing their original event fields", async () => {
+    const event = {
+      eventId: "$pin",
+      sender: "@alice:example.org",
+      body: "pinned message",
+      timestamp: 1_750_000_000_000,
+    };
+    mocks.listMatrixPins.mockResolvedValueOnce({ pinned: ["$pin"], events: [event] });
+
+    const result = await handleMatrixAction({ action: "listPins", roomId: "!room:example" }, {
+      channels: { matrix: { actions: { pins: true } } },
+    } as CoreConfig);
+
+    expect(result.details).toEqual({
+      ok: true,
+      pinned: ["$pin"],
+      events: [event],
+      pins: [
+        {
+          ...event,
+          id: "$pin",
+          authorTag: "@alice:example.org",
+          content: "pinned message",
+          ts: "2025-06-15T15:06:40.000Z",
+        },
+      ],
     });
   });
 

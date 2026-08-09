@@ -22,7 +22,7 @@ import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } f
 /**
  * Normalized conversation id details for one channel raw id.
  */
-export type ResolvedSessionConversation = {
+type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
   baseConversationId: string;
@@ -32,7 +32,7 @@ export type ResolvedSessionConversation = {
 /**
  * Parsed session-key conversation reference with parent/thread metadata.
  */
-export type ResolvedSessionConversationRef = {
+type ResolvedSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
   rawId: string;

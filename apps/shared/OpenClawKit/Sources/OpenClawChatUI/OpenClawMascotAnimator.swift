@@ -11,6 +11,8 @@ public enum OpenClawMascotMood: String, CaseIterable, Equatable, Sendable {
     case curious
     /// Eyes drift up and scan, antennae twitch asymmetrically — work in flight.
     case thinking
+    /// Hard-hat construction loop — hammering claw, impact sparks, periodic brow wipes (setup/install work in flight).
+    case working
     /// Perky antennae, soft smile, happy-squint eyes.
     case happy
     /// One big jump-and-claw-raise entrance, then sparkly happy loop.
@@ -29,6 +31,8 @@ enum OpenClawMascotEffect: Equatable {
     case sparkles
     case hearts
     case zzz
+    case sparks
+    case sweat
 }
 
 /// Drives the mascot's behavior over time: per-mood base loops, randomized
@@ -85,6 +89,12 @@ final class OpenClawMascotAnimator {
     private var dizzyUntil: TimeInterval = 0
     private var dizzyRecoveryQueued = false
 
+    // Explicit consumer headwear overrides the mood-owned accessory channel.
+    private var requestedAccessory: OpenClawMascotAccessory = .none
+    private var accessorySetAt: TimeInterval = 0
+    /// Hard-hat amount from the last rendered frame; gates the hat-tip exit.
+    private var lastHardHat: CGFloat = 0
+
     // Auto-sleep: idle mascots doze off and need a click to wake up. Night
     // owls (23:00-05:00 local) nod off about twice as fast. Only mascots with
     // a tap handler may sleep — a non-interactive view has no wake path and
@@ -105,12 +115,23 @@ final class OpenClawMascotAnimator {
 
     func setMood(_ mood: OpenClawMascotMood, at time: TimeInterval) {
         guard mood != self.mood else { return }
+        let wasWorking = self.mood == .working
         self.mood = mood
         self.lastInteractionAt = time
         self.rescheduleMoodBeat(at: time)
-        if let entrance = Self.entranceGesture(for: mood) {
+        // Tip only a hat that actually seated: a working state cancelled
+        // mid-don would otherwise synthesize a full hard hat just to lift it.
+        if wasWorking, self.lastHardHat >= 0.9 {
+            self.startGesture(.hatTip, at: time)
+        } else if let entrance = Self.entranceGesture(for: mood) {
             self.startGesture(entrance, at: time)
         }
+    }
+
+    func setAccessory(_ accessory: OpenClawMascotAccessory, at time: TimeInterval) {
+        guard accessory != self.requestedAccessory else { return }
+        self.requestedAccessory = accessory
+        self.accessorySetAt = time
     }
 
     /// Pointer direction from the view center, roughly unit-scaled; nil when
@@ -172,6 +193,7 @@ final class OpenClawMascotAnimator {
         self.advanceSchedules(at: time)
 
         let dozing = self.isDozing(at: time)
+        // Auto-doze reuses the sleepy base pose, including its nightcap.
         let effectiveMood: OpenClawMascotMood = dozing ? .sleepy : self.mood
         var pose = self.basePose(for: effectiveMood, at: time)
         self.applyGaze(&pose, mood: effectiveMood, at: time, dt: dt)
@@ -187,7 +209,20 @@ final class OpenClawMascotAnimator {
             }
         }
 
+        if self.requestedAccessory != .none {
+            pose.accessory = self.requestedAccessory
+            let progress = CGFloat((time - self.accessorySetAt) / 0.5).clamped(to: 0...1)
+            pose.accessoryAmount = OpenClawMascotGesture.easeOut(progress)
+        }
+        // One hat at a time: the working hard hat (including its hat-tip exit)
+        // owns the crown; any mood- or consumer-requested accessory waits
+        // until the hard hat is fully gone.
+        if pose.hardHat > 0.01 {
+            pose.accessoryAmount = 0
+        }
+
         pose.clampChannels()
+        self.lastHardHat = pose.hardHat
         return pose
     }
 
@@ -251,7 +286,9 @@ final class OpenClawMascotAnimator {
 
         let dozing = self.isDozing(at: time)
         if time >= self.nextClawSnapAt {
-            if self.activeGesture == nil, !dozing, self.mood != .sad, time >= self.dizzyUntil {
+            if self.activeGesture == nil, !dozing, self.mood != .sad, self.mood != .working,
+               time >= self.dizzyUntil
+            {
                 self.startGesture(.clawSnap, at: time)
             }
             self.nextClawSnapAt = time + self.random(in: 4...9)
@@ -270,6 +307,8 @@ final class OpenClawMascotAnimator {
                     self.startGesture(.sigh, at: time)
                 } else if dozing || self.mood == .sleepy {
                     self.startGesture(.yawn, at: time)
+                } else if self.mood == .working {
+                    self.startGesture(.wipeBrow, at: time)
                 }
             }
             self.rescheduleMoodBeat(at: time)
@@ -292,7 +331,7 @@ final class OpenClawMascotAnimator {
     private var quirkEligible: Bool {
         switch self.mood {
         case .idle, .curious, .happy, .attentive: true
-        case .thinking, .celebrating, .sad, .sleepy: false
+        case .thinking, .working, .celebrating, .sad, .sleepy: false
         }
     }
 
@@ -342,6 +381,7 @@ final class OpenClawMascotAnimator {
         case .celebrating: .celebrate
         case .sad: .sigh
         case .sleepy: .yawn
+        case .working: .donHardHat
         case .idle, .curious, .thinking, .attentive: nil
         }
     }
@@ -366,6 +406,34 @@ final class OpenClawMascotAnimator {
             pose.antennaDegrees = -5 * sin(2 * .pi * Self.cyclePhase(time, period: 1.3))
             pose.bodyTilt = 2 * sin(2 * .pi * Self.cyclePhase(time, period: 6))
             pose.eyeGlowOpacity = 0.9 + 0.1 * sin(2 * .pi * Self.cyclePhase(time, period: 0.8))
+        case .working:
+            let phase = Self.cyclePhase(time, period: 0.95)
+            if phase < 0.05 {
+                pose.rightClawDegrees = -6
+            } else if phase < 0.60 {
+                pose.rightClawDegrees = -6 - 28 * OpenClawMascotGesture.easeInOut((phase - 0.05) / 0.55)
+            } else if phase < 0.72 {
+                let strike = ((phase - 0.60) / 0.12).clamped(to: 0...1)
+                pose.rightClawDegrees = -34 + 46 * strike * strike
+            } else {
+                pose.rightClawDegrees = 12 - 18 * OpenClawMascotGesture.easeInOut((phase - 0.72) / 0.28)
+            }
+            pose.leftClawDegrees = 4 + 2 * sin(2 * .pi * phase)
+            let impact = OpenClawMascotGesture.bell(((phase - 0.72) / 0.14).clamped(to: 0...1))
+            pose.floatOffset = -2 * (1 - cos(2 * .pi * Self.cyclePhase(time, period: 3.8))) + 0.8 * impact
+            pose.bodyStretch = 1 - 0.03 * impact
+            pose.bodyTilt = 2.2 + 0.6 * sin(2 * .pi * Self.cyclePhase(time, period: 5))
+            if phase >= 0.72 {
+                let recoil = ((phase - 0.72) / 0.28).clamped(to: 0...1)
+                pose.antennaDegrees = 6 * (1 - recoil) * sin(recoil * 3 * .pi)
+            }
+            pose.leftEyeOpenness = 0.85
+            pose.rightEyeOpenness = 0.85
+            pose.mouthCurve = 0.18
+            pose.hardHat = 1
+            pose.effect = .sparks
+            let strikePhase = (phase - 0.72).truncatingRemainder(dividingBy: 1)
+            pose.effectPhase = strikePhase < 0 ? strikePhase + 1 : strikePhase
         case .happy:
             pose.floatOffset = -6 * (1 - cos(2 * .pi * Self.cyclePhase(time, period: 3)))
             pose.antennaDegrees = -4.5 * sin(2 * .pi * Self.cyclePhase(time, period: 1.6))
@@ -400,6 +468,8 @@ final class OpenClawMascotAnimator {
             pose.mouthRound = 0.15
             // Slow head-bob as it nods off.
             pose.bodyTilt = 2.5 * sin(2 * .pi * Self.cyclePhase(time, period: 6))
+            pose.accessory = .nightcap
+            pose.accessoryAmount = 1
             pose.effect = .zzz
             pose.effectPhase = Self.cyclePhase(time, period: 3)
         case .attentive:
@@ -424,6 +494,12 @@ final class OpenClawMascotAnimator {
                 target = CGSize(
                     width: 0.4 * sin(2 * .pi * Self.cyclePhase(time, period: 3.8)),
                     height: -0.55)
+            }
+        case .working:
+            if self.pointerTarget == nil {
+                target = CGSize(
+                    width: 0.55 + 0.04 * sin(2 * .pi * Self.cyclePhase(time, period: 4.6)),
+                    height: 0.45 + 0.02 * cos(2 * .pi * Self.cyclePhase(time, period: 3.9)))
             }
         case .attentive:
             if self.pointerTarget == nil {
@@ -493,6 +569,9 @@ enum OpenClawMascotGesture: Equatable {
     case startle
     case shake
     case clawSnap
+    case donHardHat
+    case wipeBrow
+    case hatTip
 
     static let blinkDuration: TimeInterval = 0.16
 
@@ -511,6 +590,9 @@ enum OpenClawMascotGesture: Equatable {
         case .startle: 0.8
         case .shake: 0.8
         case .clawSnap: 0.6
+        case .donHardHat: 1.0
+        case .wipeBrow: 2.0
+        case .hatTip: 0.9
         }
     }
 
@@ -617,6 +699,37 @@ enum OpenClawMascotGesture: Equatable {
             // snap to -8° and back, right claw trailing slightly.
             pose.leftClawDegrees += -8 * Self.bell((p / 0.7).clamped(to: 0...1))
             pose.rightClawDegrees += -8 * Self.bell(((p - 0.25) / 0.7).clamped(to: 0...1))
+        case .donHardHat:
+            let drop = Self.easeInOut((p / 0.55).clamped(to: 0...1))
+            pose.hardHat = min(pose.hardHat, drop)
+            if p < 0.55 {
+                pose.gaze = CGSize(width: 0, height: -0.9 * (1 - p))
+            }
+            pose.bodyStretch -= 0.04 * Self.bell(((p - 0.5) / 0.2).clamped(to: 0...1))
+            let ready = Self.bell(((p - 0.7) / 0.3).clamped(to: 0...1))
+            pose.leftClawDegrees += -8 * ready
+            pose.rightClawDegrees += 8 * ready
+        case .wipeBrow:
+            let env = Self.plateau(p, attack: 0.2, release: 0.8)
+            pose.leftClawDegrees *= 1 - env
+            pose.rightClawDegrees *= 1 - env
+            pose.leftClawDegrees += 38 * env * (0.9 + 0.1 * sin(p * 5 * .pi))
+            pose.bodyTilt *= 1 - env
+            pose.bodyStretch += 0.02 * env
+            pose.happyEyes = max(pose.happyEyes, 0.7 * env)
+            pose.mouthCurve = max(pose.mouthCurve, 0.5 * env)
+            pose.gaze = CGSize(width: pose.gaze.width * (1 - env), height: pose.gaze.height * (1 - env))
+            pose.effect = .sweat
+            pose.effectPhase = p
+        case .hatTip:
+            let reach = Self.plateau(p, attack: 0.22, release: 0.82)
+            let brimAngle = -33 + 3 * sin(p * 4 * .pi)
+            pose.rightClawDegrees = pose.rightClawDegrees * (1 - reach) + brimAngle * reach
+            let bow = Self.bell(p)
+            pose.bodyTilt += 3 * bow
+            pose.bodyStretch -= 0.02 * bow
+            // Non-working base poses have no hard hat; this clip keeps it seated until the lift-away.
+            pose.hardHat = max(pose.hardHat, 1 - Self.easeInOut((p - 0.55) / 0.45))
         }
     }
 
@@ -625,6 +738,11 @@ enum OpenClawMascotGesture: Equatable {
     static func easeInOut(_ t: CGFloat) -> CGFloat {
         let clamped = t.clamped(to: 0...1)
         return clamped * clamped * (3 - 2 * clamped)
+    }
+
+    static func easeOut(_ t: CGFloat) -> CGFloat {
+        let remaining = 1 - t.clamped(to: 0...1)
+        return 1 - remaining * remaining * remaining
     }
 
     /// Smooth 0→1→0 bump peaking at 0.5.

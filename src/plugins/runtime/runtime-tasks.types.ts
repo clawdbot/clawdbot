@@ -11,15 +11,7 @@ import type {
   TaskRunDetail,
   TaskRunView,
 } from "./task-domain-types.js";
-export type {
-  TaskFlowDetail,
-  TaskFlowView,
-  TaskRunAggregateSummary,
-  TaskRunCancelResult,
-  TaskRunDetail,
-  TaskRunView,
-} from "./task-domain-types.js";
-export type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
+export type { TaskFlowDetail, TaskRunCancelResult } from "./task-domain-types.js";
 
 export type BoundTaskRunsRuntime = {
   readonly sessionKey: string;
@@ -65,6 +57,4 @@ export type PluginRuntimeTasks = {
   runs: PluginRuntimeTaskRuns;
   flows: PluginRuntimeTaskFlows;
   managedFlows: PluginRuntimeTaskFlow;
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  flow: PluginRuntimeTaskFlow;
 };

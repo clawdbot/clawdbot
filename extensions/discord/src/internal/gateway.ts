@@ -6,6 +6,7 @@ import {
   GatewayIntentBits,
   GatewayOpcodes,
   type APIGatewayBotInfo,
+  type APIVoiceState,
   type GatewayDispatchPayload,
   type GatewayHeartbeat,
   type GatewayIdentify,
@@ -20,7 +21,10 @@ import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-c
 import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
+import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
+import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
+import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -68,28 +72,6 @@ const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
 
-function ensureGatewayParams(url: string): string {
-  const parsed = new URL(url);
-  parsed.searchParams.set("v", parsed.searchParams.get("v") ?? "10");
-  parsed.searchParams.set("encoding", parsed.searchParams.get("encoding") ?? "json");
-  return parsed.toString();
-}
-
-function decodeGatewayMessage(incoming: unknown): GatewayReceivePayload | null {
-  const text = Buffer.isBuffer(incoming)
-    ? incoming.toString("utf8")
-    : incoming instanceof ArrayBuffer
-      ? Buffer.from(incoming).toString("utf8")
-      : Array.isArray(incoming)
-        ? Buffer.concat(incoming.map((entry) => Buffer.from(entry))).toString("utf8")
-        : String(incoming);
-  try {
-    return JSON.parse(text) as GatewayReceivePayload;
-  } catch {
-    return null;
-  }
-}
-
 export class GatewayPlugin extends Plugin {
   readonly id = "gateway";
   protected client?: Client;
@@ -110,9 +92,15 @@ export class GatewayPlugin extends Plugin {
   private isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
   private readonly reconnectTimer = new GatewayReconnectTimer();
+  private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();
   private outboundLimiter = new GatewaySendLimiter(
     (payload) => this.sendSerializedGatewayEvent(payload),
     (error) => this.emitter.emit("error", error),
+    (warning) =>
+      this.emitter.emit(
+        "warning",
+        `Gateway outbound queue overflow policy=${warning.policy} droppedEvents=${warning.droppedEvents} queuedEvents=${warning.queuedEvents} maxQueuedEvents=${warning.maxQueuedEvents}`,
+      ),
   );
 
   constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {
@@ -128,6 +116,14 @@ export class GatewayPlugin extends Plugin {
 
   get ping(): number | null {
     return null;
+  }
+
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+    return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
+  }
+
+  takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
+    return this.voiceStateCache.takeTransition(state);
   }
 
   get heartbeatInterval(): NodeJS.Timeout | undefined {
@@ -188,6 +184,7 @@ export class GatewayPlugin extends Plugin {
     this.isConnected = false;
     this.reconnectAttempts = 0;
     this.consecutiveResumeFailures = 0;
+    this.voiceStateCache.clear();
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
@@ -420,8 +417,14 @@ export class GatewayPlugin extends Plugin {
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;
     }
+    this.voiceStateCache.apply(payload);
     dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
-    const data = mapGatewayDispatchData(this.client, payload.t, payload.d);
+    // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
+    // maps structures only after the queue claim; other events retain eager mapping.
+    const data =
+      payload.t === GatewayDispatchEvents.MessageCreate
+        ? payload.d
+        : mapGatewayDispatchData(this.client, payload.t, payload.d);
     await this.client.dispatchGatewayEvent(payload.t, data);
     if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
       await this.client.handleInteraction(payload.d);
@@ -433,6 +436,7 @@ export class GatewayPlugin extends Plugin {
     this.resumeGatewayUrl = null;
     this.sequence = null;
     this.consecutiveResumeFailures = 0;
+    this.voiceStateCache.clear();
   }
 
   private getResumeState(): { sessionId: string; sequence: number } | null {

@@ -1,21 +1,9 @@
 // Coverage for ordered cleanup of embedded attempt subscriptions and resources.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { log } from "../logger.js";
-import {
-  EMBEDDED_ABORT_SETTLE_TIMEOUT_MS,
-  cleanupEmbeddedAttemptResources,
-} from "./attempt.subscription-cleanup.js";
-
-function createDeferred<T>() {
-  // Manual deferreds let cleanup tests prove ordering around abort settlement.
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 
 describe("cleanupEmbeddedAttemptResources", () => {
   afterEach(() => {
@@ -27,7 +15,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
     // After an abort, pending prompt work gets a short chance to settle before
     // session flush/release/dispose run.
     const order: string[] = [];
-    const settle = createDeferred<void>();
+    const settle = createDeferred();
 
     const cleanupPromise = cleanupEmbeddedAttemptResources({
       removeToolResultContextGuard: () => {
@@ -91,7 +79,8 @@ describe("cleanupEmbeddedAttemptResources", () => {
       sessionId: "session-1",
     });
 
-    await vi.advanceTimersByTimeAsync(EMBEDDED_ABORT_SETTLE_TIMEOUT_MS - 1);
+    const abortSettleTimeoutMs = resolveEmbeddedAbortSettleTimeoutMs();
+    await vi.advanceTimersByTimeAsync(abortSettleTimeoutMs - 1);
     expect(order).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);

@@ -11,7 +11,7 @@ import { getIMessageRuntime } from "../runtime.js";
 //
 // This module keeps catchup on the same inbound evaluation and dispatch path
 // as live `imsg watch` notifications. The replay loop is pluggable via the
-// `dispatch` callback so `evaluateIMessageInbound` + `dispatchInboundMessage`
+// `dispatch` callback so `evaluateIMessageInbound` + `runChannelInboundEvent`
 // runs unchanged on replayed rows.
 //
 // See https://github.com/openclaw/openclaw/issues/78649 for design discussion.
@@ -167,9 +167,7 @@ function readIMessageCatchupCursor(accountId: string): IMessageCatchupCursor | n
   );
 }
 
-export async function loadIMessageCatchupCursor(
-  accountId: string,
-): Promise<IMessageCatchupCursor | null> {
+async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
   return readIMessageCatchupCursor(accountId);
 }
 
@@ -188,7 +186,7 @@ function buildIMessageCatchupCursor(next: {
   };
 }
 
-export async function saveIMessageCatchupCursor(
+async function saveIMessageCatchupCursor(
   accountId: string,
   next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
   options: { allowCursorRewindForRetries?: boolean } = {},
@@ -210,10 +208,6 @@ export async function saveIMessageCatchupCursor(
   });
 }
 
-export function resetIMessageCatchupCursorStoreForTest(): void {
-  openCatchupCursorStore().clear();
-}
-
 /**
  * Bound the retry map so a pathological storm of unique failing GUIDs
  * cannot grow the cursor file without limit. Keeps the `maxSize` entries
@@ -233,8 +227,7 @@ export function capFailureRetriesMap(
   // debugging).
   entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const capped: Record<string, number> = {};
-  for (let i = 0; i < entries.length && i < maxSize; i++) {
-    const [guid, count] = entries[i];
+  for (const [guid, count] of entries.slice(0, maxSize)) {
     capped[guid] = count;
     if (textEncoder.encode(JSON.stringify(capped)).byteLength > maxBytes) {
       delete capped[guid];
@@ -365,7 +358,7 @@ export async function advanceIMessageCatchupCursor(
  * The fetch and dispatch functions are injected so this loop is unit-testable
  * without standing up an `imsg` daemon. The wiring in `monitor-provider.ts`
  * passes the live `client.request("messages.history", ...)` adapter as
- * `fetch` and the `evaluateIMessageInbound` + `dispatchInboundMessage`
+ * `fetch` and the `evaluateIMessageInbound` + `runChannelInboundEvent`
  * pipeline as `dispatch`.
  */
 export async function performIMessageCatchup(
@@ -433,7 +426,7 @@ export async function performIMessageCatchup(
   // failure is held, the persisted cursor must NOT leapfrog it — otherwise
   // the next pass would filter the failed row out via `row.rowid <= sinceRowid`
   // and never retry. Already-successful rows above the held failure get
-  // re-replayed on the next pass and absorbed by the inbound-dedupe cache.
+  // re-replayed on the next pass and rejected by durable ingress tombstones.
   const cursorBeforeMs = cursor?.lastSeenMs ?? windowStartMs;
   const cursorBeforeRowid = cursor?.lastSeenRowid ?? 0;
   let highWatermarkMs = cursorBeforeMs;
@@ -533,8 +526,8 @@ export async function performIMessageCatchup(
   let lastSeenRowid: number;
   if (earliestHeldFailureRow !== null) {
     // Hold cursor strictly below the failed row. Already-successful rows
-    // above it get re-replayed next pass; the inbound-dedupe cache absorbs
-    // the duplicate dispatch.
+    // above it get re-replayed next pass; durable ingress tombstones reject
+    // the duplicate GUID before dispatch.
     lastSeenMs = Math.max(cursorBeforeMs, earliestHeldFailureRow.date - 1);
     lastSeenRowid = Math.max(cursorBeforeRowid, earliestHeldFailureRow.rowid - 1);
   } else {

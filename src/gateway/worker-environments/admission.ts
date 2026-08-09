@@ -18,7 +18,7 @@ export type ExpectedWorkerBuild = {
   protocolFeatures: readonly string[];
 };
 
-export type WorkerConnectionAdmissionResult =
+type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
 
@@ -93,6 +93,9 @@ export function admitWorkerConnection(params: {
   if (admission.sessionId !== credential.sessionId) {
     return { ok: false, reason: "session-mismatch" };
   }
+  if ((admission.sessionId === null) !== (admission.runId === null)) {
+    return { ok: false, reason: "session-mismatch" };
+  }
   if (
     admission.ownerEpoch !== credential.ownerEpoch ||
     admission.ownerEpoch !== environment.ownerEpoch
@@ -121,6 +124,7 @@ export function admitWorkerConnection(params: {
       credentialHash: credential.credentialHash,
       bundleHash: credential.bundleHash,
       sessionId: credential.sessionId,
+      runId: admission.runId,
       ownerEpoch: credential.ownerEpoch,
       rpcSetVersion: credential.rpcSetVersion,
       protocolFeatures: [...environment.bootstrapReceipt.protocolFeatures],

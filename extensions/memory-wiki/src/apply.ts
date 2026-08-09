@@ -54,9 +54,7 @@ type UpdateMetadataMemoryWikiMutation = {
   status?: string;
 };
 
-export type ApplyMemoryWikiMutation =
-  | CreateSynthesisMemoryWikiMutation
-  | UpdateMetadataMemoryWikiMutation;
+type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
 type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
 

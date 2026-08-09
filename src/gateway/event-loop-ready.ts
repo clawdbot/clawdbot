@@ -2,6 +2,5 @@
 // package so callers use one event-loop readiness contract.
 export {
   waitForEventLoopReady,
-  type EventLoopReadyOptions,
   type EventLoopReadyResult,
 } from "../../packages/gateway-client/src/event-loop-ready.js";

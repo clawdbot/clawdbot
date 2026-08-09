@@ -1,7 +1,7 @@
 /**
  * @deprecated Compatibility shim only. Keep old plugins working, but do not
  * add new imports here and do not use this subpath from repo code.
- * Prefer focused openclaw/plugin-sdk/<domain> runtime subpaths instead.
+ * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
 export * from "./delivery-queue-runtime.js";
@@ -18,7 +18,63 @@ export {
 } from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
-export * from "../infra/errors.js";
+export {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  formatUncaughtError,
+  hasErrnoCode,
+  isErrno,
+  readErrorName,
+  stringifyNonErrorCause,
+  toErrorObject,
+} from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+
+/** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
+export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
+
+/**
+ * @deprecated Shipped compat only; preserves the old substring semantics for
+ * external plugins. Core chat classification now maps canonical failover
+ * reasons (see gateway resolveChatErrorKindFromError). Removal with the next
+ * plugin-SDK major.
+ */
+export function detectErrorKind(err: unknown): ErrorKind | undefined {
+  if (err === undefined) {
+    return undefined;
+  }
+  const message = formatErrorMessage(err).toLowerCase();
+  const code = extractErrorCode(err)?.toLowerCase();
+  if (
+    message.includes("refusal") ||
+    message.includes("content_filter") ||
+    message.includes("sensitive") ||
+    message.includes("unhandled stop reason: refusal_policy")
+  ) {
+    return "refusal";
+  }
+  if (
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("429") ||
+    code === "429"
+  ) {
+    return "rate_limit";
+  }
+  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+    return "timeout";
+  }
+  if (
+    message.includes("context length") ||
+    message.includes("too many tokens") ||
+    message.includes("token limit") ||
+    message.includes("context_window")
+  ) {
+    return "context_length";
+  }
+  return undefined;
+}
 export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
@@ -199,7 +255,17 @@ export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
 export * from "../infra/scp-host.ts";
-export * from "../infra/secret-file.js";
+export {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  loadSecretFileSync,
+  PRIVATE_SECRET_DIR_MODE,
+  PRIVATE_SECRET_FILE_MODE,
+  readSecretFileSync,
+  tryReadSecretFileSync,
+  writePrivateSecretFileAtomic,
+  type SecretFileReadOptions,
+  type SecretFileReadResult,
+} from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
 export * from "../infra/system-events.js";
 export * from "../infra/system-message.ts";

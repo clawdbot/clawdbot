@@ -1,5 +1,5 @@
 ---
-summary: "Twilio SMS channel plugin for OpenClaw text messages."
+summary: "Twilio SMS/MMS channel plugin for OpenClaw messages."
 read_when:
   - You are installing, configuring, or auditing the sms plugin
 title: "Sms plugin"
@@ -7,7 +7,7 @@ title: "Sms plugin"
 
 # Sms plugin
 
-Twilio SMS channel plugin for OpenClaw text messages.
+Twilio SMS/MMS channel plugin for OpenClaw messages.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Twilio SMS channel plugin for OpenClaw text messages.
 
 ## Surface
 
-channels: sms
+channels: `sms`
 
 ## Related docs
 

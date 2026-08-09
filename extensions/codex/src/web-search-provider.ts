@@ -20,7 +20,7 @@ const CodexWebSearchSchema = {
   additionalProperties: false,
 } satisfies Record<string, unknown>;
 
-export type CodexWebSearchProviderOptions = {
+type CodexWebSearchProviderOptions = {
   resolvePluginConfig?: () => unknown;
   clientFactory?: CodexAppServerClientFactory;
 };

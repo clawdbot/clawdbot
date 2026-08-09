@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "../../../lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -163,7 +163,27 @@ const scenarioConfigSteps = new Map([
       ),
     ],
   ],
+  [
+    "codex-allowlist-survival",
+    [
+      {
+        id: "plugins-codex-allowlist",
+        intent: "codex-allowlist-survival",
+        argv: [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          "--strict-json",
+        ],
+      },
+    ],
+  ],
 ]);
+
+export function resolveScenarioConfigSteps(scenario) {
+  return scenarioConfigSteps.get(scenario) ?? [];
+}
 
 const recipe = [
   {
@@ -179,6 +199,15 @@ const recipe = [
     argv: ["config", "validate"],
   },
 ];
+
+export function resolveUpgradeSurvivorConfigSteps(scenario = "base") {
+  const validateStep = recipe.at(-1);
+  return [
+    ...recipe.slice(0, -1),
+    ...resolveScenarioConfigSteps(scenario),
+    ...(validateStep ? [validateStep] : []),
+  ];
+}
 
 function selectedScenario() {
   return process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
@@ -230,6 +259,16 @@ function adaptStepForBaseline(step, baselineVersion, summary) {
     };
   }
   return step;
+}
+
+export function resolveUpgradeSurvivorConfigStepsForBaseline(
+  scenario = "base",
+  baselineVersion = null,
+) {
+  const summary = { skippedIntents: [] };
+  return resolveUpgradeSurvivorConfigSteps(scenario)
+    .map((step) => adaptStepForBaseline(step, baselineVersion, summary))
+    .filter(Boolean);
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
@@ -289,7 +328,7 @@ function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
   const scenario = selectedScenario();
-  const scenarioSteps = scenarioConfigSteps.get(scenario) ?? [];
+  const scenarioSteps = resolveScenarioConfigSteps(scenario);
   const summary = {
     source: "baseline-cli-command-recipe",
     recipe: "upgrade-survivor-v1",
@@ -311,7 +350,7 @@ function applyRecipe() {
     steps: [],
   };
 
-  for (const step of [...recipe.slice(0, -1), ...scenarioSteps, recipe.at(-1)]) {
+  for (const step of resolveUpgradeSurvivorConfigSteps(scenario)) {
     const adaptedStep = adaptStepForBaseline(step, baselineVersion, summary);
     if (!adaptedStep) {
       continue;

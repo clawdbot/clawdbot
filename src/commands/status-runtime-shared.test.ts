@@ -1,10 +1,9 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
-  resolveStatusLastHeartbeat,
-  resolveStatusRuntimeDetails,
   resolveStatusRuntimeSnapshot,
   resolveStatusSecurityAudit,
   resolveStatusServiceSummaries,
@@ -374,31 +373,18 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("returns null for heartbeat when the gateway is unreachable", async () => {
-    expect(
-      await resolveStatusLastHeartbeat({
-        config: { gateway: {} },
-        timeoutMs: 1000,
-        gatewayReachable: false,
-      }),
-    ).toBeNull();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+  it("requests the typed exporter stability projection", async () => {
+    await resolveStatusGatewayDiagnosticsSafe({
+      config: { gateway: {} },
+      timeoutMs: 4321,
+      gatewayReachable: true,
+      type: "telemetry.exporter",
+    });
 
-  it("catches heartbeat gateway errors and returns null", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("boom"));
-
-    expect(
-      await resolveStatusLastHeartbeat({
-        config: { gateway: {} },
-        timeoutMs: 1000,
-        gatewayReachable: true,
-      }),
-    ).toBeNull();
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "last-heartbeat",
-      params: {},
-      timeoutMs: 1000,
+      method: "diagnostics.stability",
+      params: { limit: 1000, type: "telemetry.exporter" },
+      timeoutMs: 4321,
       config: { gateway: {} },
     });
   });
@@ -408,80 +394,6 @@ describe("status-runtime-shared", () => {
       { label: "LaunchAgent" },
       { label: "node" },
     ]);
-  });
-
-  it("resolves shared runtime details with optional usage and deep fields", async () => {
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        usage: true,
-        deep: true,
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
-      usage: { providers: [] },
-      health: { ok: true },
-      lastHeartbeat: { ok: true },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
-    const usageCall = requireProviderUsageCall();
-    expect(usageCall.timeoutMs).toBe(1234);
-    expect(usageCall.config).toEqual({ gateway: {} });
-    expect(usageCall.agentDir).toContain("main");
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
-      method: "last-heartbeat",
-      params: {},
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
-  });
-
-  it("skips optional runtime details when flags are off", async () => {
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        usage: false,
-        deep: false,
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
-      usage: undefined,
-      health: undefined,
-      lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("suppresses health failures inside shared runtime details", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("boom"));
-
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        deep: true,
-        gatewayReachable: false,
-        suppressHealthErrors: true,
-      }),
-    ).resolves.toEqual({
-      usage: undefined,
-      health: undefined,
-      lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
   });
 
   it("resolves the shared runtime snapshot with security audit and runtime details", async () => {
@@ -513,5 +425,35 @@ describe("status-runtime-shared", () => {
       loadPluginSecurityCollectors: false,
       plugins: [{ id: "telegram" }],
     });
+  });
+
+  it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+        suppressHealthErrors: true,
+      }),
+    ).resolves.toMatchObject({
+      health: { error: "Error: gateway health probe timed out" },
+      lastHeartbeat: { ok: true },
+    });
+  });
+
+  it("does not suppress failed deep health probes for text status", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+      }),
+    ).rejects.toThrow("gateway health probe timed out");
   });
 });

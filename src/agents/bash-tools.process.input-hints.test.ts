@@ -3,13 +3,9 @@
  * Idle writable sessions should surface actionable metadata and user-facing hints.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  addSession,
-  appendOutput,
-  markExited,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
+import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 type ProcessTool = ReturnType<typeof createProcessTool>;
@@ -59,6 +55,23 @@ function installWritableStdin(
 }
 
 describe("process input-wait hints", () => {
+  it("reports the UTF-8 byte count for process writes", async () => {
+    const processTool = createProcessTool();
+    const session = createProcessSessionFixture({
+      id: "sess-write-bytes",
+      command: "cat",
+      backgrounded: true,
+    });
+    installWritableStdin(session);
+    addSession(session);
+    const result = await runProcessAction(processTool, {
+      action: "write",
+      sessionId: "sess-write-bytes",
+      data: "你好😀",
+    });
+    expect(textOf(result)).toContain("Wrote 10 bytes to session sess-write-bytes");
+  });
+
   it("adds output and input-wait metadata to log for an idle writable session", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:20.000Z"));

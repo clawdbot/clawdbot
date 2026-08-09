@@ -29,6 +29,7 @@ export {
   type QaBusReactToMessageInput,
   type QaBusReadMessageInput,
   type QaBusSearchMessagesInput,
+  type QaBusSnapshotConversation,
   type QaBusStateSnapshot,
   type QaBusThread,
   type QaBusWaitForInput,
@@ -40,6 +41,11 @@ export {
   setQaChannelRuntime,
 } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
+export { runLiveTransportQaSuiteCommand } from "./src/live-transports/shared/live-transport-suite.runtime.js";
+export {
+  acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat,
+} from "./src/live-transports/shared/credential-lease.runtime.js";
 export {
   createQaChannelDriverLifecycle,
   runQaChannelDriverLifecycleScenarios,

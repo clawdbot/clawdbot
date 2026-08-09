@@ -167,6 +167,9 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
     return undefined;
   }
   const [, language, region] = match;
+  if (!language || !region) {
+    return undefined;
+  }
   return `${normalizeLowercaseStringOrEmpty(language)}-${region.toUpperCase()}`;
 }
 

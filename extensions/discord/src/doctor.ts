@@ -1,7 +1,12 @@
-// Discord plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
+// Discord plugin module implements doctor behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  asObjectRecord,
+  collectChannelAccountScopes,
+  collectProviderDangerousNameMatchingScopes,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { resolveDefaultDiscordAccountId } from "./accounts.js";
@@ -17,37 +22,8 @@ type DiscordIdListRef = {
   key: string;
 };
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function sanitizeForLog(value: string): string {
   return value.replace(/\p{Cc}+/gu, " ").trim();
-}
-
-function collectDiscordAccountScopes(
-  cfg: OpenClawConfig,
-): Array<{ prefix: string; account: Record<string, unknown> }> {
-  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
-  const discord = asObjectRecord(cfg.channels?.discord);
-  if (!discord) {
-    return scopes;
-  }
-
-  scopes.push({ prefix: "channels.discord", account: discord });
-  const accounts = asObjectRecord(discord.accounts);
-  if (!accounts) {
-    return scopes;
-  }
-  for (const key of Object.keys(accounts)) {
-    const account = asObjectRecord(accounts[key]);
-    if (account) {
-      scopes.push({ prefix: `channels.discord.accounts.${key}`, account });
-    }
-  }
-  return scopes;
 }
 
 function collectDiscordIdLists(
@@ -123,7 +99,7 @@ export function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumeric
     }
   };
 
-  for (const scope of collectDiscordAccountScopes(cfg)) {
+  for (const scope of collectChannelAccountScopes({ cfg, channelId: "discord" })) {
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
       scanList(ref.pathLabel, ref.holder[ref.key]);
     }
@@ -161,14 +137,14 @@ export function collectDiscordNumericIdWarnings(params: {
 
   const lines: string[] = [];
   if (repairableHits.length > 0) {
-    const sample = repairableHits[0];
+    const sample = expectDefined(repairableHits.at(0), "non-empty repairable Discord ID hits");
     lines.push(
       `- Discord allowlists contain ${repairableHits.length} numeric ${repairableHits.length === 1 ? "entry" : "entries"} (e.g. ${sanitizeForLog(sample.path)}=${sanitizeForLog(String(sample.entry))}).`,
       `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
     );
   }
   if (blockedHits.length > 0) {
-    const sample = blockedHits[0];
+    const sample = expectDefined(blockedHits.at(0), "non-empty blocked Discord ID hits");
     lines.push(
       `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that cannot be auto-repaired (e.g. ${sanitizeForLog(sample.path)}).`,
       `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
@@ -215,7 +191,7 @@ export function maybeRepairDiscordNumericIds(
     }
   };
 
-  for (const scope of collectDiscordAccountScopes(next)) {
+  for (const scope of collectChannelAccountScopes({ cfg: next, channelId: "discord" })) {
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
       repairList(ref.pathLabel, ref.holder, ref.key);
     }

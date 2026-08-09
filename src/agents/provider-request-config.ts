@@ -12,7 +12,7 @@ import type {
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -169,6 +169,7 @@ type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
   api?: RequestApi;
   baseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   defaultBaseUrl?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
@@ -358,7 +359,7 @@ export function sanitizeConfiguredModelProviderRequest(
 }
 
 /** Merges provider request overrides with later entries taking precedence. */
-export function mergeProviderRequestOverrides(
+function mergeProviderRequestOverrides(
   ...overrides: Array<ProviderRequestTransportOverrides | undefined>
 ): ProviderRequestTransportOverrides | undefined {
   const merged: ProviderRequestTransportOverrides = {};
@@ -415,21 +416,6 @@ export function normalizeBaseUrl(
     return undefined;
   }
   return raw.replace(/\/+$/, "");
-}
-
-// Default Copilot headers are dynamic per IDE/runtime and must be merged through
-// the same header precedence path as configured provider headers.
-function resolveProviderDefaultRequestHeaders(
-  provider: string | undefined,
-): Record<string, string> | undefined {
-  if (normalizeLowercaseStringOrEmpty(provider) !== "github-copilot") {
-    return undefined;
-  }
-  return {
-    ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-    "Openai-Organization": "github-copilot",
-  };
 }
 
 // Header keys are compared case-insensitively and prototype-polluting names are
@@ -531,7 +517,7 @@ function resolveAuthOverride(params: {
 }
 
 /** Sanitizes runtime-only provider request overrides for auth request paths. */
-export function sanitizeRuntimeProviderRequestOverrides(
+function sanitizeRuntimeProviderRequestOverrides(
   request: ProviderRequestTransportOverrides | undefined,
 ): ProviderRequestTransportOverrides | undefined {
   if (!request) {
@@ -705,6 +691,9 @@ export function resolveProviderRequestPolicyConfig(
     provider: params.provider,
     api: params.api,
     baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     capability,
     transport,
   } satisfies Parameters<typeof resolveProviderRequestPolicy>[0];
@@ -720,7 +709,6 @@ export function resolveProviderRequestPolicyConfig(
   });
   const extraHeaders = applyResolvedAuthHeader(
     mergeProviderRequestHeaders(
-      resolveProviderDefaultRequestHeaders(params.provider),
       params.discoveredHeaders,
       params.providerHeaders,
       params.modelHeaders,
@@ -768,6 +756,7 @@ export function resolveProviderRequestConfig(params: {
   provider: string;
   api?: RequestApi;
   baseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
   discoveredHeaders?: Record<string, string>;
@@ -820,9 +809,13 @@ export function resolveProviderRequestHeaders(params: {
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
 );
+const MODEL_PROVIDER_METADATA_OWNERS_SYMBOL = Symbol.for("openclaw.modelProviderMetadataOwners");
 
 type ModelWithProviderRequestTransport = {
   [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: ModelProviderRequestTransportOverrides;
+};
+type ModelWithProviderMetadataOwners = {
+  [MODEL_PROVIDER_METADATA_OWNERS_SYMBOL]?: PluginMetadataSnapshotOwnerMaps;
 };
 
 /** Attaches model-scoped provider request transport metadata without mutating the model. */
@@ -844,3 +837,32 @@ export function getModelProviderRequestTransport(
 ): ModelProviderRequestTransportOverrides | undefined {
   return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }
+
+/** Attaches the lifecycle-owned plugin metadata generation used for request policy. */
+export function attachModelProviderMetadataOwners<TModel extends object>(
+  model: TModel,
+  owners: PluginMetadataSnapshotOwnerMaps | undefined,
+): TModel {
+  if (!owners) {
+    return model;
+  }
+  const next = { ...model } as TModel & ModelWithProviderMetadataOwners;
+  next[MODEL_PROVIDER_METADATA_OWNERS_SYMBOL] = owners;
+  return next;
+}
+
+/** Reads the plugin metadata generation attached to a prepared model. */
+export function getModelProviderMetadataOwners(
+  model: object,
+): PluginMetadataSnapshotOwnerMaps | undefined {
+  return (model as ModelWithProviderMetadataOwners)[MODEL_PROVIDER_METADATA_OWNERS_SYMBOL];
+}
+
+/** Carries request-policy ownership across provider/transport model projections. */
+export function inheritModelProviderMetadataOwners<TModel extends object>(
+  source: object,
+  target: TModel,
+): TModel {
+  return attachModelProviderMetadataOwners(target, getModelProviderMetadataOwners(source));
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

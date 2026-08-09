@@ -5,9 +5,10 @@ scenario:
   surface: workspace
   coverage:
     primary:
-      - workspace.artifacts
+      - agent-runtime.tool-fs-write
     secondary:
-      - workspace.builds
+      - app-sdk.artifact-resources-builds
+      - agent-runtime.tool-fs-read
   objective: Verify the agent can read the repo, create a tiny playable artifact, and report what changed.
   successCriteria:
     - Agent inspects source before coding.

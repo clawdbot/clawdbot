@@ -5,21 +5,16 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-  toAgentModelListLike,
-} from "../config/model-input.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
-  resolveAgentModelFallbacksOverride,
-} from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
 export {
   resolveThinkingDefault,
   resolveThinkingDefaultWithRuntimeCatalog,
@@ -28,29 +23,30 @@ import {
   type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
-  findNormalizedProviderValue,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import {
+  resolveAllowedModelRef as resolveAllowedModelRefInternal,
+  resolveConfiguredModelFallbacks,
+} from "./model-selection-resolve.js";
 import {
   buildAllowedModelSetWithFallbacks,
   buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  getModelRefStatusWithFallbackModels,
   inferUniqueProviderFromCatalog,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
-  resolveAllowedModelRefFromAliasIndex,
   resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
   resolveConfiguredModelRef,
-  resolveConfiguredOpenRouterCompatAlias,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
   type ModelRefStatus,
@@ -60,6 +56,8 @@ export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, Mode
 
 export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 
+export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
+
 export {
   buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
@@ -78,9 +76,16 @@ export {
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 };
-export { isCliProvider } from "./model-selection-cli.js";
+export {
+  isCliProvider,
+  prepareCliProviderClassifier,
+  type CliProviderClassifier,
+} from "./model-selection-cli.js";
+// Cron imports this narrow owner directly; the public facade must not fork its policy.
+export { getModelRefStatus } from "./model-selection-resolve.js";
 
 function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
@@ -214,41 +219,6 @@ export function resolveAllowlistModelKey(
   return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
-export function resolveDefaultModelForAgent(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef {
-  const agentModelOverride = params.agentId
-    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
-    : undefined;
-  const cfg =
-    agentModelOverride && agentModelOverride.length > 0
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...params.cfg.agents?.defaults,
-              model: {
-                ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
-                primary: agentModelOverride,
-              },
-            },
-          },
-        }
-      : params.cfg;
-  return resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   raw: string | undefined;
   cfg?: OpenClawConfig;
@@ -311,29 +281,6 @@ function formatCatalogModelRef(entry: ModelCatalogEntry, profile: string | undef
 
 function appendAuthProfileSuffix(modelRef: string, profile: string | undefined): string {
   return profile ? `${modelRef}@${profile}` : modelRef;
-}
-
-function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
-  if (params.agentId) {
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
-  }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-export function resolveSubagentConfiguredModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  includeAgentPrimary?: boolean;
-}): string | undefined {
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
-    (params.includeAgentPrimary === false ? undefined : normalizeModelSelection(agentConfig?.model))
-  );
 }
 
 /**
@@ -426,57 +373,18 @@ export function buildAllowedModelSet(
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  automaticFallbackKeys: Set<string>;
 } {
   return buildAllowedModelSetWithFallbacks({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
-    fallbackModels: resolveAllowedFallbacks({
+    agentId: params.agentId,
+    fallbackModels: resolveConfiguredModelFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,
     }),
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
-export function getModelRefStatus(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    ref: ModelRef;
-    defaultProvider: string;
-    defaultModel?: string;
-  } & ModelManifestNormalizationContext,
-): ModelRefStatus {
-  return getModelRefStatusWithFallbackModels({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    ref: params.ref,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    fallbackModels: resolveAllowedFallbacks({
-      cfg: params.cfg,
-    }),
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
-function getModelRefStatusForResolve(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    defaultProvider: string;
-    defaultModel?: string;
-  } & ModelManifestNormalizationContext,
-  ref: ModelRef,
-): ModelRefStatus {
-  return getModelRefStatus({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    ref,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
     manifestPlugins: params.manifestPlugins,
   });
 }
@@ -488,45 +396,14 @@ export function resolveAllowedModelRef(
     raw: string;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
   | {
       error: string;
     } {
-  const trimmed = params.raw.trim();
-  if (!trimmed) {
-    return { error: "invalid model: empty" };
-  }
-
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-    manifestPlugins: params.manifestPlugins,
-  });
-
-  const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
-    cfg: params.cfg,
-    raw: trimmed,
-    defaultProvider: params.defaultProvider,
-    manifestPlugins: params.manifestPlugins,
-  });
-  if (openrouterCompatRef) {
-    const status = getModelRefStatusForResolve(params, openrouterCompatRef);
-    if (!status.allowed) {
-      return { error: `model not allowed: ${status.key}` };
-    }
-    return { ref: openrouterCompatRef, key: status.key };
-  }
-
-  return resolveAllowedModelRefFromAliasIndex({
-    cfg: params.cfg,
-    raw: params.raw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex,
-    manifestPlugins: params.manifestPlugins,
-    getStatus: (ref) => getModelRefStatusForResolve(params, ref),
-  });
+  return resolveAllowedModelRefInternal(params);
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

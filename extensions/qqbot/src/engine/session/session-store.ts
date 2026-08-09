@@ -2,12 +2,12 @@
  * Gateway session persistence — SQLite KV-backed store.
  */
 
-import { formatErrorMessage } from "../utils/format.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { debugLog, debugError } from "../utils/log.js";
 import { buildQQBotStateKey, openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 
 /** Persisted gateway session state. */
-export interface SessionState {
+interface SessionState {
   sessionId: string | null;
   lastSeq: number | null;
   lastConnectedAt: number;

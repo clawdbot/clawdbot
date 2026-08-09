@@ -1,4 +1,5 @@
 // Browser tests cover server.auth fail closed plugin behavior.
+import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "../server.js";
 import { getFreePort } from "./test-port.js";
@@ -71,10 +72,6 @@ vi.mock("./server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: vi.fn(async () => {}),
 }));
 
-vi.mock("./pw-ai-state.js", () => ({
-  isPwAiLoaded: vi.fn(() => false),
-}));
-
 describe("browser control auth bootstrap failures", () => {
   beforeEach(async () => {
     mocks.controlPort = await getFreePort();
@@ -130,5 +127,28 @@ describe("browser control auth bootstrap failures", () => {
     const started = await startBrowserControlServerFromConfig();
 
     expect(started).toBeNull();
+  });
+
+  it("returns null when the browser control port is already in use", async () => {
+    const blocker = createServer();
+    await new Promise<void>((resolve) => {
+      blocker.listen(0, "127.0.0.1", resolve);
+    });
+    const address = blocker.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected blocker TCP address");
+    }
+    mocks.controlPort = address.port;
+    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
+    mocks.resolveBrowserControlAuth.mockReturnValueOnce({ token: "test-token" });
+    mocks.shouldAutoGenerateBrowserAuth.mockReturnValueOnce(false);
+
+    try {
+      await expect(startBrowserControlServerFromConfig()).resolves.toBeNull();
+    } finally {
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
+    }
   });
 });

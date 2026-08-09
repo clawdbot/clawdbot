@@ -1,15 +1,12 @@
-// Full CSI: ESC [ <params> <final byte> covers cursor movement, erase, and SGR.
-const ESC_ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
-const C1_ANSI_CSI_PATTERN = "\\x9b[\\x20-\\x3f]*[\\x40-\\x7e]";
-const ANSI_CSI_PATTERN = `(?:${ESC_ANSI_CSI_PATTERN}|${C1_ANSI_CSI_PATTERN})`;
-// OSC: ESC ] or C1 OSC, then <payload> ST. Covers hyperlinks and clipboard/title escapes.
-// ST can be ESC \, BEL, or its C1 form.
-const ANSI_OSC_INTRODUCER_PATTERN = "(?:\\x1b\\]|\\x9d)";
-const ANSI_STRING_TERMINATOR_PATTERN = "(?:\\x1b\\\\|\\x07|\\x9c)";
-const ANSI_OSC_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[^\\x07\\x1b\\x9c]*${ANSI_STRING_TERMINATOR_PATTERN}`;
-
-const ANSI_OSC_AT_INDEX_REGEX = new RegExp(ANSI_OSC_PATTERN, "y");
-const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
+import stringWidth from "string-width";
+import {
+  ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
+  ANSI_OSC_INTRODUCER_PATTERN,
+  ANSI_STRING_TERMINATOR_PATTERN,
+  matchAnsiOscAt,
+  scanAnsiCsiAt,
+  splitAnsiSegments,
+} from "./ansi-sequences.js";
 
 /*
  * The following compatibility grammar is derived from ansi-regex and strip-ansi.
@@ -37,24 +34,14 @@ const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`
  * SOFTWARE.
  */
 const ANSI_OSC_SEQUENCE_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[\\s\\S]*?${ANSI_STRING_TERMINATOR_PATTERN}`;
-const ANSI_CONTROL_SEQUENCE_PATTERN =
-  "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 const ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX = new RegExp(
-  `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_CONTROL_SEQUENCE_PATTERN}`,
+  `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN}`,
   "y",
 );
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
     : null;
-
-function csiIntroducerLength(input: string, index: number): number {
-  const code = input.charCodeAt(index);
-  if (code === 0x9b) {
-    return 1;
-  }
-  return code === 0x1b && input.charCodeAt(index + 1) === 0x5b ? 2 : 0;
-}
 
 function hasAnsiIntroducer(input: string): boolean {
   return input.includes("\u001B") || input.includes("\u009B") || input.includes("\u009D");
@@ -80,17 +67,16 @@ function stripAnsiInternal(
       continue;
     }
 
-    ANSI_OSC_AT_INDEX_REGEX.lastIndex = index;
-    const oscMatch = ANSI_OSC_AT_INDEX_REGEX.exec(input);
-    if (oscMatch) {
+    const osc = matchAnsiOscAt(input, index);
+    if (osc) {
       output.push(input.slice(copyStart, index));
-      index += oscMatch[0].length;
+      index += osc.length;
       copyStart = index;
       continue;
     }
 
-    const introducerLength = csiIntroducerLength(input, index);
-    if (introducerLength === 0) {
+    const csi = scanAnsiCsiAt(input, index);
+    if (!csi) {
       ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
       const compatibilityMatch = options.compatibilityGrammar
         ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
@@ -109,52 +95,21 @@ function stripAnsiInternal(
     const compatibilityMatch = options.compatibilityGrammar
       ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
       : null;
-    let cursor = index + introducerLength;
-    const controls: string[] = [];
-    let ended = false;
-    while (cursor < input.length) {
-      const code = input.charCodeAt(cursor);
-      if (code === 0x18 || code === 0x1a) {
-        cursor += 1;
-        ended = true;
-        break;
-      }
-      if (code === 0x1b || code === 0x9b) {
-        ended = true;
-        break;
-      }
-      if (code <= 0x1f || code === 0x7f) {
-        // These controls execute independently; the caller still owns whether
-        // to retain, remove, or escape them in its output format.
-        controls.push(input.charAt(cursor));
-        cursor += 1;
-        continue;
-      }
-      if (code >= 0x20 && code <= 0x3f) {
-        cursor += 1;
-        continue;
-      }
-      if (code >= 0x40 && code <= 0x7e) {
-        cursor += 1;
-      }
-      ended = true;
+    if (!csi.ended && options.preserveIncompleteCsi) {
       break;
     }
 
-    if (!ended && options.preserveIncompleteCsi) {
-      break;
-    }
-
-    const canonicalLength = cursor - index;
+    let cursor = index + csi.value.length;
+    const canonicalLength = csi.value.length;
     if (
-      controls.length === 0 &&
+      csi.controls.length === 0 &&
       compatibilityMatch &&
       compatibilityMatch[0].length > canonicalLength
     ) {
       cursor = index + compatibilityMatch[0].length;
     }
 
-    output.push(input.slice(copyStart, index), ...controls);
+    output.push(input.slice(copyStart, index), ...csi.controls);
     index = cursor;
     copyStart = cursor;
   }
@@ -225,145 +180,153 @@ export function sanitizeForLog(v: string): string {
   return stripAnsi(v).replace(controlCharsRegex, "");
 }
 
-function isZeroWidthCodePoint(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
-    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
-    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
-    (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
-    (codePoint >= 0xfe20 && codePoint <= 0xfe2f) ||
-    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
-    codePoint === 0x200d
-  );
-}
-
-function isFullWidthCodePoint(codePoint: number): boolean {
-  if (codePoint < 0x1100) {
-    return false;
+function textWidth(text: string): number {
+  // POSIX renders these default-ignorable Hangul fillers as wide/halfwidth cells;
+  // same-shaping representatives and well-formed surrogates preserve terminal output.
+  const printable = /[\u115F\u3164\uFFA0\uD800-\uDFFF]/u.test(text)
+    ? text
+        .replace(/[\uD800-\uDFFF]/gu, "\uFFFD")
+        .replaceAll("\u115F", "\u1100")
+        .replaceAll("\u3164", "\u3131")
+        .replaceAll("\uFFA0", "\uFF8A")
+    : text;
+  // OpenClaw owns ANSI parsing; upstream must not reinterpret malformed sequences.
+  let width = stringWidth(printable, { countAnsiEscapeCodes: true });
+  // Tabs execute inside CSI too; string-width intentionally treats them as zero-width.
+  for (let index = text.indexOf("\t"); index !== -1; index = text.indexOf("\t", index + 1)) {
+    width += 1;
   }
-  return (
-    codePoint <= 0x115f ||
-    codePoint === 0x2329 ||
-    codePoint === 0x232a ||
-    (codePoint >= 0x2e80 && codePoint <= 0x3247 && codePoint !== 0x303f) ||
-    (codePoint >= 0x3250 && codePoint <= 0x4dbf) ||
-    (codePoint >= 0x4e00 && codePoint <= 0xa4c6) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97c) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-    (codePoint >= 0xfe30 && codePoint <= 0xfe6b) ||
-    (codePoint >= 0xff01 && codePoint <= 0xff60) ||
-    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
-    (codePoint >= 0x1aff0 && codePoint <= 0x1aff3) ||
-    (codePoint >= 0x1aff5 && codePoint <= 0x1affb) ||
-    (codePoint >= 0x1affd && codePoint <= 0x1affe) ||
-    (codePoint >= 0x1b000 && codePoint <= 0x1b2ff) ||
-    (codePoint >= 0x1f200 && codePoint <= 0x1f251) ||
-    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
-  );
-}
-
-const rgiEmojiPattern = new RegExp("^\\p{RGI_Emoji}$", "v");
-const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
-const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
-const unqualifiedKeycapPattern = /^[#*0-9]\u20E3$/u;
-const extendedPictographicPattern = /\p{Extended_Pictographic}/gu;
-
-function isWideEmojiGrapheme(grapheme: string): boolean {
-  const isRgiEmoji = rgiEmojiPattern.test(grapheme);
-  // RGI recognizes paired flags while keeping a lone regional indicator narrow.
-  if (regionalIndicatorPattern.test(grapheme)) {
-    return isRgiEmoji;
-  }
-  if (
-    emojiPresentationPattern.test(grapheme) ||
-    isRgiEmoji ||
-    unqualifiedKeycapPattern.test(grapheme)
-  ) {
-    return true;
-  }
-  // Minimally qualified ZWJ sequences still shape as one wide emoji in terminals.
-  return (
-    grapheme.includes("\u200D") && (grapheme.match(extendedPictographicPattern)?.length ?? 0) >= 2
-  );
-}
-
-function graphemeWidth(grapheme: string): number {
-  if (!grapheme) {
-    return 0;
-  }
-  if (isWideEmojiGrapheme(grapheme)) {
-    return 2;
-  }
-
-  let sawPrintable = false;
-  for (const char of grapheme) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint == null) {
-      continue;
-    }
-    if (isZeroWidthCodePoint(codePoint)) {
-      continue;
-    }
-    if (isFullWidthCodePoint(codePoint)) {
-      return 2;
-    }
-    sawPrintable = true;
-  }
-  return sawPrintable ? 1 : 0;
+  return width;
 }
 
 export function visibleWidth(input: string): number {
-  return splitGraphemes(stripAnsi(input)).reduce(
-    (sum, grapheme) => sum + graphemeWidth(grapheme),
-    0,
-  );
+  return textWidth(stripAnsi(input));
 }
 
 /**
  * Truncate to at most `maxWidth` visible columns, dropping whole grapheme
- * clusters that would overflow while preserving ANSI sequences verbatim
- * (they have zero visible width). A single wide grapheme that cannot fit the
- * remaining budget is dropped rather than emitted partially, so the result is
- * always `visibleWidth(result) <= maxWidth`. Callers that need a fixed width
- * pad the (possibly short) remainder themselves.
+ * clusters that would overflow while preserving zero-width ANSI sequences
+ * verbatim. Independently executed controls inside CSI count toward the budget
+ * while the containing sequence stays atomic. A single wide grapheme that
+ * cannot fit is dropped whole, so `visibleWidth(result) <= maxWidth`.
  */
 export function truncateToVisibleWidth(input: string, maxWidth: number): string {
   if (maxWidth <= 0) {
     return "";
   }
-  if (visibleWidth(input) <= maxWidth) {
+  const plainInput = stripAnsi(input);
+  const inputWidth = textWidth(plainInput);
+  if (inputWidth <= maxWidth) {
     return input;
   }
-  ANSI_SEQUENCE_REGEX.lastIndex = 0;
   let out = "";
   let used = 0;
-  let pos = 0;
   // Once the visible budget is spent we stop emitting graphemes but keep
-  // copying ANSI sequences, so trailing resets/link-closes still land and the
-  // truncated cell does not bleed styling into the padding or border.
+  // copying zero-width ANSI sequences, so trailing resets/link-closes still
+  // land without letting embedded executable controls exceed the budget.
   let budgetSpent = false;
   const appendVisible = (segment: string): void => {
     if (budgetSpent) {
       return;
     }
-    for (const grapheme of splitGraphemes(segment)) {
-      const width = graphemeWidth(grapheme);
-      if (used + width > maxWidth) {
-        budgetSpent = true;
-        return;
-      }
-      out += grapheme;
+    const remaining = maxWidth - used;
+    const width = segment === plainInput ? inputWidth : textWidth(segment);
+    if (width <= remaining) {
+      out += segment;
       used += width;
+      return;
     }
+
+    const graphemes = splitGraphemes(segment);
+    let offset = 0;
+    const offsets = [offset];
+    for (const grapheme of graphemes) {
+      offset += grapheme.length;
+      offsets.push(offset);
+    }
+    let start = 0;
+    let fittedWidth = 0;
+    if (remaining <= width / 2) {
+      let end = Math.max(
+        1,
+        Math.min(graphemes.length - 1, Math.floor((remaining * graphemes.length) / width)),
+      );
+      let stride = 1;
+      // Estimate the cell boundary first; gallop handles uneven/zero-width clusters.
+      while (end < graphemes.length) {
+        const candidateWidth = textWidth(segment.slice(0, offsets[end]));
+        if (candidateWidth > remaining) {
+          break;
+        }
+        start = end;
+        fittedWidth = candidateWidth;
+        end = Math.min(graphemes.length, end + stride);
+        stride *= 2;
+      }
+      while (start + 1 < end) {
+        const middle = Math.floor((start + end) / 2);
+        const candidateWidth = textWidth(segment.slice(0, offsets[middle]));
+        if (candidateWidth <= remaining) {
+          start = middle;
+          fittedWidth = candidateWidth;
+        } else {
+          end = middle;
+        }
+      }
+    } else {
+      const overflow = width - remaining;
+      let tooShort = 0;
+      let removed = Math.min(graphemes.length, 1);
+      let removedWidth = width;
+      // Near-end cuts search short complete-grapheme suffixes, not repeated full prefixes.
+      while (removed < graphemes.length) {
+        removedWidth = textWidth(segment.slice(offsets[graphemes.length - removed]));
+        if (removedWidth >= overflow) {
+          break;
+        }
+        tooShort = removed;
+        removed = Math.min(graphemes.length, removed * 2);
+      }
+      if (removed === graphemes.length) {
+        removedWidth = width;
+      }
+      while (tooShort + 1 < removed) {
+        const middle = Math.floor((tooShort + removed) / 2);
+        const candidateWidth = textWidth(segment.slice(offsets[graphemes.length - middle]));
+        if (candidateWidth >= overflow) {
+          removed = middle;
+          removedWidth = candidateWidth;
+        } else {
+          tooShort = middle;
+        }
+      }
+      start = graphemes.length - removed;
+      fittedWidth = width - removedWidth;
+    }
+    out += segment.slice(0, offsets[start]);
+    used += fittedWidth;
+    budgetSpent = true;
   };
-  let match: RegExpExecArray | null;
-  while ((match = ANSI_SEQUENCE_REGEX.exec(input)) !== null) {
-    appendVisible(input.slice(pos, match.index));
-    out += match[0];
-    pos = match.index + match[0].length;
+  for (const segment of splitAnsiSegments(input)) {
+    if (segment.kind === "ansi") {
+      // CSI retains only C0/DEL controls; TAB is the sole visible-width member.
+      const widthControls = segment.controls.filter((control) => control === "\t");
+      const controlWidth = widthControls.length;
+      if (!budgetSpent && used + controlWidth <= maxWidth) {
+        out += segment.value;
+        used += controlWidth;
+      } else if (controlWidth > 0) {
+        out += widthControls.reduce(
+          (value, control) => value.replaceAll(control, ""),
+          segment.value,
+        );
+        budgetSpent = true;
+      } else {
+        out += segment.value;
+      }
+    } else {
+      appendVisible(segment.value);
+    }
   }
-  appendVisible(input.slice(pos));
   return out;
 }

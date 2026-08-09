@@ -1,7 +1,7 @@
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private actor GatewayHandshakeGate {
     private var started = false
@@ -50,7 +50,8 @@ struct GatewayChannelShutdownTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
 
         // Establish a connection so `listen()` is active.
         try await channel.connect()
@@ -74,7 +75,7 @@ struct GatewayChannelShutdownTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             let responseGate = GatewayHandshakeGate()
             let snapshots = GatewaySnapshotProbe()

@@ -9,12 +9,8 @@ import {
 } from "openclaw/plugin-sdk/provider-onboard";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  applyDeepInfraConfig,
-  DEEPINFRA_BASE_URL,
-  DEEPINFRA_DEFAULT_MODEL_REF,
-} from "./onboard.js";
-import { DEEPINFRA_DEFAULT_MODEL_ID } from "./provider-models.js";
+import { applyDeepInfraConfig } from "./onboard.js";
+import { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF } from "./provider-models.js";
 
 const { resolveEnvApiKey } = providerAuth;
 
@@ -28,10 +24,6 @@ describe("DeepInfra provider config", () => {
 
     it("DEEPINFRA_DEFAULT_MODEL_REF includes provider prefix", () => {
       expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V4-Flash");
-    });
-
-    it("DEEPINFRA_DEFAULT_MODEL_ID is deepseek-ai/DeepSeek-V4-Flash", () => {
-      expect(DEEPINFRA_DEFAULT_MODEL_ID).toBe("deepseek-ai/DeepSeek-V4-Flash");
     });
   });
 

@@ -100,7 +100,7 @@ final class ShareComposeView: UIView, UITextViewDelegate {
                 text: NSLocalizedString("Sent to OpenClaw.", comment: "Share extension success status"),
                 icon: (name: "checkmark.circle.fill", tint: .systemGreen),
                 spinning: false)
-        case let .failed(message):
+        case let .blocked(message), let .failed(message):
             self.showFooter(
                 text: message,
                 icon: (name: "exclamationmark.triangle.fill", tint: .systemOrange),

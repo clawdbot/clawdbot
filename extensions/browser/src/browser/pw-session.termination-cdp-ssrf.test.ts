@@ -2,11 +2,13 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import {
+import { pwAi } from "./pw-ai.js";
+
+const {
   closePlaywrightBrowserConnection,
   forceDisconnectPlaywrightForTarget,
   listPagesViaPlaywright,
-} from "./pw-session.js";
+} = pwAi;
 
 const wsMockState = vi.hoisted(() => ({
   constructorUrls: [] as string[],

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -9,10 +9,19 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
   PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "../doctor-contract-api.js";
 import { buildQQBotStateKey } from "./engine/utils/state-keys.js";
+
+function requireStateMigration(index: number) {
+  return expectDefined(stateMigrations[index], `QQBot state migration ${index}`);
+}
 
 type CredentialBackup = {
   accountId: string;
@@ -21,13 +30,7 @@ type CredentialBackup = {
   savedAt: string;
 };
 
-const createdDirs: string[] = [];
-
-async function createTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  createdDirs.push(dir);
-  return dir;
-}
+const tempWorkspaces: TempWorkspace[] = [];
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -96,15 +99,18 @@ describe("qqbot doctor state migration", () => {
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
-    stateDir = await createTempDir("qqbot-state-");
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-state-",
+    });
+    tempWorkspaces.push(workspace);
+    stateDir = workspace.dir;
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
 
   afterEach(async () => {
     resetPluginStateStoreForTests();
-    for (const dir of createdDirs.splice(0)) {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
   });
 
   function migrationParams() {
@@ -127,7 +133,7 @@ describe("qqbot doctor state migration", () => {
     };
     await writeJson(sourcePath, backup);
 
-    const migration = stateMigrations[0];
+    const migration = requireStateMigration(0);
     await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
       preview: [expect.stringContaining("QQBot credential backups: 1 file")],
     });
@@ -171,7 +177,7 @@ describe("qqbot doctor state migration", () => {
       savedAt: "2026-06-02T00:00:00.000Z",
     });
 
-    const result = await stateMigrations[0].migrateLegacyState(migrationParams());
+    const result = await requireStateMigration(0).migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
     await expect(
@@ -194,11 +200,16 @@ describe("qqbot doctor state migration", () => {
       savedAt: "2026-06-02T00:00:00.000Z",
     });
 
-    await expect(stateMigrations[0].detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(requireStateMigration(0).detectLegacyState(migrationParams())).resolves.toBeNull();
   });
 
   it("does not scan credential backups outside the active state directory", async () => {
-    const homeDir = await createTempDir("qqbot-home-");
+    const homeWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-home-",
+    });
+    tempWorkspaces.push(homeWorkspace);
+    const homeDir = homeWorkspace.dir;
     env.HOME = homeDir;
     await writeJson(
       path.join(homeDir, ".openclaw", "qqbot", "data", "credential-backup-default.json"),
@@ -210,7 +221,7 @@ describe("qqbot doctor state migration", () => {
       },
     );
 
-    await expect(stateMigrations[0].detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(requireStateMigration(0).detectLegacyState(migrationParams())).resolves.toBeNull();
   });
 
   it("restores credential state and preserves sources when plugin capacity evicts a row", async () => {
@@ -233,7 +244,7 @@ describe("qqbot doctor state migration", () => {
     const params = migrationParams();
     params.context = createEvictingDoctorContext({ values, evictedKey: existingKey });
 
-    const result = await stateMigrations[0].migrateLegacyState(params);
+    const result = await requireStateMigration(0).migrateLegacyState(params);
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("plugin state capacity evicted")]);
@@ -250,6 +261,6 @@ describe("qqbot doctor state migration", () => {
     await writeJson(path.join(stateDir, "qqbot", "data", "known-users.json"), []);
     await fs.writeFile(path.join(stateDir, "qqbot", "data", "ref-index.jsonl"), "{}\n");
 
-    await expect(stateMigrations[0].detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(requireStateMigration(0).detectLegacyState(migrationParams())).resolves.toBeNull();
   });
 });

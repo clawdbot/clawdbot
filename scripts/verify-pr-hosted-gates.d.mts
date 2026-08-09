@@ -12,18 +12,29 @@ export function parseWorkflowRunPage(raw: unknown): {
   workflowRuns: unknown;
 };
 export function workflowRunPageCount(totalCount: unknown): number;
+export function notApplicableScheduledHostedWorkflows(changedPaths: string[]): string[];
 export function collectHostedGateEvidence({
   sha,
   pr,
   recentSha,
+  pullRequestCommitShas,
+  pullRequestHeadBranch,
+  pullRequestHeadRepository,
   workflowRuns,
+  ciGateJobs,
+  notApplicableScheduledWorkflows,
   changelogOnly,
   nowMs,
 }: {
   sha: string;
   pr?: number;
   recentSha?: string;
+  pullRequestCommitShas?: string[];
+  pullRequestHeadBranch?: string;
+  pullRequestHeadRepository?: string;
   workflowRuns: Array<Record<string, unknown>>;
+  ciGateJobs?: Array<Record<string, unknown>>;
+  notApplicableScheduledWorkflows?: string[];
   changelogOnly?: boolean | undefined;
   nowMs?: number | undefined;
 }): {
@@ -46,7 +57,9 @@ export function collectHostedGateEvidence({
     coveredBy: string;
     reason: string;
   }[];
+  notApplicableWorkflows?: string[];
 };
+export function compareCommitPageCount(totalCommits: number): number;
 export function workflowRunQueryPaths(
   repo: string,
   {
@@ -60,6 +73,5 @@ export function workflowRunQueryPaths(
   },
   page?: number,
 ): string[];
-export function main(argv?: string[]): void;
 export const SCHEDULED_HOSTED_WORKFLOWS: string[];
 export const HOSTED_GATE_MAX_AGE_HOURS: 24;

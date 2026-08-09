@@ -28,13 +28,17 @@ function collectGenericRuntimeStatusIssues(
       continue;
     }
     const accountId = resolveIssueAccountId(account);
-    if (account.restartPending === true) {
+    // Dead ingress outranks the restart-pending short-circuit: a pending restart
+    // cannot fix a channel whose inbound admission is unavailable, and hiding it
+    // behind "status may be stale" is how silent inbound loss stays invisible.
+    if (account.ingressUnavailable === true) {
       issues.push({
         channel,
         accountId,
         kind: "runtime",
-        message: "Channel restart is pending; runtime status may be stale.",
-        fix: "wait for restart to complete, then rerun channels status",
+        message:
+          "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
+        fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
       });
       continue;
     }
@@ -49,36 +53,40 @@ function collectGenericRuntimeStatusIssues(
     if (health.healthy) {
       continue;
     }
-    if (health.reason === "disconnected") {
-      issues.push({
-        channel,
-        accountId,
-        kind: "runtime",
-        message: "Channel reports running, but the runtime is disconnected.",
-        fix: "restart the channel or gateway",
-      });
-      continue;
+    let message: string;
+    let fix = "restart the channel or gateway";
+    switch (health.reason) {
+      case "not-running":
+        // Older status snapshots can omit running; absence is not a stopped runtime.
+        if (account.running !== false) {
+          continue;
+        }
+        message = "Channel is enabled and configured, but its runtime is not running.";
+        break;
+      case "disconnected":
+        message = "Channel reports running, but the runtime is disconnected.";
+        break;
+      case "stale-socket":
+        message =
+          "Channel reports connected, but transport activity is stale; inbound delivery may be broken.";
+        break;
+      case "stuck":
+        message = "Channel runtime appears stuck with stale run activity.";
+        break;
+      case "blocked":
+        message = "Channel runtime is blocked and needs operator action.";
+        fix = "resolve the reported channel error, then restart the channel";
+        break;
+      default:
+        continue;
     }
-    if (health.reason === "stale-socket") {
-      issues.push({
-        channel,
-        accountId,
-        kind: "runtime",
-        message:
-          "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
-        fix: "restart the channel or gateway",
-      });
-      continue;
-    }
-    if (health.reason === "stuck") {
-      issues.push({
-        channel,
-        accountId,
-        kind: "runtime",
-        message: "Channel runtime appears stuck with stale run activity.",
-        fix: "restart the channel or gateway",
-      });
-    }
+    issues.push({
+      channel,
+      accountId,
+      kind: "runtime",
+      message,
+      fix,
+    });
   }
   return issues;
 }

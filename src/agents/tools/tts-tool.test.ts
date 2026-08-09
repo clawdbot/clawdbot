@@ -1,17 +1,15 @@
 // TTS tool tests cover guidance, speech runtime arguments, delivery metadata,
 // timeout validation, and reply-directive defusing.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ttsRuntime from "../../tts/tts.js";
 import { createTtsTool } from "./tts-tool.js";
 
 let textToSpeechSpy: ReturnType<typeof vi.spyOn>;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function latestTextToSpeechArgs(): Record<string, unknown> {
   // Speech runtime args are the public handoff between the model-facing tool
@@ -34,9 +32,9 @@ describe("createTtsTool", () => {
   it("requires explicit user or config audio intent in guidance text", () => {
     const tool = createTtsTool();
 
-    expect(tool.description).toContain("Use only for explicit audio intent");
+    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
     expect(tool.description).toContain("active TTS config");
-    expect(tool.description).toContain("Never use for ordinary text replies");
+    expect(tool.description).toContain("never ordinary text reply");
   });
 
   it("stores audio delivery in details.media and preserves the spoken text in content", async () => {
@@ -171,7 +169,10 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: spoken });
 
-    const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const rendered = expectDefined(
+      (result.content as Array<{ type: string; text: string }>)[0],
+      "(result.content as Array<{ type: string; text: string }>)[0] test invariant",
+    ).text;
     // The literal directive tokens must not appear verbatim, so
     // parseReplyDirectives can no longer surface them as media/audio flags.
     expect(rendered).not.toMatch(/^MEDIA:/m);
@@ -194,7 +195,10 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: spoken });
 
-    const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const rendered = expectDefined(
+      (result.content as Array<{ type: string; text: string }>)[0],
+      "(result.content as Array<{ type: string; text: string }>)[0] test invariant",
+    ).text;
     expect(rendered).toContain("\u00A0\u2060MEDIA:/tmp/secret.png");
     expect(rendered).not.toMatch(/^\u00A0MEDIA:/m);
   });
@@ -211,7 +215,10 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: spoken });
 
-    const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const rendered = expectDefined(
+      (result.content as Array<{ type: string; text: string }>)[0],
+      "(result.content as Array<{ type: string; text: string }>)[0] test invariant",
+    ).text;
     expect(rendered).not.toMatch(/^[ \t]*```/m);
     expect(rendered).toContain("`\u2060``");
     expect(rendered).toContain("\u2060MEDIA:");

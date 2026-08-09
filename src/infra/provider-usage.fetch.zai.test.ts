@@ -20,6 +20,35 @@ describe("fetchZaiUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it.each([
+    ["null", null],
+    ["array", []],
+  ])("returns a stable API error for a successful %s payload", async (_name, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("API error");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it.each([
+    ["missing data", { success: true, code: 200 }],
+    ["null data", { success: true, code: 200, data: null }],
+    ["array data", { success: true, code: 200, data: [] }],
+    ["null limits", { success: true, code: 200, data: { limits: null } }],
+    ["object limits", { success: true, code: 200, data: { limits: {} } }],
+  ])("treats successful payloads with %s as empty usage", async (_name, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "zai",
+      displayName: "z.ai",
+      windows: [],
+      plan: undefined,
+    });
+  });
+
   it("returns API message errors for unsuccessful payloads", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
@@ -146,6 +175,100 @@ describe("fetchZaiUsage", () => {
         label: "Monthly",
         usedPercent: 100,
         resetAt: undefined,
+      },
+    ]);
+  });
+
+  it("skips malformed limit entries while preserving valid siblings", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: true,
+        code: 200,
+        data: {
+          planName: " Team ",
+          limits: [
+            null,
+            "not-an-object",
+            {
+              type: "TOKENS_LIMIT",
+              percentage: 25,
+              unit: 3,
+              number: 6,
+            },
+            {
+              type: "TOKENS_LIMIT",
+              percentage: 10,
+              unit: 3,
+            },
+            {
+              type: "TIME_LIMIT",
+              percentage: "40",
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.plan).toBe("Team");
+    expect(result.windows).toEqual([
+      {
+        label: "Tokens (6h)",
+        usedPercent: 25,
+        resetAt: undefined,
+      },
+      {
+        label: "Tokens (Limit)",
+        usedPercent: 10,
+        resetAt: undefined,
+      },
+      {
+        label: "Monthly",
+        usedPercent: 0,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
+  it("ignores invalid nextResetTime while preserving valid ISO resets", async () => {
+    const validReset = "2026-01-08T00:00:00Z";
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: true,
+        code: 200,
+        data: {
+          planName: "Team",
+          limits: [
+            {
+              type: "TOKENS_LIMIT",
+              percentage: 20,
+              unit: 3,
+              number: 6,
+              nextResetTime: "not-a-date",
+            },
+            {
+              type: "TIME_LIMIT",
+              percentage: 40,
+              nextResetTime: validReset,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      {
+        label: "Tokens (6h)",
+        usedPercent: 20,
+        resetAt: undefined,
+      },
+      {
+        label: "Monthly",
+        usedPercent: 40,
+        resetAt: new Date(validReset).getTime(),
       },
     ]);
   });

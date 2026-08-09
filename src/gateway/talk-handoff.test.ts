@@ -1,25 +1,19 @@
 /**
  * Tests talk handoff coordination between gateway sessions and realtime state.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelTalkHandoffTurn,
-  clearTalkHandoffsForTest,
   createTalkHandoff,
   endTalkHandoffTurn,
   getTalkHandoff,
   joinTalkHandoff,
   revokeTalkHandoff,
   startTalkHandoffTurn,
-  verifyTalkHandoffToken,
 } from "./talk-handoff.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -60,7 +54,6 @@ describe("talk handoff store", () => {
   it("creates an expiring managed-room handoff without storing the plaintext token", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-05T12:00:00.000Z"));
-    clearTalkHandoffsForTest();
 
     const handoff = createTalkHandoff({
       sessionKey: "session:main",
@@ -103,7 +96,6 @@ describe("talk handoff store", () => {
       throw new Error("expected stored talk handoff record");
     }
     expect(record.tokenHash).not.toBe(handoff.token);
-    expect(verifyTalkHandoffToken(record, handoff.token)).toBe(true);
 
     vi.advanceTimersByTime(5001);
     expect(getTalkHandoff(handoff.id)).toBeUndefined();
@@ -111,7 +103,6 @@ describe("talk handoff store", () => {
   });
 
   it("expires handoffs immediately when the creation clock is invalid", () => {
-    clearTalkHandoffsForTest();
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
       const handoff = createTalkHandoff({
@@ -131,7 +122,6 @@ describe("talk handoff store", () => {
   });
 
   it("expires handoffs immediately when expiry would exceed Date bounds", () => {
-    clearTalkHandoffsForTest();
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
 
@@ -150,7 +140,6 @@ describe("talk handoff store", () => {
   });
 
   it("joins and revokes handoffs with only the bearer token", () => {
-    clearTalkHandoffsForTest();
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
 
     expect(joinTalkHandoff(handoff.id, "wrong")).toEqual({
@@ -176,7 +165,6 @@ describe("talk handoff store", () => {
   });
 
   it("records managed-room ready, replacement, and close lifecycle events", () => {
-    clearTalkHandoffsForTest();
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
 
     const firstJoin = joinTalkHandoff(handoff.id, handoff.token, { clientId: "conn-1" });
@@ -230,7 +218,6 @@ describe("talk handoff store", () => {
   });
 
   it("records managed-room turn start, end, and cancellation events", () => {
-    clearTalkHandoffsForTest();
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
     joinTalkHandoff(handoff.id, handoff.token, { clientId: "conn-1" });
 
@@ -289,7 +276,6 @@ describe("talk handoff store", () => {
   });
 
   it("rejects stale managed-room turn completion without clearing the active turn", () => {
-    clearTalkHandoffsForTest();
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
 
     startTalkHandoffTurn(handoff.id, handoff.token, { turnId: "turn-old" });
@@ -318,8 +304,6 @@ describe("talk handoff store", () => {
   });
 
   it("isolates simultaneous handoffs for different sessions on the same host", () => {
-    clearTalkHandoffsForTest();
-
     const first = createTalkHandoff({
       sessionKey: "agent:main:first",
       channel: "browser",

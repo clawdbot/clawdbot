@@ -16,7 +16,8 @@ import { resolveBundledSkillsContext } from "../loading/bundled-context.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
-  isConfigPathTruthy,
+  isSkillEnvRequirementSatisfied,
+  isSkillConfigPathTruthy,
   resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
@@ -252,6 +253,8 @@ type BuildSkillStatusContext = {
   agentSkillFilter?: string[];
   workspaceDir: string;
   clawhubLockRead: ClawHubSkillsLockfileStatusRead;
+  managedSkillsDir: string;
+  managedLockRead: ClawHubSkillsLockfileStatusRead;
 };
 
 function buildSkillStatus(
@@ -267,12 +270,12 @@ function buildSkillStatus(
   const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
-    Boolean(
-      process.env[envName] ||
-      skillConfig?.env?.[envName] ||
-      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-    );
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+    isSkillEnvRequirementSatisfied({
+      envName,
+      skillConfig,
+      primaryEnv: entry.metadata?.primaryEnv,
+    });
+  const isConfigSatisfied = (pathStr: string) => isSkillConfigPathTruthy(config, pathStr);
   const skillSource = indexed.source;
   const bundled = indexed.bundled;
 
@@ -294,13 +297,18 @@ function buildSkillStatus(
   const availableToAgent = eligible && !blockedByAgentFilter;
   const userInvocable = indexed.userInvocable;
 
+  // Source ownership survives canonicalization of symlinked managed installs.
+  const isGlobalManagedSkill = !bundled && skillSource === "openclaw-managed";
   const clawhub =
     workspaceDir && !bundled
       ? resolveClawHubSkillStatusLinkSync({
-          workspaceDir,
+          workspaceDir: isGlobalManagedSkill
+            ? path.dirname(path.resolve(context.managedSkillsDir))
+            : workspaceDir,
           skillDir: entry.skill.baseDir,
           skillKey,
-          lockRead: context.clawhubLockRead,
+          lockRead: isGlobalManagedSkill ? context.managedLockRead : context.clawhubLockRead,
+          lockfileScope: isGlobalManagedSkill ? "managed" : "workspace",
         })
       : undefined;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
@@ -367,6 +375,12 @@ export function buildWorkspaceSkillStatus(
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
+  // Global installs are tracked beside managedSkillsDir, never by fallback.
+  const managedParentDir = path.dirname(path.resolve(managedSkillsDir));
+  const managedLockRead =
+    managedParentDir === path.resolve(workspaceDir)
+      ? clawhubLockRead
+      : readClawHubSkillsLockfileStatusSync(managedParentDir);
   const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
     bundledNames: bundledContext.names,
     agentSkillFilter,
@@ -385,6 +399,8 @@ export function buildWorkspaceSkillStatus(
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,
+        managedSkillsDir,
+        managedLockRead,
       }),
     ),
   };

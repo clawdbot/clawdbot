@@ -9,10 +9,10 @@ import {
   type TopLevelComponents,
 } from "./internal/discord.js";
 
-export const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
+const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
 export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
 
-export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
+type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
 export type DiscordAllowedMentions = APIAllowedMentions;
@@ -51,7 +51,7 @@ export function resolveDiscordSendEmbeds(params: {
   return normalizeDiscordEmbeds(params.embeds);
 }
 
-export function buildDiscordMessagePayload(params: {
+function buildDiscordMessagePayload(params: {
   text: string;
   components?: TopLevelComponents[];
   embeds?: Embed[];
@@ -95,6 +95,13 @@ export function resolveDiscordMessageFlags(params: {
     flags |= SUPPRESS_NOTIFICATIONS_FLAG;
   }
   return flags || undefined;
+}
+
+export function resolveDiscordSuppressEmbeds(params: {
+  configured?: boolean;
+  override?: boolean;
+}): boolean {
+  return params.override ?? params.configured ?? true;
 }
 
 type DiscordMessageRequestParams = {

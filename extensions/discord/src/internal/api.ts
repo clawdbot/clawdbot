@@ -45,6 +45,7 @@ export {
   editChannelMessage,
   getChannel,
   getChannelMessage,
+  getThreadMember,
   listChannelArchivedThreads,
   listChannelMessages,
   listChannelPins,

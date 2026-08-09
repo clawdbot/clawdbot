@@ -1,16 +1,18 @@
-/** Masks credential-like values while preserving the existing UTF-16 prefix/suffix policy. */
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
+/** Masks credential-like values without splitting UTF-16 surrogate pairs at the edges. */
 export function maskApiKey(value: string): string {
   const trimmed = stripControlCharacters(value).trim();
   if (!trimmed) {
     return "missing";
   }
   if (trimmed.length <= 6) {
-    return `${trimmed.slice(0, 1)}...${trimmed.slice(-1)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 1)}...${sliceUtf16Safe(trimmed, -1)}`;
   }
   if (trimmed.length <= 16) {
-    return `${trimmed.slice(0, 2)}...${trimmed.slice(-2)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 2)}...${sliceUtf16Safe(trimmed, -2)}`;
   }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
+  return `${sliceUtf16Safe(trimmed, 0, 8)}...${sliceUtf16Safe(trimmed, -8)}`;
 }
 
 function stripControlCharacters(value: string): string {

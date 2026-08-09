@@ -12,8 +12,6 @@ import {
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
 
-export { listRegisteredEmbeddingProviders };
-
 /** Lists embedding provider adapters registered directly with the process registry. */
 function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
   return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
@@ -55,14 +53,3 @@ export function getEmbeddingProvider(
     getRegisteredProvider: getRegisteredEmbeddingProvider,
   });
 }
-
-export type {
-  EmbeddingInput,
-  EmbeddingProvider,
-  EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
-  EmbeddingProviderCreateResult,
-  EmbeddingProviderRuntime,
-  RegisteredEmbeddingProvider,
-} from "./embedding-providers.js";

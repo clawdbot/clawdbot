@@ -17,6 +17,14 @@ extension RootTabsSourceGuardTests {
         let settingsOnDismiss = try #require(settingsScannerSheet.range(of: "onDismiss: {"))
         let settingsProcessing = try #require(settingsScannerSheet.range(of: "self.processQueuedScannerResult()"))
         let settingsContent = try #require(settingsScannerSheet.range(of: "content: {"))
+        let forgetGatewayDialog = try self.extract(
+            settingsSource,
+            from: ".confirmationDialog(\n                String(\n                    format: String(localized: \"Forget %@?\")",
+            to: "private func applyGatewaySetupRequestIfNeeded()")
+        let forgetGatewayAction = try self.extract(
+            actionsSource,
+            from: "func forgetGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) async",
+            to: "func refreshGatewayRegistry()")
         let settingsPendingSetupHandler = try self.extract(
             actionsSource,
             from: "func applyGatewaySetupLink(_ link: GatewayConnectDeepLink)",
@@ -62,12 +70,29 @@ extension RootTabsSourceGuardTests {
         #expect(scannerLifecycle.contains("override func viewWillDisappear"))
         #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
 
+        // The dialog dismisses after its button action returns. Carry the selected
+        // entry into the async task instead of rereading dismissal-cleared view state.
+        #expect(forgetGatewayDialog.contains("presenting: self.pendingForgetGateway"))
+        #expect(forgetGatewayDialog.contains("{ entry in"))
+        #expect(forgetGatewayDialog.contains("Task { await self.forgetGateway(entry) }"))
+        #expect(forgetGatewayAction.contains("self.pendingForgetGateway = nil"))
+        #expect(forgetGatewayAction.components(separatedBy: "pendingForgetGateway").count == 2)
+
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
+        #expect(sectionsSource.contains("This phone has limited Gateway access."))
+        #expect(sectionsSource.contains("Use a secure wss:// or Tailscale Serve Gateway"))
+        #expect(sectionsSource.contains("Label(\"Scan Full-Access Code\""))
         #expect(sectionsSource.contains("self.gatewayActions"))
         #expect(sectionsSource.contains("self.manualGatewayCard"))
         #expect(sectionsSource.contains("self.gatewaySetupCard"))
-        #expect(sectionsSource.contains("self.discoveredGatewaysCard"))
         #expect(sectionsSource.contains("self.gatewayAdvancedCard"))
+        // Pairing stays reachable without scrolling: nav-bar scanner button on the
+        // gateway route plus a status-card hero while nothing is paired. The hero
+        // honors the same connect lock as the other scanner entry points.
+        #expect(sectionsSource.contains("if route == .gateway {"))
+        #expect(sectionsSource.contains(
+            "let showScanHero = self.gatewayNeedsPairing && self.connectingGateway == nil"))
+        #expect(sectionsSource.contains("actionTitle: showScanHero ? \"Scan QR to Pair\" : nil"))
         #expect(sectionsSource.contains("title: \"Reconnect\""))
         #expect(sectionsSource.contains("Task { await self.reconnectGateway() }"))
         #expect(sectionsSource.contains("title: \"Diagnose\""))
@@ -81,16 +106,20 @@ extension RootTabsSourceGuardTests {
         // Gateway problems surface once, as the root toast; the settings page must not
         // embed a second copy of the banner.
         #expect(!sectionsSource.contains("GatewayProblemBanner("))
+        // Sections compare gateway owners byte-exact, not with raw string equality.
+        #expect(!sectionsSource.contains("entry.stableID == self.gatewayRegistry.activeStableID"))
+        #expect(sectionsSource.components(separatedBy: "GatewayStableIdentifier.matches(").count >= 4)
         #expect(rootSource.contains("GatewayProblemBanner("))
         #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
         // Operator auth/pairing problems can coexist with a connected node, so the
         // root's only remediation surface must not depend on aggregate status.
         #expect(activeProblemToast.contains("appModel.lastGatewayProblem"))
         #expect(!activeProblemToast.contains("gatewayStatus"))
-        // Every problem report re-surfaces a swiped-away toast or shakes the
-        // visible one; value equality alone must not keep the toast hidden.
+        // Every problem report re-surfaces a swiped-away toast. Visible problem
+        // banners stay stationary when reconnects re-report the same failure.
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
-        #expect(rootSource.contains("GatewayToastShakeEffect"))
+        #expect(rootSource.contains("guard self.isGatewayToastSwipeDismissed else { return }"))
+        #expect(!rootSource.contains("GatewayToastShakeEffect"))
 
         #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
@@ -108,7 +137,7 @@ extension RootTabsSourceGuardTests {
         #expect(settingsSource.contains("let acceptsGatewaySetupRequests: Bool"))
         #expect(settingsSource.contains("guard self.acceptsGatewaySetupRequests else { return }"))
         #expect(settingsSource.contains(".onChange(of: self.acceptsGatewaySetupRequests)"))
-        #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 2)
+        #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 1)
         #expect(actionsSource.contains("func syncAfterOnboardingReset()"))
         #expect(actionsSource.contains("self.pendingManualAuthOverride = nil"))
         // The root toast is the only gateway problem surface outside covers, so it
@@ -132,6 +161,8 @@ extension RootTabsSourceGuardTests {
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource.contains("case let .gatewayLink(link):"))
         #expect(actionsSource.contains("case let .setupCode(code):"))
+        #expect(actionsSource.contains(
+            "self.stagedGatewaySetupLink = nil\n        self.setupCode = \"\"\n        await self.applyGatewayLink(link)"))
         #expect(stopScanning.lowerBound < deliverResult.lowerBound)
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
@@ -209,13 +240,17 @@ extension RootTabsSourceGuardTests {
         #expect(!stagedSetupConnect.contains("self.appModel.disconnectGateway()"))
         #expect(stagedSetupConnect.contains(
             "self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)"))
-        #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
+        #expect(stagedSetupConnect.contains("guard self.connectingGateway == nil else { return }"))
+        #expect(onboardingSource.contains("case gateway(GatewayStableIdentifier.Key)"))
+        #expect(onboardingSource.contains("self.connectingGateway = .gateway(gateway.id)"))
+        #expect(!onboardingSource.contains("connectingGatewayID"))
         #expect(stagedSetupConnect.contains("self.setConnectionFailure(message)"))
         #expect(connectionFailure.contains("self.localConnectionFailure = message"))
         #expect(!connectionFailure.contains("self.connectMessage = message"))
         #expect(connectionFailure.contains("self.statusLine = message"))
-        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
-        #expect(onboardingSource.contains("primaryActionTitle: allowsRetry ? \"Retry\" : nil"))
+        #expect(onboardingSource.contains(".failedStatus(message: localFailure, allowsRetry: false)"))
+        #expect(onboardingSource.contains(
+            "primaryActionTitle: allowsRetry ? OpenClawTextValue.localized(\"Retry\") : nil"))
         #expect(onboardingSource.contains("onPrimaryAction: allowsRetry ? self.onRetry : nil"))
         #expect(stagedSetupClear.contains("self.localConnectionFailure = nil"))
         #expect(onboardingRetry.contains("self.localConnectionFailure = nil"))
@@ -247,6 +282,17 @@ extension RootTabsSourceGuardTests {
             "self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID"))
         #expect(actionsSource.contains(
             "self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID"))
+        // Gateway stable IDs compare byte-exact via GatewayStableIdentifier, never
+        // via trimmed/string equality; a regressed comparison silently reuses
+        // credentials across distinct gateway owners.
+        #expect(onboardingSource.contains(
+            "if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID)"))
+        #expect(actionsSource.contains(
+            "if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID)"))
+        #expect(!onboardingSource.contains("gatewayCredentialFieldStableID == stableID"))
+        #expect(!actionsSource.contains("gatewayCredentialFieldStableID == stableID"))
+        #expect(onboardingSource.contains("GatewayStableIdentifier.key(previousStableID) !="))
+        #expect(actionsSource.contains("GatewayStableIdentifier.key(previousStableID) !="))
     }
 
     static func assertGatewayReconnectGuards() throws {
@@ -294,5 +340,6 @@ extension RootTabsSourceGuardTests {
         #expect(backgroundReconnect.contains("expectedGeneration: generation"))
         #expect(modelSource.contains("expectedGeneration: UInt64)"))
         #expect(!modelSource.contains("expectedGeneration: UInt64?"))
+        #expect(modelSource.contains("GatewayStableIdentifier.exact(self.connectedGatewayID)"))
     }
 }

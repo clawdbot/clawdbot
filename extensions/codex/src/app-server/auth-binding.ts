@@ -8,7 +8,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 
-export type CodexAppServerPreparedAuthBinding = {
+type CodexAppServerPreparedAuthBinding = {
   authProfileStore: AuthProfileStore;
   fingerprint: string;
 };

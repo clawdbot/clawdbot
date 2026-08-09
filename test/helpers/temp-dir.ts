@@ -5,23 +5,37 @@ import path from "node:path";
 
 // Synchronous temporary directory helpers for tests.
 
-export type TempDirCollection = string[] | Set<string>;
-export type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
+type TempDirCollection = string[] | Set<string>;
+type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
 
-export interface TestTempDirTracker {
+const canonicalSystemTempRoots = new Map<string, string>();
+
+function resolveCanonicalSystemTempRoot(): string {
+  const rawRoot = os.tmpdir();
+  const cachedRoot = canonicalSystemTempRoots.get(rawRoot);
+  if (cachedRoot !== undefined) {
+    return cachedRoot;
+  }
+  const canonicalRoot = fs.realpathSync(rawRoot);
+  canonicalSystemTempRoots.set(rawRoot, canonicalRoot);
+  return canonicalRoot;
+}
+
+interface TestTempDirTracker {
   readonly dirs: ReadonlySet<string>;
-  make(prefix: string): string;
+  make(prefix: string, root?: string): string;
   cleanup(): void;
 }
 
-export interface AutoCleanupTempDirTracker {
+interface AutoCleanupTempDirTracker {
   readonly dirs: ReadonlySet<string>;
-  make(prefix: string): string;
+  make(prefix: string, root?: string): string;
 }
 
 /** Create a temp dir and register it in an array or set for cleanup. */
-export function makeTempDir(tempDirs: TempDirCollection, prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+export function makeTempDir(tempDirs: TempDirCollection, prefix: string, root?: string): string {
+  const tempRoot = root ?? resolveCanonicalSystemTempRoot();
+  const dir = fs.mkdtempSync(path.join(tempRoot, prefix));
   if (Array.isArray(tempDirs)) {
     tempDirs.push(dir);
   } else {
@@ -45,8 +59,8 @@ export function createTempDirTracker(): TestTempDirTracker {
   const dirs = new Set<string>();
   return {
     dirs,
-    make(prefix: string): string {
-      return makeTempDir(dirs, prefix);
+    make(prefix: string, root?: string): string {
+      return makeTempDir(dirs, prefix, root);
     },
     cleanup(): void {
       cleanupTempDirs(dirs);
@@ -59,13 +73,6 @@ export function useAutoCleanupTempDirTracker(
   registerCleanup: RegisterTempDirCleanup,
 ): AutoCleanupTempDirTracker {
   const tracker = createTempDirTracker();
-  registerCleanup(() => {
-    tracker.cleanup();
-  });
-  return {
-    dirs: tracker.dirs,
-    make(prefix: string): string {
-      return tracker.make(prefix);
-    },
-  };
+  registerCleanup(tracker.cleanup);
+  return tracker;
 }

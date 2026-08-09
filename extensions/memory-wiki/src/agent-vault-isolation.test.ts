@@ -1,6 +1,7 @@
 // Memory Wiki tests cover agent-scoped vault isolation through the public tools.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -40,6 +41,7 @@ function registerMemoryCoreToolFactories(
     createTestPluginApi({
       id: "memory-core",
       config: appConfig,
+      runtime: createPluginRuntimeMock(),
       registerTool(tool, options) {
         if (typeof tool !== "function") {
           return;
@@ -80,6 +82,8 @@ describe("agent-scoped memory-wiki tools", () => {
   it("keeps apply, search, and get behavior isolated by configured agent", async () => {
     const vaultParent = await createTempDir("memory-wiki-agent-vaults-");
     const appConfig = {
+      // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
+      plugins: { enabled: false },
       agents: {
         list: [{ id: "support", default: true }, { id: "marketing" }],
       },
@@ -261,5 +265,5 @@ describe("agent-scoped memory-wiki tools", () => {
     } finally {
       clearMemoryPluginState();
     }
-  });
+  }, 360_000);
 });

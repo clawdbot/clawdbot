@@ -14,29 +14,15 @@ import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../shared/text/assistant-visible-text.js";
-import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
-export {
-  stripDowngradedToolCallText,
-  stripMinimaxToolCallXml,
-} from "../shared/text/assistant-visible-text.js";
-export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
+export { stripDowngradedToolCallText } from "../shared/text/assistant-visible-text.js";
 
 /** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
-}
-
-/**
- * Strip thinking tags and their content from text.
- * This is a safety net for cases where the model outputs <think> tags
- * that slip through other filtering mechanisms.
- */
-export function stripThinkingTagsFromText(text: string): string {
-  return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
 function sanitizeAssistantText(text: string, phase?: AssistantPhase): string {
@@ -98,7 +84,7 @@ function extractAssistantTextForPhase(
     if (!isAssistantTextContentBlockType(record.type)) {
       return false;
     }
-    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
+    return Boolean(parseAssistantTextSignature(record)?.phase);
   });
 
   let hadRequestedPhase = false;
@@ -111,7 +97,7 @@ function extractAssistantTextForPhase(
       if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
         return null;
       }
-      const signature = parseAssistantTextSignature(record.textSignature);
+      const signature = parseAssistantTextSignature(record);
       const resolvedPhase =
         signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
       if (!shouldIncludeContent(resolvedPhase)) {
@@ -222,22 +208,36 @@ const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "i",
 );
-const THINKING_TAG_OPEN_GLOBAL_RE = new RegExp(
-  String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
-  "gi",
-);
-const THINKING_TAG_CLOSE_GLOBAL_RE = new RegExp(
-  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
-  "gi",
-);
 /** Global regex used to scan provider-emitted thinking tags. */
 export const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
+const THINKING_TAG_EXACT_RE = new RegExp(
+  String.raw`^<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>$`,
+  "i",
+);
+
+export type ThinkingTagStreamState = {
+  scannedOffset: number;
+  pendingTagStart?: number;
+  inThinking: boolean;
+  extracted: string;
+  lastMatchEnd: number;
+  lastTag?: { type: "open" | "close"; end: number };
+};
+
+export function createThinkingTagStreamState(): ThinkingTagStreamState {
+  return {
+    scannedOffset: 0,
+    inThinking: false,
+    extracted: "",
+    lastMatchEnd: 0,
+  };
+}
 
 /** Split text that starts with thinking tags into structured thinking/text blocks. */
-export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
+function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
@@ -369,31 +369,41 @@ export function extractThinkingFromTaggedText(text: string): string {
   return result.trim();
 }
 
-/** Extract thinking-tag content from a possibly incomplete streaming payload. */
-export function extractThinkingFromTaggedStream(text: string): string {
-  if (!text) {
-    return "";
+/** Incrementally extract thinking-tag content from a growing streaming payload. */
+export function extractThinkingFromTaggedStream(
+  text: string,
+  state: ThinkingTagStreamState,
+): string {
+  for (let index = state.scannedOffset; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "<") {
+      state.pendingTagStart = index;
+      continue;
+    }
+    if (char !== ">" || state.pendingTagStart === undefined) {
+      continue;
+    }
+    const start = state.pendingTagStart;
+    state.pendingTagStart = undefined;
+    const match = THINKING_TAG_EXACT_RE.exec(text.slice(start, index + 1));
+    if (!match) {
+      continue;
+    }
+    if (state.inThinking) {
+      state.extracted += text.slice(state.lastMatchEnd, start);
+    }
+    const isClose = match[1] === "/";
+    state.inThinking = !isClose;
+    state.lastMatchEnd = index + 1;
+    state.lastTag = { type: isClose ? "close" : "open", end: index + 1 };
   }
-  const closed = extractThinkingFromTaggedText(text);
-  if (closed) {
-    return closed;
-  }
+  state.scannedOffset = text.length;
 
-  const openMatches = [...text.matchAll(THINKING_TAG_OPEN_GLOBAL_RE)];
-  if (openMatches.length === 0) {
-    return "";
-  }
-  const closeMatches = [...text.matchAll(THINKING_TAG_CLOSE_GLOBAL_RE)];
-  const lastOpen = openMatches.at(-1);
-  const lastClose = closeMatches.at(-1);
-  if (!lastOpen) {
-    return "";
-  }
-  if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
+  const closed = state.extracted.trim();
+  if (closed || state.lastTag?.type !== "open") {
     return closed;
   }
-  const start = (lastOpen.index ?? 0) + lastOpen[0].length;
-  return text.slice(start).trim();
+  return text.slice(state.lastTag.end).trim();
 }
 
 /** Infer compact display metadata for a tool call from its args. */

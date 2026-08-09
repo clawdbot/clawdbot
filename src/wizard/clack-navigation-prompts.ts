@@ -1,5 +1,4 @@
 // Clack prompt wrappers that add onboarding navigation footers.
-import type { Writable } from "node:stream";
 import { styleText } from "node:util";
 import {
   AutocompletePrompt,
@@ -27,26 +26,19 @@ import {
   type AutocompleteOptions,
   type ConfirmOptions,
   type MultiSelectOptions,
+  type Option,
   type PasswordOptions,
   type SelectOptions,
   type TextOptions,
 } from "@clack/prompts";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { WizardPromptNavigation } from "./prompts.js";
-
-type PromptOption<Value> = {
-  value: Value;
-  label?: string;
-  hint?: string;
-  disabled?: boolean;
-};
 
 type NavigationPromptOptions = {
   navigation?: WizardPromptNavigation;
-  withGuide?: boolean;
-  output?: Writable;
 };
 
-function getOptionLabel<Value>(option: PromptOption<Value>): string {
+function getOptionLabel<Value>(option: Option<Value>): string {
   return option.label ?? String(option.value ?? "");
 }
 
@@ -60,7 +52,7 @@ function computeLabel(label: string, format: (text: string) => string): string {
     .join("\n");
 }
 
-function getFilteredOption<Value>(searchText: string, option: PromptOption<Value>): boolean {
+function getFilteredOption<Value>(searchText: string, option: Option<Value>): boolean {
   if (!searchText) {
     return true;
   }
@@ -72,20 +64,7 @@ function getFilteredOption<Value>(searchText: string, option: PromptOption<Value
   );
 }
 
-function getSelectedOptions<Value>(
-  values: Value[],
-  options: Array<PromptOption<Value>>,
-): Array<PromptOption<Value>> {
-  return options.filter((option) => values.includes(option.value));
-}
-
-function adaptOptionFilter<Value>(
-  filter: AutocompleteOptions<Value>["filter"] | undefined,
-): ((search: string, option: PromptOption<Value>) => boolean) | undefined {
-  return filter ? (search, option) => filter(search, option as never) : undefined;
-}
-
-export function formatNavigationFooter(navigation: WizardPromptNavigation | undefined): string {
+function formatNavigationFooter(navigation: WizardPromptNavigation | undefined): string {
   if (!navigation || (!navigation.canGoBack && !navigation.canGoForward)) {
     return "";
   }
@@ -116,7 +95,7 @@ function hasGuide(opts: { withGuide?: boolean }): boolean {
   return opts.withGuide ?? clackSettings.withGuide;
 }
 
-function selectOptionRenderer<Value>(option: PromptOption<Value>, state: string): string {
+function selectOptionRenderer<Value>(option: Option<Value>, state: string): string {
   const label = getOptionLabel(option);
   switch (state) {
     case "disabled":
@@ -142,7 +121,7 @@ export function selectWithNavigationFooter<Value>(
   opts: SelectOptions<Value> & NavigationPromptOptions,
 ): Promise<Value | symbol> {
   return new SelectPrompt({
-    options: opts.options as Array<PromptOption<Value>>,
+    options: opts.options as Array<Option<Value>>,
     signal: opts.signal,
     input: opts.input,
     output: opts.output,
@@ -164,7 +143,10 @@ export function selectWithNavigationFooter<Value>(
           const submitPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
           const wrappedLines = wrapTextWithPrefix(
             opts.output,
-            selectOptionRenderer(this.options[this.cursor], "selected"),
+            selectOptionRenderer(
+              expectDefined(this.options[this.cursor], "options entry at this.cursor"),
+              "selected",
+            ),
             submitPrefix,
           );
           return `${title}${wrappedLines}`;
@@ -173,7 +155,10 @@ export function selectWithNavigationFooter<Value>(
           const cancelPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
           const wrappedLines = wrapTextWithPrefix(
             opts.output,
-            selectOptionRenderer(this.options[this.cursor], "cancelled"),
+            selectOptionRenderer(
+              expectDefined(this.options[this.cursor], "options entry at this.cursor"),
+              "cancelled",
+            ),
             cancelPrefix,
           );
           return `${title}${wrappedLines}${showGuide ? `\n${styleText("gray", S_BAR)}` : ""}`;
@@ -210,12 +195,12 @@ export function selectWithNavigationFooter<Value>(
 export function autocompleteWithNavigationFooter<Value>(
   opts: AutocompleteOptions<Value> & NavigationPromptOptions,
 ): Promise<Value | symbol> {
-  const prompt = new AutocompletePrompt<PromptOption<Value>>({
-    options: opts.options as Array<PromptOption<Value>>,
+  const prompt = new AutocompletePrompt<Option<Value>>({
+    options: opts.options as Array<Option<Value>>,
     initialValue: opts.initialValue === undefined ? undefined : [opts.initialValue],
     initialUserInput: opts.initialUserInput,
     placeholder: opts.placeholder,
-    filter: adaptOptionFilter(opts.filter) ?? getFilteredOption,
+    filter: opts.filter ?? getFilteredOption,
     signal: opts.signal,
     input: opts.input,
     output: opts.output,
@@ -228,10 +213,7 @@ export function autocompleteWithNavigationFooter<Value>(
       const userInput = this.userInput;
       const options = this.options;
       const showPlaceholder = userInput === "" && opts.placeholder !== undefined;
-      const opt = (
-        option: PromptOption<Value>,
-        state: "inactive" | "active" | "disabled",
-      ): string => {
+      const opt = (option: Option<Value>, state: "inactive" | "active" | "disabled"): string => {
         const label = getOptionLabel(option);
         const hint =
           option.hint && option.value === this.focusedValue
@@ -253,7 +235,7 @@ export function autocompleteWithNavigationFooter<Value>(
 
       switch (this.state) {
         case "submit": {
-          const selected = getSelectedOptions(this.selectedValues, options);
+          const selected = options.filter((option) => this.selectedValues.includes(option.value));
           const label =
             selected.length > 0
               ? `  ${styleText("dim", selected.map(getOptionLabel).join(", "))}`
@@ -450,7 +432,7 @@ export function passwordWithNavigationFooter(
 }
 
 function multiselectOptionRenderer<Value>(
-  option: PromptOption<Value>,
+  option: Option<Value>,
   state:
     | "inactive"
     | "active"
@@ -497,12 +479,11 @@ export function multiselectWithNavigationFooter<Value>(
 ): Promise<Value[] | symbol> {
   const required = opts.required ?? true;
   return new MultiSelectPrompt({
-    options: opts.options as Array<PromptOption<Value>>,
+    options: opts.options as Array<Option<Value>>,
     signal: opts.signal,
     input: opts.input,
     output: opts.output,
     initialValues: opts.initialValues,
-    required,
     cursorAt: opts.cursorAt,
     validate(selected: Value[] | undefined) {
       if (required && (selected === undefined || selected.length === 0)) {
@@ -529,7 +510,7 @@ export function multiselectWithNavigationFooter<Value>(
       );
       const title = `${showGuide ? `${styleText("gray", S_BAR)}\n` : ""}${wrappedMessage}\n`;
       const value = this.value ?? [];
-      const styleOption = (option: PromptOption<Value>, active: boolean) => {
+      const styleOption = (option: Option<Value>, active: boolean) => {
         if (option.disabled) {
           return multiselectOptionRenderer(option, "disabled");
         }
@@ -627,7 +608,7 @@ export function autocompleteMultiselectWithNavigationFooter<Value>(
   opts: AutocompleteMultiSelectOptions<Value> & NavigationPromptOptions,
 ): Promise<Value[] | symbol> {
   const formatOption = (
-    option: PromptOption<Value>,
+    option: Option<Value>,
     active: boolean,
     selectedValues: Value[],
     focusedValue: Value | undefined,
@@ -654,11 +635,11 @@ export function autocompleteMultiselectWithNavigationFooter<Value>(
     return `${checkbox} ${styleText("dim", label)}`;
   };
 
-  const prompt = new AutocompletePrompt<PromptOption<Value>>({
-    options: opts.options as Array<PromptOption<Value>>,
+  const prompt = new AutocompletePrompt<Option<Value>>({
+    options: opts.options as Array<Option<Value>>,
     multiple: true,
     placeholder: opts.placeholder,
-    filter: adaptOptionFilter(opts.filter) ?? getFilteredOption,
+    filter: opts.filter ?? getFilteredOption,
     validate: () => {
       if (opts.required && prompt.selectedValues.length === 0) {
         return "Please select at least one item";
@@ -815,3 +796,4 @@ export function confirmWithNavigationFooter(
     },
   }).prompt() as Promise<boolean | symbol>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

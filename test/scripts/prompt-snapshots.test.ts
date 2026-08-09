@@ -4,7 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createFormattedPromptSnapshotFiles } from "../../scripts/generate-prompt-snapshots.js";
+import {
+  createFormattedPromptSnapshotFiles,
+  materializeCodexDynamicToolSnapshot,
+} from "../../scripts/generate-prompt-snapshots.js";
 import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -13,8 +16,10 @@ import {
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
+import { createHappyPathPromptSnapshotFiles } from "../helpers/agents/happy-path-prompt-snapshots.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -131,6 +136,65 @@ describe("happy path prompt snapshots", () => {
     ]);
   });
 
+  it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
+    const generated = await createHappyPathPromptSnapshotFiles();
+    const scenarios = [
+      { name: "telegram-direct", replacements: [] },
+      { name: "discord-group", replacements: ["sessions_spawn"] },
+      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+    ];
+
+    for (const { name, replacements } of scenarios) {
+      const fileName = `codex-dynamic-tools.${name}.json`;
+      const expected = generated.find((file) => path.basename(file.path) === fileName);
+      expect(expected, `missing complete generated tool catalog for ${name}`).toBeDefined();
+
+      const committed = JSON.parse(readCommittedSnapshot(fileName)) as
+        | unknown[]
+        | {
+            base: string;
+            replace: Record<string, { name: string; inputSchema?: unknown; tools?: unknown[] }>;
+          };
+      if (Array.isArray(committed)) {
+        expect(replacements).toEqual([]);
+      } else {
+        expect(committed.base).toBe("codex-dynamic-tools.telegram-direct.json");
+        expect(Object.keys(committed.replace)).toEqual(replacements);
+        for (const [toolName, tool] of Object.entries(committed.replace)) {
+          expect(tool.name).toBe(toolName);
+          expect(tool.inputSchema !== undefined || Array.isArray(tool.tools)).toBe(true);
+        }
+      }
+
+      const materialized = await materializeCodexDynamicToolSnapshot(name);
+      expect(JSON.parse(materialized)).toEqual(JSON.parse(expected!.content));
+    }
+  });
+
+  it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
+    await expect(materializeCodexDynamicToolSnapshot("../outside")).rejects.toThrow(
+      "Invalid Codex dynamic-tool snapshot scenario",
+    );
+  });
+
+  it("generates snapshots without jiti plugin-loader fallbacks", async () => {
+    // Perf contract for the check-prompt-snapshots CI lane: scenario channel
+    // plugins are preloaded through the ambient module graph. A jiti
+    // plugin-loader call here means a scenario channel (or another plugin
+    // surface) fell back to source re-transpilation, which re-evaluates the
+    // core graph and stalls the lane by minutes.
+    const callsBefore = getPluginModuleLoaderStats().calls;
+    const files = await createHappyPathPromptSnapshotFiles();
+    expect(files.length).toBeGreaterThan(0);
+    const stats = getPluginModuleLoaderStats();
+    expect(
+      stats.calls - callsBefore,
+      `prompt snapshot generation hit the jiti plugin loader; targets: ${stats.topSourceTransformTargets
+        .map((entry) => entry.target)
+        .join(", ")}`,
+    ).toBe(0);
+  });
+
   it("deletes stale generated snapshot artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-stale-"));
     try {
@@ -168,7 +232,6 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
-    expect(telegram).toContain("<TOOLS.md contents will be here>");
     expect(telegram).toContain("<USER.md contents will be here>");
     expect(telegram).toContain("<MEMORY.md contents will be here>");
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
@@ -180,7 +243,7 @@ describe("happy path prompt snapshots", () => {
     const direct = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
     const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
     const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
-    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
+    const heartbeatPhrase = "Heartbeat = useful proactive progress";
     const agentSoulHeading = "## OpenClaw Agent Soul";
 
     expect(direct).toContain('"collaborationMode": {');
@@ -210,11 +273,9 @@ describe("happy path prompt snapshots", () => {
 
     expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
     expect(collaborationModeInstructions).toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).toContain("HEARTBEAT.md exists");
-    expect(collaborationModeInstructions).toContain(
-      "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
-    );
-    expect(collaborationModeInstructions).not.toContain("<HEARTBEAT.md contents will be here>");
+    // Monitor context now lives in cron scratch; the collaboration prompt must
+    // no longer reference the retired workspace file.
+    expect(collaborationModeInstructions).not.toContain("HEARTBEAT.md");
     expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
   });
 

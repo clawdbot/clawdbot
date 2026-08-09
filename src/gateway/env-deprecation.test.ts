@@ -2,18 +2,17 @@
 // leaking secret-shaped names or values.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, deleteTestEnvValue, withEnv } from "../test-utils/env.js";
-import {
-  resetLegacyOpenClawEnvWarningForTest,
-  warnLegacyOpenClawEnvVars,
-} from "./env-deprecation.js";
+
+let warnLegacyOpenClawEnvVars: typeof import("./env-deprecation.js").warnLegacyOpenClawEnvVars;
 
 describe("warnLegacyOpenClawEnvVars", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let emitWarning: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ warnLegacyOpenClawEnvVars } = await import("./env-deprecation.js"));
     envSnapshot = captureEnv(["NODE_ENV", "VITEST"]);
-    resetLegacyOpenClawEnvWarningForTest();
     emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     deleteTestEnvValue("NODE_ENV");
     deleteTestEnvValue("VITEST");
@@ -21,7 +20,6 @@ describe("warnLegacyOpenClawEnvVars", () => {
 
   afterEach(() => {
     emitWarning.mockRestore();
-    resetLegacyOpenClawEnvWarningForTest();
     envSnapshot.restore();
   });
 

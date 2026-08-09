@@ -3,8 +3,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureMemoryCoreEmbeddingLocalService } from "./embedding-local-service.js";
-import { createEmbeddingProvider, resolveEmbeddingProviderFallbackModel } from "./embeddings.js";
+import {
+  createEmbeddingProvider,
+  resolveEmbeddingProviderFallbackModel,
+  resolveEmbeddingProviderFallbackRemote,
+} from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
@@ -13,21 +16,50 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
   acquireLocalService: vi.fn(async () => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
-  getEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
-    mockEmbeddingRegistry.genericLookupConfigs.push(config);
-    return mockEmbeddingRegistry.genericAdapters.find((adapter) => adapter.id === id);
-  },
-  listEmbeddingProviders: () => [...mockEmbeddingRegistry.genericAdapters],
-}));
-
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   DEFAULT_LOCAL_MODEL: "nomic-embed-text",
   createLocalEmbeddingProvider: async () => {
     throw new Error("local embedding provider is not used by these tests");
   },
-  getMemoryEmbeddingProvider: (id: string) =>
-    mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id),
+  getMemoryEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
+    const memoryAdapter = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
+    if (memoryAdapter) {
+      return memoryAdapter;
+    }
+    mockEmbeddingRegistry.genericLookupConfigs.push(config);
+    const genericAdapter = mockEmbeddingRegistry.genericAdapters.find(
+      (adapter) => adapter.id === id,
+    );
+    if (!genericAdapter) {
+      return undefined;
+    }
+    return {
+      ...genericAdapter,
+      create: async (options) => {
+        const result = await genericAdapter.create({
+          ...options,
+          ...(typeof options.outputDimensionality === "number"
+            ? { dimensions: options.outputDimensionality }
+            : {}),
+        });
+        const provider = result.provider;
+        if (!provider) {
+          return { ...result, provider: null };
+        }
+        return {
+          ...result,
+          provider: {
+            ...provider,
+            embedQuery: (text, callOptions) =>
+              provider.embed(text, { ...callOptions, inputType: "query" }),
+            embedBatch: (texts, callOptions) =>
+              provider.embedBatch(texts, { ...callOptions, inputType: "document" }),
+            ...(provider.close ? { close: () => provider.close?.() } : {}),
+          },
+        };
+      },
+    } satisfies MemoryEmbeddingProviderAdapter;
+  },
   listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviders: () =>
@@ -38,7 +70,10 @@ const missingBedrockCredentialsError = new Error(
   'No API key found for provider "bedrock". AWS credentials are not available.',
 );
 
-function createOptions(provider: string) {
+function createOptions(
+  provider: string,
+  acquireLocalService = mockEmbeddingRegistry.acquireLocalService,
+) {
   return {
     config: {
       plugins: {
@@ -59,6 +94,7 @@ function createOptions(provider: string) {
     provider,
     fallback: "none",
     model: "",
+    acquireLocalService,
   };
 }
 
@@ -102,11 +138,10 @@ function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
     clearMemoryEmbeddingProviders();
-    configureMemoryCoreEmbeddingLocalService(mockEmbeddingRegistry.acquireLocalService);
+    mockEmbeddingRegistry.acquireLocalService.mockReset();
   });
 
   afterEach(() => {
-    configureMemoryCoreEmbeddingLocalService(undefined);
     clearMemoryEmbeddingProviders();
   });
 
@@ -140,6 +175,121 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
+  it("drops the fallback remote config when it contains only primary-provider fields", () => {
+    expect(resolveEmbeddingProviderFallbackRemote(undefined)).toBeUndefined();
+    expect(
+      resolveEmbeddingProviderFallbackRemote({
+        baseUrl: "https://primary-openai.invalid/v1",
+        apiKey: "synthetic-primary-openai-api-key",
+        headers: { Authorization: "Bearer synthetic-primary-openai-auth" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not retry the primary provider as its own fallback", async () => {
+    const create = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => {
+      throw new Error("synthetic primary provider unavailable");
+    });
+    registerMemoryEmbeddingProvider({ id: "openai", create });
+
+    await expect(
+      createEmbeddingProvider({ ...createOptions("openai"), fallback: "openai" }),
+    ).rejects.toThrow("synthetic primary provider unavailable");
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["ollama", "lmstudio", "mistral"] as const)(
+    "keeps the primary endpoint and credentials out of the %s creation fallback",
+    async (fallback) => {
+      const primaryCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => {
+        throw new Error("synthetic primary provider unavailable");
+      });
+      const fallbackCreate = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => ({
+        provider: {
+          id: fallback,
+          model: `${fallback}-embedding`,
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }));
+      registerMemoryEmbeddingProvider({ id: "openai", create: primaryCreate });
+      registerMemoryEmbeddingProvider({ id: fallback, create: fallbackCreate });
+
+      const sharedRemote = {
+        nonBatchConcurrency: 3,
+        batch: {
+          enabled: true,
+          wait: false,
+          concurrency: 2,
+          pollIntervalMs: 250,
+          timeoutMinutes: 5,
+        },
+      };
+      const remote = {
+        baseUrl: "https://primary-openai.invalid/v1",
+        apiKey: "synthetic-primary-openai-api-key",
+        headers: {
+          Authorization: "Bearer synthetic-primary-openai-auth",
+          "X-OpenAI-Secret": "synthetic-primary-openai-header",
+        },
+        ...sharedRemote,
+      };
+      const fallbackProviderConfig = {
+        baseUrl: `https://${fallback}-provider.invalid/v1`,
+        apiKey: "synthetic-fallback-owned-api-key",
+        headers: { "X-Fallback-Auth": "synthetic-fallback-owned-header" },
+        models: [],
+      };
+      const primaryOptions = createOptions("openai");
+      const config = {
+        ...primaryOptions.config,
+        models: { providers: { [fallback]: fallbackProviderConfig } },
+      } satisfies OpenClawConfig;
+      const local = { modelPath: "/tmp/synthetic-memory-model.gguf", contextSize: 2048 };
+
+      const result = await createEmbeddingProvider({
+        ...primaryOptions,
+        config,
+        fallback,
+        model: "text-embedding-3-small",
+        remote,
+        inputType: "passage",
+        queryInputType: "query",
+        documentInputType: "document",
+        outputDimensionality: 768,
+        local,
+      });
+
+      expect(primaryCreate).toHaveBeenCalledWith(expect.objectContaining({ remote, config }));
+      expect(primaryCreate.mock.calls[0]?.[0].remote).toBe(remote);
+      expect(fallbackCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: fallback,
+          remote: sharedRemote,
+          config,
+          agentDir: primaryOptions.agentDir,
+          acquireLocalService: primaryOptions.acquireLocalService,
+          model: "text-embedding-3-small",
+          inputType: "passage",
+          queryInputType: "query",
+          documentInputType: "document",
+          outputDimensionality: 768,
+          local,
+        }),
+      );
+      expect(fallbackCreate.mock.calls[0]?.[0].remote).toEqual(sharedRemote);
+      expect(fallbackCreate.mock.calls[0]?.[0].config.models?.providers?.[fallback]).toEqual(
+        fallbackProviderConfig,
+      );
+      expect(result).toMatchObject({
+        requestedProvider: "openai",
+        fallbackFrom: "openai",
+        provider: { id: fallback },
+      });
+    },
+  );
+
   it("does not run priority-based auto-selection after a skippable setup failure", async () => {
     registerMemoryEmbeddingProvider(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
     registerMemoryEmbeddingProvider({
@@ -163,6 +313,18 @@ describe("createEmbeddingProvider", () => {
   });
 
   it("uses a generic embedding provider when no memory-specific provider exists", async () => {
+    const genericProvider = {
+      id: "generic",
+      model: "generic-model",
+      closed: false,
+      embed: async (_input: unknown, callOptions?: { inputType?: string }) =>
+        callOptions?.inputType === "query" ? [1] : [2],
+      embedBatch: async (inputs: unknown[], callOptions?: { inputType?: string }) =>
+        inputs.map(() => (callOptions?.inputType === "document" ? [3] : [4])),
+      async close() {
+        this.closed = true;
+      },
+    };
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
       create: async (options) => {
@@ -174,13 +336,7 @@ describe("createEmbeddingProvider", () => {
           ).acquireLocalService,
         ).toBe(mockEmbeddingRegistry.acquireLocalService);
         return {
-          provider: {
-            id: "generic",
-            model: "generic-model",
-            embed: async (_input, callOptions) => (callOptions?.inputType === "query" ? [1] : [2]),
-            embedBatch: async (inputs, callOptions) =>
-              inputs.map(() => (callOptions?.inputType === "document" ? [3] : [4])),
-          },
+          provider: genericProvider,
         };
       },
     });
@@ -192,6 +348,38 @@ describe("createEmbeddingProvider", () => {
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([1]);
     await expect(result.provider?.embedBatch(["doc"])).resolves.toEqual([[3]]);
+    await result.provider?.close?.();
+    expect(genericProvider.closed).toBe(true);
+  });
+
+  it("keeps concurrent provider creation bound to each caller's local-service hook", async () => {
+    const observedHooks: unknown[] = [];
+    registerGenericEmbeddingProvider({
+      id: "openai-compatible",
+      create: async (options) => {
+        observedHooks.push(
+          (options as typeof options & { acquireLocalService?: unknown }).acquireLocalService,
+        );
+        await Promise.resolve();
+        return {
+          provider: {
+            id: "generic",
+            model: "generic-model",
+            embed: async () => [1],
+            embedBatch: async (inputs) => inputs.map(() => [1]),
+          },
+        };
+      },
+    });
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+
+    await Promise.all([
+      createEmbeddingProvider(createOptions("openai-compatible", firstAcquire)),
+      createEmbeddingProvider(createOptions("openai-compatible", secondAcquire)),
+    ]);
+
+    expect(observedHooks).toEqual([firstAcquire, secondAcquire]);
   });
 
   it("keeps memory-specific providers authoritative during dual registration", async () => {

@@ -1,4 +1,5 @@
 // Status command report data tests cover report data assembly from shared status fixtures.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { createStatusCommandReportDataParams } from "./status.test-support.ts";
@@ -18,7 +19,10 @@ describe("buildStatusCommandReportData", () => {
             ...baseParams.summary.sessions,
             recent: [
               {
-                ...baseParams.summary.sessions.recent[0],
+                ...expectDefined(
+                  baseParams.summary.sessions.recent[0],
+                  "baseParams.summary.sessions.recent[0] test invariant",
+                ),
                 key: "session-key",
                 kind: "direct",
                 updatedAt: 1,
@@ -105,39 +109,6 @@ describe("buildStatusCommandReportData", () => {
     expect(result.retainedLostTaskLine).toBe("muted(2 lost tasks retained until cleanupAfter)");
   });
 
-  it("adds model-pricing degradation from gateway probe health to overview rows", async () => {
-    const baseParams = createStatusCommandReportDataParams();
-    const result = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({
-        surface: {
-          ...baseParams.surface,
-          gatewayProbe: {
-            connectLatencyMs: 123,
-            error: null,
-            health: {
-              ok: true,
-              modelPricing: {
-                state: "degraded",
-                detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-                sources: [{ source: "openrouter", state: "degraded" }],
-              },
-            },
-          },
-        },
-        health: undefined,
-      }),
-    );
-
-    const modelPricingIndex = result.overviewRows.findIndex((row) => row.Item === "Model pricing");
-    expect(modelPricingIndex).toBeGreaterThanOrEqual(0);
-    expect(result.overviewRows[modelPricingIndex]).toStrictEqual({
-      Item: "Model pricing",
-      Value:
-        "warn(warning · optional pricing refresh degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
-    });
-    expect(result.overviewRows[modelPricingIndex + 1]?.Item).toBe("Memory");
-  });
-
   it("adds pinned-session model selection lines", async () => {
     const baseParams = createStatusCommandReportDataParams();
     const result = await buildStatusCommandReportData(
@@ -148,7 +119,10 @@ describe("buildStatusCommandReportData", () => {
             ...baseParams.summary.sessions,
             recent: [
               {
-                ...baseParams.summary.sessions.recent[0],
+                ...expectDefined(
+                  baseParams.summary.sessions.recent[0],
+                  "baseParams.summary.sessions.recent[0] test invariant",
+                ),
                 configuredModel: "zhipu/glm-4.5-air",
                 selectedModel: "deepseek/deepseek-v4-flash",
                 modelSelectionReason: "session override",

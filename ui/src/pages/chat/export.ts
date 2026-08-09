@@ -19,7 +19,7 @@ export function exportChatMarkdown(messages: unknown[], assistantName: string): 
   URL.revokeObjectURL(url);
 }
 
-export function buildChatMarkdown(messages: unknown[], assistantName: string): string | null {
+function buildChatMarkdown(messages: unknown[], assistantName: string): string | null {
   const history = Array.isArray(messages) ? messages : [];
   if (history.length === 0) {
     return null;

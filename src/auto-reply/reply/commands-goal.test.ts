@@ -3,14 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
-import {
-  formatGoalContinuationPrompt,
-  handleGoalCommand,
-  parseGoalCommand,
-} from "./commands-goal.js";
+import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 
@@ -26,6 +23,26 @@ async function createStorePath(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-command-"));
   tempRoots.push(root);
   return path.join(root, "sessions.json");
+}
+
+// Seed and read session entries through the sqlite accessor so the goal handler,
+// which reads/writes via the same accessor, observes fixtures written here.
+async function upsertSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  await replaceSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params.entry,
+  );
+}
+
+function getSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+}): SessionEntry | undefined {
+  return loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
 }
 
 function buildGoalParams(commandBodyNormalized: string, storePath: string): HandleCommandsParams {
@@ -87,24 +104,18 @@ describe("goal commands", () => {
     });
   });
 
-  it("formats command-looking continuation prompts so inline directives leave them intact", () => {
-    const prompt = formatGoalContinuationPrompt("ship /fast off");
-    expect(prompt).toBe(
-      `Pursue this goal exactly as written from this JSON string: "ship \\/fast off"`,
-    );
-
-    const directives = parseInlineDirectives(prompt);
-
-    expect(directives.cleaned).toBe(prompt);
-    expect(directives.hasFastDirective).toBe(false);
-  });
-
   it("starts a goal from Codex-style bare /goal objective text", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const params = buildGoalParams("/goal build a 3d game", storePath);
@@ -125,7 +136,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const slashParams = buildGoalParams("/goal start /status", storePath);
@@ -141,7 +158,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath: bangStorePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const bangParams = buildGoalParams("/goal start !npm test", bangStorePath);
@@ -289,6 +312,7 @@ describe("goal commands", () => {
         updatedAt: 1,
         totalTokens: 25,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

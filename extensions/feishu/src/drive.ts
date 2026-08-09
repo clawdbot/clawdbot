@@ -2,7 +2,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -16,7 +15,11 @@ import {
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-import { toolExecutionErrorResult, unknownToolActionResult } from "./tool-result.js";
+import {
+  feishuExternalToolResult as jsonResult,
+  toolExecutionErrorResult,
+  unknownToolActionResult,
+} from "./tool-result.js";
 
 // ============ Actions ============
 
@@ -367,16 +370,13 @@ async function listFolder(client: Lark.Client, params: Record<string, unknown> =
   };
 }
 
-async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?: string) {
-  // Use list with folder_token to find file info
-  const res = await client.drive.file.list({
-    params: folderToken ? { folder_token: folderToken } : {},
-  });
+async function getRootFileInfo(client: Lark.Client, fileToken: string) {
+  const res = await client.drive.file.list({ params: {} });
   if (res.code !== 0) {
     throw new Error(res.msg);
   }
 
-  const file = res.data?.files?.find((f) => f.token === fileToken);
+  const file = res.data?.files?.find((candidate) => candidate.token === fileToken);
   if (!file) {
     throw new Error(`File not found: ${fileToken}`);
   }
@@ -388,6 +388,58 @@ async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?:
     url: file.url,
     created_time: file.created_time,
     modified_time: file.modified_time,
+    owner_id: file.owner_id,
+  };
+}
+
+async function getFileInfo(
+  client: Lark.Client,
+  fileToken: string,
+  type: Extract<FeishuDriveParams, { action: "info" }>["type"],
+) {
+  if (type === "shortcut") {
+    // The metadata API does not accept shortcut as a document type. Keep the existing
+    // root-list behavior so the advertised shortcut info contract does not regress.
+    return getRootFileInfo(client, fileToken);
+  }
+
+  let res: Awaited<ReturnType<Lark.Client["drive"]["meta"]["batchQuery"]>>;
+  try {
+    res = await client.drive.meta.batchQuery({
+      data: {
+        request_docs: [{ doc_token: fileToken, doc_type: type }],
+        with_url: true,
+      },
+    });
+  } catch (error) {
+    if (extractDriveApiErrorMeta(error).feishuCode === 99991672) {
+      // Existing read-only apps may not have the newer metadata scope. Preserve their
+      // root-file lookup while allowing scoped apps to resolve files in any shared folder.
+      return getRootFileInfo(client, fileToken);
+    }
+    throw error;
+  }
+  if (res.code === 99991672) {
+    return getRootFileInfo(client, fileToken);
+  }
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  const file = res.data?.metas?.find(
+    (meta) => meta.doc_token === fileToken || meta.request_doc_info?.doc_token === fileToken,
+  );
+  if (!file) {
+    throw new Error(`File not found: ${fileToken}`);
+  }
+
+  return {
+    token: file.doc_token,
+    name: file.title,
+    type: file.doc_type,
+    url: file.url,
+    created_time: file.create_time,
+    modified_time: file.latest_modify_time,
     owner_id: file.owner_id,
   };
 }
@@ -768,6 +820,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_drive",
+        resultContentSource: "network",
         label: "Feishu Drive",
         description:
           "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
@@ -791,7 +844,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                   }),
                 );
               case "info":
-                return jsonResult(await getFileInfo(client, p.file_token));
+                return jsonResult(await getFileInfo(client, p.file_token, p.type));
               case "create_folder":
                 return jsonResult(await createFolder(client, p.name, p.folder_token));
               case "move":
@@ -849,3 +902,4 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     { name: "feishu_drive" },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

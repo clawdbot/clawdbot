@@ -60,6 +60,8 @@ const hookMocks = vi.hoisted(() => {
     ),
     listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
+    progressModuleFactory: vi.fn(),
+    recoverDiscordSubagentProgress: vi.fn(),
   };
 });
 
@@ -73,6 +75,10 @@ vi.mock("./monitor/thread-bindings.js", () => ({
   listThreadBindingsBySessionKey: hookMocks.listThreadBindingsBySessionKey,
   unbindThreadBindingsBySessionKey: hookMocks.unbindThreadBindingsBySessionKey,
 }));
+vi.mock("./subagent-progress.js", () => {
+  hookMocks.progressModuleFactory();
+  return { recoverDiscordSubagentProgress: hookMocks.recoverDiscordSubagentProgress };
+});
 
 function registerHandlersForTest(
   config: Record<string, unknown> = {
@@ -210,6 +216,37 @@ describe("discord subagent hook handlers", () => {
     hookMocks.autoBindSpawnedDiscordSubagent.mockClear();
     hookMocks.listThreadBindingsBySessionKey.mockClear();
     hookMocks.unbindThreadBindingsBySessionKey.mockClear();
+    hookMocks.progressModuleFactory.mockClear();
+    hookMocks.recoverDiscordSubagentProgress.mockClear();
+  });
+
+  it("keeps progress cleanup lazy for unrelated subagent hooks", async () => {
+    const handlers = registerHandlersForTest();
+    const handler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+
+    await handler(
+      {
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: { channel: "signal" },
+        childRunId: "run-1",
+        spawnMode: "session",
+        expectsCompletionMessage: true,
+      },
+      {},
+    );
+
+    expect(hookMocks.progressModuleFactory).not.toHaveBeenCalled();
+  });
+
+  it("loads retired progress cleanup on gateway startup", async () => {
+    const handlers = registerHandlersForTest();
+    const handler = getRequiredHookHandler(handlers, "gateway_start");
+
+    await handler({}, {});
+
+    expect(hookMocks.progressModuleFactory).toHaveBeenCalledTimes(1);
+    expect(hookMocks.recoverDiscordSubagentProgress).toHaveBeenCalledTimes(1);
   });
 
   it("binds thread routing on subagent_spawning", async () => {

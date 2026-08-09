@@ -1,9 +1,7 @@
 /**
- * Doctor contract hooks for Codex plugin config migrations and session-route
- * ownership warnings.
+ * Doctor contract hooks for Codex plugin config and state migrations.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
 
 type LegacyConfigRule = {
   path: string[];
@@ -136,17 +134,5 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     changes,
   };
 }
-
-/** Session/auth ownership metadata used by doctor route-state checks. */
-export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
-  {
-    id: "codex",
-    label: "Codex",
-    providerIds: ["codex", "codex-cli", "openai-codex"],
-    runtimeIds: ["codex", "codex-cli"],
-    cliSessionKeys: ["codex-cli"],
-    authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
-  },
-];
 
 export { stateMigrations } from "./src/migration/session-binding-sidecars.js";

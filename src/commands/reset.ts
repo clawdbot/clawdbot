@@ -19,25 +19,24 @@ import {
   listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
-  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
-export type ResetScope = "config" | "config+creds+sessions" | "full";
+type ResetScope = "config" | "config+creds+sessions" | "full";
 
 /** CLI options accepted by `openclaw reset`. */
-export type ResetOptions = {
+type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
   nonInteractive?: boolean;
   dryRun?: boolean;
 };
 
-async function stopGatewayIfRunning(runtime: RuntimeEnv) {
+async function stopGatewayIfRunning(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
     // Nix mode owns service lifecycle outside OpenClaw-managed launchd/systemd
     // installs, so reset should not try to stop a service it did not create.
-    return;
+    return true;
   }
   const service = resolveGatewayService();
   let loaded;
@@ -45,15 +44,17 @@ async function stopGatewayIfRunning(runtime: RuntimeEnv) {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     runtime.error(`Gateway service check failed: ${String(err)}`);
-    return;
+    return false;
   }
   if (!loaded) {
-    return;
+    return true;
   }
   try {
     await service.stop({ env: process.env, stdout: process.stdout });
+    return true;
   } catch (err) {
     runtime.error(`Gateway stop failed: ${String(err)}`);
+    return false;
   }
 }
 
@@ -131,8 +132,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     logBackupRecommendation(runtime);
     if (dryRun) {
       runtime.log("[dry-run] stop gateway service");
-    } else {
-      await stopGatewayIfRunning(runtime);
+    } else if (!(await stopGatewayIfRunning(runtime))) {
+      runtime.exit(1);
+      return;
     }
   }
 
@@ -155,15 +157,15 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (scope === "full") {
-    await removeStateAndLinkedPaths(
+    const stateRemoved = await removeStateAndLinkedPaths(
       { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
       runtime,
       { dryRun },
     );
-    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
-    // Workspace attestations live beside workspace dirs and can outlive the
-    // workspace itself, so full reset cleans both surfaces.
-    await removeWorkspaceAttestationPaths(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceDirs(workspaceDirs, runtime, {
+      dryRun,
+      removeStateRows: !stateRemoved,
+    });
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
   }
 }

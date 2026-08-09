@@ -1,6 +1,6 @@
 // Voice Call tests cover webhook exposure plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isLocalOnlyWebhookHost, isProviderUnreachableWebhookUrl } from "./webhook-exposure.js";
+import { isProviderUnreachableWebhookUrl } from "./webhook-exposure.js";
 
 describe("webhook exposure host classification", () => {
   it.each([
@@ -24,11 +24,4 @@ describe("webhook exposure host classification", () => {
   ])("does not reject public webhook URL %s", (url) => {
     expect(isProviderUnreachableWebhookUrl(url)).toBe(false);
   });
-
-  it.each(["[::1]", "[fc00::1]", "[fd00::1]", "::ffff:7f00:1", "::ffff:a00:1", "[fe80::1]"])(
-    "normalizes local/private URL hostnames like %s",
-    (host) => {
-      expect(isLocalOnlyWebhookHost(host)).toBe(true);
-    },
-  );
 });

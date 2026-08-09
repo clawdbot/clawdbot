@@ -4,7 +4,7 @@
  * Tests the hook runner methods directly since session init is deeply integrated.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
   PluginHookSessionContext,
   PluginHookSessionEndEvent,

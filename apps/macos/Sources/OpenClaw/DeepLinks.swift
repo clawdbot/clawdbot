@@ -149,10 +149,6 @@ final class DeepLinkHandler {
         self.expectedKey()
     }
 
-    static func currentCanvasKey() -> String {
-        self.canvasUnattendedKey
-    }
-
     private static func expectedKey() -> String {
         let defaults = UserDefaults.standard
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {
@@ -184,11 +180,7 @@ final class DeepLinkHandler {
     // MARK: - UI
 
     private func openDashboard() async {
-        do {
-            try await DashboardManager.shared.show()
-        } catch {
-            DashboardManager.shared.showFailure(error)
-        }
+        AppNavigationActions.openDashboard()
     }
 
     private func confirm(title: String, message: String) -> Bool {

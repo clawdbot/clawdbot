@@ -11,7 +11,12 @@ import {
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
+import { createManagedWorktreeOwnerProtection } from "../../agents/worktrees/owner-protection.js";
+import {
+  managedWorktrees,
+  resolveWorktreeCleanupLimits,
+  WorktreeSnapshotError,
+} from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -32,31 +37,23 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, { worktrees: await service.list() }, undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(true, { worktrees: await service.list() }, undefined);
     },
     "worktrees.create": async ({ params, respond }) => {
       if (!validateWorktreesCreateParams(params)) {
         invalidParams(respond);
         return;
       }
-      try {
-        respond(
-          true,
-          await service.create({
-            repoRoot: params.repoRoot,
-            name: params.name,
-            baseRef: params.baseRef,
-            ownerKind: "manual",
-          }),
-          undefined,
-        );
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(
+        true,
+        await service.create({
+          repoRoot: params.repoRoot,
+          name: params.name,
+          baseRef: params.baseRef,
+          ownerKind: "manual",
+        }),
+        undefined,
+      );
     },
     "worktrees.remove": async ({ params, respond }) => {
       if (!validateWorktreesRemoveParams(params)) {
@@ -93,11 +90,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, await service.restore({ id: params.id }), undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(true, await service.restore({ id: params.id }), undefined);
     },
     "worktrees.branches": async ({ params, respond, context, client }) => {
       if (!validateWorktreesBranchesParams(params)) {
@@ -131,22 +124,28 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           return;
         }
       }
-      try {
-        respond(true, await service.listRepositoryBranches(params.repoRoot), undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      const result = params.includeRepositoryStatus
+        ? await service.listRepositoryBranches(params.repoRoot, {
+            includeRepositoryStatus: true,
+          })
+        : await service.listRepositoryBranches(params.repoRoot);
+      respond(true, result, undefined);
     },
-    "worktrees.gc": async ({ params, respond }) => {
+    "worktrees.gc": async ({ params, respond, context }) => {
       if (!validateWorktreesGcParams(params)) {
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, await service.gc(), undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      const cfg = context.getRuntimeConfig();
+      const limits = resolveWorktreeCleanupLimits();
+      respond(
+        true,
+        await service.gc({
+          limits,
+          shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+        }),
+        undefined,
+      );
     },
   };
 }

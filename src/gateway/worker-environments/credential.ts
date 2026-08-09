@@ -30,7 +30,7 @@ export type WorkerCredentialBinding = Pick<
 export type WorkerCredentialDeliveryClaim = WorkerCredentialBinding &
   Pick<MintedWorkerCredential, "deliveryId">;
 
-export type WorkerCredentialMaterial = {
+type WorkerCredentialMaterial = {
   credential: string;
   credentialHash: string;
 };

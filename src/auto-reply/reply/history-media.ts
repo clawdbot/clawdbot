@@ -1,17 +1,23 @@
 // Extracts media attachment references from reply history entries.
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaAttachment } from "../../media-understanding/types.js";
 import type { MsgContext } from "../templating.js";
-import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
+import type { HistoryEntry } from "./history.types.js";
 
 const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
 const RECENT_HISTORY_IMAGE_LIMIT = 4;
 
 export type RecentInboundHistoryImage = {
   path: string;
-  contentType: string;
+  contentType?: string;
+  kind?: MediaAttachment["kind"];
   sender: string;
+  sentAtMs: number;
+  messagePosition: number;
+  messageCount: number;
   messageId?: string;
 };
 
@@ -26,22 +32,6 @@ function isRemotePath(value: string): boolean {
   }
 }
 
-function resolveHistoryImageContentType(media: HistoryMediaEntry): string | undefined {
-  const contentType = normalizeOptionalString(media.contentType);
-  if (contentType?.startsWith("image/")) {
-    return contentType;
-  }
-  const path = normalizeOptionalString(media.path);
-  return mimeTypeFromFilePath(path);
-}
-
-function isHistoryImageMedia(media: HistoryMediaEntry): boolean {
-  if (media.kind === "image") {
-    return true;
-  }
-  return Boolean(resolveHistoryImageContentType(media)?.startsWith("image/"));
-}
-
 function resolveTimestamp(value: unknown): number | undefined {
   return asFiniteNumber(value);
 }
@@ -52,6 +42,8 @@ function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {
 
 export function resolveRecentInboundHistoryImages(params: {
   ctx: MsgContext;
+  // Inject the canonical classifier so text-only ACP turns never eagerly load media runtime.
+  isImageAttachment: (attachment: MediaAttachment) => boolean;
   nowMs?: number;
   ttlMs?: number;
   limit?: number;
@@ -67,7 +59,7 @@ export function resolveRecentInboundHistoryImages(params: {
   const seen = new Set<string>();
   const entries = resolveHistoryEntries(params.ctx);
   for (let index = entries.length - 1; index >= 0 && out.length < limit; index -= 1) {
-    const entry = entries[index];
+    const entry = expectDefined(entries[index], "entries entry at index");
     const timestamp = resolveTimestamp(entry?.timestamp);
     if (timestamp === undefined || Math.abs(nowMs - timestamp) > ttlMs) {
       continue;
@@ -79,17 +71,24 @@ export function resolveRecentInboundHistoryImages(params: {
       mediaIndex -= 1
     ) {
       const media = mediaEntries[mediaIndex];
-      if (!media || !isHistoryImageMedia(media)) {
+      if (
+        !media ||
+        !params.isImageAttachment({
+          path: media.path,
+          url: media.url,
+          mime: media.contentType,
+          kind: media.kind,
+          index: mediaIndex,
+        })
+      ) {
         continue;
       }
       const mediaPath = normalizeOptionalString(media.path);
       if (!mediaPath || isRemotePath(mediaPath)) {
         continue;
       }
-      const contentType = resolveHistoryImageContentType(media);
-      if (!contentType?.startsWith("image/")) {
-        continue;
-      }
+      const contentType =
+        normalizeOptionalString(media.contentType) ?? mimeTypeFromFilePath(mediaPath);
       const messageId = normalizeOptionalString(media.messageId) ?? entry.messageId;
       const key = [messageId ?? "", mediaPath].join("\0");
       if (seen.has(key)) {
@@ -98,13 +97,22 @@ export function resolveRecentInboundHistoryImages(params: {
       seen.add(key);
       out.push({
         path: mediaPath,
-        contentType,
+        ...(contentType ? { contentType } : {}),
+        ...(media.kind ? { kind: media.kind } : {}),
         sender: entry.sender,
+        sentAtMs: timestamp,
+        messagePosition: index + 1,
+        messageCount: entries.length,
         ...(messageId ? { messageId } : {}),
       });
     }
   }
   return out.toReversed();
+}
+
+function formatRecentHistoryImageSentAt(sentAtMs: number): string {
+  const date = new Date(sentAtMs);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : `${sentAtMs}ms since epoch`;
 }
 
 export function appendRecentHistoryImageContext(params: {
@@ -116,7 +124,8 @@ export function appendRecentHistoryImageContext(params: {
   }
   const notes = params.images.map((image, index) => {
     const message = image.messageId ? `, message ${image.messageId}` : "";
-    return `[Recent image ${index + 1} from ${image.sender}${message}, attached as media.]`;
+    const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
+    return `[Recent image ${index + 1} from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history, attached as media.]`;
   });
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)

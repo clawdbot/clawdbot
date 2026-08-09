@@ -17,27 +17,35 @@ export function stripLeadingPackageManagerSeparator(argv: string[]): string[];
 export function stringFlag<T extends FlagArgs>(
   flag: string,
   key: string,
-  options?: { rejectShortOptions?: boolean },
+  options?: {
+    allowEmpty?: boolean;
+    allowInline?: boolean;
+    missingValueMessage?: string;
+    rejectShortOptions?: boolean;
+    repeatable?: boolean;
+    transform?: (value: string) => unknown;
+  },
 ): FlagSpec<T>;
 export function stringListFlag<T extends FlagArgs>(
   flag: string,
   key: string,
-  options?: { rejectShortOptions?: boolean },
+  options?: {
+    allowEmpty?: boolean;
+    allowInline?: boolean;
+    missingValueMessage?: string;
+    rejectShortOptions?: boolean;
+  },
 ): FlagSpec<T>;
 export function intFlag<T extends FlagArgs>(
   flag: string,
   key: string,
   options?: { min?: number },
 ): FlagSpec<T>;
-export function floatFlag<T extends FlagArgs>(
-  flag: string,
-  key: string,
-  options?: { includeMin?: boolean; min?: number },
-): FlagSpec<T>;
 export function booleanFlag<T extends FlagArgs>(
   flag: string,
   key: string,
   value?: unknown,
+  options?: { repeatable?: boolean },
 ): FlagSpec<T>;
 export function parseFlagArgs<T extends FlagArgs>(
   argv: readonly string[],
@@ -45,6 +53,7 @@ export function parseFlagArgs<T extends FlagArgs>(
   specs: readonly FlagSpec<T>[],
   options?: {
     allowUnknownOptions?: boolean;
+    duplicateOptionMessage?: (flag: string) => string;
     ignoreDoubleDash?: boolean;
     onUnhandledArg?: (arg: string, args: T) => "handled" | void;
   },

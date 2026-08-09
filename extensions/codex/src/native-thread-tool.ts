@@ -1,7 +1,6 @@
 /**
  * Owner-only access to native Codex threads stored in the user's Codex home.
  */
-import path from "node:path";
 import {
   jsonResult,
   readStringParam,
@@ -131,7 +130,7 @@ function readLimit(value: unknown): number | undefined {
 function resolveToolSession(
   context: OpenClawPluginToolContext,
   runtime: PluginRuntime,
-): { sessionId: string; sessionFile: string; modelSelectionLocked: boolean } | undefined {
+): { sessionId: string; modelSelectionLocked: boolean } | undefined {
   const sessionKey = context.sessionKey?.trim();
   if (!sessionKey) {
     return undefined;
@@ -145,15 +144,8 @@ function resolveToolSession(
   if (!sessionId) {
     return undefined;
   }
-  const storePath = runtime.agent.session.resolveStorePath(undefined, {
-    agentId: context.agentId,
-  });
   return {
     sessionId,
-    sessionFile: runtime.agent.session.resolveSessionFilePath(sessionId, entry, {
-      agentId: context.agentId,
-      sessionsDir: path.dirname(storePath),
-    }),
     modelSelectionLocked: isModelSelectionLocked(entry),
   };
 }
@@ -284,7 +276,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
     name: "codex_threads",
     label: "Codex Threads",
     description:
-      "List and inspect native Codex threads. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
+      "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
       const params = asRecord(rawParams);

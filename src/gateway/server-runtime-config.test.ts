@@ -1,7 +1,7 @@
 // Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
 // container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetContainerCacheForTest } from "./net.js";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -265,7 +265,7 @@ describe("resolveGatewayRuntimeConfig", () => {
 
   describe("container-aware bind default", () => {
     afterEach(() => {
-      __resetContainerCacheForTest();
+      resetContainerEnvironmentCacheForTest();
       vi.restoreAllMocks();
     });
 

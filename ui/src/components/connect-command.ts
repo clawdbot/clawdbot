@@ -4,35 +4,31 @@ import { t } from "../i18n/index.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import "./tooltip.ts";
 
-async function copyCommand(command: string) {
-  try {
-    await navigator.clipboard.writeText(command);
-  } catch {
-    // Best effort only; the explicit copy button provides visible feedback.
-  }
+function copyCommand(event: Event) {
+  (event.currentTarget as HTMLElement).querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
 }
 
 export function renderConnectCommand(command: string) {
-  const copyLabel = t("overview.connection.copyCommand");
+  const copyLabel = t("connection.help.copyCommand");
   return html`
     <openclaw-tooltip .content=${copyLabel}>
       <div
         class="login-gate__command"
         role="button"
         tabindex="0"
-        aria-label=${t("overview.connection.copyCommandAria", { command })}
-        @click=${async (event: Event) => {
+        aria-label=${t("connection.help.copyCommandAria", { command })}
+        @click=${(event: Event) => {
           if ((event.target as HTMLElement | null)?.closest(".chat-copy-btn")) {
             return;
           }
-          await copyCommand(command);
+          copyCommand(event);
         }}
-        @keydown=${async (event: KeyboardEvent) => {
+        @keydown=${(event: KeyboardEvent) => {
           if (event.key !== "Enter" && event.key !== " ") {
             return;
           }
           event.preventDefault();
-          await copyCommand(command);
+          copyCommand(event);
         }}
       >
         <code>${command}</code>

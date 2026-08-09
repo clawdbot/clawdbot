@@ -12,15 +12,18 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildExecApprovalCustomId } from "./approval-custom-id.js";
+import {
+  DISCORD_APPROVAL_ALLOWED_MENTIONS,
+  formatDiscordApprovalDisplayValue,
+} from "./approval-message-safety.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
-import { encodeCustomIdComponent } from "./custom-id-codec.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
   Button,
@@ -41,6 +44,8 @@ import {
   stripUndefinedFields,
 } from "./send.shared.js";
 import { DiscordUiContainer } from "./ui.js";
+
+export { buildExecApprovalCustomId };
 
 type PendingApproval = {
   discordMessageId: string;
@@ -121,9 +126,17 @@ class ExecApprovalActionButton extends Button {
   override label: string;
   override style: ButtonStyle;
 
-  constructor(params: { approvalId: string; descriptor: ExecApprovalActionDescriptor }) {
+  constructor(params: {
+    approvalId: string;
+    approvalKind: PendingApprovalView["approvalKind"];
+    descriptor: ExecApprovalActionDescriptor;
+  }) {
     super();
-    this.customId = buildExecApprovalCustomId(params.approvalId, params.descriptor.decision);
+    this.customId = buildExecApprovalCustomId(
+      params.approvalId,
+      params.approvalKind,
+      params.descriptor.decision,
+    );
     this.label = params.descriptor.label;
     this.style =
       params.descriptor.style === "success"
@@ -137,10 +150,19 @@ class ExecApprovalActionButton extends Button {
 }
 
 class ExecApprovalActionRow extends Row<Button> {
-  constructor(params: { approvalId: string; actions: readonly ExecApprovalActionDescriptor[] }) {
+  constructor(params: {
+    approvalId: string;
+    approvalKind: PendingApprovalView["approvalKind"];
+    actions: readonly ExecApprovalActionDescriptor[];
+  }) {
     super(
       params.actions.map(
-        (descriptor) => new ExecApprovalActionButton({ approvalId: params.approvalId, descriptor }),
+        (descriptor) =>
+          new ExecApprovalActionButton({
+            approvalId: params.approvalId,
+            approvalKind: params.approvalKind,
+            descriptor,
+          }),
       ),
     );
   }
@@ -149,6 +171,7 @@ class ExecApprovalActionRow extends Row<Button> {
 function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
   return new ExecApprovalActionRow({
     approvalId: view.approvalId,
+    approvalKind: view.approvalKind,
     actions: view.actions,
   });
 }
@@ -161,7 +184,7 @@ function buildApprovalMetadataLines(
 
 function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayloadObject {
   const components: TopLevelComponents[] = [container];
-  return { components };
+  return { components, allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
 }
 
 const commandPreviewSegmenter =
@@ -243,7 +266,7 @@ function createExecApprovalRequestContainer(params: {
     commandSecondaryPreview,
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
     actionRow: params.actionRow,
-    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.view.approvalId}`,
+    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
     accentColor: "#FFA500",
   });
 }
@@ -267,7 +290,7 @@ function createPluginApprovalRequestContainer(params: {
     commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
     actionRow: params.actionRow,
-    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.view.approvalId}`,
+    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
     accentColor,
   });
 }
@@ -300,11 +323,13 @@ function createExecResolvedContainer(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     title: `Exec Approval: ${decisionLabel}`,
-    description: params.view.resolvedBy ? `Resolved by ${params.view.resolvedBy}` : "Resolved",
+    description: params.view.resolvedBy
+      ? `Resolved by ${formatDiscordApprovalDisplayValue(params.view.resolvedBy)}`
+      : "Resolved",
     commandPreview,
     commandSecondaryPreview,
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${params.view.approvalId}`,
+    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
     accentColor,
   });
 }
@@ -331,11 +356,13 @@ function createPluginResolvedContainer(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     title: `Plugin Approval: ${decisionLabel}`,
-    description: params.view.resolvedBy ? `Resolved by ${params.view.resolvedBy}` : "Resolved",
+    description: params.view.resolvedBy
+      ? `Resolved by ${formatDiscordApprovalDisplayValue(params.view.resolvedBy)}`
+      : "Resolved",
     commandPreview: formatCommandPreview(params.view.title, 700),
     commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${params.view.approvalId}`,
+    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
     accentColor,
   });
 }
@@ -359,7 +386,7 @@ function createExecExpiredContainer(params: {
     commandPreview,
     commandSecondaryPreview,
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${params.view.approvalId}`,
+    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
     accentColor: "#99AAB5",
   });
 }
@@ -377,16 +404,9 @@ function createPluginExpiredContainer(params: {
     commandPreview: formatCommandPreview(params.view.title, 700),
     commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
-    footer: `ID: ${params.view.approvalId}`,
+    footer: `ID: ${formatDiscordApprovalDisplayValue(params.view.approvalId)}`,
     accentColor: "#99AAB5",
   });
-}
-
-export function buildExecApprovalCustomId(
-  approvalId: string,
-  action: ExecApprovalDecision,
-): string {
-  return [`execapproval:id=${encodeCustomIdComponent(approvalId)}`, `action=${action}`].join(";");
 }
 
 async function updateMessage(params: {
@@ -452,7 +472,6 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
   never
 >({
   eventKinds: ["exec", "plugin"],
-  resolveApprovalKind: (request) => (request.id.startsWith("plugin:") ? "plugin" : "exec"),
   availability: {
     isConfigured: (params) => {
       const resolved = resolveHandlerContext(params);

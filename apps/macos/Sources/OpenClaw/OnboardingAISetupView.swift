@@ -1,58 +1,7 @@
 import AppKit
 import Foundation
-import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
-
-enum OnboardingProviderIcon {
-    private static let resourceBundle: Bundle? = locateResourceBundle()
-
-    static func resourceURL(for kind: String) -> URL? {
-        guard let name = resourceName(for: kind) else { return nil }
-        return self.resourceBundle?.url(
-            forResource: name,
-            withExtension: "svg",
-            subdirectory: "ProviderIcons")
-    }
-
-    static func image(for kind: String) -> NSImage? {
-        guard let url = resourceURL(for: kind), let image = NSImage(contentsOf: url) else {
-            return nil
-        }
-        image.isTemplate = true
-        return image
-    }
-
-    private static func resourceName(for kind: String) -> String? {
-        switch kind {
-        case "claude-cli": "ProviderIcon-claude"
-        case "codex-cli": "ProviderIcon-codex"
-        default: nil
-        }
-    }
-
-    private static func locateResourceBundle() -> Bundle? {
-        if self.bundleContainsProviderIcons(Bundle.main) {
-            return Bundle.main
-        }
-        // Packaged apps copy these vectors into Bundle.main. SwiftPM's generated
-        // Bundle.module accessor can fatalError when that sidecar is absent, so
-        // consult it only for development/test executables, never an .app.
-        if Bundle.main.bundleURL.pathExtension != "app",
-           self.bundleContainsProviderIcons(Bundle.module)
-        {
-            return Bundle.module
-        }
-        return nil
-    }
-
-    private static func bundleContainsProviderIcons(_ bundle: Bundle) -> Bool {
-        bundle.url(
-            forResource: "ProviderIcon-claude",
-            withExtension: "svg",
-            subdirectory: "ProviderIcons") != nil
-    }
-}
 
 enum OnboardingProviderAuthLink {
     static func safeURL(_ rawValue: String?) -> URL? {
@@ -65,14 +14,99 @@ enum OnboardingProviderAuthLink {
         else { return nil }
         return url
     }
+
+    static func displayHost(_ rawValue: String?) -> String? {
+        guard let host = self.safeURL(rawValue)?.host()?.lowercased() else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+}
+
+private struct OnboardingRecommendedInstallCard: View {
+    let install: OnboardingAISetupModel.RecommendedInstall
+    @State private var hovered = false
+
+    var body: some View {
+        Group {
+            if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
+                Link(destination: website) { self.content }
+                    .buttonStyle(.plain)
+            } else {
+                self.content
+            }
+        }
+        .onHover { self.hovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: self.hovered)
+    }
+
+    private var content: some View {
+        HStack(alignment: .top, spacing: 10) {
+            OnboardingProviderArtwork(
+                icon: self.install.icon,
+                brandCandidates: [self.install.brandId, self.install.id],
+                fallbackSymbol: "arrow.down.circle")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.install.label)
+                    .font(.callout.weight(.semibold))
+                Text(self.install.hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                if let host = OnboardingProviderAuthLink.displayHost(self.install.website) {
+                    Text(host)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(self.hovered ? 0.085 : 0.05)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
+    }
+}
+
+private struct OnboardingSurface: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+            .fill(Color.primary.opacity(0.045))
+            .overlay {
+                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            }
+    }
+}
+
+struct GatewayAuthCard: Equatable {
+    let title: String
+    let message: String
+    let primaryTitle: String
+    let secondaryTitle: String
 }
 
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
-    var crestodianChat: CrestodianOnboardingChatModel
-    @Binding var showCrestodianChat: Bool
+    var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
+
+    static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
+        GatewayAuthCard(
+            title: "Gateway authentication required",
+            message: issue.statusMessage,
+            primaryTitle: "Back to Gateway",
+            secondaryTitle: "Try again")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -84,9 +118,6 @@ struct OnboardingAISetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: self.$showCrestodianChat) {
-            self.crestodianSheet
-        }
         .sheet(isPresented: Binding(
             get: { self.model.activeAuthOption != nil },
             set: {
@@ -109,7 +140,7 @@ struct OnboardingAISetupView: View {
                     .font(.callout.weight(.semibold))
                 Text(self.model.waitingForPendingActivationDeadline
                     ? "OpenClaw will check again before changing any inference settings."
-                    : "Checking for Claude Code, Codex, Gemini, and saved API keys.")
+                    : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -131,17 +162,34 @@ struct OnboardingAISetupView: View {
                     self.candidateRow(candidate)
                 }
             }
-        } else if self.model.phase != .connected, self.model.detectError == nil {
+        } else if self.model.phase != .connected,
+                  self.model.detectError == nil,
+                  self.model.configuredGatewayAuthIssue == nil
+        {
             // A failed detect must not claim "nothing found" — the error card
             // below owns that state and the claim would be unproven.
             self.noCandidatesIntro
         }
 
-        if let detectError = model.detectError {
+        if !self.model.unavailableCandidates.isEmpty {
+            self.unavailableCandidatesSection
+        }
+
+        if let authIssue = model.configuredGatewayAuthIssue {
+            let card = Self.gatewayAuthCard(for: authIssue)
+            OnboardingErrorCard(
+                title: card.title,
+                message: card.message,
+                docsSlug: "start/onboarding",
+                retryTitle: card.primaryTitle,
+                secondaryTitle: card.secondaryTitle,
+                secondary: self.retryConfiguredGatewayProbe,
+                retry: self.returnToGatewayAuthentication)
+        } else if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
-                    : "Couldn’t check this Mac for AI accounts",
+                    : "Couldn’t check this Gateway for AI access",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
@@ -181,21 +229,9 @@ struct OnboardingAISetupView: View {
         }
 
         if !self.model.connected, self.model.providerCatalogLoaded {
+            self.providerPrepareSection
             self.providerAuthSection
             self.manualSection
-        }
-
-        if CrestodianAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
-            HStack {
-                Spacer(minLength: 0)
-                Button {
-                    self.showCrestodianChat = true
-                } label: {
-                    Label("Need help? Chat with Crestodian", systemImage: "questionmark.bubble")
-                        .font(.caption)
-                }
-                .buttonStyle(.link)
-            }
         }
     }
 
@@ -236,6 +272,14 @@ struct OnboardingAISetupView: View {
                 .buttonStyle(.link)
                 .font(.caption)
             }
+
+            Button {
+                self.model.chooseDifferentAI()
+            } label: {
+                Label("Choose a different AI…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,16 +289,28 @@ struct OnboardingAISetupView: View {
     }
 
     private var noCandidatesIntro: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("No AI accounts found on this Mac")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No usable AI access found on this Gateway")
                 .font(.headline)
-            Text(
-                "That’s fine — you can connect one with an API key or token. " +
-                    "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
-                    "sign in there first and hit “Check again”.")
+            Text(self.model.recommendedInstalls.isEmpty
+                ? "Connect a provider below with an API key or token, then check again."
+                : "Install one of these tools, then check again. You can also connect a provider below.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if !self.model.recommendedInstalls.isEmpty {
+                Text("Recommended installs")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 230), spacing: 10)],
+                    spacing: 10)
+                {
+                    ForEach(self.model.recommendedInstalls) { install in
+                        OnboardingRecommendedInstallCard(install: install)
+                    }
+                }
+            }
             Button("Check again") {
                 self.model.retryFromScratch()
             }
@@ -264,15 +320,41 @@ struct OnboardingAISetupView: View {
         .padding(.vertical, 4)
     }
 
+    private var unavailableCandidatesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Detected, but not auto-tested")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(self.model.unavailableCandidates) { candidate in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(candidate.label) — \(candidate.detail)")
+                            .font(.caption.weight(.semibold))
+                        Text(candidate.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
     private func candidateRow(_ candidate: OnboardingAISetupModel.Candidate) -> some View {
         let status = self.model.statuses[candidate.kind] ?? .untried
         let selected = self.model.selectedKind == candidate.kind
+        let presentation = self.model.candidatePresentation[candidate.kind]
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 self.model.userSelect(kind: candidate.kind)
             } label: {
                 HStack(alignment: .center, spacing: 12) {
-                    self.providerIcon(for: candidate.kind)
+                    OnboardingProviderArtwork(
+                        icon: presentation?.icon,
+                        brandCandidates: [presentation?.brandId, candidate.kind],
+                        fallbackSymbol: Self.symbol(for: candidate.kind))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
                             .font(.callout.weight(.semibold))
@@ -297,24 +379,6 @@ struct OnboardingAISetupView: View {
             }
         }
         .openClawSelectableRowChrome(selected: selected && !Self.isFailed(status))
-    }
-
-    @ViewBuilder
-    private func providerIcon(for kind: String) -> some View {
-        if let image = OnboardingProviderIcon.image(for: kind) {
-            Image(nsImage: image)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 21, height: 21)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 26)
-        } else {
-            Image(systemName: Self.symbol(for: kind))
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 26)
-        }
     }
 
     private func subtitle(
@@ -392,29 +456,60 @@ struct OnboardingAISetupView: View {
                     self.model.retryFromScratch()
                 }
             }
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if self.model.candidates.isEmpty || self.model.showManualEntry {
-                    self.manualForm
-                } else {
+        } else if self.model.candidates.isEmpty || self.model.showManualEntry {
+            self.manualForm
+        }
+    }
+
+    @ViewBuilder
+    private var providerPrepareSection: some View {
+        if !self.model.prepareOptions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Set up a local model")
+                    .font(.headline)
+                Text("Connect a local model service, or prepare a model on this Gateway.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(self.model.prepareOptions) { option in
                     Button {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.model.showManualEntry = true
-                        }
+                        self.openedProviderAuthURL = nil
+                        self.model.startProviderPrepare(option)
                     } label: {
-                        Label("Connect with an API key or token instead…", systemImage: "key")
-                            .font(.callout)
+                        HStack(spacing: 10) {
+                            OnboardingProviderArtwork(
+                                icon: option.icon,
+                                brandCandidates: [option.brandId, option.id],
+                                fallbackSymbol: "arrow.down.circle")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label)
+                                    .font(.callout.weight(.semibold))
+                                if let hint = option.hint, !hint.isEmpty {
+                                    Text(hint)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
                     }
-                    .buttonStyle(.link)
+                    .buttonStyle(.plain)
                     .disabled(self.model.isBusy)
+                    .openClawSelectableRowChrome(selected: false)
                 }
             }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(OnboardingSurface(cornerRadius: 12))
         }
     }
 
     @ViewBuilder
     private var providerAuthSection: some View {
-        if !self.model.authOptions.isEmpty {
+        if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sign in with a provider")
                     .font(.headline)
@@ -428,6 +523,9 @@ struct OnboardingAISetupView: View {
                 let more = self.model.authOptions.filter { !$0.featured }
                 ForEach(featured) { option in
                     self.providerAuthRow(option)
+                }
+                if !self.model.manualProviders.isEmpty {
+                    self.apiKeysRow
                 }
                 if !more.isEmpty {
                     DisclosureGroup("More sign-in options") {
@@ -443,10 +541,37 @@ struct OnboardingAISetupView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor)))
+            .background(OnboardingSurface(cornerRadius: 12))
         }
+    }
+
+    private var apiKeysRow: some View {
+        Button {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                self.model.showManualEntry = true
+            }
+        } label: {
+            HStack(spacing: 10) {
+                OnboardingProviderArtwork(
+                    icon: nil,
+                    brandCandidates: [],
+                    fallbackSymbol: "key.fill")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("API Keys")
+                        .font(.callout.weight(.semibold))
+                    Text("Connect with an API key or token")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Text("Connect")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(self.model.isBusy)
+        .openClawSelectableRowChrome(selected: self.model.showManualEntry)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
@@ -455,10 +580,12 @@ struct OnboardingAISetupView: View {
             self.model.startProviderAuth(option)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: option
-                    .kind == "device-code" ? "link.badge.plus" : "person.crop.circle.badge.checkmark")
-                    .font(.title3)
-                    .frame(width: 24)
+                OnboardingProviderArtwork(
+                    icon: option.icon,
+                    brandCandidates: [option.brandId, option.id],
+                    fallbackSymbol: option.kind == "device-code"
+                        ? "link.badge.plus"
+                        : "person.crop.circle.badge.checkmark")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(.callout.weight(.semibold))
@@ -484,9 +611,11 @@ struct OnboardingAISetupView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.model.activeAuthOption?.label ?? "Provider sign-in")
+                    Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
-                    Text("Credentials stay on this Gateway and are saved only after the live test succeeds.")
+                    Text(self.model.isPreparingModel
+                        ? "OpenClaw will detect and verify the prepared model before using it."
+                        : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -494,10 +623,17 @@ struct OnboardingAISetupView: View {
             }
 
             if let step = self.model.authStep {
-                if let title = step.title, !title.isEmpty {
+                let deviceCode = parseWizardDeviceCode(step.devicecode)
+                if deviceCode == nil,
+                   let title = step.title,
+                   !title.isEmpty,
+                   title != self.model.activeAuthOption?.label
+                {
                     Text(title).font(.headline)
                 }
-                if let message = step.message, !message.isEmpty {
+                if let deviceCode {
+                    self.deviceCodeStep(deviceCode)
+                } else if let message = step.message, !message.isEmpty {
                     ScrollView {
                         Text(message)
                             .textSelection(.enabled)
@@ -505,7 +641,9 @@ struct OnboardingAISetupView: View {
                     }
                     .frame(maxHeight: 190)
                 }
-                if let url = OnboardingProviderAuthLink.safeURL(step.externalurl) {
+                if deviceCode == nil,
+                   let url = OnboardingProviderAuthLink.safeURL(step.externalurl)
+                {
                     Link("Open sign-in page…", destination: url)
                         .font(.caption.weight(.semibold))
                 }
@@ -513,13 +651,17 @@ struct OnboardingAISetupView: View {
             } else if self.model.authBusy {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
-                    Text("Starting secure sign-in…")
+                    Text(self.model.isPreparingModel
+                        ? "Starting local model setup…"
+                        : "Starting secure sign-in…")
                 }
             }
 
             if let error = self.model.authError {
                 OnboardingErrorCard(
-                    title: "Sign-in didn’t complete",
+                    title: self.model.isPreparingModel
+                        ? "Model setup didn’t complete"
+                        : "Sign-in didn’t complete",
                     message: error.summary,
                     details: error.detail,
                     docsSlug: "concepts/model-providers",
@@ -546,6 +688,49 @@ struct OnboardingAISetupView: View {
         }
         .onChange(of: self.model.authStep?.externalurl) { _, rawURL in
             self.openProviderAuthURLIfNeeded(rawURL)
+        }
+    }
+
+    private func deviceCodeStep(_ deviceCode: WizardDeviceCodePresentation) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Finish in your browser")
+                    .font(.headline)
+                Text(deviceCode.message ?? "Enter this one-time code on the provider's sign-in page.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Text(deviceCode.code)
+                    .font(.system(.title2, design: .monospaced).weight(.semibold))
+                    .textSelection(.enabled)
+                Spacer(minLength: 8)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(deviceCode.code, forType: .string)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(OnboardingSurface(cornerRadius: 10))
+
+            HStack(spacing: 12) {
+                if let minutes = deviceCode.expiresInMinutes {
+                    Label("Expires in \(minutes) minutes", systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                if let url = OnboardingProviderAuthLink.safeURL(self.model.authStep?.externalurl) {
+                    Link(destination: url) {
+                        Label("Open sign-in page", systemImage: "arrow.up.right.square")
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+            }
         }
     }
 
@@ -583,6 +768,9 @@ struct OnboardingAISetupView: View {
 
     private var authContinueTitle: String {
         guard let step = model.authStep else { return "Continue" }
+        if parseWizardDeviceCode(step.devicecode) != nil {
+            return String(localized: "I've signed in")
+        }
         return wizardStepType(step) == "note" ? "Continue" : "Submit"
     }
 
@@ -591,6 +779,12 @@ struct OnboardingAISetupView: View {
             Text("Connect with an API key or token")
                 .font(.headline)
             HStack(spacing: 8) {
+                if let provider = self.model.selectedManualProvider {
+                    OnboardingProviderArtwork(
+                        icon: provider.icon,
+                        brandCandidates: [provider.brandId, provider.id],
+                        fallbackSymbol: "key.fill")
+                }
                 Picker("Provider", selection: self.$model.manualProviderID) {
                     ForEach(self.model.manualProviders) { provider in
                         Text(provider.label).tag(provider.id)
@@ -616,7 +810,10 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.manualTesting ||
+                // isBusy, not just manualTesting: submitManualKey drops the tap
+                // while another test runs, so an enabled button would be a
+                // silent no-op.
+                .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(self.manualProviderHelp)
@@ -634,9 +831,7 @@ struct OnboardingAISetupView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor)))
+        .background(OnboardingSurface(cornerRadius: 12))
     }
 
     private var manualProviderHelp: String {
@@ -645,23 +840,6 @@ struct OnboardingAISetupView: View {
             return "Paste the key or token here, and OpenClaw checks it with a real test question."
         }
         return "\(hint). Paste it here, and OpenClaw checks it with a real test question."
-    }
-
-    private var crestodianSheet: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Label("Crestodian — setup helper", systemImage: "lifepreserver")
-                    .font(.headline)
-                Spacer(minLength: 0)
-                Button("Done") {
-                    self.showCrestodianChat = false
-                }
-            }
-            .padding([.top, .horizontal], 14)
-            CrestodianOnboardingChatView(model: self.crestodianChat)
-                .task { await self.crestodianChat.startIfNeeded() }
-        }
-        .frame(width: 520, height: 480)
     }
 }
 
@@ -675,6 +853,8 @@ struct OnboardingErrorCard: View {
     let docsSlug: String
     var retryTitle: String?
     var retry: (() -> Void)?
+    var secondaryTitle: String?
+    var secondary: (() -> Void)?
 
     init(
         title: String,
@@ -682,6 +862,8 @@ struct OnboardingErrorCard: View {
         details: String? = nil,
         docsSlug: String,
         retryTitle: String? = nil,
+        secondaryTitle: String? = nil,
+        secondary: (() -> Void)? = nil,
         retry: (() -> Void)? = nil)
     {
         self.title = title
@@ -690,6 +872,8 @@ struct OnboardingErrorCard: View {
         self.docsSlug = docsSlug
         self.retryTitle = retryTitle
         self.retry = retry
+        self.secondaryTitle = secondaryTitle
+        self.secondary = secondary
     }
 
     var body: some View {
@@ -712,6 +896,11 @@ struct OnboardingErrorCard: View {
                     if let retryTitle, let retry {
                         Button(retryTitle, action: retry)
                             .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    if let secondaryTitle, let secondary {
+                        Button(secondaryTitle, action: secondary)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
                     Button("Open help…") {

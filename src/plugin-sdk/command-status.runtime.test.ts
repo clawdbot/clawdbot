@@ -17,7 +17,7 @@ vi.mock("../auto-reply/reply/commands-status.js", () => ({
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
-  loadSessionEntry,
+  loadSessionEntryReadOnly: loadSessionEntry,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -87,6 +87,7 @@ describe("resolveDirectStatusReplyForSession", () => {
     resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
     resolveDefaultModel.mockReturnValue({ defaultProvider: "openai", defaultModel: "gpt-5.4" });
     createModelSelectionState.mockResolvedValue({
+      resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "on"),
     });

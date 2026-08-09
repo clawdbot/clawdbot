@@ -7,7 +7,6 @@
 export {
   getSessionEntry,
   listSessionEntries,
-  loadSessionStore,
   patchSessionEntry,
   readSessionUpdatedAt,
   updateSessionStoreEntry,
@@ -75,11 +74,6 @@ export {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-export {
-  TELEGRAM_COMMAND_NAME_PATTERN,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
@@ -137,25 +131,9 @@ export type {
   TtsModelOverrideConfig,
   TtsPersonaConfig,
   TtsPersonaFallbackPolicy,
-  TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
-export {
-  clearSessionStoreCacheForTest,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from writing sessions.json directly.
-   */
-  saveSessionStore,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from updating sessions.json directly.
-   */
-  updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
 export {

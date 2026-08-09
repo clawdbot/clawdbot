@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
@@ -26,19 +27,24 @@ import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filt
 import { resolveUserPath } from "../utils.js";
 import {
   listAgentIds,
+  resolveMutableAgentEntry,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
 export {
   listAgentEntries,
+  listAgentEntriesWithSource,
   listAgentIds,
+  resolveMutableAgentEntry,
+  toAgentEntriesRecord,
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
@@ -193,9 +199,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
-  const fallbackAuthProfileIdSource =
-    entry.authProfileOverrideSource ??
-    (entry.authProfileOverrideCompactionCount !== undefined ? "auto" : undefined);
+  const fallbackAuthProfileIdSource = resolveSessionAuthProfileOverrideSource(entry);
   return {
     provider: originProvider,
     model: originModel,
@@ -278,20 +282,15 @@ export function clearAutoFallbackPrimaryProbeSelection(
   delete entry.providerOverride;
   delete entry.modelOverride;
   delete entry.modelOverrideSource;
+  delete entry.modelOverrideRouteResolution;
   delete entry.modelOverrideFallbackOriginProvider;
   delete entry.modelOverrideFallbackOriginModel;
-  if (
-    entry.authProfileOverrideSource === "auto" ||
-    (entry.authProfileOverrideSource === undefined &&
-      entry.authProfileOverrideCompactionCount !== undefined)
-  ) {
+  if (resolveSessionAuthProfileOverrideSource(entry) === "auto") {
     delete entry.authProfileOverride;
     delete entry.authProfileOverrideSource;
     delete entry.authProfileOverrideCompactionCount;
   }
-  delete entry.fallbackNoticeSelectedModel;
-  delete entry.fallbackNoticeActiveModel;
-  delete entry.fallbackNoticeReason;
+  delete entry.fallbackNotice;
   entry.updatedAt = now;
 }
 
@@ -367,11 +366,6 @@ export function resolveAgentEffectiveModelPrimary(
   );
 }
 
-function findMutableAgentEntry(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
-  const id = normalizeAgentId(agentId);
-  return cfg.agents?.list?.find((entry) => normalizeAgentId(entry?.id) === id);
-}
-
 function updateAgentModelPrimary(
   existing: AgentModelConfig | undefined,
   primary: string,
@@ -388,24 +382,25 @@ export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
   primary: string,
+  options: { forceAgent?: boolean } = {},
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
-  if (resolveAgentExplicitModelPrimary(cfg, id)) {
-    const entry = findMutableAgentEntry(cfg, id);
+  // forceAgent pins the write to the agent entry even without an explicit
+  // model, so a per-agent override never rewrites the shared default route.
+  if (options.forceAgent || resolveAgentExplicitModelPrimary(cfg, id)) {
+    const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);
       return "agent";
+    }
+    if (options.forceAgent) {
+      throw new Error(`Could not resolve configured agent "${id}".`);
     }
   }
   cfg.agents ??= {};
   cfg.agents.defaults ??= {};
   cfg.agents.defaults.model = updateAgentModelPrimary(cfg.agents.defaults.model, primary);
   return "defaults";
-}
-
-/** @deprecated Prefer explicit/effective helpers at new call sites. */
-export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
 
 export function resolveAgentModelFallbacksOverride(
@@ -458,11 +453,12 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
+  // then the global subagent default, then agent-primary inheritance.
   const candidates: SubagentModelConfigSelectionResult[] = [
     ...(agentConfig?.subagents?.model
       ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
     ...(params.cfg.agents?.defaults?.subagents?.model
       ? [
           {
@@ -471,16 +467,9 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
+    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
-}
-
-export function resolveSubagentModelConfigSelection(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
-}): AgentModelConfig | undefined {
-  return resolveSubagentModelConfigSelectionResult(params)?.raw;
 }
 
 export function resolveSubagentModelFallbacksOverride(
@@ -514,17 +503,6 @@ function resolveSubagentSpawnModelFallbacksOverride(
   ]);
 }
 
-export function resolveFallbackAgentId(params: {
-  agentId?: string | null;
-  sessionKey?: string | null;
-}): string {
-  const explicitAgentId = normalizeOptionalString(params.agentId) ?? "";
-  if (explicitAgentId) {
-    return normalizeAgentId(explicitAgentId);
-  }
-  return resolveAgentIdFromSessionKey(params.sessionKey);
-}
-
 export function resolveRunModelFallbacksOverride(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string | null;
@@ -533,10 +511,12 @@ export function resolveRunModelFallbacksOverride(params: {
   if (!params.cfg) {
     return undefined;
   }
-  return resolveAgentModelFallbacksOverride(
-    params.cfg,
-    resolveFallbackAgentId({ agentId: params.agentId, sessionKey: params.sessionKey }),
-  );
+  const explicitAgentId = normalizeOptionalString(params.agentId);
+  const agentId = explicitAgentId
+    ? normalizeAgentId(explicitAgentId)
+    : (parseAgentSessionKey(params.sessionKey)?.agentId ??
+      (listAgentIds(params.cfg).length > 0 ? resolveDefaultAgentId(params.cfg) : undefined));
+  return agentId ? resolveAgentModelFallbacksOverride(params.cfg, agentId) : undefined;
 }
 
 export function hasConfiguredModelFallbacks(params: {

@@ -4,16 +4,17 @@ import path from "node:path";
 export type FleetContainerRuntimeName = "docker" | "podman";
 
 export const DEFAULT_FLEET_IMAGE = "ghcr.io/openclaw/openclaw:latest";
-export const FLEET_BASE_PORT = 19_100;
+const FLEET_BASE_PORT = 19_100;
 export const FLEET_GATEWAY_PORT = 18_789;
-export const FLEET_CONTAINER_HOME = "/home/node";
-export const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
-export const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
+const FLEET_CONTAINER_HOME = "/home/node";
+const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
+const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
 export const FLEET_TENANT_LABEL = "openclaw.fleet.tenant";
 export const FLEET_OWNER_LABEL = "openclaw.fleet.owner";
 export const FLEET_ATTEMPT_LABEL = "openclaw.fleet.attempt";
 export const FLEET_ENV_KEYS_LABEL = "openclaw.fleet.env-keys";
-export const FLEET_MANAGED_ENV_KEYS = [
+export const FLEET_DISK_LIMIT_LABEL = "openclaw.fleet.disk-limit";
+const FLEET_MANAGED_ENV_KEYS = [
   "HOME",
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
@@ -44,6 +45,7 @@ export interface CellContainerProfile {
   attemptId: string;
   memory: string;
   cpus: string;
+  diskSize?: string;
   pidsLimit: number;
   environment: Readonly<Record<string, string>>;
   containerUser?:
@@ -52,7 +54,7 @@ export interface CellContainerProfile {
   selinuxRelabel: boolean;
 }
 
-export type CellContainerArgOptions = {
+type CellContainerArgOptions = {
   environmentFile: string;
 };
 
@@ -72,6 +74,19 @@ export function validateFleetImage(image: string): string {
   }
   if (normalized.startsWith("-")) {
     throw new Error("Fleet container image must not begin with '-'.");
+  }
+  return normalized;
+}
+
+export function validateDiskSize(value: string): string {
+  const normalized = value.trim();
+  const numeric = Number.parseFloat(normalized);
+  if (
+    !/^[0-9]+(?:\.[0-9]+)?(?:b|k|kb|m|mb|g|gb|t|tb)?$/iu.test(normalized) ||
+    !Number.isFinite(numeric) ||
+    numeric <= 0
+  ) {
+    throw new Error("--disk must be a positive size such as 10g, 512m, or 1024.");
   }
   return normalized;
 }
@@ -199,6 +214,9 @@ export function validateCellContainerProfile(profile: CellContainerProfile): voi
   if (!profile.cpus.trim()) {
     throw new Error("Fleet cell CPU limit must not be empty.");
   }
+  if (profile.diskSize !== undefined && validateDiskSize(profile.diskSize) !== profile.diskSize) {
+    throw new Error("Fleet cell --disk limit must not have surrounding whitespace.");
+  }
   const cpus = Number(profile.cpus);
   if (!Number.isFinite(cpus) || cpus <= 0) {
     throw new Error("Fleet cell CPU limit must be a positive number.");
@@ -260,6 +278,9 @@ function buildCellContainerArgs(
     `${FLEET_ATTEMPT_LABEL}=${profile.attemptId}`,
     "--label",
     `${FLEET_ENV_KEYS_LABEL}=${userEnvironmentKeys.join(",")}`,
+    // Podman inspect has no HostConfig.StorageOpt (verified live), so this label
+    // is the canonical carrier that lets upgrade/restore replay the disk limit.
+    ...(profile.diskSize ? ["--label", `${FLEET_DISK_LIMIT_LABEL}=${profile.diskSize}`] : []),
     "--init",
     ...containerUserArgs,
     // The official image runs a plain Node process, so the cell needs no Linux capabilities.
@@ -272,6 +293,7 @@ function buildCellContainerArgs(
     profile.memory,
     "--cpus",
     profile.cpus,
+    ...(profile.diskSize ? ["--storage-opt", `size=${profile.diskSize}`] : []),
     "--restart",
     "unless-stopped",
     "--network",

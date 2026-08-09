@@ -10,22 +10,20 @@ import type { AnyAgentTool } from "./tools/common.js";
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 /** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
-/** Direct tools whose structured results cannot cross the JSON-only guest bridge. */
-export const CODE_MODE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer"]);
 /** Hook metadata kind for Code Mode exec tools. */
 const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
 /** Hook metadata kind type for Code Mode exec tools. */
 type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
 /** Source language accepted by the Code Mode exec tool. */
-export type CodeModeExecToolInputKind = "javascript" | "typescript";
+type CodeModeExecToolInputKind = "javascript" | "typescript";
 /** Metadata attached to before-tool-call events for Code Mode exec. */
-export type CodeModeExecHookMetadata = {
+type CodeModeExecHookMetadata = {
   toolKind: CodeModeExecToolKind;
   toolInputKind?: CodeModeExecToolInputKind;
 };
 
-const codeModeControlTools = new WeakSet<AnyAgentTool>();
+const codeModeControlTools = new WeakSet<object>();
 
 /** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
@@ -34,27 +32,15 @@ export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
 }
 
 /** Replicate code-mode identity from an original tool object to a wrapper. */
-export function copyCodeModeControlToolIdentity(
-  original: AnyAgentTool,
-  wrapper: AnyAgentTool,
-): void {
+export function copyCodeModeControlToolIdentity(original: object, wrapper: object): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
   }
 }
 
 /** Return whether a tool was marked as code-mode owned. */
-export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
+export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
-}
-
-/** Return whether a provider payload tool may remain model-visible in Code Mode. */
-export function isCodeModeModelVisibleToolName(name: string): boolean {
-  return (
-    name === CODE_MODE_EXEC_TOOL_NAME ||
-    name === CODE_MODE_WAIT_TOOL_NAME ||
-    CODE_MODE_DIRECT_TOOL_NAMES.has(name)
-  );
 }
 
 function isCodeModeExecTool(tool: AnyAgentTool): boolean {

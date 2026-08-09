@@ -3,6 +3,8 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -33,11 +35,11 @@ class DebugHandler(
 
       // Public-key URL encoding must match the gateway device-auth payload contract.
       val pubKeyUrl = identityStore.publicKeyBase64Url(identity)
-      results.add("publicKeyBase64Url: ${pubKeyUrl ?: "NULL (FAILED)"}")
+      results.add("publicKeyBase64Url: ${pubKeyUrl ?: nativeString("NULL (FAILED)")}")
 
       // Sign/verify through DeviceIdentityStore to catch provider and key-format failures together.
       val signature = identityStore.signPayload(testPayload, identity)
-      results.add("signPayload: ${if (signature != null) "${signature.take(20)}... (OK)" else "NULL (FAILED)"}")
+      results.add("signPayload: ${if (signature != null) nativeString("\${signature.take(20)}... (OK)", signature.take(20)) else nativeString("NULL (FAILED)")}")
 
       if (signature != null) {
         val verifyOk = identityStore.verifySelfSignature(testPayload, signature, identity)
@@ -74,7 +76,7 @@ class DebugHandler(
     } catch (e: Throwable) {
       return GatewaySession.InvokeResult.error(
         code = "ED25519_TEST_FAILED",
-        message = "${e.javaClass.simpleName}: ${e.message}\n${e.stackTraceToString().take(500)}",
+        message = "${e.javaClass.simpleName}: ${e.message}\n${e.stackTraceToString().takeUtf16Safe(500)}",
       )
     }
   }
@@ -102,7 +104,7 @@ class DebugHandler(
         if (!finished) proc.destroyForcibly()
         val raw =
           if (tmpFile.exists() && tmpFile.length() > 0) {
-            tmpFile.readText().take(128000)
+            tmpFile.readText().takeUtf16Safe(128_000)
           } else {
             "(no output, finished=$finished, exists=${tmpFile.exists()})"
           }
@@ -146,7 +148,7 @@ class DebugHandler(
     val camLogFile = java.io.File(appContext.cacheDir, "camera_debug.log")
     val camLog =
       if (camLogFile.exists() && camLogFile.length() > 0) {
-        "\n--- camera_debug.log ---\n" + camLogFile.readText().take(4000)
+        "\n--- camera_debug.log ---\n" + camLogFile.readText().takeUtf16Safe(4_000)
       } else {
         ""
       }

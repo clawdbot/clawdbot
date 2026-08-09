@@ -1,10 +1,8 @@
-// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
+// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createMantleAnthropicStreamFn,
-  resolveMantleAnthropicBaseUrl,
-} from "./mantle-anthropic.runtime.js";
+import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
 function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
@@ -32,12 +30,7 @@ function createTestDeps() {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[index];
@@ -134,6 +127,47 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.thinkingEnabled).toBe(true);
     expect(streamOptions.effort).toBe("high");
   });
+
+  it.each([
+    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
+    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
+    { reasoning: "max" as const, thinkingEnabled: true, effort: "max" },
+  ])(
+    "uses the Opus 5 contract for reasoning=$reasoning",
+    ({ reasoning, thinkingEnabled, effort }) => {
+      const model = createTestModel({
+        id: "anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-opus-5" },
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        maxTokens: 128_000,
+      });
+      const deps = createTestDeps();
+      deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+      void createMantleAnthropicStreamFn(deps)(
+        model,
+        { messages: [] },
+        {
+          apiKey: "bedrock-bearer-token",
+          reasoning,
+          temperature: 0.2,
+        },
+      );
+
+      expect(firstStreamOptions(deps)).toMatchObject({
+        thinkingEnabled,
+        maxTokens: 128_000,
+      });
+      if (effort) {
+        expect(firstStreamOptions(deps).effort).toBe(effort);
+      } else {
+        expect(firstStreamOptions(deps)).not.toHaveProperty("effort");
+      }
+      expect(firstStreamOptions(deps)).not.toHaveProperty("temperature");
+    },
+  );
 
   it.each([
     { reasoning: undefined, effort: "high" },
@@ -266,14 +300,5 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.maxTokens).toBe(1_000);
     expect(streamOptions).not.toHaveProperty("thinkingBudgetTokens");
     expect(streamOptions.temperature).toBeUndefined();
-  });
-
-  it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {
-    expect(resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/v1")).toBe(
-      "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-    );
-    expect(
-      resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/anthropic/"),
-    ).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
   });
 });

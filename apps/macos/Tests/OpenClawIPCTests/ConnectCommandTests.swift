@@ -1,6 +1,6 @@
 import Foundation
-import OpenClawKit
 import Testing
+@testable import OpenClawKit
 @testable import OpenClawMacCLI
 
 private final class CLIConnectAuthRecorder: @unchecked Sendable {
@@ -83,7 +83,7 @@ struct ConnectCommandTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             var config = GatewayConfig()
             config.mode = "remote"
             config.remoteToken = "gateway-a-config-token" // pragma: allowlist secret
@@ -135,7 +135,7 @@ struct ConnectCommandTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             var configA = GatewayConfig()
             configA.mode = "remote"
             configA.remoteUrl = "wss://gateway-a.example.test"

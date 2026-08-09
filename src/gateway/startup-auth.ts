@@ -11,14 +11,8 @@ import {
 } from "./auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
-import {
-  hasGatewayPasswordEnvCandidate,
-  hasGatewayTokenEnvCandidate,
-  trimToUndefined,
-} from "./credentials.js";
+import { trimToUndefined } from "./credentials.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
-
-export { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
   "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
@@ -146,12 +140,8 @@ function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthCo
 }
 
 function hasGatewayPasswordOverrideCandidate(params: {
-  env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  if (hasGatewayPasswordEnvCandidate(params.env)) {
-    return true;
-  }
   return (
     typeof params.authOverride?.password === "string" &&
     params.authOverride.password.trim().length > 0
@@ -187,22 +177,27 @@ export async function ensureGatewayStartupAuth(params: {
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasTokenCandidate:
-        hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }) ||
-        hasGatewayTokenEnvCandidate(env),
-      hasPasswordCandidate:
-        hasGatewayPasswordOverrideCandidate({ env, authOverride: params.authOverride }) ||
+      hasTokenOverride: hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }),
+      hasPasswordOverride: hasGatewayPasswordOverrideCandidate({
+        authOverride: params.authOverride,
+      }),
+      hasTokenFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN)),
+      hasPasswordFallback:
+        Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) ||
         hasConfiguredGatewayAuthSecretInput(params.cfg, "gateway.auth.password"),
     }),
     resolveGatewayPasswordSecretRefValue({
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasPasswordCandidate: hasGatewayPasswordOverrideCandidate({
-        env,
+      hasPasswordOverride: hasGatewayPasswordOverrideCandidate({
         authOverride: params.authOverride,
       }),
-      hasTokenCandidate: hasGatewayTokenCandidate({
+      hasTokenOverride: hasGatewayTokenOverrideCandidate({
+        authOverride: params.authOverride,
+      }),
+      hasPasswordFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)),
+      hasTokenFallback: hasGatewayTokenCandidate({
         cfg: params.cfg,
         env,
         authOverride: params.authOverride,

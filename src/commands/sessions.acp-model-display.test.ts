@@ -79,7 +79,7 @@ function useTempStateDir(): string {
 function writeAcpRuntimeMeta(sessionKey: string): void {
   writeAcpSessionMetaForMigration({
     sessionKey,
-    sessionId: "acp-bridge-session-id",
+    lifecycleRevision: undefined,
     meta: {
       backend: "copilot",
       agent: "copilot",
@@ -177,9 +177,10 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     // SQLite ACP metadata (persisted by the ACP control plane manager).
     useTempStateDir();
     writeAcpRuntimeMeta(ACP_SESSION_KEY);
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-red",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
@@ -216,9 +217,10 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     // events (catalog notes this as deferrable).
     useTempStateDir();
     writeAcpRuntimeMeta(ACP_SESSION_KEY);
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-fix-shape",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
@@ -241,9 +243,10 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
 
   it("reads ACP runtime metadata from SQLite for the display overlay", async () => {
     useTempStateDir();
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-sqlite",
+      { agentId: "copilot" },
     );
     writeAcpRuntimeMeta(ACP_SESSION_KEY);
 
@@ -255,18 +258,18 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     expect(row?.modelProvider).toBe("acpx");
   });
 
-  it("canonicalizes raw ACP store keys before reading SQLite metadata", async () => {
+  it("reads canonical ACP store keys before reading SQLite metadata", async () => {
     useTempStateDir();
-    const rawStoreKey = "acp:binding:discord:default:feedface";
     const canonicalAcpKey = "agent:copilot:acp:binding:discord:default:feedface";
-    const store = writeStore(
-      { [rawStoreKey]: buildAcpBridgeSessionEntry() },
+    const store = await writeStore(
+      { [canonicalAcpKey]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-canonical",
+      { agentId: "copilot" },
     );
     writeAcpRuntimeMeta(canonicalAcpKey);
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-    const row = payload.sessions?.find((entry) => entry.key === rawStoreKey);
+    const row = payload.sessions?.find((entry) => entry.key === canonicalAcpKey);
 
     expect(row).toBeDefined();
     expect(row?.model).toBe("copilot-acp");
@@ -279,9 +282,10 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     // and must NOT receive the acpx sentinel. This guards against a regression
     // where key-shape-only detection would misreport bridge sessions.
     const ACP_BRIDGE_SESSION_KEY = "agent:copilot:acp:bridge-session-1";
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_BRIDGE_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-bridge-control",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
@@ -312,9 +316,10 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     //      remains correct for non-ACP keys; the proposed sentinel overlay
     //      must NOT break this case (it should only fire when both
     //      isAcpSessionKey(row.key) is true AND ACP metadata is present).
-    const store = writeStore(
+    const store = await writeStore(
       { [NON_ACP_SESSION_KEY]: buildNonAcpSessionEntry() },
       "sessions-acp-model-display-green-control",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);

@@ -23,7 +23,7 @@ function formatReplyTarget(replyTo: WhatsAppReplyContext | null) {
   return `[Replying to ${sender}${idPart}]\n${replyTo.body}\n[/Replying]`;
 }
 
-export function formatReplyContext(msg: AdmittedWebInboundMessage) {
+function formatReplyContext(msg: AdmittedWebInboundMessage) {
   return formatReplyTarget(getReplyContext(msg));
 }
 
@@ -36,9 +36,9 @@ export function buildInboundLine(params: {
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
   const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // WhatsApp inbound prefix: channels.whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
+  // WhatsApp inbound prefix: channels.whatsapp.responsePrefix > identity/defaults.
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-    configured: cfg.channels?.whatsapp?.messagePrefix,
+    configured: cfg.channels?.whatsapp?.responsePrefix,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const admission = requireWhatsAppInboundAdmission(msg);

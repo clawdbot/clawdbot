@@ -12,9 +12,8 @@ import {
 } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
-  diagnoseChromeCdp,
-  formatChromeCdpDiagnostic,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,

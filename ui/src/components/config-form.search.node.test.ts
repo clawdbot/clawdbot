@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.node.ts";
+import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 
 const schema = {
   type: "object",
@@ -66,5 +66,54 @@ describe("config form search", () => {
       criteria: parseConfigSearchQuery("mode tag:security"),
     });
     expect(negative).toBe(false);
+  });
+
+  it("searches array item schemas before entries exist", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            source: {
+              type: "string",
+              description: "Credential source for outgoing requests",
+            },
+          },
+        },
+      },
+      value: [],
+      path: ["headers"],
+      hints: {},
+      criteria: parseConfigSearchQuery("credential source"),
+    });
+
+    expect(matched).toBe(true);
+  });
+
+  it("searches additional-property schemas before entries exist", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "object",
+        additionalProperties: {
+          type: "object",
+          properties: {
+            url: {
+              type: "string",
+            },
+          },
+        },
+      },
+      value: {},
+      path: ["servers"],
+      hints: {
+        "servers.*.url": {
+          help: "Endpoint used by the remote service",
+        },
+      },
+      criteria: parseConfigSearchQuery("remote service"),
+    });
+
+    expect(matched).toBe(true);
   });
 });

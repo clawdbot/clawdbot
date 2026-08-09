@@ -1,3 +1,4 @@
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 // Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
@@ -22,6 +23,17 @@ export type UsageColumnId =
   | "tools"
   | "errors"
   | "duration";
+
+export const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
+  "channel",
+  "agent",
+  "provider",
+  "model",
+  "messages",
+  "tools",
+  "errors",
+  "duration",
+];
 
 export type TimeSeriesPoint = SessionUsageTimePoint;
 
@@ -68,10 +80,12 @@ type UsageDetailState = {
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
+  timeSeriesStatus: PanelRefreshStatus;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
   timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
+  sessionLogsStatus: PanelRefreshStatus;
   sessionLogsExpanded: boolean;
   logFilters: {
     roles: SessionLogRole[];
@@ -120,6 +134,8 @@ type UsageCallbacks = {
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
+    onRetryTimeSeries: () => void;
+    onRetrySessionLogs: () => void;
   };
 };
 

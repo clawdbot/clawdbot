@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  collectStalePluginRuntimeSymlinkHealthFindings,
-  collectStalePluginRuntimeSymlinks,
-  stalePluginRuntimeSymlinkToHealthFinding,
-} from "./plugin-runtime-symlinks.js";
+import { collectStalePluginRuntimeSymlinkHealthFindings } from "./plugin-runtime-symlinks.js";
 
 async function expectSymlinkPresent(targetPath: string): Promise<void> {
   expect((await fs.lstat(targetPath)).isSymbolicLink()).toBe(true);
@@ -69,30 +65,16 @@ describe("plugin runtime symlink health findings", () => {
     await fs.symlink(missingTarget, staleLink, "dir");
     await fs.symlink(liveTarget, liveLink, "dir");
 
-    const [stale] = await collectStalePluginRuntimeSymlinks(packageRoot);
-    if (!stale) {
-      throw new Error("expected stale plugin-runtime symlink finding");
-    }
-
-    expect(stale).toEqual({
-      name: "@slack/web-api",
-      path: staleLink,
-      target: missingTarget,
-    });
-    expect(stalePluginRuntimeSymlinkToHealthFinding(stale)).toEqual({
-      checkId: "core/doctor/stale-plugin-runtime-symlinks",
-      severity: "warning",
-      message: `Stale plugin-runtime symlink @slack/web-api points at ${missingTarget}.`,
-      path: staleLink,
-      target: staleLink,
-      requirement: "stale-plugin-runtime-symlink-removed",
-      fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
-    });
     expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([
-      expect.objectContaining({
+      {
         checkId: "core/doctor/stale-plugin-runtime-symlinks",
+        severity: "warning",
+        message: `Stale plugin-runtime symlink @slack/web-api points at ${missingTarget}.`,
         path: staleLink,
-      }),
+        target: staleLink,
+        requirement: "stale-plugin-runtime-symlink-removed",
+        fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
+      },
     ]);
     await expectSymlinkPresent(staleLink);
     await expectSymlinkPresent(liveLink);
@@ -113,7 +95,9 @@ describe("plugin runtime symlink health findings", () => {
     await fs.mkdir(existingTarget, { recursive: true });
     await fs.symlink(existingTarget, staleLink, "dir");
 
-    await expect(collectStalePluginRuntimeSymlinks(packageRoot)).resolves.toEqual([]);
+    await expect(collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).resolves.toEqual(
+      [],
+    );
     await expect(
       collectStalePluginRuntimeSymlinkHealthFindings({
         packageRoot,

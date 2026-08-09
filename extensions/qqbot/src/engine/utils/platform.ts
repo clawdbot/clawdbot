@@ -9,8 +9,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
-import { formatErrorMessage } from "./format.js";
 import { debugLog, debugWarn } from "./log.js";
 
 /**
@@ -82,7 +82,7 @@ function resolveOpenClawHome(): string {
  * Current QQ Bot runtime state lives in plugin SQLite KV. This path remains for
  * legacy imports and media-path remaps from older releases.
  */
-export function getQQBotDataPath(...subPaths: string[]): string {
+function getQQBotDataPath(...subPaths: string[]): string {
   return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
 }
 
@@ -231,7 +231,7 @@ function isPathWithinRoot(candidate: string, root: string): boolean {
 }
 
 /** Remap legacy or hallucinated QQ Bot local media paths to real files when possible. */
-export function resolveQQBotLocalMediaPath(p: string): string {
+function resolveQQBotLocalMediaPath(p: string): string {
   const normalized = normalizePath(p);
   if (!isLocalPath(normalized) || fs.existsSync(normalized)) {
     return normalized;

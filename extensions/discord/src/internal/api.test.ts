@@ -226,8 +226,7 @@ describe("Discord REST API helpers", () => {
     await expect(
       editWebhookMessage(rest, "app1", "wtoken", "m1", { body: { content: "updated" } }),
     ).resolves.toEqual({ id: "m3" });
-    await deleteWebhookMessage(rest, "app1", "wtoken", "m1");
-
+    await expect(deleteWebhookMessage(rest, "app1", "wtoken", "m1")).resolves.toBeUndefined();
     expect(rest.calls).toEqual([
       {
         method: "POST",

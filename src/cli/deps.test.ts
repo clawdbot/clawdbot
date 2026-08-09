@@ -1,7 +1,7 @@
 // Dependency tests cover CLI dependency imports and cold-start safety.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 
 const runtimeFactories = vi.hoisted(() => ({
   whatsapp: vi.fn(),
@@ -105,5 +105,25 @@ describe("createDefaultDeps", () => {
 
     expect(runtimeFactories.discord).toHaveBeenCalledTimes(1);
     expect(sendFns.discord).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a channel runtime after a transient load failure", async () => {
+    runtimeFactories.telegram.mockImplementationOnce(() => {
+      throw new Error("transient channel load");
+    });
+    const createDefaultDeps = await loadCreateDefaultDeps("module-retry");
+    const deps = createDefaultDeps();
+    const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
+
+    await expect(sendTelegram("chat", "first", { verbose: false })).rejects.toThrow(
+      "transient channel load",
+    );
+    await expect(sendTelegram("chat", "second", { verbose: false })).resolves.toEqual({
+      messageId: "t1",
+      chatId: "telegram:1",
+    });
+
+    expect(runtimeFactories.telegram).toHaveBeenCalledTimes(2);
+    expect(sendFns.telegram).toHaveBeenCalledOnce();
   });
 });

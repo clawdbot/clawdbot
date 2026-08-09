@@ -17,16 +17,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
   };
 });
 
-import {
-  buildGeminiEmbeddingRequest,
-  buildGeminiTextEmbeddingRequest,
-  createGeminiEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  GEMINI_EMBEDDING_2_MODELS,
-  isGeminiEmbedding2Model,
-  normalizeGeminiModel,
-  resolveGeminiOutputDimensionality,
-} from "./embedding-provider.js";
+import { createGeminiEmbeddingProvider } from "./embedding-provider.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -63,75 +54,40 @@ function requireFirstFetchInput(fetchMock: ReturnType<typeof vi.fn>): RequestInf
   return call[0] as RequestInfo | URL;
 }
 
-describe("Gemini embedding request helpers", () => {
-  it("builds requests and resolves model settings", () => {
-    expect(
-      buildGeminiTextEmbeddingRequest({
-        text: "hello",
-        taskType: "RETRIEVAL_DOCUMENT",
-        modelPath: "models/gemini-embedding-2-preview",
-        outputDimensionality: 1536,
-      }),
-    ).toEqual({
-      model: "models/gemini-embedding-2-preview",
-      content: { parts: [{ text: "hello" }] },
-      taskType: "RETRIEVAL_DOCUMENT",
-      outputDimensionality: 1536,
-    });
-    expect(
-      buildGeminiEmbeddingRequest({
-        input: {
-          text: "Image file: diagram.png",
-          parts: [
-            { type: "text", text: "Image file: diagram.png" },
-            { type: "inline-data", mimeType: "image/png", data: "abc123" },
-          ],
-        },
-        taskType: "RETRIEVAL_DOCUMENT",
-        modelPath: "models/gemini-embedding-2-preview",
-        outputDimensionality: 1536,
-      }),
-    ).toEqual({
-      model: "models/gemini-embedding-2-preview",
-      content: {
-        parts: [
-          { text: "Image file: diagram.png" },
-          { inlineData: { mimeType: "image/png", data: "abc123" } },
-        ],
-      },
-      taskType: "RETRIEVAL_DOCUMENT",
-      outputDimensionality: 1536,
-    });
-    expect(GEMINI_EMBEDDING_2_MODELS.has("gemini-embedding-2-preview")).toBe(true);
-    expect(isGeminiEmbedding2Model("gemini-embedding-2-preview")).toBe(true);
-    expect(isGeminiEmbedding2Model("gemini-embedding-001")).toBe(false);
-    expect(isGeminiEmbedding2Model("text-embedding-004")).toBe(false);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-001")).toBeUndefined();
-    expect(resolveGeminiOutputDimensionality("text-embedding-004")).toBeUndefined();
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview")).toBe(3072);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 768)).toBe(768);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 1536)).toBe(1536);
-    expect(resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 3072)).toBe(3072);
-    expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 512)).toThrow(
-      /Invalid outputDimensionality 512/,
-    );
-    expect(() => resolveGeminiOutputDimensionality("gemini-embedding-2-preview", 1024)).toThrow(
-      /Valid values: 768, 1536, 3072/,
-    );
-    expect(normalizeGeminiModel("models/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("gemini/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("google/gemini-embedding-2-preview")).toBe(
-      "gemini-embedding-2-preview",
-    );
-    expect(normalizeGeminiModel("")).toBe(DEFAULT_GEMINI_EMBEDDING_MODEL);
-  });
-});
-
 describe("Gemini embedding provider", () => {
+  it.each(["models/", "gemini/", "google/"])(
+    "normalizes the %s model prefix through the provider request",
+    async (prefix) => {
+      const fetchMock = installFetchMock(() => ({ embedding: { values: [1, 0] } }));
+      const { provider } = await createGeminiEmbeddingProvider({
+        config: {} as never,
+        provider: "gemini",
+        remote: { apiKey: "placeholder" },
+        model: `${prefix}gemini-embedding-2-preview`,
+        fallback: "none",
+      });
+
+      await provider.embedQuery("query");
+
+      expect(requireFirstFetchInput(fetchMock)).toBe(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
+      );
+    },
+  );
+
+  it("rejects unsupported Gemini 2 output dimensions through provider creation", async () => {
+    await expect(
+      createGeminiEmbeddingProvider({
+        config: {} as never,
+        provider: "gemini",
+        remote: { apiKey: "placeholder" },
+        model: "gemini-embedding-2-preview",
+        outputDimensionality: 1024,
+        fallback: "none",
+      }),
+    ).rejects.toThrow(/Valid values: 768, 1536, 3072/);
+  });
+
   it("handles legacy and v2 request/response behavior", async () => {
     const fetchMock = installFetchMock((input) => {
       const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;

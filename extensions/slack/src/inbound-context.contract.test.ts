@@ -14,6 +14,7 @@ function createSlackAccount(config: ResolvedSlackAccount["config"] = {}): Resolv
   return {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",

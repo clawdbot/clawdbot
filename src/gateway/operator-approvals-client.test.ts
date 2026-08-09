@@ -15,6 +15,7 @@ const bootstrapState = vi.hoisted(() => ({
   url: "ws://127.0.0.1:18789",
   urlSource: "local loopback",
   auth: { token: "secret" as string | undefined, password: undefined as string | undefined },
+  tlsFingerprint: undefined as string | undefined,
 }));
 
 class MockGatewayClient {
@@ -61,6 +62,7 @@ vi.mock("./client-bootstrap.js", () => ({
     url: bootstrapState.url,
     urlSource: bootstrapState.urlSource,
     auth: bootstrapState.auth,
+    tlsFingerprint: bootstrapState.tlsFingerprint,
   })),
 }));
 
@@ -102,6 +104,7 @@ describe("withOperatorApprovalsGatewayClient", () => {
     bootstrapState.url = "ws://127.0.0.1:18789";
     bootstrapState.urlSource = "local loopback";
     bootstrapState.auth = { token: "secret", password: undefined };
+    bootstrapState.tlsFingerprint = undefined;
   });
 
   it("waits for hello before running the callback and stops cleanly", async () => {
@@ -113,6 +116,7 @@ describe("withOperatorApprovalsGatewayClient", () => {
     });
 
     expect(clientState.options?.scopes).toEqual(["operator.approvals"]);
+    expect(clientState.options?.caps).toEqual(["approvals"]);
     expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
     expect(clientState.options?.deviceIdentity).toBeNull();
     expect(clientState.requestSpy).toHaveBeenCalledWith("exec.approval.resolve", {
@@ -131,6 +135,15 @@ describe("withOperatorApprovalsGatewayClient", () => {
     expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
     expect(clientState.options?.deviceIdentity).toBeUndefined();
     expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it("passes the resolved TLS fingerprint to the approval Gateway client", async () => {
+    bootstrapState.url = "wss://127.0.0.1:18789";
+    bootstrapState.tlsFingerprint = "sha256:local";
+
+    await runOperatorApprovalsGatewayClient();
+
+    expect(clientState.options?.tlsFingerprint).toBe("sha256:local");
   });
 
   it("keeps device identity for env loopback approval clients without runtime authority", async () => {

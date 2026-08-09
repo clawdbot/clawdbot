@@ -4,6 +4,7 @@
  * Converts ARIA or AI snapshots into compact role/name text with stable refs
  * and duplicate disambiguation for agent actions.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
@@ -16,6 +17,9 @@ type RoleRef = {
 
 /** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
+
+/** Identity strategy used to compare consecutive ref-bearing snapshots. */
+export type RoleSnapshotIdentityMode = "role" | "aria";
 
 type RoleSnapshotStats = {
   lines: number;
@@ -39,7 +43,7 @@ export type RoleSnapshotOptions = {
 };
 
 /** Compute snapshot line/char/ref statistics. */
-export function getRoleSnapshotStats<T extends { role: string }>(
+function getRoleSnapshotStats<T extends { role: string }>(
   snapshot: string,
   refs: Record<string, T>,
 ): RoleSnapshotStats {
@@ -54,6 +58,54 @@ export function getRoleSnapshotStats<T extends { role: string }>(
 
 function findSnapshotLineRef(line: string): string | undefined {
   return ROLE_SNAPSHOT_LINE_REF_RE.exec(line)?.[1];
+}
+
+/** Build the stable identity set used for per-tab snapshot deltas. */
+export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
+  refs: Record<string, T>,
+  mode: RoleSnapshotIdentityMode,
+): Set<string> {
+  // Duplicate role+name elements are identified positionally by nth, so insertion can mark a
+  // sibling duplicate. This is acceptable: they are actor-indistinguishable without DOM backing.
+  return new Set(
+    Object.entries(refs).map(([ref, value]) =>
+      mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,
+    ),
+  );
+}
+
+/** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
+function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
+  snapshot: string;
+  refs: Record<string, T>;
+  mode: RoleSnapshotIdentityMode;
+  previousKeys?: ReadonlySet<string>;
+}): { snapshot: string; keys: Set<string>; newElements?: number } {
+  const keys = getRoleSnapshotIdentityKeys(params.refs, params.mode);
+  if (params.previousKeys === undefined) {
+    return { snapshot: params.snapshot, keys };
+  }
+  const keyByRef = new Map(
+    Object.entries(params.refs).map(([ref, value]) => [
+      ref,
+      params.mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,
+    ]),
+  );
+  const markedKeys = new Set<string>();
+  const lines = params.snapshot.split("\n").map((line) => {
+    const ref = findSnapshotLineRef(line);
+    const key = ref ? keyByRef.get(ref) : undefined;
+    if (!key || params.previousKeys?.has(key)) {
+      return line;
+    }
+    markedKeys.add(key);
+    return `${line} [new]`;
+  });
+  const newElements = markedKeys.size;
+  if (newElements > 0) {
+    lines.push(`${newElements} new element(s) since last snapshot`);
+  }
+  return { snapshot: lines.join("\n"), keys, newElements };
 }
 
 function truncateRoleSnapshot(snapshot: string, maxChars: number): string {
@@ -71,23 +123,37 @@ function truncateRoleSnapshot(snapshot: string, maxChars: number): string {
 }
 
 /** Apply the final output budget, then keep only refs present on complete output lines. */
-export function finalizeRoleSnapshot<T extends { role: string }>(params: {
+export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   snapshot: string;
   refs: Record<string, T>;
   maxChars?: number;
+  delta?: {
+    mode: RoleSnapshotIdentityMode;
+    previousKeys?: ReadonlySet<string>;
+  };
 }): {
   snapshot: string;
   truncated?: boolean;
   refs: Record<string, T>;
   stats: RoleSnapshotStats;
+  newElements?: number;
 } {
   const normalizedMaxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
       ? Math.floor(params.maxChars)
       : undefined;
   const maxChars = normalizedMaxChars && normalizedMaxChars > 0 ? normalizedMaxChars : undefined;
-  const truncated = maxChars !== undefined && params.snapshot.length > maxChars;
-  const snapshot = truncated ? truncateRoleSnapshot(params.snapshot, maxChars) : params.snapshot;
+  const annotated = params.delta
+    ? annotateRoleSnapshotDelta({
+        snapshot: params.snapshot,
+        refs: params.refs,
+        mode: params.delta.mode,
+        previousKeys: params.delta.previousKeys,
+      })
+    : undefined;
+  const sourceSnapshot = annotated?.snapshot ?? params.snapshot;
+  const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;
+  const snapshot = truncated ? truncateRoleSnapshot(sourceSnapshot, maxChars) : sourceSnapshot;
   const visibleRefs = new Set(
     snapshot
       .split("\n")
@@ -97,17 +163,25 @@ export function finalizeRoleSnapshot<T extends { role: string }>(params: {
   const refs = Object.fromEntries(
     Object.entries(params.refs).filter(([ref]) => visibleRefs.has(ref)),
   ) as Record<string, T>;
+  const newElements =
+    params.delta?.previousKeys === undefined
+      ? undefined
+      : [...getRoleSnapshotIdentityKeys(refs, params.delta.mode)].filter(
+          (key) => !params.delta?.previousKeys?.has(key),
+        ).length;
   const result = {
     snapshot,
     refs,
     stats: getRoleSnapshotStats(snapshot, refs),
+    ...(newElements !== undefined ? { newElements } : {}),
   };
   return truncated ? { ...result, truncated: true } : result;
 }
 
 function getIndentLevel(line: string): number {
   const match = line.match(/^(\s*)/);
-  return match ? Math.floor(match[1].length / 2) : 0;
+  const indent = match?.[1];
+  return indent === undefined ? 0 : Math.floor(indent.length / 2);
 }
 
 function matchInteractiveSnapshotLine(
@@ -125,6 +199,9 @@ function matchInteractiveSnapshotLine(
   const roleRaw = match[2];
   const name = match[3];
   const suffix = match[4];
+  if (roleRaw === undefined || suffix === undefined) {
+    return null;
+  }
   if (roleRaw.startsWith("/")) {
     return null;
   }
@@ -201,13 +278,20 @@ function compactTree(tree: string) {
     }
     current.entry.keep ||= current.entry.hasRef;
     if (current.entry.hasRef && stack.length > 0) {
-      stack[stack.length - 1].entry.hasRef = true;
+      const parent = stack.at(-1);
+      if (parent !== undefined) {
+        parent.entry.hasRef = true;
+      }
     }
   };
 
   for (const line of lines) {
     const indent = getIndentLevel(line);
-    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+    while (stack.length > 0) {
+      const lastEntry = expectDefined(stack.at(-1), "non-empty role snapshot stack");
+      if (lastEntry.indent < indent) {
+        break;
+      }
       finishEntry();
     }
     const entry = {
@@ -246,7 +330,13 @@ function processLine(
     return options.interactive ? null : line;
   }
 
-  const [, prefix, roleRaw, name, suffix] = match;
+  const prefix = match[1];
+  const roleRaw = match[2];
+  const name = match[3];
+  const suffix = match[4];
+  if (prefix === undefined || roleRaw === undefined || suffix === undefined) {
+    return options.interactive ? null : line;
+  }
   if (roleRaw.startsWith("/")) {
     return options.interactive ? null : line;
   }
@@ -414,10 +504,10 @@ export function buildRoleSnapshotFromAriaSnapshot(
 function parseAiSnapshotRef(suffix: string): string | null {
   const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
   if (eMatch) {
-    return eMatch[1];
+    return eMatch[1] ?? null;
   }
   const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
-  return numMatch ? numMatch[1] : null;
+  return numMatch?.[1] ?? null;
 }
 
 /**
@@ -466,6 +556,10 @@ export function buildRoleSnapshotFromAiSnapshot(
     const roleRaw = match[2];
     const name = match[3];
     const suffix = match[4];
+    if (roleRaw === undefined || suffix === undefined) {
+      out.push(line);
+      continue;
+    }
     if (roleRaw.startsWith("/")) {
       out.push(line);
       continue;

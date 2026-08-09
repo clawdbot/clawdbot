@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -30,7 +31,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 // Types
 // ============================================================================
 
-export interface NostrProfileHttpContext {
+interface NostrProfileHttpContext {
   /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
@@ -57,18 +58,6 @@ const profileRateLimiter = createFixedWindowRateLimiter({
   maxRequests: RATE_LIMIT_MAX_REQUESTS,
   maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
 });
-
-export function clearNostrProfileRateLimitStateForTest(): void {
-  profileRateLimiter.clear();
-}
-
-export function getNostrProfileRateLimitStateSizeForTest(): number {
-  return profileRateLimiter.size();
-}
-
-export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
-  return profileRateLimiter.isRateLimited(accountId, nowMs);
-}
 
 function checkRateLimit(accountId: string): boolean {
   return !profileRateLimiter.isRateLimited(accountId);
@@ -178,8 +167,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return isLoopbackHost(url.hostname);
   } catch {
     return false;
   }

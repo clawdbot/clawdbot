@@ -57,11 +57,11 @@ export const ConnectErrorDetailCodes = {
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
-export type ConnectErrorDetailCode =
+type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
 /** Pairing-specific reasons clients can display and use for reconnect policy. */
-export const ConnectPairingRequiredReasons = {
+const ConnectPairingRequiredReasons = {
   NOT_PAIRED: "not-paired",
   ROLE_UPGRADE: "role-upgrade",
   SCOPE_UPGRADE: "scope-upgrade",
@@ -72,7 +72,7 @@ export type ConnectPairingRequiredReason =
   (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
 
 /** Suggested client-side recovery action for structured connect errors. */
-export type ConnectRecoveryNextStep =
+type ConnectRecoveryNextStep =
   | "retry_with_device_token"
   | "update_auth_configuration"
   | "update_auth_credentials"
@@ -80,13 +80,13 @@ export type ConnectRecoveryNextStep =
   | "review_auth_configuration";
 
 /** Optional retry guidance extracted from gateway connect-error details. */
-export type ConnectErrorRecoveryAdvice = {
+type ConnectErrorRecoveryAdvice = {
   canRetryWithDeviceToken?: boolean;
   recommendedNextStep?: ConnectRecoveryNextStep;
 };
 
 /** Full structured details for pairing-required connect failures. */
-export type PairingConnectErrorDetails = {
+type PairingConnectErrorDetails = {
   code: typeof ConnectErrorDetailCodes.PAIRING_REQUIRED;
   reason?: ConnectPairingRequiredReason;
   requestId?: string;
@@ -470,6 +470,98 @@ export function readConnectPairingRequiredMessage(
   return {
     ...(requestId ? { requestId } : {}),
     reason,
+  };
+}
+
+const PAIRING_APPROVAL_REMEDIATION =
+  "Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed " +
+  "`openclaw devices approve <requestId>` command and reconnect (pass the same --url and " +
+  "--token/--password flags if you connected with explicit credentials).";
+const DEVICE_TOKEN_REMEDIATION =
+  "Rotate the paired-device token with `openclaw devices rotate --device <deviceId> --role operator`, then reconnect.";
+const SHARED_TOKEN_REMEDIATION =
+  "Verify `gateway.remote.token` matches `gateway.auth.token`. If a paired-device token is stale, " +
+  "rotate it with `openclaw devices rotate --device <deviceId> --role operator`, then reconnect.";
+const SCOPE_MISMATCH_REMEDIATION =
+  "Review approved scopes with `openclaw devices list`; if an upgrade is pending, preview it with " +
+  "`openclaw devices approve --latest`, approve the printed request, then reconnect.";
+const RATE_LIMITED_REMEDIATION =
+  "Wait for the temporary authentication lockout to expire, then retry.";
+const GATEWAY_CLOSED_MESSAGE_PATTERN = /\bgateway closed \(\d+\):/i;
+
+/** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
+export function classifyGatewayConnectFailure(input: {
+  details?: unknown;
+  reason?: string | null;
+  message?: string | null;
+}) {
+  const code = readConnectErrorDetailCode(input.details);
+  const message = normalizeOptionalString(input.message);
+  const reason = normalizeOptionalString(input.reason);
+  const userMessage = message ?? reason;
+  const classificationText = [message, reason]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  const normalized = classificationText.toLowerCase();
+  const pairing =
+    readPairingConnectErrorDetails(input.details) ??
+    readConnectPairingRequiredMessage(classificationText);
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED || pairing) {
+    return {
+      kind: "pairing-required" as const,
+      userMessage:
+        code === ConnectErrorDetailCodes.PAIRING_REQUIRED
+          ? formatConnectPairingRequiredMessage(input.details)
+          : (userMessage ?? "device pairing required"),
+      remediation: PAIRING_APPROVAL_REMEDIATION,
+    };
+  }
+  const deviceIdentityRequired =
+    code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED ||
+    code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+    normalized.includes("device identity required");
+  const scopeMismatch =
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH || normalized.includes("scope mismatch");
+  const rateLimited =
+    code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+    (!code && normalized.includes("too many failed authentication attempts"));
+  const deviceTokenMismatch =
+    code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    normalized.includes("device token mismatch");
+  const sharedTokenMismatch =
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+    normalized.includes("gateway token mismatch");
+  const authRejected =
+    deviceTokenMismatch ||
+    sharedTokenMismatch ||
+    code?.startsWith("AUTH_") ||
+    code?.startsWith("DEVICE_AUTH_");
+  const kind = deviceIdentityRequired
+    ? ("device-identity-required" as const)
+    : scopeMismatch
+      ? ("scope-mismatch" as const)
+      : rateLimited
+        ? ("rate-limited" as const)
+        : authRejected
+          ? ("auth-rejected" as const)
+          : code || GATEWAY_CLOSED_MESSAGE_PATTERN.test(classificationText)
+            ? ("gateway-rejected" as const)
+            : ("unreachable" as const);
+  const remediation = rateLimited
+    ? RATE_LIMITED_REMEDIATION
+    : scopeMismatch
+      ? SCOPE_MISMATCH_REMEDIATION
+      : deviceTokenMismatch
+        ? DEVICE_TOKEN_REMEDIATION
+        : sharedTokenMismatch
+          ? SHARED_TOKEN_REMEDIATION
+          : undefined;
+  return {
+    kind,
+    userMessage:
+      userMessage ??
+      (kind === "unreachable" ? "gateway unreachable" : "gateway rejected connection"),
+    ...(remediation ? { remediation } : {}),
   };
 }
 

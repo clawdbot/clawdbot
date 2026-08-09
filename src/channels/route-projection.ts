@@ -35,7 +35,7 @@ export function formatConversationTarget(params: ConversationTargetParams): stri
 }
 
 /** Resolves a channel conversation into target/thread fields for delivery routing. */
-export function resolveConversationDeliveryTarget(params: ConversationTargetParams): {
+function resolveConversationDeliveryTarget(params: ConversationTargetParams): {
   to?: string;
   threadId?: string;
 } {

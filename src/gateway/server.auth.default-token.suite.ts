@@ -12,7 +12,6 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -22,6 +21,7 @@ import {
   PROTOCOL_VERSION,
   readConnectChallengeNonce,
   resolveGatewayTokenOrEnv,
+  resolvePreauthHandshakeTimeoutMs,
   rpcReq,
   sendRawConnectReq,
   startGatewayServer,
@@ -113,7 +113,7 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         await withGatewayServer(async ({ port: isolatedPort }) => {
           const ws = await openWs(isolatedPort);
-          const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+          const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs();
           const closed = await waitForWsClose(ws, handshakeTimeoutMs + 10_000);
           expect(closed).toBe(true);
         });
@@ -132,9 +132,9 @@ export function registerDefaultAuthTokenSuite(): void {
       process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
+        expect(resolvePreauthHandshakeTimeoutMs()).toBe(75);
         process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
-        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
+        expect(resolvePreauthHandshakeTimeoutMs()).toBe(20);
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
@@ -161,19 +161,53 @@ export function registerDefaultAuthTokenSuite(): void {
             type?: unknown;
             features?: { capabilities?: unknown };
             snapshot?: { configPath?: string; stateDir?: string };
+            policy?: {
+              allowedSessionVisibilities?: unknown;
+              hasMultipleSessionSharingIdentities?: unknown;
+            };
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+      );
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
       );
       expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.CRESTODIAN_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
+      expect(payload?.policy?.allowedSessionVisibilities).toEqual([
+        "shared",
+        "read-only",
+        "suggest",
+        "draft",
+      ]);
+      expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(false);
 
       ws.close();
+    });
+
+    test("hello policy counts canonical session-sharing identities", async () => {
+      const { ensureProfileForEmail, linkEmail } = await import("../state/user-profiles.js");
+      const suffix = `${process.pid}-${Date.now()}`;
+      ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
+      const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);
+      ensureProfileForEmail(`hello-merged-${suffix}@example.invalid`);
+      linkEmail(`hello-merged-${suffix}@example.invalid`, target.id);
+
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws);
+        const payload = res.payload as
+          | { policy?: { hasMultipleSessionSharingIdentities?: unknown } }
+          | undefined;
+        expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(true);
+      } finally {
+        ws.close();
+      }
     });
 
     test("connect (req) handshake resolves server version from runtime precedence", async () => {
@@ -182,7 +216,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: " ",
-            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: VERSION,
@@ -190,7 +223,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: "9.9.9-cli",
-            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: "9.9.9-cli",
@@ -198,7 +230,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: " ",
-            OPENCLAW_SERVICE_VERSION: "\t",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: VERSION,
@@ -353,7 +384,7 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.json`),
+        identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.sqlite`),
         nonce,
       });
 
@@ -468,7 +499,7 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("allows authenticated previous-protocol nodes to register for maintenance", async () => {
+    test("retains authenticated previous-protocol node-host maintenance commands", async () => {
       const nodeWs = await openWs(port);
       const operatorWs = await openWs(port);
       try {
@@ -477,23 +508,35 @@ export function registerDefaultAuthTokenSuite(): void {
           minProtocol: MIN_NODE_PROTOCOL_VERSION,
           maxProtocol: MIN_NODE_PROTOCOL_VERSION,
           role: "node",
-          client: { ...NODE_CLIENT, version: legacyVersion },
+          client: { ...NODE_CLIENT, version: legacyVersion, platform: "linux" },
+          caps: ["system"],
+          commands: ["system.which"],
         });
         expect(nodeRes.ok).toBe(true);
 
         const operatorRes = await connectReq(operatorWs);
         expect(operatorRes.ok).toBe(true);
-        const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean; version?: string }> }>(
-          operatorWs,
-          "node.list",
-          {},
+        type LegacyNodeStatus = {
+          commands?: string[];
+          connected?: boolean;
+          deviceFamily?: string;
+          pendingDeclaredCommands?: string[];
+          pendingRequestId?: string;
+          platform?: string;
+          version?: string;
+        };
+        const pendingList = await rpcReq<{
+          nodes?: LegacyNodeStatus[];
+        }>(operatorWs, "node.list", {});
+        const pendingNode = pendingList.payload?.nodes?.find(
+          (node) => node.connected === true && node.version === legacyVersion,
         );
-        expect(listRes.ok).toBe(true);
-        expect(
-          listRes.payload?.nodes?.some(
-            (node) => node.connected === true && node.version === legacyVersion,
-          ),
-        ).toBe(true);
+        expect(pendingNode).toMatchObject({
+          deviceFamily: "Linux",
+          pendingDeclaredCommands: ["system.which"],
+          platform: "linux",
+        });
+        expect(pendingNode?.pendingRequestId).toBeTypeOf("string");
       } finally {
         nodeWs.close();
         operatorWs.close();

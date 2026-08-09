@@ -10,7 +10,7 @@ import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
 
 type ManifestSuppressionResolver = ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;
 
@@ -27,11 +27,11 @@ type CachedManifestSuppressionResolver = {
 let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
 
 /** Clear cached manifest suppression resolver state for tests and metadata lifecycle resets. */
-export function clearModelSuppressionResolverCacheForTest(): void {
+function clearModelSuppressionResolverCache(): void {
   cachedManifestSuppressionResolver = undefined;
 }
 
-registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCacheForTest);
+registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCache);
 
 function resolveCachedManifestSuppressionResolver(params: {
   config?: OpenClawConfig;
@@ -45,7 +45,7 @@ function resolveCachedManifestSuppressionResolver(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const cwd = process.cwd();
-  const envFingerprint = resolvePluginMetadataSnapshotMemoEnvFingerprint(params.env);
+  const envFingerprint = resolvePluginMetadataEnvFingerprint(params.env);
   const metadataSnapshot = getCurrentPluginMetadataSnapshotState().snapshot;
   if (
     cached !== undefined &&

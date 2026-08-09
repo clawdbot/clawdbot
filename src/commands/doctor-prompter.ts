@@ -1,9 +1,7 @@
 /** Doctor prompt adapter that centralizes repair, force, update, and noninteractive behavior. */
 import { confirm, select } from "@clack/prompts";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-} from "../../packages/terminal-core/src/prompt-style.js";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveDoctorRepairMode,
@@ -114,17 +112,7 @@ export function createDoctorPrompter(params: {
       if (!repairMode.canPrompt || repairMode.shouldRepair) {
         return fallback;
       }
-      return guardCancel(
-        await select({
-          ...p,
-          message: stylePromptMessage(p.message),
-          options: p.options.map((opt) =>
-            opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-          ),
-        }),
-        params.runtime,
-        130,
-      ) as T;
+      return guardCancel(await select(styleSelectParams(p)), params.runtime, 130) as T;
     },
     shouldRepair: repairMode.shouldRepair,
     shouldForce: repairMode.shouldForce,

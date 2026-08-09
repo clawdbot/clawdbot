@@ -28,9 +28,6 @@ type ResolvedDiscordAutoPresenceConfig = {
   enabled: boolean;
   intervalMs: number;
   minUpdateIntervalMs: number;
-  healthyText?: string;
-  degradedText?: string;
-  exhaustedText?: string;
 };
 
 type DiscordAutoPresenceDecision = {
@@ -43,14 +40,6 @@ type PresenceGateway = {
   isConnected: boolean;
   updatePresence: (payload: UpdatePresenceData) => void;
 };
-
-function normalizeOptionalText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function clampPositiveInt(value: unknown, fallback: number, minValue: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -77,9 +66,6 @@ function resolveAutoPresenceConfig(
     enabled: config?.enabled === true,
     intervalMs,
     minUpdateIntervalMs,
-    healthyText: normalizeOptionalText(config?.healthyText),
-    degradedText: normalizeOptionalText(config?.degradedText),
-    exhaustedText: normalizeOptionalText(config?.exhaustedText),
   };
 }
 
@@ -168,14 +154,11 @@ function resolvePresenceActivities(params: {
   const reasonLabel = formatUnavailableReason(params.unavailableReason ?? null);
 
   if (params.state === "healthy") {
-    if (params.cfg.healthyText) {
-      return [buildCustomStatusActivity(params.cfg.healthyText)];
-    }
     return params.basePresence?.activities ?? [];
   }
 
   if (params.state === "degraded") {
-    const template = params.cfg.degradedText ?? "runtime degraded";
+    const template = "runtime degraded";
     const text = renderTemplate(template, { reason: reasonLabel });
     return text ? [buildCustomStatusActivity(text)] : [];
   }
@@ -183,7 +166,7 @@ function resolvePresenceActivities(params: {
   const defaultTemplate = isExhaustedUnavailableReason(params.unavailableReason ?? null)
     ? "token exhausted"
     : "model unavailable ({reason})";
-  const template = params.cfg.exhaustedText ?? defaultTemplate;
+  const template = defaultTemplate;
   const text = renderTemplate(template, { reason: reasonLabel });
   return text ? [buildCustomStatusActivity(text)] : [];
 }
@@ -198,7 +181,7 @@ function resolvePresenceStatus(state: DiscordAutoPresenceState): UpdatePresenceD
   return "idle";
 }
 
-export function resolveDiscordAutoPresenceDecision(params: {
+function resolveDiscordAutoPresenceDecision(params: {
   discordConfig: Pick<
     DiscordAccountConfig,
     "autoPresence" | "activity" | "status" | "activityType" | "activityUrl"

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
-  resolveConfigAuditLogPath,
+  resolveLegacyConfigAuditLogPath,
   scrubConfigAuditLog,
   type ConfigAuditScrubResult,
 } from "../config/io.audit.js";
@@ -30,7 +30,7 @@ export async function detectConfigAuditScrubIssue(params?: {
   });
   return {
     ...result,
-    auditPath: resolveConfigAuditLogPath(env, homedir),
+    auditPath: resolveLegacyConfigAuditLogPath(env, homedir),
   };
 }
 

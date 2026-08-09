@@ -6,8 +6,7 @@ import {
   deleteGraphRequest,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
-  postGraphBetaJson,
-  postGraphJson,
+  mutateGraphJson,
   resolveGraphToken,
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
@@ -102,8 +101,10 @@ export function resolveConversationPath(to: string): {
   channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
-  if (cleaned.includes("/")) {
-    const [teamId, channelId] = cleaned.split("/", 2);
+  const separatorIndex = cleaned.indexOf("/");
+  if (separatorIndex !== -1) {
+    const teamId = cleaned.slice(0, separatorIndex);
+    const channelId = cleaned.slice(separatorIndex + 1).replace(/\/.*$/, "");
     return {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
@@ -192,9 +193,10 @@ export async function pinMessageMSTeams(
   const body = {
     "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(params.messageId)}`,
   };
-  const result = await postGraphJson<{ id?: string }>({
+  const result = await mutateGraphJson<{ id?: string }>({
     token,
     path: `${conv.basePath}/pinnedMessages`,
+    method: "POST",
     body,
   });
   return { ok: true, pinnedMessageId: result.id };
@@ -351,7 +353,13 @@ export async function reactMessageMSTeams(
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
-  await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
+  await mutateGraphJson<unknown>({
+    token,
+    path,
+    method: "POST",
+    body: { reactionType },
+    beta: true,
+  });
   return { ok: true };
 }
 
@@ -369,7 +377,13 @@ export async function unreactMessageMSTeams(
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
-  await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
+  await mutateGraphJson<unknown>({
+    token,
+    path,
+    method: "POST",
+    body: { reactionType },
+    beta: true,
+  });
   return { ok: true };
 }
 

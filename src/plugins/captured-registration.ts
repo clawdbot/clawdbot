@@ -5,7 +5,10 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
+import {
+  agentToolResultMiddlewareRegistrationCoversTool,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
@@ -22,6 +25,8 @@ import type {
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
+import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type {
   AnyAgentTool,
   AgentHarness,
@@ -32,7 +37,7 @@ import type {
   TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCliRegistrar,
   PluginTextTransformRegistration,
   ProviderPlugin,
@@ -50,7 +55,7 @@ type CapturedPluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
   parentPath: string[];
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: OpenClawPluginCliRootCommandDescriptor[];
 };
 
 export type CapturedPluginRegistration = {
@@ -86,6 +91,7 @@ export type CapturedPluginRegistration = {
   sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
+  sessionCatalogs: SessionCatalogProvider[];
 };
 
 export function createCapturedPluginRegistration(params?: {
@@ -127,6 +133,7 @@ export function createCapturedPluginRegistration(params?: {
   let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
+  const sessionCatalogs: SessionCatalogProvider[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
   const pluginSource = params?.source ?? "captured-plugin-registration";
@@ -169,6 +176,7 @@ export function createCapturedPluginRegistration(params?: {
     sessionActions,
     tools,
     modelCatalogProviders,
+    sessionCatalogs,
     api: buildPluginApi({
       id: pluginId,
       name: pluginName,
@@ -181,12 +189,22 @@ export function createCapturedPluginRegistration(params?: {
       handlers: {
         registerCli(registrar, opts) {
           const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
+          const rootRegistration = parentPath.length === 0;
           const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => ({
-              name: descriptor.name.trim(),
-              description: descriptor.description.trim(),
-              hasSubcommands: descriptor.hasSubcommands,
-            }))
+            .map((descriptor) => {
+              const machineOutput = rootRegistration
+                ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
+                : undefined;
+              const normalized: OpenClawPluginCliRootCommandDescriptor = {
+                name: descriptor.name.trim(),
+                description: descriptor.description.trim(),
+                hasSubcommands: descriptor.hasSubcommands,
+              };
+              if (machineOutput) {
+                normalized.machineOutput = machineOutput;
+              }
+              return normalized;
+            })
             .filter((descriptor) => descriptor.name && descriptor.description);
           const commands = normalizeStringEntries([
             ...(opts?.commands ?? []),
@@ -208,6 +226,9 @@ export function createCapturedPluginRegistration(params?: {
         registerModelCatalogProvider(provider: UnifiedModelCatalogProviderPlugin) {
           modelCatalogProviders.push(provider);
         },
+        registerSessionCatalog(provider: SessionCatalogProvider) {
+          sessionCatalogs.push(provider);
+        },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);
         },
@@ -219,14 +240,34 @@ export function createCapturedPluginRegistration(params?: {
           options?: AgentToolResultMiddlewareOptions,
         ) {
           const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
-          agentToolResultMiddlewares.push({
+          const matcher = normalizePluginToolMatcher(options?.matcher);
+          const scopedHandler: AgentToolResultMiddleware = (event, ctx) => {
+            if (
+              !agentToolResultMiddlewareRegistrationCoversTool(
+                registration,
+                ctx.runtime,
+                event.toolName,
+              )
+            ) {
+              return;
+            }
+            return handler(event, ctx);
+          };
+          const registration: PluginAgentToolResultMiddlewareRegistration = {
             pluginId,
             pluginName,
             rawHandler: handler,
-            handler,
+            handler: scopedHandler,
             runtimes,
+            scopes: [
+              {
+                runtimes,
+                ...(matcher ? { matcher } : {}),
+              },
+            ],
             source: pluginSource,
-          });
+          };
+          agentToolResultMiddlewares.push(registration);
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);
@@ -280,7 +321,8 @@ export function createCapturedPluginRegistration(params?: {
           sessionExtensions.push(extension);
         },
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
-          trustedToolPolicies.push(policy);
+          const matcher = normalizePluginToolMatcher(policy.matcher);
+          trustedToolPolicies.push({ ...policy, ...(matcher ? { matcher } : {}) });
         },
         registerToolMetadata(metadata: PluginToolMetadataRegistration) {
           toolMetadata.push(metadata);

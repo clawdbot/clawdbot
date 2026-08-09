@@ -36,7 +36,7 @@ function ensureWsUrl(value: string): string {
   return trimmed;
 }
 
-function validateGatewayWebSocketUrl(value: string): string | undefined {
+export function validateGatewayWebSocketUrl(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
     return t("wizard.remote.validWebSocketUrl");

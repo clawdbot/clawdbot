@@ -11,9 +11,10 @@ import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
-export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
+/** @internal Shared repository-script contract. */
 export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
@@ -167,10 +168,12 @@ function collectTrackedBundledPluginFiles(cwd) {
   if (result.status !== 0) {
     return null;
   }
-
   const filesByPlugin = new Map();
   for (const rawLine of result.stdout.split("\n")) {
     const line = toPosixPath(rawLine.trim());
+    if (!fs.existsSync(path.join(cwd, line))) {
+      continue;
+    }
     const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
     if (!match) {
       continue;
@@ -292,7 +295,10 @@ export function collectBundledPluginBuildEntries(params = {}) {
   return entries.filter((entry) => filteredBuildIds.has(entry.id));
 }
 
-/** Return buildable bundled plugin entries with optional CLI filtering applied. */
+/**
+ * Return buildable bundled plugin entries with optional CLI filtering applied.
+ * @internal Directly tested script implementation detail.
+ */
 export function listBundledPluginBuildEntries(params = {}) {
   return Object.fromEntries(
     collectBundledPluginBuildEntries(params).flatMap(({ id, sourceEntries }) =>
@@ -305,7 +311,10 @@ export function listBundledPluginBuildEntries(params = {}) {
   );
 }
 
-/** Collect bundled extension dirs that root package builds should exclude. */
+/**
+ * Collect bundled extension dirs that root package builds should exclude.
+ * @internal Shared repository-script contract.
+ */
 export function collectRootPackageExcludedExtensionDirs(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const packageJsonPath = path.join(cwd, "package.json");
@@ -327,7 +336,10 @@ export function collectRootPackageExcludedExtensionDirs(params = {}) {
   return excluded;
 }
 
-/** List package artifact files generated for bundled plugins. */
+/**
+ * List package artifact files generated for bundled plugins.
+ * @internal Shared repository-script contract.
+ */
 export function listBundledPluginPackArtifacts(params = {}) {
   const excludedPackageDirs =
     params.includeRootPackageExcludedDirs === true

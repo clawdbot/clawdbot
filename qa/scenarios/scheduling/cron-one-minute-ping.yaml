@@ -5,11 +5,11 @@ scenario:
   surface: cron
   coverage:
     primary:
-      - scheduling.cron
-      - scheduling.cron-rpcs
-      - scheduling.chat-announce-delivery
+      - automation.cron-rpcs
+      - automation.chat-announce-delivery
+      - automation.agent-cron-tool
     secondary:
-      - channels.qa-channel
+      - channels.qa-channel-final-reply
   objective: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
   successCriteria:
     - Agent schedules a cron reminder roughly one minute ahead.
@@ -24,8 +24,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       channelId: qa-room
       channelTitle: QA Room
       reminderPromptTemplate: "A QA cron just fired. Send a one-line ping back to the room containing this exact marker: {{marker}}"

@@ -1,4 +1,5 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
@@ -13,7 +14,7 @@ export type McpLoopbackToolCallOutcome =
   | { outcome: "completed"; result?: unknown }
   | McpLoopbackToolCallTerminalOutcome;
 
-export type McpLoopbackToolCallResult = {
+type McpLoopbackToolCallResult = {
   toolName: string;
   args: Record<string, unknown>;
   correlationId?: string;
@@ -39,13 +40,13 @@ type McpLoopbackToolCallCapture = {
   activityWaiters: Set<() => void>;
 };
 
-export type McpLoopbackRequestCaptureHandle = {
+type McpLoopbackRequestCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   classified: boolean;
   finished: boolean;
 };
 
-export type McpLoopbackToolCallCaptureHandle = {
+type McpLoopbackToolCallCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   call: McpLoopbackToolCallStart;
   correlationId?: string;
@@ -55,7 +56,14 @@ export type McpLoopbackToolCallCaptureHandle = {
 
 let activeRuntime: McpLoopbackRuntime | undefined;
 let nextToolCallCaptureGeneration = 0;
-const toolCallCaptures = new Map<string, McpLoopbackToolCallCapture>();
+const toolCallCaptures = resolveGlobalMap<string, McpLoopbackToolCallCapture>(
+  Symbol.for("openclaw.mcpLoopbackToolCallCaptures"),
+  (captures) => {
+    for (const key of captures.keys()) {
+      deleteMcpLoopbackToolCallCapture(key);
+    }
+  },
+);
 
 function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
   const capture = toolCallCaptures.get(captureKey);
@@ -347,14 +355,6 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
 /** Clear an unfinished invocation capture. Attempt keys are unique per CLI execution. */
 export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
   deleteMcpLoopbackToolCallCapture(captureKey.trim());
-}
-
-/** Clear transient capture state between isolated tests. */
-export function clearMcpLoopbackToolCallCapturesForTest(): void {
-  for (const captureKey of toolCallCaptures.keys()) {
-    deleteMcpLoopbackToolCallCapture(captureKey);
-  }
-  nextToolCallCaptureGeneration = 0;
 }
 
 /** Return a copy of the active loopback runtime, if one has been installed. */

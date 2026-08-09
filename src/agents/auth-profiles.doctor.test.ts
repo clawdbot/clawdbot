@@ -2,34 +2,20 @@
  * Auth-profile doctor copy tests.
  * Covers provider-specific repair hints without invoking real auth flows.
  */
-import { describe, expect, it } from "vitest";
-import {
-  formatAuthDoctorHint,
-  formatAuthDoctorHintWithPluginBuilder,
-} from "./auth-profiles/doctor.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const EMPTY_STORE: AuthProfileStore = {
-  version: 1,
-  profiles: {},
-};
+const buildProviderAuthDoctorHintWithPluginMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
+}));
+
+import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 
 describe("formatAuthDoctorHint", () => {
-  it("does not report restored qwen portal auth as removed", async () => {
-    let pluginBuilderCalled = false;
-    const hint = await formatAuthDoctorHintWithPluginBuilder(
-      {
-        store: EMPTY_STORE,
-        provider: "qwen-portal",
-      },
-      async () => {
-        pluginBuilderCalled = true;
-        return undefined;
-      },
-    );
-
-    expect(pluginBuilderCalled).toBe(true);
-    expect(hint).toBe("");
+  beforeEach(() => {
+    buildProviderAuthDoctorHintWithPluginMock.mockReset();
+    buildProviderAuthDoctorHintWithPluginMock.mockResolvedValue(undefined);
   });
 
   it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
@@ -51,7 +37,20 @@ describe("formatAuthDoctorHint", () => {
     });
 
     expect(hint).toBe(
-      "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.",
+      "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current Qwen API key: openclaw onboard --auth-choice qwen-api-key.",
     );
+    expect(buildProviderAuthDoctorHintWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("delegates other provider hints to the provider plugin", async () => {
+    buildProviderAuthDoctorHintWithPluginMock.mockResolvedValueOnce("Provider-owned repair");
+
+    await expect(
+      formatAuthDoctorHint({
+        store: { version: 1, profiles: {} },
+        provider: "demo",
+      }),
+    ).resolves.toBe("Provider-owned repair");
+    expect(buildProviderAuthDoctorHintWithPluginMock).toHaveBeenCalledOnce();
   });
 });

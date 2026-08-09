@@ -1,6 +1,7 @@
 // Discord plugin module implements send.messages behavior.
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChannelMessage,
   createThread,
@@ -16,6 +17,7 @@ import {
   searchGuildMessages,
   unpinChannelMessage,
 } from "./internal/discord.js";
+import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
@@ -25,10 +27,6 @@ import type {
   DiscordThreadCreate,
   DiscordThreadList,
 } from "./send.types.js";
-
-function formatDiscordThreadInitialMessageError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function assertDiscordResponseArray<T>(value: unknown, label: string): T[] {
   if (!Array.isArray(value)) {
@@ -44,12 +42,19 @@ function assertDiscordResponseObject(value: unknown, label: string): Record<stri
   return value as Record<string, unknown>;
 }
 
+function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number | undefined {
+  if (!channel || !("default_auto_archive_duration" in channel)) {
+    return undefined;
+  }
+  return channel.default_auto_archive_duration;
+}
+
 export class DiscordThreadInitialMessageError extends Error {
   readonly initialMessageError: string;
   readonly thread: APIChannel;
 
   constructor(thread: APIChannel, error: unknown) {
-    const initialMessageError = formatDiscordThreadInitialMessageError(error);
+    const initialMessageError = formatErrorMessage(error);
     super(
       `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
     );
@@ -158,25 +163,26 @@ export async function createThreadDiscord(
 ) {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = { name: payload.name };
-  if (payload.autoArchiveMinutes) {
-    body.auto_archive_duration = payload.autoArchiveMinutes;
-  }
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
   }
-  let channelType: ChannelType | undefined;
+  let channel: APIChannel | undefined;
   if (!payload.messageId) {
-    // Only detect channel kind for route-less thread creation.
-    // If this lookup fails, keep prior behavior and let Discord validate.
     try {
-      const channel = await getChannel(rest, channelId);
-      channelType = channel?.type;
+      channel = await getChannel(rest, channelId);
     } catch {
-      channelType = undefined;
+      // Channel metadata only enriches standalone creation; Discord still validates it.
     }
   }
+  // Discord clients preselect the parent default, but REST thread creation needs
+  // it explicitly. Keep a caller override authoritative when one was supplied.
+  const archiveDuration =
+    payload.autoArchiveMinutes ?? resolveDefaultThreadAutoArchiveDuration(channel);
+  if (archiveDuration !== undefined) {
+    body.auto_archive_duration = archiveDuration;
+  }
   const isForumLike =
-    channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+    channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
   if (isForumLike) {
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
@@ -243,8 +249,22 @@ export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: Dis
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  return assertDiscordResponseObject(
+  const result = assertDiscordResponseObject(
     await searchGuildMessages(rest, query.guildId, params),
     "message search",
   );
+  // Discord returns HTTP 202 with code 110000 while the guild search index is warming.
+  if (result.code === 110000) {
+    const message =
+      typeof result.message === "string" && result.message.trim()
+        ? result.message.trim()
+        : "Discord search index is not yet available";
+    const retryAfter = parseDiscordRetryAfterBodySeconds(result.retry_after);
+    const retryHint = retryAfter === undefined ? "" : ` (retry after ${retryAfter}s)`;
+    throw new Error(`Discord message search unavailable: ${message}${retryHint}`);
+  }
+  if (!Array.isArray(result.messages)) {
+    throw new Error("Unexpected Discord response for message search: expected messages array.");
+  }
+  return result;
 }

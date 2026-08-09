@@ -6,7 +6,14 @@ describe("renderTelegramMiniAppPage", () => {
     const html = renderTelegramMiniAppPage({ accountId: "ops", scriptNonce: "nonce" });
 
     expect(html).toContain('const accountId = "ops";');
+    expect(html).toContain('new URLSearchParams(location.hash.slice(1)).get("launchTicket")');
     expect(html).toContain("new URL(payload.controlUiUrl)");
     expect(html).not.toContain("const controlUiUrl =");
+  });
+
+  it("escapes the nonce for its quoted HTML attribute", () => {
+    const html = renderTelegramMiniAppPage({ accountId: "ops", scriptNonce: `&<>"'` });
+
+    expect(html).toContain('nonce="&amp;&lt;&gt;&quot;&#39;"');
   });
 });

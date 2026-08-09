@@ -8,6 +8,42 @@ title: "Node troubleshooting"
 
 Use this page when a node is visible in status but node tools fail.
 
+## Node goes offline after SSH logout (Linux)
+
+On Linux, `openclaw node install` creates a **user-level** systemd service. The
+`systemd --user` instance is torn down when your last login session ends, so the
+node service stops the moment you log out — even though it looked healthy
+(`enabled` + `running`) while you were connected.
+
+Check lingering:
+
+```bash
+loginctl show-user "$USER" -p Linger
+```
+
+If it reads `Linger=no`, enable it (may require sudo):
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Then restart the node service and verify it survives logout:
+
+```bash
+openclaw node restart
+# log out, then from another machine:
+openclaw nodes status
+```
+
+`openclaw node install` prints a warning with this recovery command when it
+detects lingering is disabled. Don't mix a user-level service with a
+system-level one for the same node. The duplicate-scope guard that prevents
+two managers from running the same unit name is enforced for gateway units
+(two supervisors on the same port SIGTERM each other in a restart loop); for
+node services the installer does not raise this guard, so a leftover unit in
+the other scope can leave the node in an ambiguous state. Fully remove one
+before switching.
+
 ## Command ladder
 
 ```bash
@@ -61,7 +97,7 @@ If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground a
 Three separate gates control whether a node command succeeds:
 
 1. **Device pairing**: can this node connect to the gateway?
-2. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.allowCommands` / `denyCommands` and platform defaults?
+2. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny` and platform defaults?
 3. **Exec approvals**: can this node run a specific shell command locally?
 
 Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
@@ -112,7 +148,7 @@ If still stuck:
 - Re-grant OS permissions.
 - Recreate/adjust the exec approval policy.
 
-For computer control, also verify that a vision-capable agent exposes the `computer` tool, `screen.snapshot` succeeds with Screen Recording permission, and `/phone status` shows the temporary or persistent gateway authorization you intended. A `gateway.nodes.denyCommands` entry always overrides `allowCommands`.
+For computer control, also verify that the node-local Computer Control toggle is enabled, its pairing update is approved, a vision-capable agent exposes the `computer` tool, and `screen.snapshot` succeeds with Screen Recording permission. A `gateway.nodes.commands.deny` entry always overrides a platform default or `gateway.nodes.commands.allow`.
 
 ## Related
 

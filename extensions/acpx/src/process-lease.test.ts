@@ -11,12 +11,12 @@ import {
   createAcpxProcessLeaseStore,
   openAcpxProcessLeaseStateStore,
   OPENCLAW_ACPX_LEASE_ID_ARG,
-  OPENCLAW_ACPX_LEASE_ID_ENV,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ENV,
+  readAcpxProcessLeaseIdentity,
   withAcpxLeaseEnvironment,
   type AcpxProcessLease,
 } from "./process-lease.js";
+import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 
 function makeLease(index: number): AcpxProcessLease {
   return {
@@ -76,22 +76,35 @@ describe("createAcpxProcessLeaseStore", () => {
     await expect(store.load(closedLease.leaseId)).resolves.toBeUndefined();
     await expect(store.listOpen("gateway-test")).resolves.toEqual([openLease]);
   });
+
+  it("rejects capacity overflow without evicting existing process ownership", async () => {
+    const store = createStore();
+    await Promise.all(
+      Array.from({ length: ACPX_PROCESS_LEASE_MAX_ENTRIES }, (_, index) =>
+        store.save(makeLease(index)),
+      ),
+    );
+
+    await expect(store.save(makeLease(ACPX_PROCESS_LEASE_MAX_ENTRIES))).rejects.toMatchObject({
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+    });
+    await expect(store.load("lease-0")).resolves.toEqual(makeLease(0));
+    await expect(store.listOpen("gateway-test")).resolves.toHaveLength(
+      ACPX_PROCESS_LEASE_MAX_ENTRIES,
+    );
+  });
 });
 
 describe("withAcpxLeaseEnvironment", () => {
-  it("adds lease environment and wrapper args on POSIX", () => {
+  it("adds portable lease wrapper args", () => {
     const command = withAcpxLeaseEnvironment({
       command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
       leaseId: "lease-test",
       gatewayInstanceId: "gateway-test",
-      platform: "darwin",
     });
 
     expect(command).toBe(
       [
-        "env",
-        `${OPENCLAW_ACPX_LEASE_ID_ENV}=lease-test`,
-        `${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=gateway-test`,
         "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
         OPENCLAW_ACPX_LEASE_ID_ARG,
         "lease-test",
@@ -101,24 +114,47 @@ describe("withAcpxLeaseEnvironment", () => {
     );
   });
 
-  it("keeps Windows logs keyed by lease id with wrapper args", () => {
+  it("quotes portable lease wrapper args", () => {
     const command = withAcpxLeaseEnvironment({
       command: "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
-      leaseId: "lease-test",
+      leaseId: "lease test",
       gatewayInstanceId: "gateway-test",
-      platform: "win32",
     });
 
     expect(command).toBe(
       [
         "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
         OPENCLAW_ACPX_LEASE_ID_ARG,
-        "lease-test",
+        "'lease test'",
         OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
         "gateway-test",
       ].join(" "),
     );
-    expect(command).not.toContain(`${OPENCLAW_ACPX_LEASE_ID_ENV}=`);
-    expect(command).not.toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=`);
+  });
+});
+
+describe("readAcpxProcessLeaseIdentity", () => {
+  it("reads quoted portable lease wrapper args", () => {
+    expect(
+      readAcpxProcessLeaseIdentity(
+        [
+          "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+          OPENCLAW_ACPX_LEASE_ID_ARG,
+          "'lease test'",
+          OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+          '"gateway test"',
+        ].join(" "),
+      ),
+    ).toEqual({
+      leaseId: "lease test",
+      gatewayInstanceId: "gateway test",
+    });
+  });
+
+  it("rejects incomplete lease identity", () => {
+    expect(
+      readAcpxProcessLeaseIdentity(`node wrapper.mjs ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-test`),
+    ).toBeUndefined();
+    expect(readAcpxProcessLeaseIdentity(undefined)).toBeUndefined();
   });
 });

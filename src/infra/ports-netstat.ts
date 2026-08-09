@@ -1,7 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import type { PortListener } from "./ports-types.js";
 
-export type WindowsNetstatListener = PortListener & { pid: number; address: string };
+type WindowsNetstatListener = PortListener & { pid: number; address: string };
 
 function normalizeTcpHost(host: string): string {
   const normalized = host.toLowerCase();
@@ -21,7 +22,12 @@ export function parseTcpEndpoint(raw: string): { host: string; port: number } | 
   const bracketMatch = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
   if (bracketMatch) {
     const port = parseTcpPort(bracketMatch[2]);
-    return port === null ? null : { host: normalizeTcpHost(bracketMatch[1]), port };
+    return port === null
+      ? null
+      : {
+          host: normalizeTcpHost(expectDefined(bracketMatch[1], "bracket match capture group 1")),
+          port,
+        };
   }
   const lastColon = endpoint.lastIndexOf(":");
   if (lastColon <= 0 || lastColon >= endpoint.length - 1) {
@@ -32,6 +38,18 @@ export function parseTcpEndpoint(raw: string): { host: string; port: number } | 
     return null;
   }
   return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
+}
+
+/** Parses the address field emitted for a TCP listener by lsof or netstat. */
+export function parseTcpListenerEndpoint(raw: string | undefined): {
+  host: string;
+  port: number;
+} | null {
+  const normalized = raw
+    ?.trim()
+    .replace(/^tcp6?\s+/i, "")
+    .replace(/\s*\(listen\)\s*$/i, "");
+  return normalized ? parseTcpEndpoint(normalized) : null;
 }
 
 function isWildcardEndpoint(raw: string | undefined): boolean {

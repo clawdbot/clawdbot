@@ -23,6 +23,8 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const PACKAGE_NAME_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const PACKAGE_DIR_PATTERN = /^extensions\/[a-z0-9][a-z0-9._-]*$/u;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
+const PROTECTED_WORKFLOW_TAG_PATTERN =
+  /^refs\/tags\/(release-publish\/([a-f0-9]{12})-[1-9][0-9]*)$/u;
 const VERSION_PATTERN =
   /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
 const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
@@ -431,6 +433,17 @@ export async function downloadClawHubBootstrapArtifact(options) {
   const producerJobName = requireString(options.producerJobName, "producerJobName");
   const targetSha = requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha");
   const workflowSha = requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha");
+  const workflowHeadBranch = requireString(options.workflowHeadBranch, "workflowHeadBranch");
+  const workflowRef = requireString(options.workflowRef, "workflowRef");
+  const protectedWorkflowTag = PROTECTED_WORKFLOW_TAG_PATTERN.exec(workflowRef);
+  const trustedMain = workflowRef === "refs/heads/main" && workflowHeadBranch === "main";
+  const trustedProtectedTag =
+    protectedWorkflowTag !== null &&
+    workflowHeadBranch === protectedWorkflowTag[1] &&
+    protectedWorkflowTag[2] === workflowSha.slice(0, 12);
+  if (!trustedMain && !trustedProtectedTag) {
+    fail("workflowRef must be main or the SHA-pinned release-publish tag.");
+  }
   const artifactDigest = requirePattern(options.artifactDigest, SHA256_PATTERN, "artifactDigest");
   const artifactName = requireString(options.artifactName, "artifactName");
   const repository = requirePattern(options.repository, REPOSITORY_PATTERN, "repository");
@@ -488,7 +501,7 @@ export async function downloadClawHubBootstrapArtifact(options) {
       runAttempt,
       runId,
       workflowEvent: "workflow_dispatch",
-      workflowHeadBranch: "main",
+      workflowHeadBranch,
       workflowPath: ".github/workflows/plugin-clawhub-new.yml",
       workflowSha,
     },
@@ -745,6 +758,8 @@ async function main() {
       targetSha: args.target_sha,
       token: process.env.GH_TOKEN,
       workflowSha: args.workflow_sha,
+      workflowHeadBranch: args.workflow_head_branch,
+      workflowRef: args.workflow_ref,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;

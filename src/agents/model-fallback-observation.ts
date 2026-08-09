@@ -7,7 +7,12 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
 import type { FailoverReason } from "./embedded-agent-helpers.js";
-import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelCandidate,
+  ModelFallbackRouteOrigin,
+  ModelFallbackRouteResolution,
+} from "./model-fallback.types.js";
 
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
 const AUTH_DECISION_LOG_COALESCE_WINDOW_MS = 30_000;
@@ -47,11 +52,11 @@ type AuthDecisionLogCoalesceEntry = {
 
 const authDecisionLogCoalesceEntries = new Map<string, AuthDecisionLogCoalesceEntry>();
 
-export function resetModelFallbackDecisionLogCoalescingForTest(): void {
-  authDecisionLogCoalesceEntries.clear();
-}
-
 type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
+type ObservedModelCandidate = ModelCandidate & {
+  routeOrigin?: ModelFallbackRouteOrigin;
+  routeResolution?: ModelFallbackRouteResolution;
+};
 
 /** Structured fields that describe one fallback-chain transition. */
 export type ModelFallbackStepFields = {
@@ -76,14 +81,14 @@ export type ModelFallbackDecisionParams = {
   lane?: string;
   requestedProvider: string;
   requestedModel: string;
-  candidate: ModelCandidate;
+  candidate: ObservedModelCandidate;
   attempt?: number;
   total?: number;
   reason?: FailoverReason | null;
   status?: number;
   code?: string;
   error?: string;
-  nextCandidate?: ModelCandidate;
+  nextCandidate?: ObservedModelCandidate;
   isPrimary?: boolean;
   requestedModelMatched?: boolean;
   fallbackConfigured?: boolean;
@@ -94,6 +99,14 @@ export type ModelFallbackDecisionParams = {
 
 function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
+}
+
+function readRouteOrigin(candidate: ObservedModelCandidate) {
+  return candidate.routeOrigin;
+}
+
+function readRouteResolution(candidate: ObservedModelCandidate) {
+  return candidate.routeResolution;
 }
 
 function isAuthDecisionLogCoalescingEligible(params: ModelFallbackDecisionParams): boolean {
@@ -115,6 +128,8 @@ function buildAuthDecisionLogCoalesceKey(
     params.decision,
     params.candidate.provider,
     params.candidate.model,
+    readRouteOrigin(params.candidate),
+    readRouteResolution(params.candidate),
     params.attempt,
     params.total,
     params.reason,
@@ -124,6 +139,8 @@ function buildAuthDecisionLogCoalesceKey(
     observedError.providerErrorType,
     observedError.errorFingerprint ?? observedError.errorHash,
     params.nextCandidate ? formatModelRef(params.nextCandidate) : null,
+    params.nextCandidate ? readRouteOrigin(params.nextCandidate) : null,
+    params.nextCandidate ? readRouteResolution(params.nextCandidate) : null,
     params.isPrimary,
     params.requestedModelMatched,
     params.fallbackConfigured,
@@ -292,6 +309,8 @@ export function logModelFallbackDecision(
     requestedModel: params.requestedModel,
     candidateProvider: params.candidate.provider,
     candidateModel: params.candidate.model,
+    candidateRouteOrigin: readRouteOrigin(params.candidate),
+    candidateRouteResolution: readRouteResolution(params.candidate),
     attempt: params.attempt,
     total: params.total,
     reason: params.reason,
@@ -301,6 +320,12 @@ export function logModelFallbackDecision(
     ...fallbackStepFields,
     nextCandidateProvider: params.nextCandidate?.provider,
     nextCandidateModel: params.nextCandidate?.model,
+    nextCandidateRouteOrigin: params.nextCandidate
+      ? readRouteOrigin(params.nextCandidate)
+      : undefined,
+    nextCandidateRouteResolution: params.nextCandidate
+      ? readRouteResolution(params.nextCandidate)
+      : undefined,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
     fallbackConfigured: params.fallbackConfigured,

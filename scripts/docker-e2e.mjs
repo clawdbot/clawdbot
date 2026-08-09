@@ -29,6 +29,10 @@ function githubOutputs(plan) {
     `needs_functional_image=${boolOutput(needs.functionalImage)}`,
     `needs_live_image=${boolOutput(needs.liveImage)}`,
     `needs_package=${boolOutput(needs.package)}`,
+    `needs_prepublish_plugin_registry=${boolOutput(needs.prepublishPluginRegistry)}`,
+    `required_prepublish_plugin_packages=${JSON.stringify(
+      plan.requiredPrepublishPluginPackages ?? [],
+    )}`,
   ];
 }
 

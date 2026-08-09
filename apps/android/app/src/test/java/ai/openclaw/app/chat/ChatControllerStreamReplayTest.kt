@@ -35,7 +35,7 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun cleanRunStreamsThenConvergesToHistoryWithoutDuplicates() =
+  fun cleanRunStreamsV3AndV4DeltasThenConvergesToHistoryWithoutDuplicates() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
@@ -50,7 +50,8 @@ class ChatControllerStreamReplayTest {
           .single { it.role == "user" }
           .id
 
-      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, "Str", "Str"))
+      // V3 deltas carry the accumulated message without v4's deltaText field.
+      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, null, "Str"))
       assertEquals("Str", controller.streamingAssistantText.value)
       controller.handleGatewayEvent(
         "chat",

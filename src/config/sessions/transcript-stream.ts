@@ -1,6 +1,7 @@
 // Transcript streaming reads large JSONL files forward or backward without whole-file buffering.
 import fs from "node:fs";
 import readline from "node:readline";
+import { hasErrnoCode } from "../../infra/errors.js";
 import { readFileRangeAsync } from "./file-range.js";
 
 // Shared streaming helpers for JSONL session transcripts.
@@ -17,11 +18,11 @@ const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
 const MAX_REVERSE_CHUNK_BYTES = 1024 * 1024;
 const MIN_REVERSE_CHUNK_BYTES = 1024;
 
-export type TranscriptStreamOptions = {
+type TranscriptStreamOptions = {
   signal?: AbortSignal;
 };
 
-export type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
+type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
   /** Bytes read per reverse scan chunk. Clamped to [1KiB, 1MiB]. */
   chunkBytes?: number;
 };
@@ -40,8 +41,11 @@ export async function* streamSessionTranscriptLines(
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(filePath);
-  } catch {
-    return;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
   }
   if (!stat.isFile() || stat.size <= 0) {
     return;
@@ -72,7 +76,7 @@ export async function* streamSessionTranscriptLines(
  * Stream the non-empty, trimmed JSONL lines of a transcript file in reverse
  * (newest-first) order.
  *
- * Returns an empty async iterator if the file cannot be opened, is empty, or is
+ * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. The implementation splits on newline bytes before UTF-8
  * decoding so multibyte characters survive arbitrary chunk boundaries.
  */
@@ -88,8 +92,11 @@ export async function* streamSessionTranscriptLinesReverse(
   let fileHandle: Awaited<ReturnType<typeof fs.promises.open>>;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
-  } catch {
-    return;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
   }
   try {
     const stat = await fileHandle.stat();

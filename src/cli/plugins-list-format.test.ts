@@ -1,6 +1,6 @@
 // Plugin list format tests cover installed plugin table and JSON formatting.
 import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { formatPluginLine } from "./plugins-list-format.js";
 
 describe("formatPluginLine", () => {
@@ -26,6 +26,19 @@ describe("formatPluginLine", () => {
     expect(output).toContain("activated: yes");
     expect(output).toContain("imported: no");
     expect(output).toContain("explicitly enabled: no");
+  });
+
+  it("labels portable bundle records as Agent Plugins", () => {
+    const output = formatPluginLine(
+      createPluginRecord({
+        id: "portable",
+        format: "bundle",
+        bundleFormat: "agent",
+      }),
+      true,
+    );
+
+    expect(output).toContain("bundle format: agent (Agent Plugins)");
   });
 
   it("sanitizes activation reasons in verbose output", () => {

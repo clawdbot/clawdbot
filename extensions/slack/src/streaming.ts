@@ -233,7 +233,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
 }
 
 /** Result of {@link stopSlackStream}. */
-export type StopSlackStreamResult = {
+type StopSlackStreamResult = {
   /**
    * The Slack `ts` of the finalized streamed message, when `chat.stopStream`
    * reports it. Used to populate `MessageSentEvent.messageId` for the
@@ -347,12 +347,12 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   "method_not_supported_for_channel_type",
 ]);
 
-export function isBenignSlackFinalizeError(err: unknown): boolean {
+function isBenignSlackFinalizeError(err: unknown): boolean {
   const code = extractSlackErrorCode(err);
   return code !== undefined && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code);
 }
 
-export function extractSlackErrorCode(err: unknown): string | undefined {
+function extractSlackErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -371,7 +371,7 @@ export function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
-  const nativeStreamWasStarted = session.delivered;
+  const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
   session.pendingText = "";
   // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
   // Clear fallback-owned text before retrying stop(), or the SDK resends it.

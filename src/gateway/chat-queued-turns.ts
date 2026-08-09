@@ -21,7 +21,7 @@ export type QueuedChatTurnEntry = {
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
 
-export type RegisterQueuedChatTurnParams = {
+type RegisterQueuedChatTurnParams = {
   chatQueuedTurns: QueuedChatTurnMap;
   runId: string;
   controller: AbortController;
@@ -122,7 +122,7 @@ export function retireQueuedChatTurnCancellation(
   return true;
 }
 
-export function getQueuedChatTurn(
+function getQueuedChatTurn(
   chatQueuedTurns: QueuedChatTurnMap,
   runId: string,
 ): QueuedChatTurnEntry | undefined {
@@ -168,7 +168,7 @@ export function abortQueuedChatTurnById(
   return { aborted: true };
 }
 
-export type QueuedChatTurnMatch = {
+type QueuedChatTurnMatch = {
   runId: string;
   entry: QueuedChatTurnEntry;
 };

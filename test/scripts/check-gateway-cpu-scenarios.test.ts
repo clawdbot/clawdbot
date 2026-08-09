@@ -50,6 +50,21 @@ function writeQaSuiteSummary(
   );
 }
 
+function writeConcurrencyReport(outputDir: string): void {
+  writeFileSync(
+    path.join(outputDir, "gateway-concurrency-bench.json"),
+    `${JSON.stringify({
+      mode: "mock-streaming-agent",
+      runs: [{ turnCount: 8 }],
+      summary: {
+        eventLoopDelayP99Ms: { max: 20 },
+        sessionsListLatencyMs: { p99: 30 },
+        controlUiLatencyMs: { p99: 25 },
+      },
+    })}\n`,
+  );
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -153,11 +168,15 @@ describe("gateway CPU scenario guard", () => {
     ]);
 
     const result = await testing.runGatewayCpuScenarios(options, {
+      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
       spawnSync: (command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, command, env: opts?.env });
         if (args.includes("scripts/bench-gateway-startup.ts")) {
           writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
+        }
+        if (args.includes("scripts/bench-gateway-concurrency.ts")) {
+          writeConcurrencyReport(outputDir);
         }
         return { status: 0 };
       },
@@ -167,10 +186,13 @@ describe("gateway CPU scenario guard", () => {
     expect(calls.map((call) => call.args[0])).toEqual([
       "scripts/ensure-cli-startup-build.mjs",
       "--import",
+      "scripts/bench-gateway-concurrency.ts",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
+    expect(calls[2]?.args).toContain("scripts/bench-gateway-concurrency.ts");
     expect(calls[0]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
     expect(calls[1]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
+    expect(calls[2]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
   });
 
   it("fails successful startup benches that do not write a report", async () => {
@@ -247,6 +269,7 @@ describe("gateway CPU scenario guard", () => {
     expect(result.summary.steps).toEqual([
       { name: "startup build", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
+      { name: "concurrency bench", signal: null, status: 1 },
     ]);
   });
 
@@ -272,6 +295,7 @@ describe("gateway CPU scenario guard", () => {
     expect(result.summary.steps).toEqual([
       { name: "startup build", error: "spawn ENOENT", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
+      { name: "concurrency bench", signal: null, status: 1 },
     ]);
   });
 
@@ -289,6 +313,7 @@ describe("gateway CPU scenario guard", () => {
 
     const result = await testing.runGatewayCpuScenarios(options, {
       cwd,
+      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
       spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, env: opts?.env });

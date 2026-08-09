@@ -8,42 +8,20 @@ import {
   asString,
   collectIssuesForEnabledAccounts,
   isRecord,
+  readAccountStatusSnapshot,
 } from "openclaw/plugin-sdk/status-helpers";
 
-type WhatsAppAccountStatus = {
-  accountId?: unknown;
-  statusState?: unknown;
-  enabled?: unknown;
-  linked?: unknown;
-  connected?: unknown;
-  running?: unknown;
-  reconnectAttempts?: unknown;
-  lastDisconnect?: unknown;
-  lastInboundAt?: unknown;
-  lastError?: unknown;
-  healthState?: unknown;
-};
+const WHATSAPP_ACCOUNT_STATUS_FIELDS = [
+  "statusState",
+  "linked",
+  "reconnectAttempts",
+  "lastDisconnect",
+  "lastInboundAt",
+  "lastError",
+  "healthState",
+] as const;
 
 const RECENT_DISCONNECT_WARNING_WINDOW_MS = 15 * 60 * 1000;
-
-function readWhatsAppAccountStatus(value: ChannelAccountSnapshot): WhatsAppAccountStatus | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return {
-    accountId: value.accountId,
-    statusState: value.statusState,
-    enabled: value.enabled,
-    linked: value.linked,
-    connected: value.connected,
-    running: value.running,
-    reconnectAttempts: value.reconnectAttempts,
-    lastDisconnect: value.lastDisconnect,
-    lastInboundAt: value.lastInboundAt,
-    lastError: value.lastError,
-    healthState: value.healthState,
-  };
-}
 
 function readLastDisconnect(value: unknown): { at: number | null; error?: string } | null {
   if (typeof value === "string") {
@@ -71,7 +49,7 @@ export function collectWhatsAppStatusIssues(
 ): ChannelStatusIssue[] {
   return collectIssuesForEnabledAccounts({
     accounts,
-    readAccount: readWhatsAppAccountStatus,
+    readAccount: (value) => readAccountStatusSnapshot(value, WHATSAPP_ACCOUNT_STATUS_FIELDS),
     collectIssues: ({ account, accountId, issues }) => {
       const linked = account.linked === true;
       const statusState = asString(account.statusState);
@@ -92,6 +70,17 @@ export function collectWhatsAppStatusIssues(
           kind: "auth",
           message: "Auth state is still stabilizing.",
           fix: "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
+        });
+        return;
+      }
+
+      if (healthState === "logged-out") {
+        issues.push({
+          channel: "whatsapp",
+          accountId,
+          kind: "auth",
+          message: `Session logged out${lastError ? `: ${lastError}` : "."}`,
+          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
         return;
       }
@@ -139,17 +128,6 @@ export function collectWhatsAppStatusIssues(
           kind: "runtime",
           message: `Linked but ${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
           fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-        });
-        return;
-      }
-
-      if (healthState === "logged-out") {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "auth",
-          message: `Linked session logged out${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
         return;
       }

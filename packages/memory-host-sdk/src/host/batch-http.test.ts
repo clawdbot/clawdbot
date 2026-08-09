@@ -69,7 +69,7 @@ describe("postJsonWithRetry", () => {
       headers: { Authorization: "Bearer test" },
       body: { chunks: ["a", "b"] },
       errorPrefix: "memory batch failed",
-      retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
+      retryImpl: retryAsyncMock as typeof import("@openclaw/retry").retryAsync,
     });
 
     expect(result).toEqual({ ok: true, ids: [1, 2] });
@@ -101,7 +101,7 @@ describe("postJsonWithRetry", () => {
         headers: {},
         body: { chunks: [] },
         errorPrefix: "memory batch failed",
-        retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
+        retryImpl: retryAsyncMock as typeof import("@openclaw/retry").retryAsync,
       });
     } catch (caught) {
       error = caught;

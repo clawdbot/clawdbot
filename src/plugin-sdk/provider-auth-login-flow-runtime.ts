@@ -10,7 +10,10 @@ export type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
-import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
 type RunModelsAuthLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
@@ -19,15 +22,21 @@ const CODEX_LOGIN_PROVIDER = "openai";
 const CODEX_LOGIN_METHOD = "device-code";
 const CODEX_LOGIN_FLOW_TTL_MS = 15 * 60_000;
 
-const CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai", "openai-codex"]);
+const CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai"]);
 
 type CodexLoginFlowRecord = {
   expiresAt: number;
+  signal: AbortSignal;
+  cancel: () => void;
 };
 
 type CodexLoginFlowReservation =
   | { status: "active" }
   | { status: "reserved"; record: CodexLoginFlowRecord };
+
+function createCodexLoginFlowRegistry(): Map<string, CodexLoginFlowRecord> {
+  return new Map();
+}
 
 const loadProviderAuthLoginFlowRuntime = createLazyRuntimeModule(
   () => import("../commands/models/auth.js"),
@@ -77,9 +86,15 @@ function reserveCodexLoginFlow(params: {
     return { status: "active" };
   }
   if (activeFlow) {
+    activeFlow.cancel();
     params.flows.delete(params.flowKey);
   }
-  const record = { expiresAt: now + CODEX_LOGIN_FLOW_TTL_MS };
+  const abortController = new AbortController();
+  const record = {
+    expiresAt: now + CODEX_LOGIN_FLOW_TTL_MS,
+    signal: abortController.signal,
+    cancel: () => abortController.abort(new Error("Codex login was replaced by a newer flow.")),
+  };
   params.flows.set(params.flowKey, record);
   return { status: "reserved", record };
 }
@@ -96,14 +111,19 @@ function releaseCodexLoginFlow(params: {
 
 function buildCodexDeviceLoginPrompter(params: {
   sendMessage: (message: string) => Promise<void>;
+  sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
+  signal?: AbortSignal;
   unsupportedPromptMessage: string;
 }): ModelsAuthLoginFlowOptions["prompter"] {
   const sendCleanMessage = async (message: string) => {
+    params.signal?.throwIfAborted();
     const text = message.trim();
     if (text) {
       await params.sendMessage(text);
+      params.signal?.throwIfAborted();
     }
   };
+  const sendDeviceCode = params.sendDeviceCode;
   const unsupportedPrompt = async () => {
     throw new Error(params.unsupportedPromptMessage);
   };
@@ -113,6 +133,15 @@ function buildCodexDeviceLoginPrompter(params: {
     note: async (message, title) => {
       await sendCleanMessage([title?.trim(), message.trim()].filter(Boolean).join("\n\n"));
     },
+    ...(sendDeviceCode
+      ? {
+          deviceCode: async (deviceCode) => {
+            params.signal?.throwIfAborted();
+            await sendDeviceCode(deviceCode);
+            params.signal?.throwIfAborted();
+          },
+        }
+      : {}),
     plain: sendCleanMessage,
     select: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["select"],
     multiselect: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["multiselect"],
@@ -125,6 +154,51 @@ function buildCodexDeviceLoginPrompter(params: {
   };
 }
 
+function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResult {
+  if (!value || typeof value !== "object") {
+    throw new Error("Provider login returned an invalid result.");
+  }
+  const result = value as Record<string, unknown>;
+  if (!Array.isArray(result.profiles)) {
+    throw new Error("Provider login returned an invalid result.");
+  }
+  const parseRequiredString = (input: unknown, label: string): string => {
+    if (typeof input !== "string" || !input.trim()) {
+      throw new Error(`Provider login returned an invalid ${label}.`);
+    }
+    return input.trim();
+  };
+  const providerId = parseRequiredString(result.providerId, "provider id");
+  const methodId = parseRequiredString(result.methodId, "method id");
+  const profiles = result.profiles.map((profile): ModelsAuthLoginFlowResult["profiles"][number] => {
+    if (!profile || typeof profile !== "object") {
+      throw new Error("Provider login returned an invalid profile.");
+    }
+    const record = profile as Record<string, unknown>;
+    const profileId = parseRequiredString(record.profileId, "profile id");
+    const provider = parseRequiredString(record.provider, "profile provider");
+    const mode = parseRequiredString(record.mode, "profile mode");
+    if (mode !== "api_key" && mode !== "oauth" && mode !== "token") {
+      throw new Error("Provider login returned an invalid profile.");
+    }
+    return {
+      profileId,
+      provider,
+      mode,
+    };
+  });
+  const defaultModel =
+    result.defaultModel === undefined
+      ? undefined
+      : parseRequiredString(result.defaultModel, "default model");
+  return {
+    providerId,
+    methodId,
+    ...(defaultModel ? { defaultModel } : {}),
+    profiles,
+  };
+}
+
 async function runCodexDeviceLoginFlow(params: {
   provider: string;
   agentId: string;
@@ -132,26 +206,33 @@ async function runCodexDeviceLoginFlow(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   sendMessage: (message: string) => Promise<void>;
+  sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
+  signal?: AbortSignal;
   unsupportedPromptMessage: string;
   runLoginFlow?: RunModelsAuthLoginFlow;
-}): Promise<unknown> {
-  return await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
+}): Promise<ModelsAuthLoginFlowResult> {
+  const result = await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
     provider: params.provider,
     method: CODEX_LOGIN_METHOD,
     agent: params.agentId,
     ...(params.profileId ? { profileId: params.profileId } : {}),
     config: params.config,
     runtime: params.runtime,
+    signal: params.signal,
     prompter: buildCodexDeviceLoginPrompter({
       sendMessage: params.sendMessage,
+      sendDeviceCode: params.sendDeviceCode,
+      signal: params.signal,
       unsupportedPromptMessage: params.unsupportedPromptMessage,
     }),
     isRemote: true,
     openUrl: async () => {},
   });
+  return parseModelsAuthLoginFlowResult(result);
 }
 
 export const codexChannelLoginRuntime = {
+  createFlowRegistry: createCodexLoginFlowRegistry,
   resolveProvider: resolveCodexLoginProvider,
   hasConfiguredCommandOwnerAllowlist,
   resolveProviderScopedProfileId,

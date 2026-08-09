@@ -20,7 +20,11 @@ Related: [Browser tool](/tools/browser)
 - `--timeout <ms>`: request timeout in ms (default: `30000`).
 - `--expect-final`: wait for a final Gateway response.
 - `--browser-profile <name>`: choose a browser profile (default: `openclaw`, or `browser.defaultProfile`).
-- `--json`: machine-readable output (where supported).
+- `--json`: machine-readable output (where supported). This is a browser-level option, so
+  place it before the subcommand for an unambiguous form, such as
+  `openclaw browser --json status`. Trailing placement such as
+  `openclaw browser status --json` also works when the selected child command does not
+  define its own `--json`.
 
 ## Quick start (local)
 
@@ -64,7 +68,7 @@ openclaw browser --browser-profile openclaw reset-profile
 - For a running local managed profile, `status` and `doctor` report cached
   graphics diagnostics from Chrome: hardware/software classification, renderer,
   backend, device/driver, feature and disabled-status details, and accelerated
-  video capabilities. `status --json` returns the full structured payload.
+  video capabilities. `openclaw browser --json status` returns the full structured payload.
   Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides even for `attachOnly` and remote CDP profiles where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
@@ -113,6 +117,34 @@ On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles
 When the macOS app uses a local Gateway, it can offer this import once and make the isolated imported profile the default for agent browsing. Import always requires an explicit click; successful import or dismissal suppresses later automatic prompts, and **Settings → General → Browser login** remains available for re-import.
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
+
+## Chrome extension relay
+
+```bash
+openclaw browser extension path
+openclaw browser extension pair
+openclaw browser extension pair --gateway-url wss://gateway.example.com
+openclaw browser extension cdp
+openclaw browser extension cdp --json
+```
+
+- `extension path` prints the unpacked extension directory for Chrome's **Load
+  unpacked** flow.
+- `extension pair` creates the host-local relay key when needed and prints the
+  pairing string. `--gateway-url` creates a direct remote-Gateway pairing URL;
+  non-loopback URLs must use `wss://`.
+- `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
+  the loopback browser/CDP endpoints, protocol version, key ID, and fixed
+  challenge/complete binding. It never prints the relay key or an authorization
+  header by default.
+
+`extension cdp --legacy-bearer` is a temporary migration escape hatch. It
+prints the old Bearer header with a warning only while
+`browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
+without printing a credential. Use `--json` for machine output; warnings remain
+on stderr so stdout stays valid JSON.
+
+Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
 
 ## Tabs
 
@@ -193,6 +225,16 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
+Batch actions:
+
+```bash
+openclaw browser batch --actions '[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]'
+openclaw browser batch --actions-file plan.json
+openclaw browser batch --actions-file - --continue
+```
+
+`openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
 ## State and storage
 
 Viewport + emulation:
@@ -251,11 +293,11 @@ The default existing-session path is host-only Chrome MCP auto-connect. If the b
 Current existing-session limits:
 
 - Snapshot-driven actions use refs, not CSS selectors.
-- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
+- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.
-- `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject per-call timeout overrides.
+- `hover`, `scrollintoview`, `drag`, `select`, and `fill` reject per-call timeout overrides; `evaluate` accepts `--timeout-ms`.
 - `select` supports one value only.
 - `wait --load networkidle` is not supported (works on managed and raw/remote CDP profiles).
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.

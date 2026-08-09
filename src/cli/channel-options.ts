@@ -35,8 +35,13 @@ export function formatCliChannelOptions(extra: string[] = []): string {
   return options.length > 0 ? options.join("|") : "channel";
 }
 
-export const testing = {
+const testing = {
   resetPrecomputedChannelOptionsForTests(): void {
     precomputedChannelOptions = undefined;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliChannelOptionsTestApi")] =
+    testing;
+}

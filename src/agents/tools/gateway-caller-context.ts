@@ -1,19 +1,37 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { copyPluginToolMeta } from "../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../before-tool-call-metadata.js";
-import { copyChannelAgentToolMeta } from "../channel-tools.js";
-import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
+import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "./common.js";
 
 type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  /** Host-signed capability for the scheduled run's existing self-management surface. */
+  cronSelfManagementJobId?: string;
+  cronToolsAllowCapture?: "final-executable-surface";
+  /** One-shot Gateway-owned proof for a freshly resolved configured-MCP cap. */
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+};
+
+type GatewayToolCallerSource = {
+  agentSessionKey?: string;
+  agentChannel?: string;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  agentTo?: string;
+  agentAccountId?: string;
+  currentThreadTs?: string;
+  agentThreadId?: string | number;
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
@@ -33,6 +51,15 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: identity.agentId.trim(),
       sessionKey: identity.sessionKey.trim(),
+      ...(identity.cronSelfManagementJobId?.trim()
+        ? { cronSelfManagementJobId: identity.cronSelfManagementJobId.trim() }
+        : {}),
+      ...(identity.cronToolsAllowCapture === "final-executable-surface"
+        ? { cronToolsAllowCapture: identity.cronToolsAllowCapture }
+        : {}),
+      ...(identity.cronCreatorAuthorityGrant
+        ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
+        : {}),
       ...(identity.turnSourceChannel?.trim()
         ? { turnSourceChannel: identity.turnSourceChannel.trim() }
         : {}),
@@ -60,9 +87,37 @@ export function wrapToolWithGatewayCallerIdentity(
     execute: async (...args) =>
       await withGatewayToolCallerIdentity(identity, async () => await tool.execute?.(...args)),
   };
-  copyPluginToolMeta(tool, wrapped);
-  copyChannelAgentToolMeta(tool as never, wrapped as never);
-  copyBeforeToolCallHookMarker(tool, wrapped);
-  copyToolTerminalPresentation(tool, wrapped);
+  copyAgentToolMetadata(tool, wrapped);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await withGatewayToolCallerIdentity(identity, () => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) =>
+              withGatewayToolCallerIdentity(identity, () => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
   return wrapped;
+}
+
+export function createGatewayToolCallerWrapper(
+  agentId: string | undefined,
+  source: GatewayToolCallerSource | undefined,
+): (tool: AnyAgentTool) => AnyAgentTool {
+  const identity =
+    agentId && source?.agentSessionKey?.trim()
+      ? {
+          agentId,
+          sessionKey: source.agentSessionKey.trim(),
+          turnSourceChannel: source.agentChannel,
+          turnSourceTo: source.currentMessagingTarget ?? source.currentChannelId ?? source.agentTo,
+          turnSourceAccountId: source.agentAccountId,
+          turnSourceThreadId: source.currentThreadTs ?? source.agentThreadId,
+        }
+      : undefined;
+  return (tool) => wrapToolWithGatewayCallerIdentity(tool, identity);
 }

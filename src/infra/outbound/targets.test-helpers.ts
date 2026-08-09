@@ -21,7 +21,7 @@ function stripTestPrefix(raw: string, channelId: string): string {
 }
 
 /** Parses forum test targets with optional topic/thread suffixes. */
-export function parseForumTargetForTest(raw: string): {
+function parseForumTargetForTest(raw: string): {
   roomId: string;
   threadId?: number;
   chatType: "direct" | "group" | "unknown";

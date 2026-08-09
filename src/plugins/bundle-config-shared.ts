@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
@@ -12,7 +12,7 @@ type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
   | { ok: false; error: string };
 
-export type BundleServerRuntimeSupport = {
+type BundleServerRuntimeSupport = {
   hasSupportedServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
@@ -91,6 +91,9 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     rootDir: string;
     bundleFormat: PluginBundleFormat;
   }) => { config: TConfig; diagnostics: string[] };
+  loadNativePluginConfig?: (params: {
+    record: PluginManifestRecord;
+  }) => { config: TConfig; diagnostics: string[] } | undefined;
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
@@ -109,7 +112,9 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   let merged = params.createEmptyConfig();
 
   for (const record of registry.plugins) {
-    if (record.format !== "bundle" || !record.bundleFormat) {
+    const canLoadBundle = record.format === "bundle" && Boolean(record.bundleFormat);
+    const canLoadNative = record.format !== "bundle" && params.loadNativePluginConfig !== undefined;
+    if (!canLoadBundle && !canLoadNative) {
       continue;
     }
     const activationState = resolveEffectivePluginActivationState({
@@ -117,16 +122,23 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
+      enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
       continue;
     }
 
-    const loaded = params.loadBundleConfig({
-      pluginId: record.id,
-      rootDir: record.rootDir,
-      bundleFormat: record.bundleFormat,
-    });
+    const loaded =
+      canLoadBundle && record.bundleFormat
+        ? params.loadBundleConfig({
+            pluginId: record.id,
+            rootDir: record.rootDir,
+            bundleFormat: record.bundleFormat,
+          })
+        : params.loadNativePluginConfig?.({ record });
+    if (!loaded) {
+      continue;
+    }
     merged = applyMergePatch(merged, loaded.config) as TConfig;
     for (const message of loaded.diagnostics) {
       diagnostics.push(params.createDiagnostic(record.id, message));

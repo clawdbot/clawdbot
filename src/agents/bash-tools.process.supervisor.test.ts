@@ -2,6 +2,7 @@
  * Regression coverage for process-tool supervisor cancellation.
  * Verifies managed session cancellation, process-tree fallback, and registry state.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
@@ -30,7 +31,7 @@ let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
 
@@ -43,12 +44,7 @@ function createBackgroundSession(id: string, pid?: number) {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
   const session = requireRecord(getSession(sessionId), sessionId);
@@ -84,8 +80,8 @@ describe("process tool supervisor cancellation", () => {
       getFinishedSession,
       getSession,
       markBackgrounded,
-      resetProcessRegistryForTests,
     } = await import("./bash-process-registry.js"));
+    ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
     ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
     ({ createProcessTool } = await import("./bash-tools.process.js"));
   });

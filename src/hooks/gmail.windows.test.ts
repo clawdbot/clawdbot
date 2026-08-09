@@ -1,10 +1,7 @@
 // Gmail Windows tests cover gog watcher command invocation on Windows.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getWindowsInstallRoots,
-  resetWindowsInstallRootsForTests,
-} from "../infra/windows-install-roots.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,9 +24,7 @@ function expectedTrustedCmdExe(): string {
 }
 
 describe("resolveGogServeInvocation on Windows", () => {
-  beforeEach(() => {
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
-  });
+  beforeEach(() => {});
 
   it("wraps spaced gog .cmd paths in an outer cmd.exe command line", async () => {
     const { resolveGogServeInvocation } = await importGmailWithExecutable(

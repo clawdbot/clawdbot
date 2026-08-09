@@ -1,4 +1,5 @@
 import { notifyLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import { expectDefined } from "@openclaw/normalization-core";
 // LLM idle-timeout tests cover timeout selection and stream wrapping for
 // embedded provider calls, including local-provider and cron exceptions.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -420,6 +421,15 @@ describe("resolveLlmIdleTimeoutMs", () => {
         },
       }),
     ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "ollama/gpt-oss:120b-cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it.each([
@@ -587,6 +597,15 @@ describe("resolveLlmFirstEventTimeoutMs", () => {
         model: { provider: "ollama", id: "ollama/kimi-k2.6:cloud", baseUrl: "http://127.0.0.1" },
       }),
     ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "ollama/gpt-oss:120b-cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
   });
 
   it("honors explicit provider request timeouts", () => {
@@ -674,7 +693,10 @@ describe("streamWithIdleTimeout", () => {
         return {
           async next() {
             if (index < chunks.length) {
-              return { done: false, value: chunks[index++] };
+              return {
+                done: false,
+                value: expectDefined(chunks[index++], "chunks[index++] test invariant"),
+              };
             }
             return { done: true, value: undefined };
           },

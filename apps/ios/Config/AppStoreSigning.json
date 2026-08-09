@@ -12,7 +12,7 @@
       "platform": "IOS",
       "profileKey": "OPENCLAW_APP_PROFILE",
       "profileName": "OpenClaw App Store ai.openclawfoundation.app",
-      "capabilities": ["PUSH_NOTIFICATIONS", "APP_GROUPS", "APP_ATTEST"],
+      "capabilities": ["PUSH_NOTIFICATIONS", "APP_GROUPS", "APP_ATTEST", "HEALTH_KIT"],
       "appGroups": ["group.ai.openclawfoundation.app.shared"]
     },
     {

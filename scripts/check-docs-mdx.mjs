@@ -169,15 +169,11 @@ function stripFrontmatter(raw) {
 }
 
 function formatMdxError(filePath, error) {
-  const place = error?.place ?? error?.position;
-  const start = place?.start ?? place;
-  const line = typeof start?.line === "number" ? start.line : undefined;
-  const column = typeof start?.column === "number" ? start.column : undefined;
   return {
     type: "mdx",
     file: filePath,
-    line,
-    column,
+    line: error?.line,
+    column: error?.column,
     message: String(error?.reason ?? error?.message ?? error).split("\n")[0],
   };
 }
@@ -230,14 +226,7 @@ async function checkMdxFile(filePath) {
   if (structureErrors.length > 0) {
     return structureErrors;
   }
-  const value = stripFrontmatter(raw);
-  await compile(
-    { path: filePath, value },
-    {
-      development: false,
-      jsx: false,
-    },
-  );
+  await compile({ path: filePath, value: stripFrontmatter(raw) });
   return [];
 }
 

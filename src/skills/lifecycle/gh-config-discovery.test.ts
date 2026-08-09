@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   detectGhConfigDirMismatch,
   formatGhConfigDirMismatchHint,
-  type GhConfigDirMismatch,
   type GhConfigDiscoveryInput,
 } from "./gh-config-discovery.js";
+
+type GhConfigDirMismatch = Omit<
+  Extract<ReturnType<typeof detectGhConfigDirMismatch>, { kind: "mismatch" }>,
+  "kind"
+>;
 
 function makeInput(overrides: Partial<GhConfigDiscoveryInput>): GhConfigDiscoveryInput {
   return {

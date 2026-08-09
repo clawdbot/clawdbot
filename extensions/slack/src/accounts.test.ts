@@ -59,6 +59,41 @@ describe("resolveSlackOperationToken", () => {
 
     expect(resolveSlackOperationToken(account, operation)).toBe(expected);
   });
+
+  it.each(["read", "write"] as const)(
+    "uses the user token for %s operations with user identity",
+    (operation) => {
+      const account = resolveSlackAccount({
+        cfg: {
+          channels: {
+            slack: {
+              postAs: "user",
+              userToken: "test-user-token",
+              userTokenReadOnly: true,
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(resolveSlackOperationToken(account, operation)).toBe("test-user-token");
+    },
+  );
+
+  it("does not fall back when a user identity has no user token", () => {
+    const account = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            postAs: "user",
+            botToken: "test-bot-token",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(resolveSlackOperationToken(account, "read")).toBeUndefined();
+    expect(resolveSlackOperationToken(account, "write")).toBeUndefined();
+  });
 });
 
 describe("resolveSlackAccount allowFrom precedence", () => {
@@ -81,6 +116,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     });
 
     expect(resolved.accountId).toBe("work");
+    expect(resolved.identity).toBe("bot");
     expect(resolved.name).toBe("Work");
     expect(resolved.botToken).toBe("xoxb-work");
     expect(resolved.appToken).toBe("xapp-work");
@@ -327,7 +363,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolved.config.allowFrom).toBeUndefined();
   });
 
-  it("falls back to top-level dm.allowFrom when allowFrom alias is unset", () => {
+  it("does not treat retired nested dm.allowFrom as canonical", () => {
     const resolved = resolveSlackAccount({
       cfg: {
         channels: {
@@ -338,15 +374,14 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             },
           },
         },
-      },
+      } as never,
       accountId: "work",
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
-    expect(resolved.config.dm?.allowFrom).toEqual(["U123"]);
   });
 
-  it("resolves account legacy dm.allowFrom before inherited root allowFrom", () => {
+  it("resolves account allowFrom before inherited root allowFrom", () => {
     const cfg = {
       channels: {
         slack: {
@@ -355,14 +390,14 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             work: {
               botToken: "xoxb-work",
               appToken: "xapp-work",
-              dm: { allowFrom: ["account-legacy"] },
+              allowFrom: ["account"],
             },
           },
         },
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account-legacy"]);
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account"]);
   });
 
   it("coerces numeric allowFrom entries at the config boundary", () => {
@@ -383,7 +418,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["12345"]);
   });
 
-  it("resolves account legacy dm policy before inherited root policy", () => {
+  it("resolves account DM policy before inherited root policy", () => {
     const cfg = {
       channels: {
         slack: {
@@ -392,7 +427,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             work: {
               botToken: "xoxb-work",
               appToken: "xapp-work",
-              dm: { policy: "allowlist" },
+              dmPolicy: "allowlist",
             },
           },
         },
@@ -412,7 +447,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             Work: {
               botToken: "xoxb-work",
               appToken: "xapp-work",
-              dm: { policy: "allowlist" },
+              dmPolicy: "allowlist",
               allowFrom: ["U123"],
             },
           },

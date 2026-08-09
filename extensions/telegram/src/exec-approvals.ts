@@ -20,7 +20,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeApproverId(value: string | number): string {
@@ -221,25 +220,6 @@ export function shouldInjectTelegramExecApprovalButtons(params: {
     return target === "channel" || target === "both";
   }
   return target === "both";
-}
-
-function resolveExecApprovalButtonsExplicitlyDisabled(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
-  const capabilities = resolveTelegramAccount(params).config.capabilities;
-  return resolveTelegramInlineButtonsConfigScope(capabilities) === "off";
-}
-
-export function shouldEnableTelegramExecApprovalButtons(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-}): boolean {
-  if (!shouldInjectTelegramExecApprovalButtons(params)) {
-    return false;
-  }
-  return !resolveExecApprovalButtonsExplicitlyDisabled(params);
 }
 
 export function shouldSuppressLocalTelegramExecApprovalPrompt(params: {

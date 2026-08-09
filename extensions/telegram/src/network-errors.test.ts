@@ -1,9 +1,9 @@
 // Telegram tests cover network errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
   isRetryableTelegramApiError,
+  isTelegramAuthenticationError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
@@ -60,6 +60,20 @@ describe("Telegram error_code predicate contracts", () => {
   );
 });
 
+describe("isTelegramAuthenticationError", () => {
+  it.each([
+    ["Unauthorized", 401, true],
+    ["Forbidden", 403, false],
+    ["Not Found", 404, true],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramAuthenticationError(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+
+  it("does not infer authentication failure from an unstructured message", () => {
+    expect(isTelegramAuthenticationError(new Error("Unauthorized"))).toBe(false);
+  });
+});
+
 describe("isRecoverableTelegramNetworkError", () => {
   it("tracks Telegram polling origin separately from generic network matching", () => {
     const slackDnsError = Object.assign(
@@ -74,10 +88,6 @@ describe("isRecoverableTelegramNetworkError", () => {
 
     tagTelegramNetworkError(slackDnsError, {
       method: "getUpdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
-    expect(getTelegramNetworkErrorOrigin(slackDnsError)).toEqual({
-      method: "getupdates",
       url: "https://api.telegram.org/bot123456:ABC/getUpdates",
     });
     expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
@@ -174,7 +184,6 @@ describe("isRecoverableTelegramNetworkError", () => {
     const inner = new Error("inner");
     tagTelegramNetworkError(inner, { method: " ", url: " " });
     const outer = Object.assign(new Error("outer"), { cause: inner });
-    expect(getTelegramNetworkErrorOrigin(outer)).toEqual({ method: null, url: null });
     expect(isTelegramPollingNetworkError(outer)).toBe(false);
   });
 

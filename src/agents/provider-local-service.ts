@@ -5,10 +5,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -152,7 +154,11 @@ function isLoopbackProviderBaseUrl(value: string): boolean {
     return false;
   }
   const hostname = new URL(normalized).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    (isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname))
+  );
 }
 
 function isConfiguredProviderBaseUrl(targetBaseUrl: string, configuredBaseUrl?: string): boolean {
@@ -217,7 +223,7 @@ export async function ensureProviderLocalService(
 
   validateLocalServiceConfig(service, target.providerId);
   const healthUrl = resolveHealthUrl(service, target.baseUrl);
-  const healthHeaders = filterHealthProbeHeaders(target.headers);
+  const healthHeaders = buildHealthProbeHeaders(target.headers, undefined);
   const key = localServiceKey(target.providerId, service, healthUrl);
   installExitHandler();
   const managed = services.get(key) ?? { active: 0 };
@@ -355,10 +361,6 @@ function buildHealthProbeHeaders(
   return [...headers].length > 0 ? headers : undefined;
 }
 
-function filterHealthProbeHeaders(headers: HeadersInit | undefined): Headers | undefined {
-  return buildHealthProbeHeaders(headers, undefined);
-}
-
 async function probeHealth(
   url: string,
   headers: HeadersInit | undefined,
@@ -418,6 +420,9 @@ async function startAndWaitForLocalService(params: {
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
+  // The last lease can disappear while the health probe or restart settles.
+  // Recheck at the spawn boundary so cleanup cannot orphan a newly created child.
+  throwIfAborted(signal);
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,
@@ -428,7 +433,9 @@ async function startAndWaitForLocalService(params: {
   const child = managed.process;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  const captureStdout = (chunk: Buffer | string) => {
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  const captureStdout = (chunk: string) => {
     diagnostics.stdoutTail = appendLocalServiceOutputTail(
       diagnostics.stdoutTail,
       chunk,
@@ -438,7 +445,7 @@ async function startAndWaitForLocalService(params: {
       healthHeaders,
     );
   };
-  const captureStderr = (chunk: Buffer | string) => {
+  const captureStderr = (chunk: string) => {
     diagnostics.stderrTail = appendLocalServiceOutputTail(
       diagnostics.stderrTail,
       chunk,
@@ -499,7 +506,7 @@ async function startAndWaitForLocalService(params: {
     if (Date.now() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
-    await sleep(PROBE_INTERVAL_MS, signal);
+    await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });
   }
 }
 
@@ -694,25 +701,6 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
         reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
-  });
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfAborted(signal);
-  return new Promise((resolve, reject) => {
-    const cleanup = () => signal?.removeEventListener("abort", onAbort);
-    const onDone = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(toAbortError(signal));
-    };
-    const timeout: NodeJS.Timeout = setTimeout(onDone, ms);
-    timeout.unref?.();
-    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

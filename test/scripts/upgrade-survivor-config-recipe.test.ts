@@ -8,6 +8,9 @@ import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
   isReleaseBefore,
+  resolveScenarioConfigSteps,
+  resolveUpgradeSurvivorConfigSteps,
+  resolveUpgradeSurvivorConfigStepsForBaseline,
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
@@ -59,6 +62,36 @@ describe("upgrade survivor config recipe command resolution", () => {
       commandLabel: "openclaw config validate",
       shell: false,
     });
+  });
+
+  it("adds the Codex allowlist survival scenario", () => {
+    expect(resolveScenarioConfigSteps("codex-allowlist-survival")).toEqual([
+      {
+        argv: [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          "--strict-json",
+        ],
+        id: "plugins-codex-allowlist",
+        intent: "codex-allowlist-survival",
+      },
+    ]);
+  });
+
+  it("inserts scenario config before final validation", () => {
+    const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
+    expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("removes unsupported scenario config for older baselines", () => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
+    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
+    expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
+    expect(steps.at(-1)?.id).toBe("validate");
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {

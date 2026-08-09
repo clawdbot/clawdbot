@@ -1,10 +1,12 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -40,7 +42,8 @@ import kotlinx.coroutines.withContext
  */
 class MainActivity : AppCompatActivity() {
   private val viewModel: MainViewModel by viewModels()
-  private lateinit var permissionRequester: PermissionRequester
+  private val permissionRequester: PermissionRequester
+    get() = (application as NodeApp).permissionRequester
   private var initializedViewModel: MainViewModel? = null
   private var didStartViewModelCollectors = false
   private var foreground = false
@@ -52,7 +55,7 @@ class MainActivity : AppCompatActivity() {
     super.onCreate(savedInstanceState)
     pendingIntentRouter.setInitialIntent(intent)
     WindowCompat.setDecorFitsSystemWindows(window, false)
-    permissionRequester = PermissionRequester(this)
+    permissionRequester.attach(this)
     if (BuildConfig.DEBUG) {
       screenshotScene = parseAndroidScreenshotModeIntent(intent)
       if (screenshotScene != null) hideScreenshotModeStatusBar()
@@ -101,7 +104,20 @@ class MainActivity : AppCompatActivity() {
     initializedViewModel?.setForeground(true)
   }
 
+  override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+    super.onTopResumedActivityChanged(isTopResumedActivity)
+    // minSdk 31 guarantees this callback and lets multi-resume select the actually interactive task.
+    updateTopResumedPermissionHost(
+      isTopResumedActivity = isTopResumedActivity,
+      activate = { permissionRequester.activate(this) },
+      deactivate = { permissionRequester.deactivate(this) },
+      refreshPermissionSurface = { initializedViewModel?.refreshNodePermissionSurface() },
+    )
+  }
+
   override fun onStop() {
+    // Top-resumed ownership normally clears first; this also covers abnormal lifecycle ordering.
+    permissionRequester.deactivate(this)
     foreground = false
     if (shouldNotifyRuntimeBackgrounded(isChangingConfigurations)) {
       initializedViewModel?.setForeground(false)
@@ -109,12 +125,30 @@ class MainActivity : AppCompatActivity() {
     super.onStop()
   }
 
+  override fun onDestroy() {
+    permissionRequester.detach(this)
+    super.onDestroy()
+  }
+
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    pendingIntentRouter.onNewIntent(intent) { routedIntent ->
-      initializedViewModel?.let { handleAssistantIntent(viewModel = it, intent = routedIntent) }
-    }
+    val accepted =
+      pendingIntentRouter.onNewIntent(intent) { routedIntent ->
+        initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
+      }
+    if (!accepted) return
+  }
+
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<String>,
+    grantResults: IntArray,
+  ) {
+    // AppCompatActivity marks this callback @CallSuper; it preserves Fragment and ActivityResult dispatch.
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    initializedViewModel?.refreshNodePermissionSurface()
   }
 
   /**
@@ -129,8 +163,9 @@ class MainActivity : AppCompatActivity() {
       pendingIntentRouter.discardInitialIntent()
     }
     pendingIntentRouter.activate { initialIntent ->
-      handleAssistantIntent(viewModel = readyViewModel, intent = initialIntent)
+      handleLaunchIntent(viewModel = readyViewModel, intent = initialIntent)
     }
+    readyViewModel.reportShareLaunchOverflow(pendingIntentRouter.takeShareOverflowCount())
   }
 
   /**
@@ -169,15 +204,35 @@ class MainActivity : AppCompatActivity() {
         }
       }
     }
+
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        readyViewModel.shareLaunchOverflowRevision.collect { revision ->
+          if (revision == 0L) return@collect
+          repeat(readyViewModel.takeShareLaunchOverflowCount()) {
+            Toast
+              .makeText(
+                this@MainActivity,
+                nativeString("Too many shares are waiting to be added."),
+                Toast.LENGTH_SHORT,
+              ).show()
+          }
+        }
+      }
+    }
   }
 
   /**
    * Routes assistant/app-action intents into ViewModel state without recreating the activity.
    */
-  private fun handleAssistantIntent(
+  private fun handleLaunchIntent(
     viewModel: MainViewModel,
     intent: Intent?,
   ) {
+    if (intent?.isShareLaunchIntent() == true) {
+      viewModel.handleShareLaunchIntent(intent)
+      return
+    }
     parseHomeDestinationIntent(intent)?.let { destination ->
       viewModel.requestHomeDestination(destination)
       return
@@ -187,46 +242,76 @@ class MainActivity : AppCompatActivity() {
   }
 }
 
-/** Holds launch intents until ViewModel activation, then routes every later intent immediately. */
+/** Queues shares until ViewModel activation while retaining only the latest ordinary launch intent. */
 internal class MainActivityPendingIntentRouter {
+  private data class PendingLaunchIntent(
+    val sequence: Long,
+    val intent: Intent,
+    val initial: Boolean,
+  )
+
   private var activated = false
-  private var pendingIntent: Intent? = null
-  private var pendingIntentIsInitial = false
+  private var sequence = 0L
+  private val pendingShareIntents = ArrayDeque<PendingLaunchIntent>()
+  private var pendingNonShareIntent: PendingLaunchIntent? = null
+  private var shareOverflowCount = 0
 
   fun setInitialIntent(intent: Intent?) {
-    if (!activated) {
-      pendingIntent = intent
-      pendingIntentIsInitial = true
-    }
+    if (!activated && intent != null) store(intent = intent, initial = true)
   }
 
   fun onNewIntent(
     intent: Intent,
     routeIntent: (Intent) -> Unit,
-  ) {
+  ): Boolean {
     if (activated) {
       routeIntent(intent)
-      return
+      return true
     }
-    pendingIntent = intent
-    pendingIntentIsInitial = false
+    return store(intent = intent, initial = false)
   }
 
   fun discardInitialIntent() {
-    if (activated || !pendingIntentIsInitial) return
-    pendingIntent = null
-    pendingIntentIsInitial = false
+    if (activated) return
+    pendingShareIntents.removeAll { it.initial }
+    if (pendingNonShareIntent?.initial == true) pendingNonShareIntent = null
   }
 
   fun activate(routeIntent: (Intent) -> Unit): Boolean {
     if (activated) return false
     activated = true
-    pendingIntent?.let(routeIntent)
-    pendingIntent = null
-    pendingIntentIsInitial = false
+    (pendingShareIntents + listOfNotNull(pendingNonShareIntent))
+      .sortedBy(PendingLaunchIntent::sequence)
+      .forEach { pending -> routeIntent(pending.intent) }
+    pendingShareIntents.clear()
+    pendingNonShareIntent = null
+    return true
+  }
+
+  fun takeShareOverflowCount(): Int =
+    shareOverflowCount.also {
+      shareOverflowCount = 0
+    }
+
+  private fun store(
+    intent: Intent,
+    initial: Boolean,
+  ): Boolean {
+    val pending = PendingLaunchIntent(sequence = sequence++, intent = intent, initial = initial)
+    if (!intent.isShareLaunchIntent()) {
+      pendingNonShareIntent = pending
+      return true
+    }
+    if (pendingShareIntents.size >= MAX_PENDING_CHAT_SHARES) {
+      shareOverflowCount += 1
+      return false
+    }
+    pendingShareIntents.addLast(pending)
     return true
   }
 }
+
+private fun Intent.isShareLaunchIntent(): Boolean = action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE
 
 /** Keeps launch intents one-shot across same-process Activity recreation, but not process death. */
 internal class MainActivityInitialIntentGate {
@@ -240,6 +325,20 @@ internal class MainActivityInitialIntentGate {
 }
 
 internal fun shouldNotifyRuntimeBackgrounded(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
+
+internal fun updateTopResumedPermissionHost(
+  isTopResumedActivity: Boolean,
+  activate: () -> Unit,
+  deactivate: () -> Unit,
+  refreshPermissionSurface: () -> Unit,
+) {
+  if (isTopResumedActivity) {
+    activate()
+    refreshPermissionSurface()
+  } else {
+    deactivate()
+  }
+}
 
 /** Preserves one-shot runtime UI startup while allowing screenshot fixtures to skip side effects. */
 internal class MainActivityRuntimeUiStarter {

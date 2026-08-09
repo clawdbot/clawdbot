@@ -60,6 +60,9 @@ export function parseDiffDetailsString(diff: string): DiffLine[] | null {
       return null;
     }
     const [, sign, lineNo, text] = match;
+    if (!sign || !lineNo) {
+      return null;
+    }
     lines.push({
       kind: sign === "+" ? "add" : sign === "-" ? "del" : "ctx",
       lineNo: Number.parseInt(lineNo, 10),
@@ -101,7 +104,8 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
   }
   const keep = new Uint8Array(lines.length);
   for (let index = 0; index < lines.length; index++) {
-    if (lines[index].kind !== "add" && lines[index].kind !== "del") {
+    const line = lines[index];
+    if (!line || (line.kind !== "add" && line.kind !== "del")) {
       continue;
     }
     const start = Math.max(0, index - 3);
@@ -125,7 +129,10 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
       clipped = true;
       break;
     }
-    preview.push(lines[index]);
+    const line = lines[index];
+    if (line) {
+      preview.push(line);
+    }
   }
   if (clipped && preview.at(-1)?.kind !== "skip") {
     preview.push({ kind: "skip", text: "" });
@@ -151,35 +158,51 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
     Array.from({ length: m + 1 }, () => 0),
   );
   for (let i = n - 1; i >= 0; i--) {
+    const row = lcs[i];
+    const nextRow = lcs[i + 1];
+    if (!row || !nextRow) {
+      continue;
+    }
     for (let j = m - 1; j >= 0; j--) {
-      lcs[i][j] =
+      row[j] =
         oldLines[i] === newLines[j]
-          ? lcs[i + 1][j + 1] + 1
-          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+          ? (nextRow[j + 1] ?? 0) + 1
+          : Math.max(nextRow[j] ?? 0, row[j + 1] ?? 0);
     }
   }
   const lines: DiffLine[] = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (oldLines[i] === newLines[j]) {
-      lines.push({ kind: "ctx", text: oldLines[i] });
+    const oldLine = oldLines[i];
+    const newLine = newLines[j];
+    if (oldLine === undefined || newLine === undefined) {
+      break;
+    }
+    if (oldLine === newLine) {
+      lines.push({ kind: "ctx", text: oldLine });
       i++;
       j++;
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      lines.push({ kind: "del", text: oldLines[i] });
+    } else if ((lcs[i + 1]?.[j] ?? 0) >= (lcs[i]?.[j + 1] ?? 0)) {
+      lines.push({ kind: "del", text: oldLine });
       i++;
     } else {
-      lines.push({ kind: "add", text: newLines[j] });
+      lines.push({ kind: "add", text: newLine });
       j++;
     }
   }
   while (i < n) {
-    lines.push({ kind: "del", text: oldLines[i] });
+    const line = oldLines[i];
+    if (line !== undefined) {
+      lines.push({ kind: "del", text: line });
+    }
     i++;
   }
   while (j < m) {
-    lines.push({ kind: "add", text: newLines[j] });
+    const line = newLines[j];
+    if (line !== undefined) {
+      lines.push({ kind: "add", text: line });
+    }
     j++;
   }
   return compactLineDiff(lines, inputTruncated);
@@ -189,8 +212,8 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 export function buildWriteDiffLines(content: string, maxLines = 80): DiffLine[] {
   const sourceLines = splitDiffLines(content);
   const lines: DiffLine[] = [];
-  for (let index = 0; index < sourceLines.length && index < maxLines; index++) {
-    lines.push({ kind: "add", lineNo: index + 1, text: sourceLines[index] });
+  for (const [index, text] of sourceLines.slice(0, maxLines).entries()) {
+    lines.push({ kind: "add", lineNo: index + 1, text });
   }
   if (sourceLines.length > maxLines) {
     lines.push({ kind: "skip", text: "" });

@@ -2,10 +2,11 @@ title: WhatsApp status command reply
 
 scenario:
   id: whatsapp-status-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp status returns the active session summary.
   successCriteria:
     - The status command succeeds in a WhatsApp DM.
@@ -16,8 +17,6 @@ scenario:
   execution:
     kind: flow
     channel: whatsapp
-    config:
-      requiredChannelDriver: live
     summary: Run WhatsApp status and verify session text.
 
 flow:

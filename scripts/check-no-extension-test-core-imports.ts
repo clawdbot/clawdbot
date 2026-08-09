@@ -15,10 +15,6 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
     hint: "Use a focused plugin-sdk test subpath for the public extension test surface.",
   },
   {
-    pattern: /["']openclaw\/plugin-sdk\/testing["']/,
-    hint: "Use a focused plugin-sdk test subpath instead of the broad compatibility testing barrel.",
-  },
-  {
     pattern: /["']openclaw\/plugin-sdk\/compat["']/,
     hint: "Use a focused public plugin-sdk subpath instead of compat.",
   },
@@ -36,7 +32,7 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["'](?:\.\.\/)+(?:test\/helpers\/media-generation\/)[^"']+["']/,
-    hint: "Use openclaw/plugin-sdk/provider-test-contracts or openclaw/plugin-sdk/provider-http-test-mocks instead of repo-only media provider helper bridges.",
+    hint: "Use openclaw/plugin-sdk/test-media-generation, provider-test-contracts, or provider-http-test-mocks instead of repo-only media provider helper bridges.",
   },
   {
     pattern:

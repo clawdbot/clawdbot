@@ -17,9 +17,15 @@ export type {
   MemoryEmbeddingProviderRuntime,
 } from "./host/openclaw-runtime-memory.js";
 export { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./host/embeddings.js";
-export { extractBatchErrorMessage, formatUnavailableBatchError } from "./host/batch-error-utils.js";
+export {
+  EmbeddingBatchUnavailableError,
+  extractBatchErrorMessage,
+  formatBatchErrorDetail,
+  formatUnavailableBatchError,
+  isEmbeddingBatchUnavailableError,
+} from "./host/batch-error-utils.js";
 export { postJsonWithRetry } from "./host/batch-http.js";
-export { applyEmbeddingBatchOutputLine } from "./host/batch-output.js";
+export { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./host/batch-output.js";
 export {
   EMBEDDING_BATCH_ENDPOINT,
   type EmbeddingBatchStatus,
@@ -33,6 +39,7 @@ export {
 export {
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
+  throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
   type BatchCompletionResult,
 } from "./host/batch-status.js";

@@ -48,6 +48,12 @@ type DiscoverLmstudioModelsParams = {
   fetchImpl?: typeof fetch;
 };
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchLmstudioEndpoint(params: {
   url: string;
   init?: RequestInit;
@@ -57,8 +63,10 @@ async function fetchLmstudioEndpoint(params: {
   auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  let response: Response;
+  let release: () => Promise<void>;
   if (params.ssrfPolicy) {
-    return await fetchWithSsrFGuard({
+    const guarded = await fetchWithSsrFGuard({
       url: params.url,
       init: params.init,
       timeoutMs,
@@ -66,22 +74,23 @@ async function fetchLmstudioEndpoint(params: {
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
     });
-  }
-  const fetchFn = params.fetchImpl ?? fetch;
-  return {
-    response: await fetchFn(params.url, {
+    response = guarded.response;
+    release = guarded.release;
+  } else {
+    const fetchFn = params.fetchImpl ?? fetch;
+    response = await fetchFn(params.url, {
       ...params.init,
       signal: AbortSignal.timeout(timeoutMs),
-    }),
-    release: async () => {},
-  };
-}
-
-function asLmstudioModelWire(value: unknown): LmstudioModelWire {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("LM Studio model list: malformed JSON response");
+    });
+    release = async () => undefined;
   }
-  return value as LmstudioModelWire;
+  return {
+    response,
+    release: async () => {
+      await cancelUnreadResponseBody(response);
+      await release();
+    },
+  };
 }
 
 function withResolvedLmstudioModelKey(
@@ -136,10 +145,17 @@ export async function fetchLmstudioModels(params: {
         "LM Studio model list",
         "models",
       );
+      const validModels = models.filter(
+        (model): model is LmstudioModelWire =>
+          typeof model === "object" && model !== null && !Array.isArray(model),
+      );
+      if (models.length > 0 && validModels.length === 0) {
+        throw new Error("LM Studio model list: malformed JSON response");
+      }
       return {
         reachable: true,
         status: response.status,
-        models: models.map(asLmstudioModelWire),
+        models: validModels,
       };
     } finally {
       await release();

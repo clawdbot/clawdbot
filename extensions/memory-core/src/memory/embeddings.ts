@@ -1,19 +1,13 @@
 // Memory Core plugin module implements embeddings behavior.
 import {
-  getEmbeddingProvider,
-  type EmbeddingProviderAdapter,
-  type EmbeddingProvider as GenericEmbeddingProvider,
-  type EmbeddingProviderRuntime as GenericEmbeddingProviderRuntime,
-} from "openclaw/plugin-sdk/embedding-providers";
-import {
-  getMemoryEmbeddingProvider as getLegacyMemoryEmbeddingProvider,
+  getMemoryEmbeddingProvider,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
-import { getMemoryCoreEmbeddingLocalService } from "./embedding-local-service.js";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -33,11 +27,11 @@ export type EmbeddingProviderResult = {
 type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
-const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 
 function createMissingLlamaCppProviderError(): Error {
   return new Error(
@@ -50,99 +44,6 @@ function createMissingLlamaCppProviderError(): Error {
   );
 }
 
-function adaptGenericEmbeddingProvider(
-  provider: GenericEmbeddingProvider,
-): MemoryEmbeddingProvider {
-  const adapted: MemoryEmbeddingProvider = {
-    id: provider.id,
-    model: provider.model,
-    ...(typeof provider.maxInputTokens === "number"
-      ? { maxInputTokens: provider.maxInputTokens }
-      : {}),
-    embedQuery: async (text, options) =>
-      await provider.embed(text, {
-        ...options,
-        inputType: "query",
-      }),
-    embedBatch: async (texts, options) =>
-      await provider.embedBatch(texts, {
-        ...options,
-        inputType: "document",
-      }),
-    embedBatchInputs: async (inputs, options) =>
-      await provider.embedBatch(inputs, {
-        ...options,
-        inputType: "document",
-      }),
-    ...(provider.close ? { close: provider.close } : {}),
-  };
-  const getRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
-  if (typeof getRuntimeFacts === "function") {
-    Object.defineProperty(adapted, LOCAL_EMBEDDING_RUNTIME_FACTS, {
-      enumerable: false,
-      value: getRuntimeFacts,
-    });
-  }
-  return adapted;
-}
-
-function adaptGenericRuntime(
-  runtime: GenericEmbeddingProviderRuntime | undefined,
-): MemoryEmbeddingProviderRuntime | undefined {
-  if (!runtime) {
-    return undefined;
-  }
-  return {
-    id: runtime.id,
-    ...(runtime.cacheKeyData ? { cacheKeyData: runtime.cacheKeyData } : {}),
-    ...(runtime.indexIdentityAliases?.length
-      ? { indexIdentityAliases: runtime.indexIdentityAliases }
-      : {}),
-    ...(typeof runtime.inlineQueryTimeoutMs === "number"
-      ? { inlineQueryTimeoutMs: runtime.inlineQueryTimeoutMs }
-      : {}),
-    ...(typeof runtime.inlineBatchTimeoutMs === "number"
-      ? { inlineBatchTimeoutMs: runtime.inlineBatchTimeoutMs }
-      : {}),
-  };
-}
-
-function adaptGenericEmbeddingAdapter(
-  adapter: EmbeddingProviderAdapter,
-): MemoryEmbeddingProviderAdapter {
-  const resolveIndexIdentity = adapter.resolveIndexIdentity;
-  return {
-    id: adapter.id,
-    ...(adapter.defaultModel ? { defaultModel: adapter.defaultModel } : {}),
-    ...(adapter.transport ? { transport: adapter.transport } : {}),
-    ...(adapter.authProviderId ? { authProviderId: adapter.authProviderId } : {}),
-    ...(adapter.formatSetupError ? { formatSetupError: adapter.formatSetupError } : {}),
-    ...(resolveIndexIdentity
-      ? {
-          resolveIndexIdentity: (options: MemoryEmbeddingProviderCreateOptions) =>
-            resolveIndexIdentity({
-              ...options,
-              ...(typeof options.outputDimensionality === "number"
-                ? { dimensions: options.outputDimensionality }
-                : {}),
-            }),
-        }
-      : {}),
-    create: async (options) => {
-      const result = await adapter.create({
-        ...options,
-        ...(typeof options.outputDimensionality === "number"
-          ? { dimensions: options.outputDimensionality }
-          : {}),
-      });
-      return {
-        provider: result.provider ? adaptGenericEmbeddingProvider(result.provider) : null,
-        runtime: adaptGenericRuntime(result.runtime),
-      };
-    },
-  };
-}
-
 function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unknown): string {
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
 }
@@ -151,13 +52,9 @@ function getAdapter(
   id: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): MemoryEmbeddingProviderAdapter {
-  const adapter = getLegacyMemoryEmbeddingProvider(id, config);
+  const adapter = getMemoryEmbeddingProvider(id, config);
   if (adapter) {
     return adapter;
-  }
-  const genericAdapter = getEmbeddingProvider(id, config);
-  if (genericAdapter) {
-    return adaptGenericEmbeddingAdapter(genericAdapter);
   }
   if (id === LOCAL_LLAMA_CPP_PROVIDER_ID) {
     throw createMissingLlamaCppProviderError();
@@ -181,10 +78,19 @@ export function resolveEmbeddingProviderFallbackModel(
   fallbackSourceModel: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): string {
-  const adapter =
-    getLegacyMemoryEmbeddingProvider(providerId, config) ??
-    getEmbeddingProvider(providerId, config);
+  const adapter = getMemoryEmbeddingProvider(providerId, config);
   return adapter?.defaultModel ?? fallbackSourceModel;
+}
+
+export function resolveEmbeddingProviderFallbackRemote(
+  remote: MemoryEmbeddingProviderCreateOptions["remote"],
+): MemoryEmbeddingProviderCreateOptions["remote"] {
+  if (!remote) {
+    return undefined;
+  }
+  // Endpoint and auth belong to the primary provider; batch settings are safe to reuse.
+  const { baseUrl: _baseUrl, apiKey: _apiKey, headers: _headers, ...sharedRemote } = remote;
+  return Object.keys(sharedRemote).length > 0 ? sharedRemote : undefined;
 }
 
 export function resolveEmbeddingProviderAdapterId(
@@ -239,7 +145,6 @@ async function createWithAdapter(
   const createOptions = {
     ...options,
     model: resolveProviderModel(adapter, options.model),
-    acquireLocalService: getMemoryCoreEmbeddingLocalService(),
   };
   const result = await adapter.create(createOptions);
   return {
@@ -268,6 +173,7 @@ export async function createEmbeddingProvider(
         const fallbackResult = await createWithAdapter(fallbackAdapter, {
           ...options,
           provider: options.fallback,
+          remote: resolveEmbeddingProviderFallbackRemote(options.remote),
         });
         return {
           ...fallbackResult,

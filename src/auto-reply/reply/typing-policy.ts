@@ -3,7 +3,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { TypingPolicy } from "../types.js";
 
 /** Inputs used to resolve typing behavior for one reply run. */
-export type ResolveRunTypingPolicyParams = {
+type ResolveRunTypingPolicyParams = {
   requestedPolicy?: TypingPolicy;
   suppressTyping?: boolean;
   isHeartbeat?: boolean;
@@ -12,7 +12,7 @@ export type ResolveRunTypingPolicyParams = {
 };
 
 /** Effective typing policy plus suppression flag for a reply run. */
-export type ResolvedRunTypingPolicy = {
+type ResolvedRunTypingPolicy = {
   typingPolicy: TypingPolicy;
   suppressTyping: boolean;
 };

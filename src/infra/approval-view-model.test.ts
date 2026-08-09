@@ -1,7 +1,8 @@
 // Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
-import { buildPendingApprovalView } from "./approval-view-model.js";
+import { buildPendingApprovalView, resolveApprovalRequestKind } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 describe("buildPendingApprovalView", () => {
   it("passes command analysis through exec approval views", () => {
@@ -29,5 +30,70 @@ describe("buildPendingApprovalView", () => {
       throw new Error("expected exec approval view");
     }
     expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
+    expect(view.actions[0]?.action).toEqual({
+      type: "approval",
+      approvalId: "approval-id",
+      approvalKind: "exec",
+      decision: "allow-once",
+    });
+  });
+
+  it("uses the typed request owner instead of approval id spelling", () => {
+    const request: PluginApprovalRequest = {
+      id: "custom-id-without-prefix",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Use protected tool",
+        description: "The plugin needs operator consent.",
+      },
+    };
+
+    expect(resolveApprovalRequestKind(request)).toBe("plugin");
+    const view = buildPendingApprovalView(request);
+    expect(view.approvalKind).toBe("plugin");
+    expect(view.actions[0]?.action).toEqual({
+      type: "approval",
+      approvalId: "custom-id-without-prefix",
+      approvalKind: "plugin",
+      decision: "allow-once",
+    });
+  });
+
+  it("keeps the fail-closed plugin decision in channel-facing actions", () => {
+    const request: PluginApprovalRequest = {
+      id: "plugin-approval",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Use protected tool",
+        description: "The plugin needs operator consent.",
+        allowedDecisions: ["allow-once"],
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+
+    expect(view.actions.map((action) => action.action)).toEqual([
+      {
+        type: "approval",
+        approvalId: "plugin-approval",
+        approvalKind: "plugin",
+        decision: "allow-once",
+      },
+      {
+        type: "approval",
+        approvalId: "plugin-approval",
+        approvalKind: "plugin",
+        decision: "deny",
+      },
+    ]);
+  });
+
+  it.each([
+    { request: {} },
+    { request: { command: "echo hi", title: "Ambiguous", description: "Ambiguous" } },
+  ])("rejects a request payload without exactly one owner: %j", (request) => {
+    expect(() => resolveApprovalRequestKind(request)).toThrow("exactly one owner");
   });
 });

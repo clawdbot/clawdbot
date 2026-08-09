@@ -1,5 +1,6 @@
 // Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 
 type MemoryEmbeddingTextPart = {
   type: "text";
@@ -90,7 +91,7 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
 
-export function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
+function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
 
@@ -102,12 +103,6 @@ export function isRetryableMemoryEmbeddingError(message: string): boolean {
   return (
     RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
     isRetryableMemoryEmbeddingTransportError(message)
-  );
-}
-
-export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {
-  return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-    message,
   );
 }
 
@@ -128,26 +123,15 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
-  const attempts = Math.max(1, params.maxAttempts);
-  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
-    const delayMs = params.baseDelayMs * 2 ** (attempt - 1);
-    try {
-      return await params.run();
-    } catch (err) {
-      // Abort must win over retryable-looking failures: abort reasons often
-      // carry "timed out" messages that match the retryable transport
-      // patterns and would otherwise keep retrying for an absent caller.
-      if (params.signal?.aborted) {
-        throw err;
-      }
-      const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
-        throw err;
-      }
-      await params.waitForRetry(delayMs);
-    }
-  }
-  throw new Error("retry loop exhausted");
+  return await retryAsync(params.run, {
+    attempts: params.maxAttempts,
+    minDelayMs: params.baseDelayMs,
+    maxDelayMs: Number.MAX_SAFE_INTEGER,
+    // Caller cancellation wins even when its timeout resembles a retryable
+    // provider error; otherwise abandoned searches start another request.
+    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(formatErrorMessage(err)),
+    sleep: params.waitForRetry,
+  });
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {

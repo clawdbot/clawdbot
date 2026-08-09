@@ -1,23 +1,14 @@
 // Control UI E2E tests cover autonomous tool-turn outcome rendering.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI autonomous tool-turn outcomes",
+  startServerBeforeBrowser: true,
+});
 
 function failedTool(timestamp: number) {
   return {
@@ -38,21 +29,24 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
-describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
-  beforeAll(async () => {
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
+async function expandCompletedWorkGroups(page: import("playwright").Page) {
+  const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
+  await workSummaries.first().waitFor();
+  for (let index = 0; index < (await workSummaries.count()); index += 1) {
+    const summary = workSummaries.nth(index);
+    if ((await summary.getAttribute("aria-expanded")) !== "true") {
+      await summary.click();
+    }
+  }
+}
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
+    const sessionKey = "agent:main:dashboard:tool-turn-outcome";
     await installMockGateway(page, {
+      sessionKey,
       historyMessages: [
         failedTool(1),
         {
@@ -71,8 +65,9 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
+    await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
       "Tool error",
@@ -90,7 +85,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
   });
 
   it("pairs a canonical parallel batch and renders per-file patch sections", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -140,8 +135,8 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat`);
-    const activity = page.locator(".chat-activity-group__summary");
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
     expect(await activity.textContent()).toContain("Read a file, edited 2 files");
     if ((await activity.getAttribute("aria-expanded")) !== "true") {
@@ -176,8 +171,59 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     await context.close();
   });
 
+  it("keeps a message-only turn visible with its first message line", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    const message = "Hello Molty, first claw-to-claw hello.";
+    await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Send the Reef greeting.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message",
+              name: "message",
+              arguments: {
+                action: "send",
+                channel: "reef",
+                target: "@molty",
+                message: `${message}\nHidden second line.`,
+              },
+            },
+          ],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message",
+          toolName: "message",
+          content: [{ type: "text", text: '{"status":"sent"}' }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    await row.waitFor();
+
+    expect(await page.locator(".chat-work-group").count()).toBe(0);
+    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
+    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    await captureToolActivityProof(page, "message-only-turn-visible");
+    await row.click();
+    await page.getByText("action:", { exact: true }).waitFor();
+    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
+    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
+      0,
+    );
+    await context.close();
+  });
+
   it("sweeps a text wave over the active tool row and stops it on the result", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       historyMessages: [
@@ -189,7 +235,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText("Ready for the running tool wave proof.").waitFor();
     await page.locator(".agent-chat__input textarea").fill("run a long command");
     await page.getByRole("button", { name: "Send message" }).click();

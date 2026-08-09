@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mjs";
 import { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 const DEFAULT_SCAN_ROOTS = ["src", "extensions", "packages", "ui", "scripts", "test"];
@@ -20,9 +21,6 @@ const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
   /\bimport\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
   /\brequire\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
   /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/gi,
-];
-const PACKAGE_FILE_LOOKUP_PATTERNS = [
-  /\bresolvePackageFileForCommandExplanation\s*\(\s*["']([^"']+)["']/g,
 ];
 const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
   [
@@ -93,13 +91,6 @@ export function collectModuleSpecifiers(source) {
       }
     }
   }
-  for (const pattern of PACKAGE_FILE_LOOKUP_PATTERNS) {
-    for (const match of source.matchAll(pattern)) {
-      if (match[1]) {
-        specifiers.add(match[1]);
-      }
-    }
-  }
   const stringConstants = new Map();
   for (const match of source.matchAll(STRING_CONSTANT_PATTERN)) {
     if (match[1] && match[2]) {
@@ -152,20 +143,6 @@ function collectExtensionDependencyDeclarations(repoRoot) {
   }
 
   return declarations;
-}
-
-function collectExcludedPackagedExtensionDirs(rootPackageJson) {
-  const excluded = new Set();
-  for (const entry of rootPackageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
 }
 
 function collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPackageJson) {

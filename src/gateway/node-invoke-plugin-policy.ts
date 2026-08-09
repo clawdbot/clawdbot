@@ -14,11 +14,11 @@ import type {
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
+import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
-  registerPendingApprovalRecord,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -116,16 +116,16 @@ function createApprovalRuntime(params: {
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      const decisionPromise = registerPendingApprovalRecord({
-        manager,
-        record,
-        timeoutMs,
-        respond,
-      });
-      if (!decisionPromise) {
-        return { id: record.id, decision: null };
-      }
+      // Register directly: persistence and presentation-validation failures
+      // must throw so the plugin policy fails closed before any request
+      // routing. The RPC storage-unavailable respond path does not apply to
+      // this runtime-internal caller.
+      const decisionPromise = manager.register(record, timeoutMs);
       const requestEvent = buildRequestedApprovalEvent(record);
+      const forwardRequest = params.context.forwardPluginApprovalRequest;
+      const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
+        params.context.pluginApprovalIosPushDelivery,
+      );
       await handlePendingApprovalRequest({
         manager,
         record,
@@ -137,20 +137,40 @@ function createApprovalRuntime(params: {
         requestEvent,
         twoPhase: false,
         approvalKind: "plugin",
-        deliverRequest: () => {
-          const forward = params.context.forwardPluginApprovalRequest;
-          if (!forward) {
-            return false;
+        deliverRequest: () =>
+          runApprovalRequestDeliveries({
+            context: params.context,
+            record,
+            forward: forwardRequest
+              ? [
+                  () => forwardRequest(requestEvent),
+                  "plugin approvals: forward node policy request failed",
+                ]
+              : undefined,
+            iosPush: iosPushRequest
+              ? [
+                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
+                  "plugin approvals: iOS push node policy request failed",
+                ]
+              : undefined,
+          }),
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
           }
-          return forward(requestEvent).catch((err: unknown) => {
-            params.context.logGateway?.error?.(
-              `plugin approvals: forward node policy request failed: ${String(err)}`,
-            );
-            return false;
-          });
         },
+        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
-      return { id: record.id, decision: await decisionPromise };
+      const decision = await decisionPromise;
+      // This return hands execution authority to the plugin policy. Claim a
+      // one-shot decision here so observation or retry cannot replay it.
+      if (
+        decision === "allow-once" &&
+        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+      ) {
+        return { id: record.id, decision: null };
+      }
+      return { id: record.id, decision };
     },
   };
 }
@@ -169,7 +189,11 @@ export async function applyPluginNodeInvokePolicy(params: {
     threadId?: unknown;
   };
   timeoutMs?: number;
+  signal?: AbortSignal;
+  resolveRemainingTimeoutMs?: () => number | undefined;
+  onNodeCommandDispatched?: () => void;
   idempotencyKey?: string;
+  isInvocationCurrent?: () => boolean | Promise<boolean>;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
@@ -198,12 +222,31 @@ export async function applyPluginNodeInvokePolicy(params: {
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
-    const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
+    if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
+    const currentNode = params.nodeSession.pairingGeneration
+      ? params.context.nodeRegistry.getForPairingGeneration(
+          params.nodeSession.nodeId,
+          params.nodeSession.pairingGeneration,
+        )
+      : params.context.nodeRegistry.get(params.nodeSession.nodeId);
     if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
       return {
         ok: false,
         code: "ROUTE_CHANGED",
         message: "node connection changed before dispatch",
+      };
+    }
+    if (currentNode.client.invalidated === true) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
       };
     }
     const currentConfig = params.context.getRuntimeConfig();
@@ -224,16 +267,38 @@ export async function applyPluginNodeInvokePolicy(params: {
         details: { command: params.command, reason: allowed.reason },
       };
     }
-    // Once the registry owns the request, any failure is ambiguous to callers:
-    // the node may have acted before the response was lost or rejected.
-    nodeCommandDispatched = true;
+    const remainingTimeoutMs = params.resolveRemainingTimeoutMs?.();
+    if (remainingTimeoutMs === 0 && params.timeoutMs !== 0) {
+      return {
+        ok: false,
+        code: "TIMEOUT",
+        message: "node invoke timed out",
+      };
+    }
+    const requestedTimeoutMs = override.timeoutMs ?? params.timeoutMs;
+    const timeoutMs =
+      typeof remainingTimeoutMs === "number" && remainingTimeoutMs > 0
+        ? typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
+          : remainingTimeoutMs
+        : requestedTimeoutMs;
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
+      ...(params.nodeSession.pairingGeneration
+        ? { expectedPairingGeneration: params.nodeSession.pairingGeneration }
+        : {}),
       command: params.command,
       params: override.params ?? params.params,
-      timeoutMs: override.timeoutMs ?? params.timeoutMs,
+      timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      onDispatchReady: () => {
+        // Only the registry knows that the transport send succeeded. Preserve
+        // pre-send failures as retry-safe while making later failures ambiguous.
+        nodeCommandDispatched = true;
+        params.onNodeCommandDispatched?.();
+      },
     });
     if (!res.ok) {
       return {

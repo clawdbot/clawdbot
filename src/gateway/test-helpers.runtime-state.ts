@@ -51,12 +51,14 @@ type GatewayTestHoistedState = {
   runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
   dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
   testIsNixMode: { value: boolean };
-  sessionStoreSaveDelayMs: { value: number };
   embeddedRunMock: {
     activeIds: Set<string>;
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
+    endWaitCalls: string[];
+    endWaiters: Map<string, (ended: boolean) => void>;
+    resolveEndBeforeTimeoutIds: Set<string>;
     compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
@@ -101,12 +103,14 @@ const gatewayTestHoisted = vi.hoisted(() => {
     runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
     dispatchInboundMessage: vi.fn(),
     testIsNixMode: { value: false },
-    sessionStoreSaveDelayMs: { value: 0 },
     embeddedRunMock: {
       activeIds: new Set<string>(),
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
+      endWaitCalls: [],
+      endWaiters: new Map<string, (ended: boolean) => void>(),
+      resolveEndBeforeTimeoutIds: new Set<string>(),
       compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,
@@ -155,7 +159,6 @@ export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
 export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
-export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
 export const getReplyFromConfig = gatewayTestHoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
@@ -164,7 +167,6 @@ export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
 export const sendWhatsAppMock = gatewayTestHoisted.sendWhatsAppMock;
 export const testState = gatewayTestHoisted.testState;
 export const testIsNixMode = gatewayTestHoisted.testIsNixMode;
-export const sessionStoreSaveDelayMs = gatewayTestHoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = gatewayTestHoisted.embeddedRunMock;
 
 export const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({

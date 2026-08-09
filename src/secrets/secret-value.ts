@@ -4,7 +4,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 /**
  * Describes the resolved value shape a secret target accepts after provider resolution.
  */
-export type SecretExpectedResolvedValue = "string" | "string-or-object"; // pragma: allowlist secret
+type SecretExpectedResolvedValue = "string" | "string-or-object"; // pragma: allowlist secret
 
 /**
  * Returns whether a resolved provider value satisfies the target's accepted runtime shape.

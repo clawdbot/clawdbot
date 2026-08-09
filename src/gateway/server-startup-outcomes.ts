@@ -4,26 +4,24 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 
-export const GATEWAY_STARTUP_SUBSYSTEMS = [
+const GATEWAY_STARTUP_SUBSYSTEMS = [
   "internal-hooks",
   "internal-startup-hook",
   "gateway-start-hooks",
-  "memory-qmd",
   "gmail-watcher",
   "gmail-model",
 ] as const;
 
-export type GatewayStartupSubsystem = (typeof GATEWAY_STARTUP_SUBSYSTEMS)[number];
+type GatewayStartupSubsystem = (typeof GATEWAY_STARTUP_SUBSYSTEMS)[number];
 
-export type GatewayStartupSkippedReason =
+type GatewayStartupSkippedReason =
   | "not-configured"
   | "no-handlers-loaded"
   | "disabled-by-environment"
   | "hooks-disabled"
-  | "no-gmail-account"
-  | "startup-disabled";
+  | "no-gmail-account";
 
-export type GatewayStartupOutcome =
+type GatewayStartupOutcome =
   | { subsystem: GatewayStartupSubsystem; status: "loaded" | "scheduled" }
   | { subsystem: GatewayStartupSubsystem; status: "failed"; reason: "see earlier log" }
   | {
@@ -35,7 +33,6 @@ export type GatewayStartupOutcome =
 type GatewayStartupOutcomePlan = {
   internalHooks: "configured" | "not-configured" | "hooks-disabled";
   gatewayStartHooks: boolean;
-  memoryQmd: "scheduled" | "not-configured" | "startup-disabled";
   gmailWatcher: "scheduled" | "disabled-by-environment" | "hooks-disabled" | "no-gmail-account";
   gmailModel: "scheduled" | "not-configured";
 };
@@ -45,10 +42,9 @@ export type GatewayStartupOutcomeRecorder = {
   snapshot: () => GatewayStartupOutcome[];
 };
 
-export type GatewayStartupOutcomeRecorderParams = {
+type GatewayStartupOutcomeRecorderParams = {
   cfg: OpenClawConfig;
   gatewayStartHooks: boolean;
-  memoryStartupMode: "off" | "immediate" | "idle";
   env?: NodeJS.ProcessEnv;
 };
 
@@ -68,12 +64,6 @@ function resolveOutcomePlan(
       : hasConfiguredInternalHooks(params.cfg)
         ? "configured"
         : "not-configured";
-  const memoryQmd: GatewayStartupOutcomePlan["memoryQmd"] =
-    params.cfg.memory?.backend !== "qmd"
-      ? "not-configured"
-      : params.memoryStartupMode === "off"
-        ? "startup-disabled"
-        : "scheduled";
   const gmailWatcher: GatewayStartupOutcomePlan["gmailWatcher"] = !params.cfg.hooks?.enabled
     ? "hooks-disabled"
     : !params.cfg.hooks.gmail?.account
@@ -85,7 +75,6 @@ function resolveOutcomePlan(
   return {
     internalHooks,
     gatewayStartHooks: params.gatewayStartHooks,
-    memoryQmd,
     gmailWatcher,
     gmailModel: params.cfg.hooks?.gmail?.model ? "scheduled" : "not-configured",
   };
@@ -112,12 +101,6 @@ export function createGatewayStartupOutcomeRecorder(
       plan.gatewayStartHooks
         ? { subsystem: "gateway-start-hooks", status: "scheduled" }
         : skipped("gateway-start-hooks", "no-handlers-loaded"),
-    ],
-    [
-      "memory-qmd",
-      plan.memoryQmd === "scheduled"
-        ? { subsystem: "memory-qmd", status: "scheduled" }
-        : skipped("memory-qmd", plan.memoryQmd),
     ],
     [
       "gmail-watcher",

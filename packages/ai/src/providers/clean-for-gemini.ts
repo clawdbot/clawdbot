@@ -46,6 +46,33 @@ function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknow
   }
 }
 
+// Google requires enum entries as strings even when the declared schema type is numeric or
+// boolean. Keep the type intact so tool argument generation and runtime validation still agree.
+function stringifyGeminiEnumValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function cleanGeminiEnumValues(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value.flatMap((entry) => {
+    const stringified = stringifyGeminiEnumValue(entry);
+    return stringified === undefined ? [] : [stringified];
+  });
+  const unique = [...new Set(values)];
+  return unique.length > 0 ? unique : undefined;
+}
+
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
@@ -325,7 +352,18 @@ function cleanSchemaForGeminiWithDefs(
     }
 
     if (key === "const") {
-      cleaned.enum = [value];
+      const enumValues = cleanGeminiEnumValues([value]);
+      if (enumValues) {
+        cleaned.enum = enumValues;
+      }
+      continue;
+    }
+
+    if (key === "enum") {
+      const enumValues = cleanGeminiEnumValues(value);
+      if (enumValues) {
+        cleaned.enum = enumValues;
+      }
       continue;
     }
 

@@ -30,7 +30,7 @@ type LegacyNodePairingRow = {
   lastConnectedAtMs?: number;
 };
 
-export type LegacyNodePairingMigrationResult = {
+type LegacyNodePairingMigrationResult = {
   migrated: number;
   orphaned: number;
 };

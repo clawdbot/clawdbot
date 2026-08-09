@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue as readString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -12,9 +13,7 @@ type LegacyAgentTurnCommandPayload = {
   timeoutSeconds?: number;
 };
 
-export type UnresolvedAgentTurnShellToolPromptKind =
-  | "commandPromptWithoutShellAccess"
-  | "shellToolPrompt";
+type UnresolvedAgentTurnShellToolPromptKind = "commandPromptWithoutShellAccess" | "shellToolPrompt";
 
 const LEGACY_AGENT_TURN_COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
 const LEGACY_AGENT_TURN_COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
@@ -43,22 +42,46 @@ function hasShellToolAccess(toolsAllow: unknown): boolean {
   });
 }
 
-function toCanonicalOpenAIModelRef(value: unknown): string | undefined {
-  const raw = readString(value);
-  if (typeof raw !== "string") {
-    return undefined;
+type LegacyOpenAICodexCronModelRoute = {
+  legacyModelRef: string;
+  canonicalModelRef: string;
+};
+
+function readLegacyOpenAICodexCronModelRoute(
+  value: unknown,
+): LegacyOpenAICodexCronModelRoute | undefined {
+  const legacyModelRef = readString(value)?.trim();
+  const canonicalModelRef = legacyModelRef ? toCanonicalOpenAIModelRef(legacyModelRef) : undefined;
+  return legacyModelRef && canonicalModelRef ? { legacyModelRef, canonicalModelRef } : undefined;
+}
+
+/** Legacy and canonical route pairs retained for namespace-specific migration blockers. */
+export function collectLegacyOpenAICodexCronModelRoutes(
+  payload: UnknownRecord,
+): LegacyOpenAICodexCronModelRoute[] {
+  const routes = new Map<string, LegacyOpenAICodexCronModelRoute>();
+  const add = (value: unknown) => {
+    const route = readLegacyOpenAICodexCronModelRoute(value);
+    if (route) {
+      routes.set(`${route.legacyModelRef}\u0000${route.canonicalModelRef}`, route);
+    }
+  };
+  add(payload.model);
+  if (Array.isArray(payload.fallbacks)) {
+    for (const fallback of payload.fallbacks) {
+      add(fallback);
+    }
   }
-  const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0) {
-    return undefined;
-  }
-  const provider = trimmed.slice(0, slash).trim().toLowerCase();
-  if (provider !== "openai-codex") {
-    return undefined;
-  }
-  const model = trimmed.slice(slash + 1).trim();
-  return model ? `openai/${model}` : undefined;
+  return [...routes.values()];
+}
+
+/** Canonical OpenAI refs whose legacy cron shape implied the Codex runtime. */
+function collectLegacyOpenAICodexCronModelRefs(payload: UnknownRecord): string[] {
+  return [
+    ...new Set(
+      collectLegacyOpenAICodexCronModelRoutes(payload).map((route) => route.canonicalModelRef),
+    ),
+  ];
 }
 
 function normalizeChannel(value: string): string {
@@ -116,29 +139,35 @@ function parseLegacyAgentTurnCommandMessage(message: string): LegacyAgentTurnCom
   };
 }
 
-/** Return true when a cron payload contains legacy `openai-codex/*` model refs. */
+/** Return true when a cron payload contains legacy Codex-route model refs. */
 export function hasLegacyOpenAICodexCronModelRef(payload: UnknownRecord): boolean {
-  if (toCanonicalOpenAIModelRef(payload.model)) {
-    return true;
-  }
-  const fallbacks = payload.fallbacks;
-  return (
-    Array.isArray(fallbacks) && fallbacks.some((fallback) => toCanonicalOpenAIModelRef(fallback))
-  );
+  return collectLegacyOpenAICodexCronModelRefs(payload).length > 0;
 }
 
-function migrateLegacyOpenAICodexModelRefs(payload: UnknownRecord): boolean {
+function migrateLegacyOpenAICodexModelRefs(
+  payload: UnknownRecord,
+  shouldMigrate: (modelRef: string, legacyModelRef: string) => boolean,
+): boolean {
   let mutated = false;
 
-  const model = toCanonicalOpenAIModelRef(payload.model);
-  if (model && payload.model !== model) {
-    payload.model = model;
+  const model = readLegacyOpenAICodexCronModelRoute(payload.model);
+  if (
+    model &&
+    shouldMigrate(model.canonicalModelRef, model.legacyModelRef) &&
+    payload.model !== model.canonicalModelRef
+  ) {
+    payload.model = model.canonicalModelRef;
     mutated = true;
   }
 
   const fallbacks = payload.fallbacks;
   if (Array.isArray(fallbacks)) {
-    const next = fallbacks.map((fallback) => toCanonicalOpenAIModelRef(fallback) ?? fallback);
+    const next = fallbacks.map((fallback) => {
+      const route = readLegacyOpenAICodexCronModelRoute(fallback);
+      return route && shouldMigrate(route.canonicalModelRef, route.legacyModelRef)
+        ? route.canonicalModelRef
+        : fallback;
+    });
     if (next.some((fallback, index) => fallback !== fallbacks[index])) {
       payload.fallbacks = next;
       mutated = true;
@@ -149,7 +178,13 @@ function migrateLegacyOpenAICodexModelRefs(payload: UnknownRecord): boolean {
 }
 
 /** Normalize legacy cron payload channel/provider and model reference fields in place. */
-export function migrateLegacyCronPayload(payload: UnknownRecord): boolean {
+export function migrateLegacyCronPayload(
+  payload: UnknownRecord,
+  options: {
+    migrateCodexModelRefs?: boolean;
+    shouldMigrateCodexModelRef?: (modelRef: string, legacyModelRef: string) => boolean;
+  } = {},
+): boolean {
   let mutated = false;
 
   const channelValue = readString(payload.channel);
@@ -174,7 +209,11 @@ export function migrateLegacyCronPayload(payload: UnknownRecord): boolean {
     mutated = true;
   }
 
-  if (migrateLegacyOpenAICodexModelRefs(payload)) {
+  const shouldMigrateCodexModelRef =
+    options.migrateCodexModelRefs === true
+      ? (options.shouldMigrateCodexModelRef ?? (() => true))
+      : () => false;
+  if (migrateLegacyOpenAICodexModelRefs(payload, shouldMigrateCodexModelRef)) {
     mutated = true;
   }
 

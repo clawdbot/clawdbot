@@ -5,23 +5,25 @@ import {
   callGatewayFromCli,
   type GatewayRpcOpts,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import type {
+  SessionCatalogHost as CodexSessionCatalogHost,
+  SessionCatalogSession as CodexSessionCatalogSession,
+} from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  CodexSessionCatalogHost,
-  CodexSessionCatalogParams,
-  CodexSessionCatalogResult,
-  CodexSessionCatalogSession,
-} from "./session-catalog-types.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_SESSION_ARCHIVE_METHOD,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-  CODEX_SESSION_CATALOG_METHOD,
-  CODEX_SESSION_CONTINUE_METHOD,
-  parseCodexSessionCatalogResult,
 } from "./session-catalog.js";
+
+type CodexSessionCatalogResult = { hosts: CodexSessionCatalogHost[] };
+type CodexSessionCatalogParams = {
+  search?: string;
+  limitPerHost?: number;
+  hostIds?: string[];
+  cursors?: Record<string, string>;
+};
 
 type CodexGatewayOptions = GatewayRpcOpts & {
   json?: boolean;
@@ -109,11 +111,7 @@ function sessionStatus(session: CodexSessionCatalogSession): string {
     session.status === "notLoaded"
       ? "stored / activity unknown"
       : singleLineTerminalText(session.status) || "unknown";
-  const details = (session.activeFlags ?? [])
-    .filter((entry) => entry !== session.status)
-    .map(singleLineTerminalText)
-    .filter(Boolean);
-  return details.length > 0 ? `${status} (${details.join(", ")})` : status;
+  return status;
 }
 
 function quoteShellArgument(value: string): string {
@@ -189,16 +187,26 @@ async function listCodexSessions(options: CodexSessionsCliOptions): Promise<void
     ...(cursor && host ? { cursors: { [host]: cursor } } : {}),
   };
   const raw = await callGatewayFromCli(
-    CODEX_SESSION_CATALOG_METHOD,
+    "sessions.catalog.list",
     gatewayOptions(options),
-    params,
+    { catalogId: "codex", ...params },
     {
       mode: "cli",
       // Federation invokes paired nodes, so this inherits node.invoke's write scope.
       scopes: ["operator.write"],
     },
   );
-  const result = filterHosts(parseCodexSessionCatalogResult(raw), host);
+  if (!isRecord(raw) || !Array.isArray(raw.catalogs)) {
+    throw new Error("Codex session catalog returned an invalid result");
+  }
+  const catalog = raw.catalogs.find(
+    (candidate) =>
+      isRecord(candidate) && candidate.id === "codex" && Array.isArray(candidate.hosts),
+  );
+  if (!isRecord(catalog)) {
+    throw new Error("Codex session catalog is unavailable on this Gateway");
+  }
+  const result = filterHosts({ hosts: catalog.hosts as CodexSessionCatalogHost[] }, host);
   if (options.json) {
     writeJson(result);
     return;
@@ -233,24 +241,20 @@ async function continueCodexSession(
 ): Promise<void> {
   const threadId = readThreadId(threadIdValue);
   const raw = await callGatewayFromCli(
-    CODEX_SESSION_CONTINUE_METHOD,
+    "sessions.catalog.continue",
     gatewayOptions(options),
-    { hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId },
+    { catalogId: "codex", hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId },
     { mode: "cli", scopes: ["operator.write"] },
   );
   if (!isRecord(raw) || typeof raw.sessionKey !== "string" || !raw.sessionKey.trim()) {
     throw new Error("Codex session continue returned an invalid session key");
   }
-  if (raw.disposition !== "existing" && raw.disposition !== "forked") {
-    throw new Error("Codex session continue returned an invalid disposition");
-  }
-  const result = { sessionKey: raw.sessionKey, disposition: raw.disposition };
+  const result = { sessionKey: raw.sessionKey };
   if (options.json) {
     writeJson(result);
     return;
   }
-  const dispositionLabel = result.disposition === "forked" ? "branch created" : "existing";
-  writeLine(`OpenClaw session (${dispositionLabel}): ${singleLineTerminalText(result.sessionKey)}`);
+  writeLine(`OpenClaw session: ${singleLineTerminalText(result.sessionKey)}`);
 }
 
 async function archiveCodexSession(
@@ -264,15 +268,20 @@ async function archiveCodexSession(
     );
   }
   const raw = await callGatewayFromCli(
-    CODEX_SESSION_ARCHIVE_METHOD,
+    "sessions.catalog.archive",
     gatewayOptions(options),
-    { hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId, confirmNoOtherRunner: true },
+    {
+      catalogId: "codex",
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      threadId,
+      confirmNoOtherRunner: true,
+    },
     { mode: "cli", scopes: ["operator.write"] },
   );
-  if (!isRecord(raw) || raw.archived !== true) {
+  if (!isRecord(raw) || raw.ok !== true) {
     throw new Error("Codex session archive returned an invalid result");
   }
-  const result = { archived: true as const };
+  const result = { ok: true as const };
   if (options.json) {
     writeJson(result);
     return;

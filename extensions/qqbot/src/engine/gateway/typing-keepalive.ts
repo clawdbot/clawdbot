@@ -6,9 +6,9 @@
  */
 
 import { createTypingKeepaliveLoop } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { claimMessageReply } from "../messaging/outbound-reply.js";
 import type { ReplyLimitResult } from "../messaging/reply-limiter.js";
-import { formatErrorMessage } from "../utils/format.js";
 
 /** Function that sends a typing indicator to one user. */
 type SendInputNotifyFn = (
@@ -21,11 +21,7 @@ type SendInputNotifyFn = (
 /** Refresh every 5s for the QQ API's 10s input-notify window. */
 const TYPING_INTERVAL_MS = 5_000;
 export const TYPING_INPUT_SECOND = 10;
-const QQ_C2C_PASSIVE_REPLY_LIMIT = 5;
-const INITIAL_TYPING_NOTIFY_COUNT = 1;
 const FINAL_REPLY_RESERVE_COUNT = 1;
-export const TYPING_RENEWAL_LIMIT =
-  QQ_C2C_PASSIVE_REPLY_LIMIT - INITIAL_TYPING_NOTIFY_COUNT - FINAL_REPLY_RESERVE_COUNT;
 
 export class TypingKeepAlive {
   private stopped = false;

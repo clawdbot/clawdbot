@@ -12,11 +12,12 @@ import {
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
@@ -26,7 +27,8 @@ import {
   dismissTaskSuggestion,
   listTaskSuggestions,
 } from "../task-suggestion-registry.js";
-import { sessionsHandlers } from "./sessions.js";
+import { sessionCreateHandlers } from "./sessions-create.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function invalidParams(method: string, errors: Parameters<typeof formatValidationErrors>[0]) {
@@ -42,6 +44,19 @@ type TaskSuggestionAcceptanceResult =
 
 const activeAcceptances = new Map<string, Promise<TaskSuggestionAcceptanceResult>>();
 
+function abandonSuggestedTaskAcceptance(
+  taskId: string,
+  options: GatewayRequestHandlerOptions,
+): void {
+  if (abandonTaskSuggestionAcceptance(taskId)) {
+    options.context.broadcast(
+      "task.suggestion",
+      { action: "resolved", taskId, resolution: "expired" },
+      { dropIfSlow: true },
+    );
+  }
+}
+
 async function rollbackSuggestedTaskSession(params: {
   key: string;
   agentId?: string;
@@ -49,7 +64,7 @@ async function rollbackSuggestedTaskSession(params: {
 }): Promise<boolean> {
   let deletionConfirmed = false;
   try {
-    await sessionsHandlers["sessions.delete"]?.({
+    await sessionDeleteHandlers["sessions.delete"]?.({
       ...params.options,
       params: {
         key: params.key,
@@ -71,7 +86,10 @@ async function rollbackSuggestedTaskSession(params: {
     // and its worktree were fully removed despite a handler-level failure.
   }
   try {
-    if (!deletionConfirmed && loadSessionEntry(params.key, { agentId: params.agentId }).entry) {
+    if (
+      !deletionConfirmed &&
+      loadSessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
+    ) {
       return false;
     }
   } catch {
@@ -115,13 +133,7 @@ async function failSuggestedTaskSession(params: {
     }
     return { ok: false, error: params.error };
   }
-  if (abandonTaskSuggestionAcceptance(params.taskId)) {
-    params.options.context.broadcast(
-      "task.suggestion",
-      { action: "resolved", taskId: params.taskId, resolution: "expired" },
-      { dropIfSlow: true },
-    );
-  }
+  abandonSuggestedTaskAcceptance(params.taskId, params.options);
   return {
     ok: false,
     error: errorShape(
@@ -144,7 +156,7 @@ async function createSuggestedTaskSession(params: {
   );
   const sessionKey = buildDashboardSessionKey(agentId);
   try {
-    await sessionsHandlers["sessions.create"]?.({
+    await sessionCreateHandlers["sessions.create"]?.({
       ...params.options,
       params: {
         key: sessionKey,
@@ -254,6 +266,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (!insideGitCheckout(params.cwd)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be inside a git checkout"),
+      );
+      return;
+    }
     const sessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     if (
@@ -338,6 +358,9 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       taskId: params.taskId,
       suggestion: acceptance.suggestion,
       options,
+    }).catch((error: unknown) => {
+      abandonSuggestedTaskAcceptance(params.taskId, options);
+      throw error;
     });
     activeAcceptances.set(params.taskId, pending);
     try {

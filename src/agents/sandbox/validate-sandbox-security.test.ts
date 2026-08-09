@@ -8,12 +8,26 @@ import { withEnv } from "../../test-utils/env.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
-  validateBindMounts,
   validateNetworkMode,
-  validateSeccompProfile,
-  validateApparmorProfile,
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
+
+type SandboxSecurityConfig = Parameters<typeof validateSandboxSecurity>[0];
+
+function validateBindMounts(
+  binds: string[] | undefined,
+  options?: Omit<SandboxSecurityConfig, "binds">,
+): void {
+  validateSandboxSecurity({ ...options, binds });
+}
+
+function validateSeccompProfile(seccompProfile: string | undefined): void {
+  validateSandboxSecurity({ seccompProfile });
+}
+
+function validateApparmorProfile(apparmorProfile: string | undefined): void {
+  validateSandboxSecurity({ apparmorProfile });
+}
 
 function expectBindMountsToThrow(binds: string[], expected: RegExp, label: string) {
   expect(() => validateBindMounts(binds), label).toThrow(expected);

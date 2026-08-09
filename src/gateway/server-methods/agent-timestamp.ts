@@ -18,7 +18,7 @@ const CRON_TIME_MARKER = "Current time: ";
  */
 const TIMESTAMP_ENVELOPE_PATTERN = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
 
-export interface TimestampInjectionOptions {
+interface TimestampInjectionOptions {
   timezone?: string;
   now?: Date;
   includeTimestamp?: boolean;
@@ -105,6 +105,6 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
 export function timestampOptsFromConfig(cfg: OpenClawConfig): TimestampInjectionOptions {
   return {
     timezone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-    includeTimestamp: cfg.agents?.defaults?.envelopeTimestamp !== "off",
+    includeTimestamp: true,
   };
 }

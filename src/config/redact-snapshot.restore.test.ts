@@ -1,13 +1,15 @@
 // Covers restoring redacted config snapshots into writable config values.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import type { ConfigUiHints } from "./schema.js";
 
 describe("restoreRedactedValues", () => {
   it("restores redacted URL endpoint fields on round-trip", () => {
@@ -235,8 +237,337 @@ describe("restoreRedactedValues", () => {
       },
     };
     const result = restoreRedactedValues(incoming, original, hints) as typeof incoming;
-    expect(result.channels.slack.accounts[0].botToken).toBe("original-token-first-account");
-    expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
+    expect(
+      expectDefined(
+        result.channels.slack.accounts[0],
+        "result.channels.slack.accounts[0] test invariant",
+      ).botToken,
+    ).toBe("original-token-first-account");
+    expect(
+      expectDefined(
+        result.channels.slack.accounts[1],
+        "result.channels.slack.accounts[1] test invariant",
+      ).botToken,
+    ).toBe("user-provided-new-token-value");
+  });
+
+  describe.each([
+    { name: "schema hints", hints: { "accounts[].token": { sensitive: true } } },
+    { name: "sensitive-path guessing", hints: undefined },
+  ])("stable array identities with $name", ({ hints }) => {
+    const original = {
+      accounts: [
+        { id: "alpha", token: "synthetic-alpha-token" },
+        { id: "bravo", token: "synthetic-bravo-token" },
+        { id: "charlie", token: "synthetic-charlie-token" },
+      ],
+    };
+
+    it.each([
+      { change: "deleting an earlier entry", ids: ["bravo", "charlie"] },
+      { change: "reordering the entries", ids: ["charlie", "alpha", "bravo"] },
+    ])("restores each owner's secret after $change", ({ ids }) => {
+      const incoming = {
+        accounts: ids.map((id) => ({ id, token: REDACTED_SENTINEL })),
+      };
+
+      const restored = restoreRedactedValues(incoming, original, hints);
+
+      expect(restored.accounts).toEqual(ids.map((id) => ({ id, token: `synthetic-${id}-token` })));
+    });
+
+    it("keeps a unique owner's secret when an unidentified sibling is deleted", () => {
+      const previous = {
+        accounts: [
+          { token: "synthetic-unidentified-token" },
+          { id: "bravo", token: "synthetic-bravo-token" },
+        ],
+      };
+      const incoming = {
+        accounts: [{ id: "bravo", token: REDACTED_SENTINEL }],
+      };
+
+      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
+        { id: "bravo", token: "synthetic-bravo-token" },
+      ]);
+    });
+
+    it("keeps a unique owner's secret when ambiguous sibling identities are deleted", () => {
+      const previous = {
+        accounts: [
+          { id: "duplicate", token: "synthetic-first-duplicate-token" },
+          { id: "duplicate", token: "synthetic-second-duplicate-token" },
+          { id: "bravo", token: "synthetic-bravo-token" },
+        ],
+      };
+      const incoming = {
+        accounts: [{ id: "bravo", token: REDACTED_SENTINEL }],
+      };
+
+      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
+        { id: "bravo", token: "synthetic-bravo-token" },
+      ]);
+    });
+
+    it("rejects a redacted secret for a new identity instead of borrowing its position", () => {
+      const result = restoreRedactedValues_orig(
+        { accounts: [{ id: "new-owner", token: REDACTED_SENTINEL }] },
+        original,
+        hints,
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).not.toContain("synthetic-alpha-token");
+    });
+
+    it("accepts a new identity when its secret was explicitly supplied", () => {
+      const restored = restoreRedactedValues(
+        { accounts: [{ id: "new-owner", token: "synthetic-new-token" }] },
+        original,
+        hints,
+      );
+
+      expect(restored.accounts).toEqual([{ id: "new-owner", token: "synthetic-new-token" }]);
+    });
+
+    it("matches prototype-shaped identities without inherited-key collisions", () => {
+      const previous = {
+        accounts: [
+          { id: "__proto__", token: "synthetic-prototype-token" },
+          { id: "constructor", token: "synthetic-constructor-token" },
+        ],
+      };
+      const incoming = {
+        accounts: [
+          { id: "constructor", token: REDACTED_SENTINEL },
+          { id: "__proto__", token: REDACTED_SENTINEL },
+        ],
+      };
+
+      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
+        { id: "constructor", token: "synthetic-constructor-token" },
+        { id: "__proto__", token: "synthetic-prototype-token" },
+      ]);
+    });
+
+    it("keeps escaped environment identities positional after runtime substitution", () => {
+      const previous = {
+        accounts: [
+          { id: "${ACCOUNT_ID}", token: "synthetic-literal-token" },
+          { id: "bravo", token: "synthetic-bravo-token" },
+        ],
+      };
+      const incoming = {
+        accounts: [
+          { id: "$${ACCOUNT_ID}", token: REDACTED_SENTINEL },
+          { id: "bravo", token: REDACTED_SENTINEL },
+        ],
+      };
+
+      expect(restoreRedactedValues(incoming, previous, hints).accounts).toEqual([
+        { id: "$${ACCOUNT_ID}", token: "synthetic-literal-token" },
+        { id: "bravo", token: "synthetic-bravo-token" },
+      ]);
+    });
+
+    it("rejects moving an unidentified redacted entry onto an identified owner's position", () => {
+      const previous = {
+        accounts: [
+          { token: "synthetic-unidentified-token" },
+          { id: "bravo", token: "synthetic-bravo-token" },
+        ],
+      };
+      const incoming = {
+        accounts: [{ id: "bravo", token: REDACTED_SENTINEL }, { token: REDACTED_SENTINEL }],
+      };
+
+      const result = restoreRedactedValues_orig(incoming, previous, hints);
+
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).not.toContain("synthetic-bravo-token");
+    });
+
+    it.each([
+      {
+        reason: "original identities are duplicated",
+        previous: [
+          { id: "duplicate", token: "synthetic-first-token" },
+          { id: "duplicate", token: "synthetic-second-token" },
+        ],
+        incoming: [
+          { id: "duplicate", token: REDACTED_SENTINEL },
+          { id: "duplicate", token: REDACTED_SENTINEL },
+        ],
+      },
+      {
+        reason: "incoming identities are duplicated",
+        previous: [
+          { id: "alpha", token: "synthetic-first-token" },
+          { id: "bravo", token: "synthetic-second-token" },
+        ],
+        incoming: [
+          { id: "alpha", token: REDACTED_SENTINEL },
+          { id: "alpha", token: REDACTED_SENTINEL },
+        ],
+      },
+      {
+        reason: "an original identity is missing",
+        previous: [
+          { id: "alpha", token: "synthetic-first-token" },
+          { token: "synthetic-second-token" },
+        ],
+        incoming: [{ id: "alpha", token: REDACTED_SENTINEL }, { token: REDACTED_SENTINEL }],
+      },
+      {
+        reason: "an incoming identity is missing",
+        previous: [
+          { id: "alpha", token: "synthetic-first-token" },
+          { id: "bravo", token: "synthetic-second-token" },
+        ],
+        incoming: [{ id: "alpha", token: REDACTED_SENTINEL }, { token: REDACTED_SENTINEL }],
+      },
+      {
+        reason: "an identity is empty",
+        previous: [
+          { id: "", token: "synthetic-first-token" },
+          { id: "bravo", token: "synthetic-second-token" },
+        ],
+        incoming: [
+          { id: "", token: REDACTED_SENTINEL },
+          { id: "bravo", token: REDACTED_SENTINEL },
+        ],
+      },
+      {
+        reason: "an incoming identity is an unresolved environment placeholder",
+        previous: [
+          { id: "alpha", token: "synthetic-first-token" },
+          { id: "bravo", token: "synthetic-second-token" },
+        ],
+        incoming: [
+          { id: "${ACCOUNT_ID}", token: REDACTED_SENTINEL },
+          { id: "bravo", token: REDACTED_SENTINEL },
+        ],
+      },
+      {
+        reason: "an incoming identity contains an inline environment placeholder",
+        previous: [
+          { id: "account-alpha", token: "synthetic-first-token" },
+          { id: "bravo", token: "synthetic-second-token" },
+        ],
+        incoming: [
+          { id: "account-${ACCOUNT_ID}", token: REDACTED_SENTINEL },
+          { id: "bravo", token: REDACTED_SENTINEL },
+        ],
+      },
+    ])("keeps positional restoration when $reason", ({ previous, incoming }) => {
+      const restored = restoreRedactedValues({ accounts: incoming }, { accounts: previous }, hints);
+
+      expect(restored.accounts.map((entry) => entry.token)).toEqual([
+        "synthetic-first-token",
+        "synthetic-second-token",
+      ]);
+    });
+  });
+
+  it("matches stable identities independently at each nested array boundary", () => {
+    const hints: ConfigUiHints = {
+      "providers[].accounts[].token": { sensitive: true },
+    };
+    const original = {
+      providers: [
+        {
+          id: "provider-alpha",
+          accounts: [{ id: "account-one", token: "synthetic-alpha-one-token" }],
+        },
+        {
+          id: "provider-bravo",
+          accounts: [
+            { id: "account-one", token: "synthetic-bravo-one-token" },
+            { id: "account-two", token: "synthetic-bravo-two-token" },
+          ],
+        },
+      ],
+    };
+    const incoming = {
+      providers: [
+        {
+          id: "provider-bravo",
+          accounts: [
+            { id: "account-two", token: REDACTED_SENTINEL },
+            { id: "account-one", token: REDACTED_SENTINEL },
+          ],
+        },
+      ],
+    };
+
+    const restored = restoreRedactedValues(incoming, original, hints);
+
+    expect(restored.providers).toEqual([
+      {
+        id: "provider-bravo",
+        accounts: [
+          { id: "account-two", token: "synthetic-bravo-two-token" },
+          { id: "account-one", token: "synthetic-bravo-one-token" },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps positional restoration for arrays of scalar secrets", () => {
+    const hints: ConfigUiHints = { "apiKeys[]": { sensitive: true } };
+    const original = { apiKeys: ["synthetic-first-key", "synthetic-second-key"] };
+
+    const restored = restoreRedactedValues(
+      { apiKeys: [REDACTED_SENTINEL, REDACTED_SENTINEL] },
+      original,
+      hints,
+    );
+
+    expect(restored).toEqual(original);
+  });
+
+  it("does not treat a redacted identifier as a stable array identity", () => {
+    const hints: ConfigUiHints = {
+      "accounts[].id": { sensitive: true },
+      "accounts[].token": { sensitive: true },
+    };
+    const original = {
+      accounts: [
+        { id: "synthetic-first-id", token: "synthetic-first-token" },
+        { id: "synthetic-second-id", token: "synthetic-second-token" },
+      ],
+    };
+    const incoming = {
+      accounts: [
+        { id: REDACTED_SENTINEL, token: REDACTED_SENTINEL },
+        { id: REDACTED_SENTINEL, token: REDACTED_SENTINEL },
+      ],
+    };
+
+    expect(restoreRedactedValues(incoming, original, hints)).toEqual(original);
+  });
+
+  it("keeps reordered hook-mapping session keys redacted until identity-based restoration", () => {
+    const hints: ConfigUiHints = { "hooks.mappings[].sessionKey": { sensitive: true } };
+    const original = {
+      hooks: {
+        mappings: [
+          { id: "alpha", sessionKey: "synthetic-alpha-session" },
+          { id: "bravo", sessionKey: "synthetic-bravo-session" },
+        ],
+      },
+    };
+    const redacted = redactConfigSnapshot(makeSnapshot(original), hints);
+    const incoming = {
+      hooks: { mappings: [(redacted.config as typeof original).hooks.mappings[1]] },
+    };
+
+    expect(JSON.stringify(redacted)).not.toContain("synthetic-alpha-session");
+    expect(JSON.stringify(redacted)).not.toContain("synthetic-bravo-session");
+    expect(incoming.hooks.mappings[0]?.sessionKey).toBe(REDACTED_SENTINEL);
+    expect(restoreRedactedValues(incoming, original, hints).hooks.mappings).toEqual([
+      { id: "bravo", sessionKey: "synthetic-bravo-session" },
+    ]);
   });
 
   it("restores redacted SecretRef ids for channels token paths", () => {

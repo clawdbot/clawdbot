@@ -1,5 +1,9 @@
 {
   "id": "acpx",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },
@@ -37,21 +41,20 @@
       "openClawToolsMcpBridge": {
         "type": "boolean"
       },
-      "strictWindowsCmdWrapper": {
-        "type": "boolean"
-      },
       "timeoutSeconds": {
         "type": "number",
         "minimum": 0.001,
         "default": 120
       },
-      "queueOwnerTtlSeconds": {
-        "type": "number",
-        "minimum": 0
-      },
-      "probeAgent": {
-        "type": "string",
-        "minLength": 1
+      "piSessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
       },
       "mcpServers": {
         "type": "object",
@@ -81,6 +84,7 @@
         "type": "object",
         "additionalProperties": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "command": {
               "type": "string",
@@ -123,20 +127,14 @@
       "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
       "advanced": true
     },
-    "strictWindowsCmdWrapper": {
-      "label": "Strict Windows cmd Wrapper",
-      "help": "Legacy compatibility field. The current embedded acpx/runtime package uses its own Windows command resolution behavior. Setting this to false is accepted for compatibility and logged as ignored.",
-      "advanced": true
-    },
     "timeoutSeconds": {
       "label": "Runtime Operation Timeout Seconds",
       "help": "Timeout for embedded ACP runtime startup and control operations. ACP turns use OpenClaw agent/run timeouts.",
       "advanced": true
     },
-    "queueOwnerTtlSeconds": {
-      "label": "Queue Owner TTL Seconds",
-      "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
-      "advanced": true
+    "piSessionCatalog.enabled": {
+      "label": "Pi Session Catalog",
+      "help": "Auto-detect Pi sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
     },
     "probeAgent": {
       "label": "Health Probe Agent",

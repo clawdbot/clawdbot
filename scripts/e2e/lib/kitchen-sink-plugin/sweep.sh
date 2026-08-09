@@ -155,11 +155,11 @@ run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
   local install_args=("$KITCHEN_SINK_SPEC")
   if [ -n "${KITCHEN_SINK_PREINSTALL_SPEC:-}" ]; then
-    run_kitchen_sink_openclaw_logged "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"
+    run_kitchen_sink_openclaw_logged "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force
     assert_kitchen_sink_cutover_preinstalled
     install_args+=("--force")
   fi
-  run_kitchen_sink_openclaw_logged "kitchen-sink-install-${KITCHEN_SINK_LABEL}" plugins install "${install_args[@]}"
+  run_kitchen_sink_openclaw_logged "kitchen-sink-install-${KITCHEN_SINK_LABEL}" plugins install "${install_args[@]}" --force
   configure_kitchen_sink_runtime
   run_kitchen_sink_openclaw_logged "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" plugins enable "$KITCHEN_SINK_ID"
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json" plugins list --json
@@ -178,7 +178,7 @@ run_success_scenario() {
 
 run_failure_scenario() {
   echo "Testing expected ${KITCHEN_SINK_LABEL} install failure from ${KITCHEN_SINK_SPEC}..."
-  run_expect_failure "install-${KITCHEN_SINK_LABEL}" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
+  run_expect_failure "install-${KITCHEN_SINK_LABEL}" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC" --force
   remove_kitchen_sink_channel_config
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json" plugins list --json
   assert_kitchen_sink_removed

@@ -1,10 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Formatting helpers for `openclaw health` failures and channel summaries. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
-import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed") {
@@ -173,6 +174,7 @@ export const formatHealthChannelLines = (
         : (filteredSummaries ?? (channelSummary.accounts ? Object.values(accountSummaries) : []));
     const baseSummary =
       filteredSummaries && filteredSummaries.length > 0 ? filteredSummaries[0] : channelSummary;
+    const selectedSummary = expectDefined(baseSummary, "channel health summary");
     const botUsernames = listSummaries
       ? listSummaries
           .map((account) => {
@@ -183,33 +185,33 @@ export const formatHealthChannelLines = (
           .filter((value): value is string => Boolean(value))
       : [];
     const statusState =
-      typeof baseSummary.statusState === "string" ? baseSummary.statusState : null;
-    if (statusState) {
-      if (statusState === "linked") {
-        const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
-        lines.push(`${label}: ${formatChannelStatusState(statusState)}${authLabel}`);
-      } else {
-        lines.push(`${label}: ${formatChannelStatusState(statusState)}`);
-      }
-      continue;
-    }
-
-    const linked = typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
-    if (linked !== null) {
-      if (linked) {
-        const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
-        lines.push(`${label}: linked${authLabel}`);
-      } else {
-        lines.push(`${label}: not linked`);
-      }
-      continue;
-    }
-
-    const configured = typeof baseSummary.configured === "boolean" ? baseSummary.configured : null;
-    if (configured === false) {
-      lines.push(`${label}: not configured`);
+      typeof selectedSummary.statusState === "string" ? selectedSummary.statusState : null;
+    const healthState =
+      typeof selectedSummary.healthState === "string" && selectedSummary.healthState
+        ? selectedSummary.healthState
+        : null;
+    const linked = typeof selectedSummary.linked === "boolean" ? selectedSummary.linked : null;
+    const configured =
+      typeof selectedSummary.configured === "boolean" ? selectedSummary.configured : null;
+    const inactiveState =
+      statusState === "disabled" || statusState === "unconfigured"
+        ? formatChannelStatusState(statusState)
+        : configured === false
+          ? "not configured"
+          : null;
+    // Explicit inactive/degraded facts outrank probes; passive success waits until after them.
+    // Otherwise a live probe can be hidden behind stale "healthy", "linked", or "configured".
+    const preProbeState = inactiveState
+      ? inactiveState
+      : healthState && healthState !== "healthy"
+        ? healthState
+        : statusState && statusState !== "linked" && statusState !== "configured"
+          ? formatChannelStatusState(statusState)
+          : linked === false
+            ? "not linked"
+            : null;
+    if (preProbeState) {
+      lines.push(`${label}: ${preProbeState}`);
       continue;
     }
 
@@ -233,17 +235,27 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    const probeLine = formatProbeLine(baseSummary.probe, { botUsernames });
+    const probeLine = formatProbeLine(selectedSummary.probe, {
+      botUsernames,
+    });
     if (probeLine) {
       lines.push(`${label}: ${probeLine}`);
       continue;
     }
 
-    if (configured === true) {
-      lines.push(`${label}: configured`);
-      continue;
-    }
-    lines.push(`${label}: unknown`);
+    const authAgeMs =
+      typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
+    const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+    const passiveState = healthState
+      ? healthState
+      : statusState
+        ? `${formatChannelStatusState(statusState)}${statusState === "linked" ? authLabel : ""}`
+        : linked === true
+          ? `linked${authLabel}`
+          : configured === true
+            ? "configured"
+            : "unknown";
+    lines.push(`${label}: ${passiveState}`);
   }
   return lines;
 };

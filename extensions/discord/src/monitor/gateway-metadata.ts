@@ -82,12 +82,8 @@ function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
 }
 
-export function resolveDiscordGatewayInfoTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+export function resolveDiscordGatewayInfoTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayInfoTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
   );
@@ -164,7 +160,7 @@ function summarizeGatewaySchemaErrors(value: unknown): string {
     .join("; ");
 }
 
-export function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
+function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
   const parsed = JSON.parse(body) as unknown;
   if (!Check(discordGatewayBotInfoSchema, parsed)) {
     throw new Error(summarizeGatewaySchemaErrors(parsed));
@@ -172,7 +168,7 @@ export function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
   return parsed;
 }
 
-export async function fetchDiscordGatewayInfo(params: {
+async function fetchDiscordGatewayInfo(params: {
   token: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
@@ -284,9 +280,14 @@ export async function fetchDiscordGatewayMetadataGuarded(
   init?: DiscordGatewayFetchInit,
   options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
+  const requestInit = init as RequestInit | undefined;
+  const signal = requestInit?.signal ?? undefined;
   const guarded = await fetchWithSsrFGuard({
     url: resolveFetchInputUrl(input),
-    init: init as RequestInit,
+    init: requestInit,
+    // DNS and proxy preflight run before RequestInit reaches fetch. Surface the
+    // existing metadata watchdog here so the whole lookup shares one deadline.
+    ...(signal ? { signal } : {}),
     policy: { allowedHostnames: [DISCORD_API_HOST] },
     capture: false,
     auditContext: "discord.gateway.metadata",

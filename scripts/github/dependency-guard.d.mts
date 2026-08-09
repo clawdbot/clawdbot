@@ -17,6 +17,11 @@ type PullRequest = {
 };
 
 type ActorCandidate = { login: string; source: string };
+type DependencyGraphChange = {
+  change_type: string;
+  manifest?: string | null;
+  name?: string | null;
+};
 
 export function isDependencyFile(filename: string): boolean;
 export function isDependencyManifest(filename: string): boolean;
@@ -25,6 +30,9 @@ export function dependencyFieldChanges(
   baseManifest: Record<string, unknown>,
   headManifest: Record<string, unknown>,
 ): string[];
+export function isRemovalOnlyDependencyGraphChange(
+  changes: readonly DependencyGraphChange[],
+): boolean;
 export function shouldAutoscrubDependencyLockfiles(options: {
   dependencyFiles?: string[];
   lockfileChanges: unknown[];
@@ -76,6 +84,10 @@ export function renderTrustedDependencyComment(options: {
   actor: { login: string; reason: string };
   headSha: string;
 }): string;
+export function renderRemovalOnlyDependencyComment(options: {
+  dependencyGraphChanges: readonly DependencyGraphChange[];
+  headSha?: string;
+}): string;
 export function renderAutoscrubbedDependencyComment(options: {
   baseBranch: string;
   lockfileChanges: string[];
@@ -98,6 +110,7 @@ export function githubApi(
   options?: {
     fetchImpl?: typeof fetch;
     responseMaxBodyBytes?: number;
+    retryDelaysMs?: readonly number[];
     timeoutMs?: number;
   },
 ): { request(path: string, options?: Record<string, unknown>): Promise<unknown> };

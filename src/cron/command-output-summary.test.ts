@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCronCommandSummary,
-  cronCommandSummaryNeedsExternalRedaction,
   redactCronCommandSummaryForExternalDelivery,
 } from "./command-output-summary.js";
 
@@ -22,7 +21,6 @@ describe("cron command output summaries", () => {
     const summary =
       "action-required output preserved:\nVisit https://example.com/device or www.example.com/device and enter code ABCD-EFGH\n\ncompleted";
 
-    expect(cronCommandSummaryNeedsExternalRedaction(summary)).toBe(true);
     expect(redactCronCommandSummaryForExternalDelivery(summary)).toBe(
       "action-required output preserved:\nVisit [redacted-url] or [redacted-url] and enter code [redacted-code]\n\ncompleted",
     );

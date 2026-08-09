@@ -6,10 +6,10 @@ scenario:
   category: diagnostics
   coverage:
     primary:
-      - personal.diagnostics
+      - observability.support-zip-diagnostics
     secondary:
-      - personal.redaction
-      - qa.artifact-safety
+      - observability.support-zip-redaction
+      - observability.support-zip-artifact-safety
   risk: high
   capabilities:
     - tools.read
@@ -106,9 +106,9 @@ flow:
           args:
             - ref: env
             - 60000
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -153,7 +153,7 @@ flow:
               expr: "`share-safe diagnostics reply leaked unsafe source material: ${outbound.text}`"
         - set: diagnosticDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(requestCountBefore).filter((request) => /personal share-safe diagnostics check/i.test(String(request.allInputText ?? ''))) : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /personal share-safe diagnostics check/i.test(String(request.allInputText ?? ''))) : []"
         - assert:
             expr: "!env.mock || diagnosticDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 2"
             message:

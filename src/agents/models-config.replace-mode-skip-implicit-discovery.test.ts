@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveProvidersForModelsJsonWithDeps } from "./models-config.plan.js";
+import { resolveProvidersForModelsJsonWithDeps } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 function createExplicitProvider(): ProviderConfig {
@@ -117,5 +117,54 @@ describe("models-config plan: replace mode skips implicit discovery", () => {
     );
 
     expect(resolveImplicitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards resolved runtime config separately from source config", async () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          explicit: {
+            ...createExplicitProvider(),
+            apiKey: { source: "exec", provider: "must-not-run", id: "explicit" },
+          },
+        },
+      },
+    };
+    const discoveryAuthConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          explicit: {
+            ...createExplicitProvider(),
+            apiKey: "resolved-runtime-key",
+          },
+        },
+      },
+    };
+    const resolveImplicitSpy = vi.fn(async () => ({}));
+
+    await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg,
+        discoveryAuthConfig,
+        agentDir: "/tmp/openclaw-models-config-auth-test",
+        env: {},
+      },
+      { resolveImplicitProviders: resolveImplicitSpy },
+    );
+
+    expect(resolveImplicitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          models: expect.objectContaining({
+            providers: expect.objectContaining({
+              explicit: expect.objectContaining({
+                apiKey: { source: "exec", provider: "must-not-run", id: "explicit" },
+              }),
+            }),
+          }),
+        }),
+        discoveryAuthConfig,
+      }),
+    );
   });
 });

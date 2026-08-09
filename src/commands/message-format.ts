@@ -176,7 +176,7 @@ function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null
       flattened.push(entry);
     }
   }
-  return flattened.length ? flattened : null;
+  return flattened;
 }
 
 function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
@@ -441,25 +441,8 @@ export function formatMessageCliText(
     if (list) {
       lines.push(heading("Search results"));
       lines.push(renderMessageList(list, formatOpts, "No results.")[0] ?? "");
-      // Discord search nests cursor signals (hasMore, total_results) inside
-      // results rather than at the payload top level. Try payload first, then
-      // the nested results object, then a total_results-vs-count comparison
-      // so completed searches (total_results === returned) show no hint.
-      const hint =
-        renderPaginationHint(payload, muted) ??
-        renderPaginationHint(results, muted) ??
-        (() => {
-          if (!results || typeof results !== "object") {
-            return null;
-          }
-          const r = results as Record<string, unknown>;
-          if (typeof r.total_results === "number" && r.total_results > list.length) {
-            return muted(
-              "More results available. Use --limit to fetch more, or --json for the raw cursor.",
-            );
-          }
-          return null;
-        })();
+      // Discord's approximate result count cannot prove another page exists.
+      const hint = renderPaginationHint(payload, muted) ?? renderPaginationHint(results, muted);
       if (hint) {
         lines.push(hint);
       }

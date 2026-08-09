@@ -1,16 +1,20 @@
 // Outbound bridge tests cover channel message handoff from core to outbound adapters.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createChannelMessageAdapterFromOutbound,
-  type ChannelMessageOutboundBridgeResult,
-} from "./outbound-bridge.js";
+import { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
 import type {
   ChannelMessageSendPayloadContext,
   ChannelMessageSendPollContext,
   ChannelMessageSendTextContext,
   MessageReceipt,
 } from "./types.js";
+
+type OutboundBridgeAdapter = Parameters<
+  typeof createChannelMessageAdapterFromOutbound
+>[0]["outbound"];
+type ChannelMessageOutboundBridgeResult = Awaited<
+  ReturnType<NonNullable<OutboundBridgeAdapter["sendText"]>>
+>;
 
 const cfg = {} as OpenClawConfig;
 
@@ -109,6 +113,81 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         platformMessageIds: ["chunk-1"],
       }),
     });
+  });
+
+  it("preserves contracted delivery facts without exposing private provider fields", async () => {
+    const sourceResult = (messageId: string) => ({
+      channel: "forged-channel",
+      messageId,
+      chatId: "chat-1",
+      channelId: "channel-1",
+      roomId: "room-1",
+      conversationId: "conversation-1",
+      toJid: "recipient@example.invalid",
+      pollId: "poll-1",
+      timestamp: 123,
+      meta: { questionActionIds: ["question:1"], questionMessageId: "question-card" },
+      receipt: {
+        primaryPlatformMessageId: messageId,
+        platformMessageIds: [messageId],
+        parts: [{ platformMessageId: messageId, kind: "text" as const, index: 0 }],
+        sentAt: 123,
+      },
+      accessToken: "private-access-token",
+      content: "private-provider-content",
+      primaryMessageId: "private-primary-id",
+      threadTs: "private-thread-ts",
+      blocks: [{ text: "private-block" }],
+      callback: { value: "private-callback" },
+      action: { value: "private-action" },
+    });
+    const onDeliveryResult = vi.fn();
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: async ({ onDeliveryResult: reportProgress }) => {
+          await reportProgress?.(sourceResult("progress-1"));
+          return sourceResult("final-1");
+        },
+      },
+    });
+
+    const result = await adapter.send?.text?.({
+      cfg,
+      to: "room-1",
+      text: "hello",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    const progress = onDeliveryResult.mock.calls[0]?.[0];
+    for (const [delivery, messageId] of [
+      [progress, "progress-1"],
+      [result, "final-1"],
+    ] as const) {
+      expect(delivery).toMatchObject({
+        messageId,
+        chatId: "chat-1",
+        channelId: "channel-1",
+        roomId: "room-1",
+        conversationId: "conversation-1",
+        toJid: "recipient@example.invalid",
+        pollId: "poll-1",
+        timestamp: 123,
+        meta: { questionActionIds: ["question:1"], questionMessageId: "question-card" },
+      });
+      for (const privateField of [
+        "channel",
+        "accessToken",
+        "content",
+        "primaryMessageId",
+        "threadTs",
+        "blocks",
+        "callback",
+        "action",
+      ]) {
+        expect(delivery).not.toHaveProperty(privateField);
+      }
+    }
   });
 
   it("preserves an outbound receipt instead of rebuilding it", async () => {

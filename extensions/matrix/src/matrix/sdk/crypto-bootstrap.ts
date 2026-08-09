@@ -17,7 +17,7 @@ import type {
 } from "./verification-manager.js";
 import { isMatrixDeviceOwnerVerified } from "./verification-status.js";
 
-export type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
+type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
   getUserId: () => Promise<string>;
   getPassword?: () => string | undefined;
   canUnlockSecretStorage: () => Promise<boolean>;

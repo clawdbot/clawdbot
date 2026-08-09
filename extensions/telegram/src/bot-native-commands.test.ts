@@ -19,7 +19,6 @@ import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plug
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
-let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
@@ -122,37 +121,10 @@ function replyAt(params: Record<string, unknown>, index = 0) {
   return reply;
 }
 
-function registerCustomTelegramCommandMenu(
-  customCommands: NonNullable<TelegramAccountConfig["customCommands"]>,
-) {
-  const setMyCommands = vi.fn().mockResolvedValue(undefined);
-  const runtimeLog = vi.fn();
-
-  registerTelegramNativeCommands({
-    ...createNativeCommandTestParams({ commands: { native: false } }),
-    bot: {
-      api: {
-        setMyCommands,
-        sendMessage: vi.fn().mockResolvedValue(undefined),
-      },
-      command: vi.fn(),
-    } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-    runtime: { log: runtimeLog } as unknown as RuntimeEnv,
-    telegramCfg: { customCommands } as TelegramAccountConfig,
-    nativeEnabled: false,
-    nativeSkillsEnabled: false,
-  });
-
-  return { runtimeLog, setMyCommands };
-}
-
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
-    ({
-      registerTelegramNativeCommands,
-      parseTelegramNativeCommandCallbackData,
-      resolveTelegramNativeCommandDisableBlockStreaming,
-    } = await import("./bot-native-commands.js"));
+    ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
+      await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {
@@ -219,23 +191,28 @@ describe("registerTelegramNativeCommands", () => {
     );
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands).toContainEqual({
+    expect(registeredCommands.find((command) => command.command === "demo_skill")).toMatchObject({
       command: "demo_skill",
       description: "Demo skill",
       descriptionLocalizations: { ko: "데모 스킬" },
     });
   });
 
-  it("drops per-skill commands before truncating an over-limit Telegram menu", async () => {
+  it("prioritizes /skill and configured commands after per-skill pressure omission", async () => {
     const { bot, commandHandlers, setMyCommands } = createCommandBot();
     const runtimeLog = vi.fn();
-    listSkillCommandsForAgents.mockReturnValue(
-      Array.from({ length: 120 }, (_, index) => ({
+    listSkillCommandsForAgents.mockReturnValue([
+      {
+        name: "export_session",
+        skillName: "export-session-collision",
+        description: "Colliding export skill",
+      },
+      ...Array.from({ length: 120 }, (_, index) => ({
         name: `demo_skill_${index}`,
         skillName: `demo-skill-${index}`,
         description: `Demo skill ${index}`,
       })),
-    );
+    ]);
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
       {
         name: "demo_skill_0",
@@ -252,52 +229,35 @@ describe("registerTelegramNativeCommands", () => {
         {
           bot,
           runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+          telegramCfg: {
+            customCommands: [
+              { command: "custom_one", description: "Custom one" },
+              { command: "custom_two", description: "Custom two" },
+            ],
+          },
         },
       ),
     );
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands.length).toBeLessThanOrEqual(100);
+    expect(registeredCommands.slice(0, 3).map(({ command }) => command)).toEqual([
+      "skill",
+      "custom_one",
+      "custom_two",
+    ]);
     expect(registeredCommands.some((entry) => entry.command.startsWith("demo_skill_"))).toBe(false);
-    expect(commandHandlers.has("demo_skill_0")).toBe(true);
-    expect(runtimeLog).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "-command Telegram limit; removing per-skill commands and keeping /skill.",
-      ),
+    expect(registeredCommands.filter((entry) => entry.command === "export_session")).toHaveLength(
+      1,
     );
-  });
-
-  it("truncates Telegram command registration to 100 commands", async () => {
-    const customCommands = Array.from({ length: 120 }, (_, index) => ({
-      command: `cmd_${index}`,
-      description: `Command ${index}`,
-    }));
-    const { runtimeLog, setMyCommands } = registerCustomTelegramCommandMenu(customCommands);
-
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands).toHaveLength(100);
-    expect(registeredCommands).toEqual(customCommands.slice(0, 100));
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
-    );
-  });
-
-  it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
-    const customCommands = Array.from({ length: 92 }, (_, index) => ({
-      command: `cmd_${index}`,
-      description: `Command ${index} ` + "x".repeat(120),
-    }));
-    const { runtimeLog, setMyCommands } = registerCustomTelegramCommandMenu(customCommands);
-
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands).toHaveLength(92);
     expect(
-      registeredCommands.some(
-        (entry) => entry.description.length < customCommands[0].description.length,
+      Array.from({ length: 120 }, (_, index) => commandHandlers.has(`demo_skill_${index}`)).every(
+        Boolean,
       ),
     ).toBe(true);
+    expect(commandHandlers.has("export_session")).toBe(true);
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram menu text exceeded the conservative 5700-character payload budget; shortening descriptions to keep 92 commands visible.",
+      "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
   });
 
@@ -550,27 +510,6 @@ describe("registerTelegramNativeCommands", () => {
     expect(
       (sendMessageCall[2] as { message_thread_id?: number } | undefined)?.message_thread_id,
     ).toBe(77);
-  });
-
-  it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {
-    expect(
-      resolveTelegramNativeCommandDisableBlockStreaming({
-        streaming: {
-          block: {
-            enabled: false,
-          },
-        },
-      } as TelegramAccountConfig),
-    ).toBe(true);
-    expect(
-      resolveTelegramNativeCommandDisableBlockStreaming({
-        streaming: {
-          block: {
-            enabled: true,
-          },
-        },
-      } as TelegramAccountConfig),
-    ).toBe(false);
   });
 
   it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {

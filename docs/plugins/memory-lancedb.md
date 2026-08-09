@@ -31,6 +31,15 @@ Companion plugins such as `memory-wiki` can run alongside `memory-lancedb`,
 but only one plugin owns the active memory slot at a time.
 </Note>
 
+<Note>
+LanceDB's `memory_recall` does not receive the protected private transcript
+authorization used by `memory.search.rememberAcrossConversations`. Use LanceDB's
+`autoRecall` or its `memory_recall` tool through
+[advanced Active Memory](/concepts/active-memory#lancedb-memory).
+`openclaw doctor` reports when Remember across conversations is unavailable
+with the current memory provider.
+</Note>
+
 ## Quick start
 
 ```json5
@@ -206,28 +215,36 @@ Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
 
+Every memory is owned by one agent. Recall, duplicate detection, capture,
+listing, raw queries, and deletion all enforce that owner before returning or
+mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`
+entry, or one inheriting a disabled top-level search, also gets none of the `memory_recall`, `memory_store`,
+or `memory_forget` tools and does not participate in automatic recall or
+capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
 (not only when it owns the active memory slot):
 
 ```bash
-openclaw ltm list [--limit <n>] [--order-by-created-at]
-openclaw ltm search <query> [--limit <n>]
-openclaw ltm stats
+openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
+openclaw ltm search <query> [--agent <id>] [--limit <n>]
+openclaw ltm stats [--agent <id>]
 ```
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 
 ```bash
-openclaw ltm query --cols id,text,createdAt --limit 20
+openclaw ltm query --agent research --cols id,text,createdAt --limit 20
 openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
 ```
 
 | Flag                              | Default                                 | Notes                                                                                                                                     |
 | --------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--agent <id>`                    | configured default agent                | Selects the private agent namespace. Available on `list`, `search`, `query`, and `stats`.                                                 |
 | `--cols <columns>`                | `id,text,importance,category,createdAt` | Comma-separated column allowlist.                                                                                                         |
-| `--filter <condition>`            | none                                    | SQL-style WHERE clause. Max 200 chars; only alphanumerics, `_-`, whitespace, and `='"<>!.,()%*` are allowed.                              |
+| `--filter <condition>`            | none                                    | One comparison over an output column, such as `category = 'preference'` or `importance >= 0.8`. String values must be quoted.             |
 | `--limit <n>`                     | `10`                                    | Positive integer.                                                                                                                         |
 | `--order-by <column>:<asc\|desc>` | none                                    | Sorted in memory after the filter runs; the sort column is auto-added to the projection and stripped from output if it was not requested. |
 
@@ -261,6 +278,19 @@ LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
   },
 }
 ```
+
+The plugin keeps one LanceDB table and stores a normalized agent owner on each
+row. This is a storage boundary, not a post-search filter: agent ownership is
+applied before vector ranking and is included in list, query, count, and delete
+predicates. `ltm query --filter` accepts one validated comparison over the
+public output columns. The store builds that comparison separately from the
+mandatory owner predicate, so a filter cannot widen the query to another
+agent.
+
+Databases created before per-agent ownership have no reliable row provenance.
+On upgrade, `openclaw doctor --fix` assigns those legacy rows once to the
+configured default agent. Runtime access fails closed until that migration has
+completed; other agents never inherit the old shared rows.
 
 `storageOptions` accepts string key/value pairs for LanceDB storage backends
 (e.g. S3-compatible object storage) and supports `${ENV_VAR}` expansion:

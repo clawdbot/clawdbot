@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Doctor migration from legacy DM allowFrom fallback to explicit groupAllowFrom lists.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.js";
@@ -87,10 +88,11 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
     return allOf.every((branch) => schemaAllowsConfigPath(branch, path));
   }
 
-  const [segment, ...rest] = path;
+  const segment = expectDefined(path[0], "schema path segment");
+  const rest = path.slice(1);
   const properties = asObjectRecord(node.properties);
   if (segment !== ACCOUNT_SCHEMA_WILDCARD && properties && Object.hasOwn(properties, segment)) {
-    return schemaAllowsConfigPath(properties[segment], rest);
+    return schemaAllowsConfigPath(expectDefined(properties[segment], "schema property"), rest);
   }
 
   const additionalProperties = node.additionalProperties;
@@ -105,7 +107,9 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
   const schema = findGeneratedChannelConfigSchema(channelName);
-  return !schema || schemaAllowsConfigPath(schema, path);
+  // Extension-installed channels (e.g. ClawHub agentmail) have no generated-metadata entry;
+  // without schema info we can't prove the write is safe, so fail closed rather than open.
+  return schema !== undefined && schemaAllowsConfigPath(schema, path);
 }
 
 function migrateRecord(params: {

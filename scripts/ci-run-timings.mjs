@@ -2,6 +2,7 @@
 
 // Summarizes GitHub Actions run/job timings for CI analysis.
 import { execFileSync } from "node:child_process";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
@@ -101,7 +102,7 @@ function isPnpmStoreWarmupGatedJobName(name) {
     name === "build-artifacts" ||
     name === "check-docs" ||
     name === "check-guards" ||
-    name === "check-shrinkwrap" ||
+    name === "check-npm-lock" ||
     name === "check-prod-types" ||
     name === "check-lint" ||
     name === "check-dependencies" ||
@@ -124,7 +125,9 @@ function collectRunTimingContext(run) {
         conclusion: job.conclusion ?? "",
         durationSeconds: secondsBetween(started, completed),
         name: job.name,
-        queueSeconds: secondsBetween(created, started),
+        // Actions exposes job start time, but not the split between `needs`
+        // dependency wait and runner queue. Keep the combined delay honest.
+        startDelaySeconds: secondsBetween(created, started),
         started,
         completed,
         status: job.status,
@@ -146,9 +149,9 @@ export function summarizeRunTimings(run, limit = 15) {
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
     .slice(0, limit);
-  const byQueue = [...jobs]
-    .filter((job) => job.queueSeconds !== null && (job.durationSeconds ?? 0) > 5)
-    .toSorted((left, right) => right.queueSeconds - left.queueSeconds)
+  const byStartDelay = [...jobs]
+    .filter((job) => job.startDelaySeconds !== null && (job.durationSeconds ?? 0) > 5)
+    .toSorted((left, right) => right.startDelaySeconds - left.startDelaySeconds)
     .slice(0, limit);
   const badJobs = jobs.filter(
     (job) => job.conclusion && !["success", "skipped", "cancelled"].includes(job.conclusion),
@@ -156,7 +159,7 @@ export function summarizeRunTimings(run, limit = 15) {
 
   return {
     byDuration,
-    byQueue,
+    byStartDelay,
     conclusion: run.conclusion ?? "",
     status: run.status ?? "",
     wallSeconds: secondsBetween(created, updated),
@@ -347,7 +350,9 @@ function summarizeJobs(run) {
       Number.isFinite(firstStart) && Number.isFinite(lastComplete)
         ? secondsBetween(firstStart, lastComplete)
         : null,
-    firstQueueSeconds: Number.isFinite(firstStart) ? secondsBetween(created, firstStart) : null,
+    firstStartDelaySeconds: Number.isFinite(firstStart)
+      ? secondsBetween(created, firstStart)
+      : null,
     jobCount: successfulDurations.length,
     maxDurationSeconds: successfulDurations.length === 0 ? null : Math.max(...successfulDurations),
     p90DurationSeconds: percentile(successfulDurations, 0.9),
@@ -360,7 +365,7 @@ function printSection(title, jobs, metric) {
   console.log(title);
   for (const job of jobs) {
     console.log(
-      `${String(job.name).padEnd(48)} ${formatSeconds(job[metric]).padStart(6)}  queue=${formatSeconds(job.queueSeconds).padStart(6)}  ${job.status}/${job.conclusion}`,
+      `${String(job.name).padEnd(48)} ${formatSeconds(job[metric]).padStart(6)}  start-delay=${formatSeconds(job.startDelaySeconds).padStart(6)}  ${job.status}/${job.conclusion}`,
     );
   }
 }
@@ -447,7 +452,7 @@ async function main() {
           run.headSha.slice(0, 10),
           `wall=${formatSeconds(summary.wallSeconds)}`,
           `exec=${formatSeconds(summary.executionWindowSeconds)}`,
-          `firstQueue=${formatSeconds(summary.firstQueueSeconds)}`,
+          `firstStartDelay=${formatSeconds(summary.firstStartDelaySeconds)}`,
           `jobs=${summary.jobCount}`,
           `avg=${formatSeconds(summary.avgDurationSeconds)}`,
           `p90=${formatSeconds(summary.p90DurationSeconds)}`,
@@ -486,7 +491,11 @@ async function main() {
     );
   }
   printSection("\nSlowest jobs", summary.byDuration, "durationSeconds");
-  printSection("\nLongest queues", summary.byQueue, "queueSeconds");
+  printSection(
+    "\nLongest start delays (dependencies + runner queue)",
+    summary.byStartDelay,
+    "startDelaySeconds",
+  );
   if (summary.badJobs.length > 0) {
     console.log("\nFailed jobs");
     for (const job of summary.badJobs) {
@@ -495,6 +504,6 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main();
 }

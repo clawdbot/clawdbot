@@ -7,13 +7,15 @@ import {
 } from "./agent-event-audit.js";
 import type { AuditMessageMode } from "./audit-config.js";
 import { createAuditEventWriter, type AuditEventWriter } from "./audit-event-writer.js";
+import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
 const log = createSubsystemLogger("audit/events");
 let persistenceFailureWarned = false;
 
-export type AuditEventRecorder = AgentEventAuditRecorder & {
+type AuditEventRecorder = AgentEventAuditRecorder & {
   recordMessage: (event: TrustedMessageAuditEvent) => void;
+  recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
 };
 
 export function createAuditEventRecorder(options: {
@@ -43,6 +45,7 @@ export function createAuditEventRecorder(options: {
 
   return {
     ...agentRecorder,
+    recordExecutionIdentity: writer.recordExecutionIdentity,
     recordMessage: (event) => {
       if (options.messageMode === "off") {
         return;
@@ -58,8 +61,4 @@ export function createAuditEventRecorder(options: {
       });
     },
   };
-}
-
-export function resetAuditEventRecorderForTest(): void {
-  persistenceFailureWarned = false;
 }

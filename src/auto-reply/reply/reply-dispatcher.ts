@@ -1,7 +1,13 @@
 // Dispatches final reply payloads through visible senders and message tools.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  findPlatformMessageRejectedError,
+  isProvenDeliveryNotSentError,
+} from "../../infra/delivery-recovery.shared.js";
+import { collectErrorGraphCandidates } from "../../infra/errors.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -13,6 +19,7 @@ import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type {
   ReplyDispatchBeforeDeliver,
+  ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
   ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
@@ -20,8 +27,6 @@ import type {
 } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
-
-export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type ReplyDispatchErrorHandler = (
   err: unknown,
@@ -38,6 +43,39 @@ type ReplyDispatchCancelHandler = (
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
+export type ReplyDispatchDeliveryOutcome =
+  | "delivered"
+  | "cancelled"
+  | "failed-before-deliver"
+  | "failed-deliver";
+
+function isRetryableNoSendFailure(error: unknown): boolean {
+  return (
+    isProvenDeliveryNotSentError(error) &&
+    !findPlatformMessageRejectedError(error) &&
+    !collectErrorGraphCandidates(error, (candidate) => [
+      candidate.cause,
+      candidate.original,
+      candidate.error,
+      candidate.reason,
+      ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+    ]).some(
+      (candidate) =>
+        isRecord(candidate) &&
+        (candidate.sentBeforeError === true ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            candidate.deliveryResult.visibleReplySent === true)),
+    )
+  );
+}
+
+type ReplyDispatchDeliveryOutcomeTracker = {
+  promise: Promise<ReplyDispatchDeliveryOutcome>;
+  resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
+  tracked: boolean;
+};
+
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: ReplyDispatchRuntimeInfo,
@@ -47,8 +85,137 @@ export type { ReplyDispatchBeforeDeliver };
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const DEFAULT_BEFORE_DELIVER_TIMEOUT_MS = 15_000;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const beforeDeliverCancelledHooks = new WeakMap<ReplyDispatcher, ReplyDispatchCancelHandler[]>();
+const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
+const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
+
+type ReplyDispatchBeforeDeliverStage = {
+  hook: ReplyDispatchBeforeDeliver;
+  timeoutMs?: number;
+};
+
+type ReplyDispatchBeforeDeliverStageInput =
+  | ReplyDispatchBeforeDeliver
+  | {
+      hook: ReplyDispatchBeforeDeliver;
+      options?: ReplyDispatchBeforeDeliverOptions;
+    }
+  | undefined;
+
+const beforeDeliverStagesByHook = new WeakMap<
+  ReplyDispatchBeforeDeliver,
+  readonly ReplyDispatchBeforeDeliverStage[]
+>();
+
+class ReplyDispatchBeforeDeliverTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`beforeDeliver timed out after ${timeoutMs}ms`);
+    this.name = "ReplyDispatchBeforeDeliverTimeoutError";
+  }
+}
+
+function resolveReplyDispatchBeforeDeliverTimeoutMs(
+  options: ReplyDispatchBeforeDeliverOptions | undefined,
+): number {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError("beforeDeliver timeoutMs must be a positive finite number");
+  }
+  return timeoutMs;
+}
+
+async function runReplyDispatchBeforeDeliverStage(
+  stage: ReplyDispatchBeforeDeliverStage,
+  payload: ReplyPayload,
+  info: ReplyDispatchRuntimeInfo,
+): Promise<ReplyPayload | null> {
+  const timeoutMs = stage.timeoutMs;
+  if (!timeoutMs) {
+    return await stage.hook(payload, info);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The hook promise cannot be cancelled. The deadline releases the serialized
+  // delivery owner; Promise.race still observes any late rejection.
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new ReplyDispatchBeforeDeliverTimeoutError(timeoutMs)),
+      timeoutMs,
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([Promise.resolve(stage.hook(payload, info)), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function resolveReplyDispatchBeforeDeliverStages(
+  input: ReplyDispatchBeforeDeliverStageInput,
+): readonly ReplyDispatchBeforeDeliverStage[] {
+  if (!input) {
+    return [];
+  }
+  if (typeof input === "function") {
+    return (
+      beforeDeliverStagesByHook.get(input) ?? [
+        { hook: input, timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS },
+      ]
+    );
+  }
+  const existingStages = beforeDeliverStagesByHook.get(input.hook);
+  // Internal composition already assigned each real stage its owner budget.
+  // Wrapping that chain again would turn one stage budget into an aggregate deadline.
+  if (existingStages) {
+    return existingStages;
+  }
+  return [
+    {
+      hook: input.hook,
+      timeoutMs: resolveReplyDispatchBeforeDeliverTimeoutMs(input.options),
+    },
+  ];
+}
+
+/** Compose core delivery stages while retaining a separate deadline for each actual hook. */
+export function composeReplyDispatchBeforeDeliver(
+  ...hooks: ReplyDispatchBeforeDeliverStageInput[]
+): ReplyDispatchBeforeDeliver | undefined {
+  const stages: ReplyDispatchBeforeDeliverStage[] = [];
+  for (const hook of hooks) {
+    if (hook) {
+      stages.push(...resolveReplyDispatchBeforeDeliverStages(hook));
+    }
+  }
+  if (stages.length === 0) {
+    return undefined;
+  }
+  const composed: ReplyDispatchBeforeDeliver = async (payload, info) => {
+    let current: ReplyPayload | null = payload;
+    for (const stage of stages) {
+      if (!current) {
+        return null;
+      }
+      const next = await runReplyDispatchBeforeDeliverStage(stage, current, info);
+      current = next ? copyReplyPayloadMetadata(current, next) : null;
+    }
+    return current;
+  };
+  beforeDeliverStagesByHook.set(composed, stages);
+  return composed;
+}
+
+/** Mark a core hook whose lifecycle owner controls settlement and any deadline. */
+export function markReplyDispatchBeforeDeliverDeadlineOwned(
+  hook: ReplyDispatchBeforeDeliver,
+): ReplyDispatchBeforeDeliver {
+  beforeDeliverStagesByHook.set(hook, [{ hook }]);
+  return hook;
+}
 
 /** Adds a core-internal cancellation observer without expanding the plugin-facing dispatcher. */
 export function appendReplyDispatcherBeforeDeliverCancelled(
@@ -61,6 +228,31 @@ export function appendReplyDispatcherBeforeDeliverCancelled(
   }
   hooks.push(hook);
   return true;
+}
+
+/** Capture one core-dispatcher delivery outcome without changing send* return types. */
+export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
+  promise: Promise<ReplyDispatchDeliveryOutcome>;
+  isTracked: () => boolean;
+} {
+  let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+  const tracker: ReplyDispatchDeliveryOutcomeTracker = {
+    promise: new Promise((resolve) => {
+      resolveOutcome = resolve;
+    }),
+    resolve: (outcome) => resolveOutcome(outcome),
+    tracked: false,
+  };
+  deliveryOutcomeTrackers.set(payload, tracker);
+  return { promise: tracker.promise, isTracked: () => tracker.tracked };
+}
+
+/** Attach a text alternative that is delivered only when the primary payload is proven unsent. */
+export function attachReplyDispatchUndeliveredFallback(
+  payload: ReplyPayload,
+  fallback: ReplyPayload,
+): void {
+  undeliveredFallbacks.set(payload, fallback);
 }
 
 function buildReplyDispatchRuntimeInfo(
@@ -125,6 +317,8 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
+  /** Owner-declared deadline for the constructor before-delivery callback. */
+  beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
@@ -181,7 +375,11 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
-  let beforeDeliver = options.beforeDeliver;
+  let beforeDeliver = composeReplyDispatchBeforeDeliver(
+    options.beforeDeliver
+      ? { hook: options.beforeDeliver, options: options.beforeDeliverOptions }
+      : undefined,
+  );
   const appendedBeforeDeliverCancelledHooks: ReplyDispatchCancelHandler[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
@@ -228,16 +426,61 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     ];
     for (const observer of observers) {
       try {
-        await observer(payload, info);
+        await runReplyDispatchBeforeDeliverStage(
+          {
+            hook: async (current, currentInfo) => {
+              await observer(current, currentInfo);
+              return current;
+            },
+            timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS,
+          },
+          payload,
+          info,
+        );
       } catch (err: unknown) {
         reportObserverError(err, info);
       }
     }
   };
 
+  const deliverOnce = async (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ): Promise<ReplyDispatchDeliveryOutcome> => {
+    let deliverPayload: ReplyPayload | null = payload;
+    let deliveryStarted = false;
+    try {
+      if (beforeDeliver) {
+        try {
+          deliverPayload = await beforeDeliver(payload, info);
+        } catch (error) {
+          await notifyBeforeDeliverCancelled(payload, info);
+          throw error;
+        }
+        if (!deliverPayload) {
+          await notifyBeforeDeliverCancelled(payload, info);
+          return "cancelled";
+        }
+        deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
+      }
+      deliveryStarted = true;
+      await options.deliver(deliverPayload, info);
+      return "delivered";
+    } catch (error) {
+      try {
+        await options.onError?.(error, info);
+      } catch {}
+      return deliveryStarted && !isRetryableNoSendFailure(error)
+        ? "failed-deliver"
+        : "failed-before-deliver";
+    }
+  };
+
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const fallback = undeliveredFallbacks.get(payload);
+    undeliveredFallbacks.delete(payload);
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
-    const normalized = normalizeReplyPayloadInternal(payload, {
+    const normalizedPrimary = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
@@ -249,6 +492,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           reason,
         }),
     });
+    const normalizedFallback = fallback
+      ? normalizeReplyPayloadInternal(fallback, {
+          responsePrefix: options.responsePrefix,
+          responsePrefixContext: options.responsePrefixContext,
+          responsePrefixContextProvider: options.responsePrefixContextProvider,
+          transformReplyPayload: options.transformReplyPayload,
+          onHeartbeatStrip: options.onHeartbeatStrip,
+        })
+      : null;
+    const normalized = normalizedPrimary ?? normalizedFallback;
     if (!normalized) {
       if (kind === "final" && originalWasExactSilent) {
         silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
@@ -259,14 +512,20 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       }
       return false;
     }
+    const deliveryFallback = normalizedPrimary ? normalizedFallback : null;
     queuedCounts[kind] += 1;
     pending += 1;
+    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
+    if (deliveryOutcomeTracker) {
+      deliveryOutcomeTracker.tracked = true;
+    }
 
     // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;
     }
+    let deliveryOutcome: ReplyDispatchDeliveryOutcome = "failed-before-deliver";
 
     sendChain = sendChain
       .then(async () => {
@@ -278,29 +537,33 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
-        let deliverPayload: ReplyPayload | null = normalized;
-        if (beforeDeliver) {
-          try {
-            deliverPayload = await beforeDeliver(normalized, dispatchInfo);
-          } catch (err: unknown) {
-            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
-            throw err;
-          }
-          if (!deliverPayload) {
-            cancelledCounts[kind] += 1;
-            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
-            return;
-          }
-          deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
+        deliveryOutcome = await deliverOnce(normalized, dispatchInfo);
+        if (
+          deliveryFallback &&
+          (deliveryOutcome === "cancelled" || deliveryOutcome === "failed-before-deliver")
+        ) {
+          deliveryOutcome = await deliverOnce(deliveryFallback, dispatchInfo);
         }
-        await options.deliver(deliverPayload, dispatchInfo);
+        if (deliveryOutcome === "cancelled") {
+          cancelledCounts[kind] += 1;
+        } else if (
+          deliveryOutcome === "failed-before-deliver" ||
+          deliveryOutcome === "failed-deliver"
+        ) {
+          failedCounts[kind] += 1;
+        }
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         failedCounts[kind] += 1;
-        void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        try {
+          await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        } catch {}
+        deliveryOutcome = "failed-before-deliver";
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
+        deliveryOutcomeTracker?.resolve(deliveryOutcome);
+        deliveryOutcomeTrackers.delete(payload);
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {
@@ -347,16 +610,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
-    appendBeforeDeliver: (hook) => {
-      const previousBeforeDeliver = beforeDeliver;
-      beforeDeliver = previousBeforeDeliver
-        ? async (payload, info) => {
-            const previousPayload = await previousBeforeDeliver(payload, info);
-            return previousPayload
-              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
-              : null;
-          }
-        : hook;
+    appendBeforeDeliver: (hook, stageOptions) => {
+      beforeDeliver = composeReplyDispatchBeforeDeliver(beforeDeliver, {
+        hook,
+        options: stageOptions,
+      });
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),

@@ -3,11 +3,13 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../../infra/git-commit.js";
+import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js";
 import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
+import { getCommanderErrorCommandPath } from "./commander-parse-facts.js";
 import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
@@ -43,6 +45,23 @@ const EXAMPLES = [
     "Send via your Telegram bot.",
   ],
 ] as const;
+
+export function formatProgramHelpOutput(str: string): string {
+  // Commander emits plain section labels; decorate them after command-specific help renders.
+  let output = str;
+  const isRootHelp = new RegExp(
+    `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
+    "m",
+  ).test(output);
+  if (isRootHelp && /^Commands:/m.test(output)) {
+    output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
+  }
+
+  return output
+    .replace(/^Usage:/gm, theme.heading("Usage:"))
+    .replace(/^Options:/gm, theme.heading("Options:"))
+    .replace(/^Commands:/gm, theme.heading("Commands:"));
+}
 
 export function configureProgramHelp(
   program: Command,
@@ -92,31 +111,21 @@ export function configureProgramHelp(
     },
   });
 
-  const formatHelpOutput = (str: string) => {
-    // Commander emits plain section labels; decorate them after command-specific help renders.
-    let output = str;
-    const isRootHelp = new RegExp(
-      `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
-      "m",
-    ).test(output);
-    if (isRootHelp && /^Commands:/m.test(output)) {
-      output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
-    }
-
-    return output
-      .replace(/^Usage:/gm, theme.heading("Usage:"))
-      .replace(/^Options:/gm, theme.heading("Options:"))
-      .replace(/^Commands:/gm, theme.heading("Commands:"));
-  };
-
   program.configureOutput({
     writeOut: (str) => {
-      process.stdout.write(formatHelpOutput(str));
+      process.stdout.write(formatProgramHelpOutput(str));
     },
     writeErr: (str) => {
-      process.stderr.write(formatHelpOutput(str));
+      const message = formatProgramHelpOutput(str);
+      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
     },
-    outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
+    outputError: (str, write) =>
+      write(
+        formatCliParseErrorOutput(str, {
+          argv: process.argv,
+          commandPath: getCommanderErrorCommandPath(program),
+        }),
+      ),
   });
 
   if (isRootVersionInvocation(process.argv)) {

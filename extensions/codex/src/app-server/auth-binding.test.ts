@@ -1,4 +1,8 @@
-import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fingerprintCodexAppServerAuthBinding,
@@ -6,9 +10,12 @@ import {
 } from "./auth-binding.js";
 
 describe("Codex app-server auth binding", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
+    vi.unstubAllEnvs();
+  });
 
-  it("materializes a SecretRef once and fingerprints the executed store", async () => {
+  it("uses the materialized runtime SecretRef snapshot and fingerprints the executed store", async () => {
     const profileId = "openai:work";
     const store: AuthProfileStore = {
       version: 1,
@@ -28,7 +35,25 @@ describe("Codex app-server auth binding", () => {
         auth: { profiles: { [profileId]: { provider: "openai", mode: "api_key" as const } } },
       },
     };
-    vi.stubEnv("OPENAI_WORK_KEY", "work-key-a");
+    const publishRuntimeKey = (key: string) => {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir: params.agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              [profileId]: {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
+                key,
+              },
+            },
+          },
+        },
+      ]);
+    };
+    publishRuntimeKey("work-key-a");
 
     const prepared = await prepareCodexAppServerAuthBinding(params);
     expect(prepared?.authProfileStore).not.toBe(store);
@@ -44,7 +69,7 @@ describe("Codex app-server auth binding", () => {
     });
     expect(await fingerprintCodexAppServerAuthBinding(params)).toBe(prepared?.fingerprint);
 
-    vi.stubEnv("OPENAI_WORK_KEY", "work-key-b");
+    publishRuntimeKey("work-key-b");
     expect(await fingerprintCodexAppServerAuthBinding(params)).not.toBe(prepared?.fingerprint);
   });
 });

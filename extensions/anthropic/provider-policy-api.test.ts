@@ -158,17 +158,22 @@ describe("anthropic provider policy public artifact", () => {
         defaultLevel: "high",
         preserveWhenCatalogReasoningFalse: true,
       });
-      expect(
-        resolveThinkingProfile({
-          provider: "claude-cli",
-          modelId,
-        }),
-      ).toEqual({
-        levels: [{ id: "off" }],
-        defaultLevel: "off",
-      });
     },
   );
+
+  it("keeps the Fable thinking profile identical across API and CLI routes", () => {
+    const modelId = "claude-fable-5";
+    expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
+      resolveThinkingProfile({ provider: "anthropic", modelId }),
+    );
+  });
+
+  it("keeps direct-only Mythos thinking disabled on the CLI route", () => {
+    expect(resolveThinkingProfile({ provider: "claude-cli", modelId: "claude-mythos-5" })).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
 
   it("does not return fable-5 off-thinking profile for claude-fable-50 (prefix boundary check)", () => {
     const profile = resolveThinkingProfile({

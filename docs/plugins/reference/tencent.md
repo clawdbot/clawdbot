@@ -16,7 +16,7 @@ Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
 
 ## Surface
 
-providers: tencent-tokenhub, tencent-tokenplan
+providers: `tencent-tokenhub`, `tencent-tokenplan`
 
 ## Related docs
 

@@ -56,7 +56,7 @@ function createAccount(): GatewayAccount {
     markdownSupport: true,
     config: {
       allowFrom: ["*"],
-      streaming: false,
+      streaming: { mode: "off" },
     },
   };
 }
@@ -81,7 +81,7 @@ describe("trySlashCommand", () => {
       channels: {
         qqbot: {
           allowFrom: ["*"],
-          streaming: false,
+          streaming: { mode: "off" },
         },
       },
     };
@@ -102,7 +102,7 @@ describe("trySlashCommand", () => {
     const qqbot = getWrittenQQBotConfig(writes[0]);
     expect(result).toBe("handled");
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
     expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("已开启");
   });
 

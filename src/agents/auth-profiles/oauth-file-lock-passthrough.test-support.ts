@@ -5,15 +5,14 @@
  */
 import { afterAll, vi } from "vitest";
 
-vi.mock("../../infra/file-lock.js", () => ({
+const fileLockPassthroughMock = vi.hoisted(() => ({
+  drainFileLockStateForTest: async () => undefined,
   resetFileLockStateForTest: () => undefined,
   withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
 }));
 
-vi.mock("../../plugin-sdk/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
+vi.mock("../../infra/file-lock.js", () => fileLockPassthroughMock);
+vi.mock("../../plugin-sdk/file-lock.js", () => fileLockPassthroughMock);
 
 afterAll(() => {
   vi.doUnmock("../../infra/file-lock.js");

@@ -69,6 +69,13 @@ openclaw directory groups list --channel zalouser --query "work"
 
 - Outbound text is chunked to 2000 characters (Zalo client limit).
 - Streaming is not supported.
+- Completed inbound message ids are retained for 30 days, bounded to the 1000 most recent entries per account.
+
+## Inbound durability
+
+OpenClaw stores each raw `zca-js` message callback before processing it. Pending messages resume from the account queue after a Gateway restart, and processing stays serialized per direct chat or group.
+
+The `zca-js` socket listener does not expose a delivery acknowledgement or automatically replay old messages after reconnect. The durable queue therefore protects the local crash window after a callback reaches OpenClaw; it cannot recover a message the socket never delivered. Replay tombstones are mostly a safeguard against a repeated callback with the same Zalo message id.
 
 ## Access control (DMs)
 

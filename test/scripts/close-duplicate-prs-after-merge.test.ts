@@ -1,8 +1,9 @@
 // Close Duplicate Prs After Merge tests cover close duplicate prs after merge script behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyClosePlan,
   buildDuplicateClosePlan,
+  defaultRunGh,
   parseArgs,
   parsePrNumberList,
   parseUnifiedDiffRanges,
@@ -251,5 +252,55 @@ Closing #70592 as a duplicate.`,
       ["pr", "comment", "70592", "--repo", "openclaw/openclaw", "--body", "closing"],
       ["pr", "close", "70592", "--repo", "openclaw/openclaw"],
     ]);
+  });
+});
+
+describe("defaultRunGh", () => {
+  it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
+    const execFileSyncImpl = vi.fn(() => "result");
+
+    const result = defaultRunGh(["pr", "view", "123"], {}, { execFileSyncImpl });
+
+    expect(result).toBe("result");
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "view", "123"],
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "inherit"],
+        timeout: 60_000,
+      }),
+    );
+  });
+
+  it("forwards stdin input while keeping the timeout bound", () => {
+    const execFileSyncImpl = vi.fn(() => "ok");
+
+    defaultRunGh(
+      ["pr", "edit", "123", "--add-label", "duplicate"],
+      { input: "body" },
+      { execFileSyncImpl },
+    );
+
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "edit", "123", "--add-label", "duplicate"],
+      expect.objectContaining({
+        input: "body",
+        killSignal: "SIGKILL",
+        stdio: ["pipe", "pipe", "inherit"],
+        timeout: 60_000,
+      }),
+    );
+  });
+
+  it("propagates timeout failures from the GitHub CLI process", () => {
+    const timeout = Object.assign(new Error("spawnSync gh ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const execFileSyncImpl = vi.fn(() => {
+      throw timeout;
+    });
+
+    expect(() => defaultRunGh(["pr", "view", "123"], {}, { execFileSyncImpl })).toThrow(timeout);
   });
 });

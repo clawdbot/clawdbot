@@ -1,5 +1,6 @@
-// Qqbot plugin module implements finalize behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Qqbot plugin module implements finalize behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
@@ -55,8 +56,7 @@ async function linkViaQrCode(params: {
 
     let next = params.cfg;
 
-    for (let i = 0; i < accounts.length; i++) {
-      const { appId, appSecret } = accounts[i];
+    for (const [i, { appId, appSecret }] of accounts.entries()) {
       // use current account id for first account, and use app id for subsequent accounts
       const targetAccountId = i === 0 ? params.accountId : appId;
 
@@ -67,7 +67,8 @@ async function linkViaQrCode(params: {
     }
 
     if (accounts.length === 1) {
-      params.runtime.log(`✔ QQ Bot 绑定成功！(AppID: ${accounts[0].appId})`);
+      const account = expectDefined(accounts.at(0), "single linked QQ Bot account");
+      params.runtime.log(`✔ QQ Bot 绑定成功！(AppID: ${account.appId})`);
     } else {
       const idList = accounts.map((a) => a.appId).join(", ");
       params.runtime.log(`✔ ${accounts.length} 个 QQ Bot 绑定成功！(AppID: ${idList})`);

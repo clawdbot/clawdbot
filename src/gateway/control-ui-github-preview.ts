@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ControlUiGitHubPreview } from "./control-ui-contract.js";
 // Same-origin GitHub metadata adapter for Control UI link previews.
 import {
@@ -44,7 +45,16 @@ function isValidOwner(value: string): boolean {
 }
 
 function isValidRepo(value: string): boolean {
-  return value !== "." && value !== ".." && /^[a-z\d_.-]{1,100}$/iu.test(value);
+  if (value.length < 1 || value.length > 100) {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  // GitHub accepts dot/underscore/hyphen edge names, including consecutive
+  // periods; only reject standalone path-confusion segments before visibility.
+  if (!/^[a-z\d._-]+$/iu.test(value) || lower === "." || lower === "..") {
+    return false;
+  }
+  return !lower.endsWith(".git") && !lower.endsWith(".atom");
 }
 
 export function parseControlUiGitHubPreviewTarget(
@@ -183,15 +193,23 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   }
   try {
     const url = new URL(raw);
+    const rawPathEnd = raw.search(/[?#]/u);
+    const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
     if (
       url.protocol !== "https:" ||
       url.hostname !== GITHUB_AVATAR_HOST ||
+      url.hash ||
       url.username ||
       url.password ||
-      url.port
+      url.port ||
+      rawPath.includes("..") ||
+      rawPath.includes("\\") ||
+      url.pathname.includes("..") ||
+      url.pathname.includes("\\")
     ) {
       return null;
     }
+    url.search = "";
     url.searchParams.set("s", "64");
     return url;
   } catch {
@@ -308,12 +326,6 @@ export function loadControlUiGitHubPreview(
     }),
   };
   previewCache.set(key, entry);
-  while (previewCache.size > CACHE_LIMIT) {
-    const oldestKey = previewCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      break;
-    }
-    previewCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(previewCache, CACHE_LIMIT);
   return entry.promise;
 }

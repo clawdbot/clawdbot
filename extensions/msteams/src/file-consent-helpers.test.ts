@@ -1,13 +1,7 @@
 // Msteams tests cover file consent helpers plugin behavior.
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
-import {
-  clearPendingUploads,
-  getPendingUpload,
-  getPendingUploadCount,
-  removePendingUpload,
-  storePendingUpload,
-} from "./pending-uploads.js";
 import * as pendingUploads from "./pending-uploads.js";
 
 describe("requiresFileConsent", () => {
@@ -194,10 +188,10 @@ describe("prepareFileConsentActivity", () => {
       conversationId: "conv456",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { description: string }
-    >;
+    const attachment = expectDefined(
+      (result.activity.attachments as Array<{ content: { description: string } }>)[0],
+      "default file-consent attachment",
+    );
     expect(attachment.content.description).toBe("File: document.docx");
   });
 
@@ -212,10 +206,10 @@ describe("prepareFileConsentActivity", () => {
       description: "Q4 Financial Report",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { description: string }
-    >;
+    const attachment = expectDefined(
+      (result.activity.attachments as Array<{ content: { description: string } }>)[0],
+      "described file-consent attachment",
+    );
     expect(attachment.content.description).toBe("Q4 Financial Report");
   });
 
@@ -229,10 +223,14 @@ describe("prepareFileConsentActivity", () => {
       conversationId: "conv000",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { acceptContext: { uploadId: string } }
-    >;
+    const attachment = expectDefined(
+      (
+        result.activity.attachments as Array<{
+          content: { acceptContext: { uploadId: string } };
+        }>
+      )[0],
+      "file-consent upload attachment",
+    );
     expect(attachment.content.acceptContext.uploadId).toBe(mockUploadId);
   });
 
@@ -247,83 +245,5 @@ describe("prepareFileConsentActivity", () => {
 
     expect(result.uploadId).toBe(mockUploadId);
     expect(result.activity.type).toBe("message");
-  });
-});
-
-describe("msteams pending uploads", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    clearPendingUploads();
-  });
-
-  afterEach(() => {
-    clearPendingUploads();
-    vi.useRealTimers();
-  });
-
-  it("stores uploads, exposes them by id, and tracks count", () => {
-    const id = storePendingUpload({
-      buffer: Buffer.from("hello"),
-      filename: "hello.txt",
-      contentType: "text/plain",
-      conversationId: "conv-1",
-    });
-
-    expect(getPendingUploadCount()).toBe(1);
-    const pendingUpload = getPendingUpload(id);
-    expect(pendingUpload).toEqual({
-      id,
-      buffer: Buffer.from("hello"),
-      filename: "hello.txt",
-      contentType: "text/plain",
-      conversationId: "conv-1",
-      createdAt: pendingUpload?.createdAt,
-    });
-    expect(typeof pendingUpload?.createdAt).toBe("number");
-  });
-
-  it("removes uploads explicitly and ignores empty ids", () => {
-    const id = storePendingUpload({
-      buffer: Buffer.from("hello"),
-      filename: "hello.txt",
-      conversationId: "conv-1",
-    });
-
-    removePendingUpload(undefined);
-    expect(getPendingUploadCount()).toBe(1);
-
-    removePendingUpload(id);
-    expect(getPendingUpload(id)).toBeUndefined();
-    expect(getPendingUploadCount()).toBe(0);
-  });
-
-  it("expires uploads by ttl even if the timeout callback has not been observed yet", () => {
-    const id = storePendingUpload({
-      buffer: Buffer.from("hello"),
-      filename: "hello.txt",
-      conversationId: "conv-1",
-    });
-
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    expect(getPendingUpload(id)).toBeUndefined();
-    expect(getPendingUploadCount()).toBe(0);
-  });
-
-  it("clears all uploads for test cleanup", () => {
-    storePendingUpload({
-      buffer: Buffer.from("a"),
-      filename: "a.txt",
-      conversationId: "conv-1",
-    });
-    storePendingUpload({
-      buffer: Buffer.from("b"),
-      filename: "b.txt",
-      conversationId: "conv-2",
-    });
-
-    clearPendingUploads();
-
-    expect(getPendingUploadCount()).toBe(0);
   });
 });

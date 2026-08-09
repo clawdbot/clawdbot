@@ -4,7 +4,6 @@
     { "path": "./tsconfig.core.projects.json" },
     { "path": "./tsconfig.extensions.projects.json" },
     { "path": "./tsconfig.scripts.json" },
-    { "path": "./tsconfig.strict-ratchet.json" },
     { "path": "./test/tsconfig/tsconfig.test.root.json" }
   ]
 }

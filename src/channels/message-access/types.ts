@@ -1,3 +1,4 @@
+import type { ResolvedChannelImplicitMentions } from "../../config/implicit-mentions.js";
 /**
  * Internal channel ingress access graph types.
  *
@@ -20,7 +21,7 @@ export type ChannelIngressIdentifierKind =
   | `plugin:${string}`;
 
 /** Public, redacted identifier material that can participate in allowlist matching. */
-export type MatchableIdentifier = {
+type MatchableIdentifier = {
   opaqueId: string;
   kind: ChannelIngressIdentifierKind;
   dangerous?: boolean;
@@ -38,7 +39,7 @@ export type InternalChannelIngressSubject = {
 };
 
 /** Public, redacted form of a normalized allowlist entry. */
-export type ChannelIngressNormalizedEntry = {
+type ChannelIngressNormalizedEntry = {
   opaqueEntryId: string;
   kind: ChannelIngressIdentifierKind;
   dangerous?: boolean;
@@ -63,17 +64,14 @@ export type RedactedIngressMatch = {
 };
 
 /** Public normalization result for a set of allowlist entries. */
-export type ChannelIngressNormalizeResult = {
+type ChannelIngressNormalizeResult = {
   matchable: ChannelIngressNormalizedEntry[];
   invalid: RedactedIngressEntryDiagnostic[];
   disabled: RedactedIngressEntryDiagnostic[];
 };
 
 /** Internal normalization result with raw comparable entry values retained. */
-export type InternalChannelIngressNormalizeResult = Omit<
-  ChannelIngressNormalizeResult,
-  "matchable"
-> & {
+type InternalChannelIngressNormalizeResult = Omit<ChannelIngressNormalizeResult, "matchable"> & {
   matchable: InternalNormalizedEntry[];
 };
 
@@ -145,18 +143,13 @@ export type RedactedIngressAllowlistFacts = {
 };
 
 /** Route lookup state projected into the ingress access graph. */
-export type RouteGateState =
-  | "not-configured"
-  | "matched"
-  | "not-matched"
-  | "disabled"
-  | "lookup-failed";
+type RouteGateState = "not-configured" | "matched" | "not-matched" | "disabled" | "lookup-failed";
 
 /** How a matched route affects sender allowlist evaluation. */
 export type RouteSenderPolicy = "inherit" | "replace" | "deny-when-empty";
 
 /** Source list used when a route sender policy contributes sender entries. */
-export type RouteSenderAllowlistSource = "effective-dm" | "effective-group";
+type RouteSenderAllowlistSource = "effective-dm" | "effective-group";
 
 /** Raw route gate facts supplied by a channel-specific router. */
 export type RouteGateFacts = {
@@ -195,7 +188,7 @@ export type ChannelIngressEventInput = {
 };
 
 /** Redacted event facts exposed in decisions and access facts. */
-export type RedactedChannelIngressEvent = Omit<ChannelIngressEventInput, "originSubject"> & {
+type RedactedChannelIngressEvent = Omit<ChannelIngressEventInput, "originSubject"> & {
   hasOriginSubject: boolean;
   originSubjectMatched: boolean;
 };
@@ -236,6 +229,7 @@ export type ChannelIngressPolicyInput = {
   activation?: {
     requireMention: boolean;
     allowTextCommands: boolean;
+    implicitMentions?: ResolvedChannelImplicitMentions;
     allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
     order?: "before-sender" | "after-command";
   };
@@ -248,10 +242,10 @@ export type ChannelIngressPolicyInput = {
 };
 
 /** Ordered phase for a gate in the ingress graph. */
-export type IngressGatePhase = "route" | "sender" | "command" | "event" | "activation";
+type IngressGatePhase = "route" | "sender" | "command" | "event" | "activation";
 
 /** Gate kind used in the ingress graph and projected access facts. */
-export type IngressGateKind =
+type IngressGateKind =
   | "route"
   | "routeSender"
   | "dmSender"
@@ -264,7 +258,7 @@ export type IngressGateKind =
   | "mention";
 
 /** Effect produced by a gate when computing final ingress admission. */
-export type IngressGateEffect =
+type IngressGateEffect =
   | "allow"
   | "block-dispatch"
   | "block-command"
@@ -340,7 +334,7 @@ export type AccessGraphGate = {
 };
 
 /** Ordered graph of all evaluated ingress gates. */
-export type AccessGraph = {
+type AccessGraph = {
   gates: AccessGraphGate[];
 };
 
@@ -362,7 +356,7 @@ export type ChannelIngressState = {
 };
 
 /** Final runtime admission action for the inbound event. */
-export type ChannelIngressAdmission = "dispatch" | "observe" | "skip" | "drop" | "pairing-required";
+type ChannelIngressAdmission = "dispatch" | "observe" | "skip" | "drop" | "pairing-required";
 
 /** Final decision and graph for a resolved channel ingress event. */
 export type ChannelIngressDecision = {

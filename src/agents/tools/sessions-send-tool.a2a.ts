@@ -7,7 +7,6 @@ import crypto from "node:crypto";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -89,7 +88,7 @@ export async function runSessionsSendA2AFlow(params: {
   announceTimeoutMs: number;
   maxPingPongTurns: number;
   requesterSessionKey?: string;
-  requesterChannel?: GatewayMessageChannel;
+  requesterChannel?: string;
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
@@ -258,7 +257,7 @@ export async function runSessionsSendA2AFlow(params: {
   }
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsSendA2ADeps = overrides
       ? {
@@ -268,4 +267,9 @@ export const testing = {
       : defaultSessionsSendA2ADeps;
   },
 };
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsSendA2ATestApi")] = {
+    testing,
+  };
+}

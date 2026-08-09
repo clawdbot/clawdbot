@@ -9,7 +9,6 @@ import type {
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
   ImageGenerationOutputFormat,
-  ImageGenerationProvider,
   ImageGenerationProviderOptions,
   ImageGenerationQuality,
   ImageGenerationResolution,
@@ -50,9 +49,3 @@ export type GenerateImageRuntimeResult = {
   metadata?: Record<string, unknown>;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
 };
-
-export type ListRuntimeImageGenerationProvidersParams = {
-  config?: OpenClawConfig;
-};
-
-export type RuntimeImageGenerationProvider = ImageGenerationProvider;

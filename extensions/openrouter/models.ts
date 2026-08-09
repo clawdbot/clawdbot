@@ -21,14 +21,12 @@ const OPENROUTER_SHORT_TO_API_MODEL_ID = new Map([
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
 ]);
 
-export function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
+export function normalizeOpenRouterModelFamilyId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.startsWith(OPENROUTER_MODEL_PREFIX)
-    ? normalized.slice(OPENROUTER_MODEL_PREFIX.length)
-    : normalized;
+  return normalized.replace(/^openrouter\//, "").replace(/^~/, "");
 }
 
 export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefined {
@@ -50,17 +48,14 @@ export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefi
 }
 
 export function isOpenRouterMistralModelId(modelId: unknown): boolean {
-  const normalized = normalizeOpenRouterModelId(modelId);
+  const normalized = normalizeOpenRouterModelFamilyId(modelId);
   return Boolean(
     normalized && OPENROUTER_MISTRAL_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix)),
   );
 }
 
 export function isOpenRouterDeepSeekV4ModelId(modelId: unknown): boolean {
-  const normalized = normalizeOpenRouterModelId(modelId);
-  if (!normalized?.startsWith("deepseek/")) {
-    return false;
-  }
-  const deepSeekModelId = normalized.slice("deepseek/".length).split(":", 1)[0];
-  return deepSeekModelId === "deepseek-v4-flash" || deepSeekModelId === "deepseek-v4-pro";
+  return /^deepseek\/deepseek-v4-(?:flash|pro)(?:-\d{4,8})?(?::[^/]*)?$/.test(
+    normalizeOpenRouterModelFamilyId(modelId) ?? "",
+  );
 }

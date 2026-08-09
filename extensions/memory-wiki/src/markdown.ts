@@ -4,6 +4,7 @@ import path from "node:path";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   asFiniteNumber,
+  asNullableRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
@@ -109,6 +110,7 @@ export type WikiPageSummary = {
   sourcePath?: string;
   bridgeRelativePath?: string;
   bridgeWorkspaceDir?: string;
+  bridgeAgentIds: string[];
   unsafeLocalConfiguredPath?: string;
   unsafeLocalRelativePath?: string;
   lastRefreshedAt?: string;
@@ -199,15 +201,19 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const parsed = YAML.parse(match[1]) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const frontmatter = match[1];
+  if (frontmatter === undefined) {
+    return { hasFrontmatter: false, frontmatter: {}, body: content };
+  }
+  const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
+  if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
     // so an edit cannot silently replace scalar or sequence frontmatter.
     throw new TypeError("Wiki frontmatter must be a YAML mapping");
   }
   return {
     hasFrontmatter: true,
-    frontmatter: parsed as Record<string, unknown>,
+    frontmatter: parsed,
     body: content.slice(match[0].length),
   };
 }
@@ -230,10 +236,10 @@ export function normalizeSourceIds(value: unknown): string[] {
 }
 
 function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asNullableRecord(value);
+  if (!record) {
     return null;
   }
-  const record = value as Record<string, unknown>;
   const kind = normalizeOptionalString(record.kind);
   const sourceId = normalizeOptionalString(record.sourceId);
   const evidencePath = normalizeOptionalString(record.path);
@@ -241,9 +247,8 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   const note = normalizeOptionalString(record.note);
   const updatedAt = normalizeOptionalString(record.updatedAt);
   const privacyTier = normalizeOptionalString(record.privacyTier);
-  const weight =
-    typeof record.weight === "number" && Number.isFinite(record.weight) ? record.weight : undefined;
-  const confidence = normalizeOptionalNumber(record.confidence);
+  const weight = asFiniteNumber(record.weight);
+  const confidence = asFiniteNumber(record.confidence);
   if (
     !kind &&
     !sourceId &&
@@ -275,10 +280,10 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
     return [];
   }
   return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    const record = asNullableRecord(entry);
+    if (!record) {
       return [];
     }
-    const record = entry as Record<string, unknown>;
     const text = normalizeOptionalString(record.text);
     if (!text) {
       return [];
@@ -289,60 +294,46 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
           return normalized ? [normalized] : [];
         })
       : [];
-    const confidence =
-      typeof record.confidence === "number" && Number.isFinite(record.confidence)
-        ? record.confidence
-        : undefined;
+    const confidence = asFiniteNumber(record.confidence);
+    const status = normalizeOptionalString(record.status);
+    const updatedAt = normalizeOptionalString(record.updatedAt);
     return [
       {
         ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
         text,
-        ...(normalizeOptionalString(record.status)
-          ? { status: normalizeOptionalString(record.status) }
-          : {}),
+        ...(status ? { status } : {}),
         ...(confidence !== undefined ? { confidence } : {}),
         evidence,
-        ...(normalizeOptionalString(record.updatedAt)
-          ? { updatedAt: normalizeOptionalString(record.updatedAt) }
-          : {}),
+        ...(updatedAt ? { updatedAt } : {}),
       },
     ];
   });
 }
 
-function normalizeOptionalNumber(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
-
 function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asNullableRecord(value);
+  if (!record) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
+  const canonicalId = normalizeOptionalString(record.canonicalId);
+  const timezone = normalizeOptionalString(record.timezone);
+  const confidence = asFiniteNumber(record.confidence);
+  const privacyTier = normalizeOptionalString(record.privacyTier);
+  const lastRefreshedAt = normalizeOptionalString(record.lastRefreshedAt);
   const card: WikiPersonCard = {
-    ...(normalizeOptionalString(record.canonicalId)
-      ? { canonicalId: normalizeOptionalString(record.canonicalId) }
-      : {}),
+    ...(canonicalId ? { canonicalId } : {}),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
     emails: normalizeSingleOrTrimmedStringList(record.emails ?? record.email),
-    ...(normalizeOptionalString(record.timezone)
-      ? { timezone: normalizeOptionalString(record.timezone) }
-      : {}),
+    ...(timezone ? { timezone } : {}),
     ...(normalizeOptionalString(record.lane) ? { lane: normalizeOptionalString(record.lane) } : {}),
     askFor: normalizeSingleOrTrimmedStringList(record.askFor),
     avoidAskingFor: normalizeSingleOrTrimmedStringList(record.avoidAskingFor),
     bestUsedFor: normalizeSingleOrTrimmedStringList(record.bestUsedFor),
     notEnoughFor: normalizeSingleOrTrimmedStringList(record.notEnoughFor),
-    ...(normalizeOptionalNumber(record.confidence) !== undefined
-      ? { confidence: normalizeOptionalNumber(record.confidence) }
-      : {}),
-    ...(normalizeOptionalString(record.privacyTier)
-      ? { privacyTier: normalizeOptionalString(record.privacyTier) }
-      : {}),
-    ...(normalizeOptionalString(record.lastRefreshedAt)
-      ? { lastRefreshedAt: normalizeOptionalString(record.lastRefreshedAt) }
-      : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(privacyTier ? { privacyTier } : {}),
+    ...(lastRefreshedAt ? { lastRefreshedAt } : {}),
   };
   const hasAnyValue =
     Boolean(
@@ -364,10 +355,12 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
     return [];
   }
   return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    const record = asNullableRecord(entry);
+    if (!record) {
       return [];
     }
-    const record = entry as Record<string, unknown>;
+    const weight = asFiniteNumber(record.weight);
+    const confidence = asFiniteNumber(record.confidence);
     const relationship: WikiRelationship = {
       ...(normalizeOptionalString(record.targetId)
         ? { targetId: normalizeOptionalString(record.targetId) }
@@ -381,12 +374,8 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
       ...(normalizeOptionalString(record.kind)
         ? { kind: normalizeOptionalString(record.kind) }
         : {}),
-      ...(normalizeOptionalNumber(record.weight) !== undefined
-        ? { weight: normalizeOptionalNumber(record.weight) }
-        : {}),
-      ...(normalizeOptionalNumber(record.confidence) !== undefined
-        ? { confidence: normalizeOptionalNumber(record.confidence) }
-        : {}),
+      ...(weight !== undefined ? { weight } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
       ...(normalizeOptionalString(record.evidenceKind)
         ? { evidenceKind: normalizeOptionalString(record.evidenceKind) }
         : {}),
@@ -441,7 +430,7 @@ function maskMarkdownCode(markdown: string): string {
   return masked.join("");
 }
 
-export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
@@ -525,14 +514,34 @@ function afterSourceContentFence(page: string): number {
 function findNotesHumanBlock(page: string): { start: number; end: number } | null {
   const searchFrom = afterSourceContentFence(page);
   const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  if (start === -1) {
-    return null;
-  }
   const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
-  if (endMarker < start) {
-    return null;
+  if (start === -1 && endMarker < searchFrom) {
+    const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
+      page.slice(searchFrom),
+    );
+    if (!notesSection?.[1]?.trim()) {
+      return null;
+    }
+  }
+  if (start === -1 || endMarker < start) {
+    const missingMarker = start === -1 ? HUMAN_START_MARKER : HUMAN_END_MARKER;
+    throw new Error(
+      `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
+    );
   }
   return { start, end: endMarker + HUMAN_END_MARKER.length };
+}
+
+export function extractHumanNotesBlock(page: string): string | null {
+  const block = findNotesHumanBlock(page);
+  if (!block) {
+    return null;
+  }
+  const notes = page.slice(
+    block.start + HUMAN_START_MARKER.length,
+    block.end - HUMAN_END_MARKER.length,
+  );
+  return notes.trim() ? page.slice(block.start, block.end) : null;
 }
 
 export function preserveHumanNotesBlock(rendered: string, existing: string): string {
@@ -719,11 +728,7 @@ export function scanWikiPageSummary(params: {
       claims: normalizeWikiClaims(parsed.frontmatter.claims),
       contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
       questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
-      confidence:
-        typeof parsed.frontmatter.confidence === "number" &&
-        Number.isFinite(parsed.frontmatter.confidence)
-          ? parsed.frontmatter.confidence
-          : undefined,
+      confidence: asFiniteNumber(parsed.frontmatter.confidence),
       privacyTier: normalizeOptionalString(parsed.frontmatter.privacyTier),
       personCard: normalizeWikiPersonCard(parsed.frontmatter.personCard),
       relationships: normalizeWikiRelationships(parsed.frontmatter.relationships),
@@ -737,6 +742,7 @@ export function scanWikiPageSummary(params: {
       sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
       bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
       bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
+      bridgeAgentIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bridgeAgentIds),
       unsafeLocalConfiguredPath: normalizeOptionalString(
         parsed.frontmatter.unsafeLocalConfiguredPath,
       ),
@@ -755,3 +761,4 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

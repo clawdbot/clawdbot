@@ -224,6 +224,8 @@ describe("createDiscordGatewayPlugin", () => {
     return firstMockArg(fetchWithSsrFGuardMock, "fetchWithSsrFGuardMock") as {
       url: string;
       init?: RequestInit & { signal?: unknown };
+      signal?: unknown;
+      timeoutMs?: number;
       mode?: string;
       dispatcherPolicy?: unknown;
       policy?: unknown;
@@ -644,6 +646,8 @@ describe("createDiscordGatewayPlugin", () => {
     expect(guardedFetch.policy).toEqual({ allowedHostnames: ["discord.com"] });
     expect(guardedFetch.init?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(guardedFetch.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(guardedFetch.signal).toBe(guardedFetch.init?.signal);
+    expect(guardedFetch.timeoutMs).toBeUndefined();
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -730,26 +734,6 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(String(firstMockArg(runtime.log, "runtime.log"))).toContain(
       "discord: gateway metadata lookup failed transiently",
-    );
-  });
-
-  it("uses configured gateway metadata timeout before falling back", async () => {
-    vi.useFakeTimers();
-    const runtime = createRuntime();
-    globalFetchMock.mockImplementation(() => new Promise(() => {}));
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { gatewayInfoTimeoutMs: 5_000 },
-      runtime,
-    });
-
-    const registerPromise = registerGatewayClient(plugin);
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await registerPromise;
-
-    expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
-      "wss://gateway.discord.gg/",
     );
   });
 

@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runInstallPolicyMock = vi.fn();
 const findBlockedManifestDependenciesMock = vi.fn();
@@ -41,7 +44,15 @@ const {
   evaluateSkillInstallPolicyRuntime,
   preflightPluginNpmInstallPolicyRuntime,
   scanBundleInstallSourceRuntime,
+  scanFileInstallSourceRuntime,
+  scanInstalledPackageDependencyTreeRuntime,
 } = await import("./install-security-scan.runtime.js");
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
+});
 
 function expectOnlyOperatorPolicyRan() {
   expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
@@ -53,17 +64,17 @@ function expectOnlyOperatorPolicyRan() {
   expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
 }
 
-describe("install security scan official bypass", () => {
-  beforeEach(() => {
-    runInstallPolicyMock.mockReset();
-    findBlockedManifestDependenciesMock.mockReset();
-    findBlockedNodeModulesDirectoryMock.mockReset();
-    findBlockedNodeModulesFileAliasMock.mockReset();
-    findBlockedPackageDirectoryInPathMock.mockReset();
-    findBlockedPackageFileAliasInPathMock.mockReset();
-    getGlobalHookRunnerMock.mockReset();
-  });
+beforeEach(() => {
+  runInstallPolicyMock.mockReset();
+  findBlockedManifestDependenciesMock.mockReset();
+  findBlockedNodeModulesDirectoryMock.mockReset();
+  findBlockedNodeModulesFileAliasMock.mockReset();
+  findBlockedPackageDirectoryInPathMock.mockReset();
+  findBlockedPackageFileAliasInPathMock.mockReset();
+  getGlobalHookRunnerMock.mockReset();
+});
 
+describe("install security scan official bypass", () => {
   it("bypasses plugin install friction for bundled OpenClaw sources", async () => {
     const result = await scanBundleInstallSourceRuntime({
       logger: {},
@@ -172,5 +183,173 @@ describe("install security scan official bypass", () => {
       },
     });
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("installed dependency tree scan", () => {
+  it("accepts a managed host link declared as a runtime dependency", async () => {
+    findBlockedManifestDependenciesMock.mockReturnValue([]);
+    const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-scan-"));
+    tempDirs.push(npmRoot);
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    const hostLink = path.join(packageDir, "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(hostLink), { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-plugin",
+        dependencies: { openclaw: "2026.7.1" },
+      }),
+      "utf8",
+    );
+    await fs.symlink(process.cwd(), hostLink, "junction");
+
+    const result = await scanInstalledPackageDependencyTreeRuntime({
+      allowManagedNpmRootPackagePeerSymlinks: true,
+      dependencyScanRootDir: npmRoot,
+      logger: {},
+      packageDir,
+      pluginId: "runtime-plugin",
+    });
+
+    expect(result).toBeUndefined();
+    expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an openclaw dependency symlink that does not target the trusted host", async () => {
+    findBlockedManifestDependenciesMock.mockReturnValue([]);
+    const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-scan-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-outside-"));
+    tempDirs.push(npmRoot, outsideRoot);
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    const hostLink = path.join(packageDir, "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(hostLink), { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-plugin",
+        dependencies: { openclaw: "2026.7.1" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(outsideRoot, "package.json"), '{"name":"openclaw"}', "utf8");
+    await fs.symlink(outsideRoot, hostLink, "junction");
+
+    await expect(
+      scanInstalledPackageDependencyTreeRuntime({
+        allowManagedNpmRootPackagePeerSymlinks: true,
+        dependencyScanRootDir: npmRoot,
+        logger: {},
+        packageDir,
+        pluginId: "runtime-plugin",
+      }),
+    ).rejects.toThrow("installed dependency scan found package outside install root");
+  });
+});
+
+describe("legacy file install scan compatibility", () => {
+  it("preserves policy and hook metadata for published lazy install chunks", async () => {
+    const warnings: string[] = [];
+    const hasHooks = vi.fn().mockReturnValue(true);
+    const runBeforeInstall = vi.fn().mockResolvedValue(undefined);
+    getGlobalHookRunnerMock.mockReturnValue({ hasHooks, runBeforeInstall });
+    runInstallPolicyMock.mockResolvedValueOnce({
+      findings: [
+        {
+          ruleId: "registry-review",
+          severity: "warn",
+          message: "Registry requires review.",
+        },
+      ],
+    });
+
+    const result = await scanFileInstallSourceRuntime({
+      filePath: "/tmp/payload.js",
+      logger: { warn: (message) => warnings.push(message) },
+      mode: "update",
+      pluginId: "payload",
+      requestedSpecifier: "./payload.js",
+    });
+
+    expect(result).toBeUndefined();
+    expect(warnings).toEqual(["Install policy: Registry requires review."]);
+    expect(runInstallPolicyMock).toHaveBeenCalledWith({
+      config: undefined,
+      logger: expect.any(Object),
+      request: {
+        targetName: "payload",
+        targetType: "plugin",
+        sourcePath: "/tmp/payload.js",
+        sourcePathKind: "file",
+        source: { kind: "file", authority: "user", mutable: true, network: false },
+        origin: { type: "plugin-file" },
+        request: {
+          kind: "plugin-file",
+          mode: "update",
+          requestedSpecifier: "./payload.js",
+        },
+        plugin: {
+          contentType: "file",
+          pluginId: "payload",
+          extensions: ["payload.js"],
+        },
+      },
+    });
+    expect(hasHooks).toHaveBeenCalledWith("before_install");
+    expect(runBeforeInstall).toHaveBeenCalledWith(
+      {
+        targetName: "payload",
+        targetType: "plugin",
+        origin: "plugin-file",
+        sourcePath: "/tmp/payload.js",
+        sourcePathKind: "file",
+        request: {
+          kind: "plugin-file",
+          mode: "update",
+          requestedSpecifier: "./payload.js",
+        },
+        builtinScan: {
+          status: "ok",
+          scannedFiles: 0,
+          critical: 0,
+          warn: 0,
+          info: 0,
+          findings: [],
+        },
+        plugin: {
+          contentType: "file",
+          pluginId: "payload",
+          extensions: ["payload.js"],
+        },
+      },
+      {
+        origin: "plugin-file",
+        targetType: "plugin",
+        requestKind: "plugin-file",
+      },
+    );
+  });
+
+  it("returns operator policy blocks before invoking hooks", async () => {
+    runInstallPolicyMock.mockResolvedValueOnce({
+      blocked: {
+        code: "security_scan_blocked",
+        reason: "blocked by operator policy",
+      },
+    });
+
+    const result = await scanFileInstallSourceRuntime({
+      filePath: "/tmp/payload.js",
+      logger: {},
+      pluginId: "payload",
+    });
+
+    expect(result).toEqual({
+      blocked: {
+        code: "security_scan_blocked",
+        reason: "blocked by operator policy",
+      },
+    });
+    expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
   });
 });

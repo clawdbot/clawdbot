@@ -37,8 +37,3 @@ export function recordChannelBotPairLoopAndCheckSuppression(
     nowMs: params.nowMs,
   });
 }
-
-/** Clears channel bot-loop state for isolated tests. */
-export function clearChannelBotPairLoopGuardForTests(): void {
-  channelBotPairLoopGuard.clear();
-}

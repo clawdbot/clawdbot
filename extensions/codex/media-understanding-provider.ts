@@ -13,19 +13,17 @@ import type {
   StructuredExtractionRequest,
   StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import { CODEX_PROVIDER_ID, FALLBACK_CODEX_MODELS } from "./provider-catalog.js";
 import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
 } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
 
-const DEFAULT_CODEX_IMAGE_MODEL =
-  FALLBACK_CODEX_MODELS.find((model) => model.inputModalities.includes("image"))?.id ??
-  FALLBACK_CODEX_MODELS[0]?.id;
+const CODEX_MEDIA_PROVIDER_ID = "codex";
+const DEFAULT_CODEX_IMAGE_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_IMAGE_PROMPT = "Describe the image.";
 
-export type CodexMediaUnderstandingProviderOptions = CodexBoundedTurnOptions;
+type CodexMediaUnderstandingProviderOptions = CodexBoundedTurnOptions;
 
 /**
  * Builds the media-understanding provider that delegates image tasks to an
@@ -35,9 +33,9 @@ export function buildCodexMediaUnderstandingProvider(
   options: CodexMediaUnderstandingProviderOptions = {},
 ): MediaUnderstandingProvider {
   return {
-    id: CODEX_PROVIDER_ID,
+    id: CODEX_MEDIA_PROVIDER_ID,
     capabilities: ["image"],
-    ...(DEFAULT_CODEX_IMAGE_MODEL ? { defaultModels: { image: DEFAULT_CODEX_IMAGE_MODEL } } : {}),
+    defaultModels: { image: DEFAULT_CODEX_IMAGE_MODEL },
     describeImage: async (req) =>
       describeCodexImages(
         {
@@ -53,6 +51,7 @@ export function buildCodexMediaUnderstandingProvider(
           prompt: req.prompt,
           maxTokens: req.maxTokens,
           timeoutMs: req.timeoutMs,
+          ...(req.signal ? { signal: req.signal } : {}),
           profile: req.profile,
           preferredProfile: req.preferredProfile,
           authStore: req.authStore,
@@ -74,12 +73,14 @@ async function describeCodexImages(
   if (!model) {
     throw new Error("Codex image understanding requires model id.");
   }
+  req.signal?.throwIfAborted();
 
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
     profile: req.profile,
     timeoutMs: req.timeoutMs,
+    signal: req.signal,
     agentDir: req.agentDir,
     authProfileStore: req.authStore,
     options,
@@ -117,12 +118,14 @@ async function extractCodexStructured(
   if (!req.input.some((entry) => entry.type === "image")) {
     throw new Error("Codex structured extraction requires at least one image input.");
   }
+  req.signal?.throwIfAborted();
 
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
     profile: req.profile,
     timeoutMs: req.timeoutMs,
+    signal: req.signal,
     agentDir: req.agentDir,
     authProfileStore: req.authStore,
     options,

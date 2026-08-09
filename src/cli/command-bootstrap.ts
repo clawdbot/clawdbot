@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { CliPluginRegistryPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
+import { measureCliCommandStartup } from "./command-startup-timing.js";
 import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
 const configGuardModuleLoader = createLazyImportLoader(() => import("./program/config-guard.js"));
@@ -22,17 +23,28 @@ export async function ensureCliCommandBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   pluginRegistry?: CliPluginRegistryPolicy;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }) {
   if (!params.skipConfigGuard) {
-    const { ensureConfigReady } = await loadConfigGuardModule();
-    await ensureConfigReady({
-      runtime: params.runtime,
-      commandPath: params.commandPath,
-      ...(params.allowInvalid ? { allowInvalid: true } : {}),
-      ...(params.beforeStateMigrations
-        ? { beforeStateMigrations: params.beforeStateMigrations }
-        : {}),
-      ...(params.suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+    await measureCliCommandStartup("config-ready", async () => {
+      const { ensureConfigReady } = await loadConfigGuardModule();
+      await ensureConfigReady({
+        runtime: params.runtime,
+        commandPath: params.commandPath,
+        measure: (stage, run) => measureCliCommandStartup(stage, run),
+        ...(params.allowInvalid ? { allowInvalid: true } : {}),
+        ...(params.beforeStateMigrations
+          ? { beforeStateMigrations: params.beforeStateMigrations }
+          : {}),
+        ...(params.suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+        ...(params.skipPristineStartupStateMigrations
+          ? { skipPristineStartupStateMigrations: true }
+          : {}),
+        ...(params.skipPristineCoreStateMigrations
+          ? { skipPristineCoreStateMigrations: true }
+          : {}),
+      });
     });
   }
   if (!params.loadPlugins) {
@@ -40,8 +52,10 @@ export async function ensureCliCommandBootstrap(params: {
   }
   const pluginRegistryLoadPolicy =
     params.pluginRegistry ?? resolveCliCommandPathPolicy(params.commandPath).pluginRegistry;
-  await ensureCliPluginRegistryLoaded({
-    scope: pluginRegistryLoadPolicy.scope,
-    routeLogsToStderr: params.suppressDoctorStdout,
-  });
+  await measureCliCommandStartup("plugin-registry", () =>
+    ensureCliPluginRegistryLoaded({
+      scope: pluginRegistryLoadPolicy.scope,
+      routeLogsToStderr: params.suppressDoctorStdout,
+    }),
+  );
 }

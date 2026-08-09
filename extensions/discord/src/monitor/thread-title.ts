@@ -140,7 +140,7 @@ function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(100, Math.floor(timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS));
 }
 
-export function normalizeGeneratedThreadTitle(raw: string): string {
+function normalizeGeneratedThreadTitle(raw: string): string {
   const lines = raw.replace(/\r/g, "").split("\n");
   let firstLine = "";
   for (const line of lines) {

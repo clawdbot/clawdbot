@@ -1,5 +1,23 @@
 #!/usr/bin/env node
 export function isReleaseBefore(version: unknown, minimum: unknown): boolean;
+export function resolveScenarioConfigSteps(scenario: string): Array<{
+  id: string;
+  intent: string;
+  argv: string[];
+}>;
+export function resolveUpgradeSurvivorConfigSteps(scenario?: string): Array<{
+  id: string;
+  intent: string;
+  argv: string[];
+}>;
+export function resolveUpgradeSurvivorConfigStepsForBaseline(
+  scenario?: string,
+  baselineVersion?: string | null,
+): Array<{
+  id: string;
+  intent: string;
+  argv: string[];
+}>;
 export function resolveUpgradeSurvivorOpenClawCommand(
   argv: unknown,
   params?: Record<string, unknown>,

@@ -1,9 +1,14 @@
 // Memory Host SDK module implements embeddings debug behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-// Lightweight stderr debug logging for memory embedding internals.
+// Lightweight debug logging for memory embedding internals.
 
-const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
+const normalizedDebugEmbeddings = normalizeLowercaseStringOrEmpty(
+  process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS,
+);
+const debugEmbeddings =
+  parseBoolean(normalizedDebugEmbeddings) ?? ["1", "on", "yes"].includes(normalizedDebugEmbeddings);
 
 /** Write embedding debug metadata when OPENCLAW_DEBUG_MEMORY_EMBEDDINGS is enabled. */
 export function debugEmbeddingsLog(message: string, meta?: Record<string, unknown>): void {
@@ -11,18 +16,5 @@ export function debugEmbeddingsLog(message: string, meta?: Record<string, unknow
     return;
   }
   const suffix = meta ? ` ${JSON.stringify(meta)}` : "";
-  process.stderr.write(`${message}${suffix}\n`);
-}
-
-/** Parse common truthy env values for debug toggles. */
-function isTruthyEnvValue(value?: string): boolean {
-  switch (normalizeLowercaseStringOrEmpty(value)) {
-    case "1":
-    case "on":
-    case "true":
-    case "yes":
-      return true;
-    default:
-      return false;
-  }
+  console.warn(`${message}${suffix}`);
 }

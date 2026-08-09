@@ -13,6 +13,7 @@ import {
 } from "./message-action-runner.test-helpers.js";
 
 const emptyConfig = {} as OpenClawConfig;
+const portableLocation = { latitude: 48.858844, longitude: 2.294351 };
 
 describe("runMessageAction send validation", () => {
   beforeEach(() => {
@@ -87,6 +88,76 @@ describe("runMessageAction send validation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it("allows send when only a portable location is provided", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        location: { latitude: 48.858844, longitude: 2.294351 },
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it.each([
+    { name: "text", extra: { message: "caption" } },
+    { name: "media", extra: { mediaUrl: "https://example.com/photo.jpg" } },
+  ])(
+    "rejects location sends mixed with $name before cross-context decoration",
+    async ({ extra }) => {
+      await expect(
+        runDrySend({
+          cfg: workspaceConfig,
+          actionParams: {
+            channel: "workspace",
+            target: "channel:C99999999",
+            location: { latitude: 48.858844, longitude: 2.294351 },
+            ...extra,
+          },
+          toolContext: {
+            currentChannelId: "C12345678",
+            currentChannelProvider: "workspace",
+          },
+        }),
+      ).rejects.toThrow(/cannot be combined/i);
+    },
+  );
+
+  it.each([
+    { name: "text", content: { message: "hello" } },
+    { name: "image", content: { image: "https://example.com/photo.jpg" } },
+    { name: "buffer media", content: { buffer: "aGVsbG8=", filename: "hello.txt" } },
+  ])("repairs incidental location for model-authored $name sends", async ({ content }) => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      actionOrigin: "message-tool",
+      params: {
+        channel: "workspace",
+        target: "channel:C99999999",
+        ...content,
+        location: portableLocation,
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      action: "send",
+      normalization: { locationOmitted: true },
+    });
+    expect(result.kind === "send" ? result.payload : undefined).not.toMatchObject({
+      location: expect.anything(),
+    });
   });
 
   it("uses the current internal UI source as the message-tool-only send sink", async () => {
@@ -433,6 +504,39 @@ describe("runMessageAction send validation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it.each(["", " \t\n"])(
+    "treats blank shared-schema event location %j as omitted on send",
+    async (location) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello",
+          location,
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      });
+
+      expect(result.kind).toBe("send");
+    },
+  );
+
+  it("keeps rejecting a non-empty event location string on send", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello",
+          location: "Main stage",
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow("location must be an object");
   });
 });
 

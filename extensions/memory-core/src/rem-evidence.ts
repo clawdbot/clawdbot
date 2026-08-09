@@ -380,7 +380,7 @@ function summarizeSection(
 
 function compactCandidateTitle(title: string): string {
   let compact = sanitizeSectionTitle(title)
-    .replace(/\s*\((?:via:|from qmd \+ memory|this session)[^)]+\)\s*/gi, " ")
+    .replace(/\s*\((?:via:|this session)[^)]+\)\s*/gi, " ")
     .replace(
       /\s*[—-]\s*(?:research results.*|in progress.*|working.*|installed.*|booked.*|proposed.*|clarified.*|candidate.*|fixes.*|updates?.*)$/i,
       "",
@@ -614,8 +614,13 @@ function splitSubjectLeadClaim(text: string): string[] {
   if (!match?.groups) {
     return [text];
   }
-  const subject = normalizeWhitespace(match.groups.subject);
-  const rest = normalizeWhitespace(match.groups.rest);
+  const rawSubject = match.groups.subject;
+  const rawRest = match.groups.rest;
+  if (rawSubject === undefined || rawRest === undefined) {
+    return [text];
+  }
+  const subject = normalizeWhitespace(rawSubject);
+  const rest = normalizeWhitespace(rawRest);
   if (!subject || !rest) {
     return [text];
   }
@@ -1093,3 +1098,4 @@ export async function previewGroundedRemMarkdown(params: {
     files: previews,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

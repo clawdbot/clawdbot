@@ -18,10 +18,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   listProfilesForProvider,
 }));
 
-import {
-  defaultQaRuntimeModelForMode,
-  resolveQaPreferredLiveModel,
-} from "./model-selection.runtime.js";
+import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 
 describe("qa model selection runtime", () => {
   beforeEach(() => {
@@ -36,7 +33,6 @@ describe("qa model selection runtime", () => {
   it("keeps the OpenAI live default when an API key is configured", () => {
     resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
 
-    expect(resolveQaPreferredLiveModel()).toBeUndefined();
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
@@ -51,7 +47,6 @@ describe("qa model selection runtime", () => {
       },
     });
 
-    expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.6-luna");
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
     expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
       readOnly: true,
@@ -70,7 +65,6 @@ describe("qa model selection runtime", () => {
       },
     });
 
-    expect(resolveQaPreferredLiveModel()).toBeUndefined();
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
   });
 

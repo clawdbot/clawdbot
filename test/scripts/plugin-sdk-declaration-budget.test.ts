@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
   evaluatePluginSdkDeclarationBudget,
   isPrivateQaPluginSdkBuild,
 } from "../../scripts/lib/plugin-sdk-declaration-budget.mjs";
@@ -14,48 +15,61 @@ describe("plugin SDK declaration budget", () => {
   });
 
   it("enforces the publication budget at its exact boundary", () => {
+    const budgetBytes =
+      MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES + PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES;
     expect(
       evaluatePluginSdkDeclarationBudget({
         buildPrivateQa: false,
-        declarationBytes: MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+        declarationBytes: budgetBytes,
       }),
     ).toEqual({
-      budgetBytes: MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+      budgetBytes,
       budgetKind: "public",
+      ratchetBytes: MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
       shouldFail: false,
+      varianceBytes: PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
     });
     expect(
       evaluatePluginSdkDeclarationBudget({
         buildPrivateQa: false,
-        declarationBytes: MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES + 1,
+        declarationBytes: budgetBytes + 1,
       }),
     ).toEqual({
-      budgetBytes: MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+      budgetBytes,
       budgetKind: "public",
+      ratchetBytes: MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
       shouldFail: true,
+      varianceBytes: PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
     });
   });
 
   it("tracks private-build public-entry chunk growth under a separate budget", () => {
+    const budgetBytes =
+      MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES +
+      PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES;
     expect(
       evaluatePluginSdkDeclarationBudget({
         buildPrivateQa: true,
-        declarationBytes: MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+        declarationBytes: budgetBytes,
       }),
     ).toEqual({
-      budgetBytes: MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+      budgetBytes,
       budgetKind: "private-qa-public-entry",
+      ratchetBytes: MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
       shouldFail: false,
+      varianceBytes: PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
     });
     expect(
       evaluatePluginSdkDeclarationBudget({
         buildPrivateQa: true,
-        declarationBytes: MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES + 1,
+        declarationBytes: budgetBytes + 1,
       }),
     ).toEqual({
-      budgetBytes: MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+      budgetBytes,
       budgetKind: "private-qa-public-entry",
+      ratchetBytes: MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
       shouldFail: true,
+      varianceBytes: PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
     });
   });
 });

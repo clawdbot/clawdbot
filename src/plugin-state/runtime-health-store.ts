@@ -19,7 +19,7 @@ export type RuntimeHealthRecordEnvelope = {
 // PID) can never match records written by its predecessor.
 const currentProcessToken = randomUUID();
 
-export type RuntimeHealthStoreOptions<T extends RuntimeHealthRecordEnvelope> = {
+type RuntimeHealthStoreOptions<T extends RuntimeHealthRecordEnvelope> = {
   ownerId: `core:${string}`;
   namespace: string;
   maxEntries: number;
@@ -33,7 +33,7 @@ export type RuntimeHealthStoreOptions<T extends RuntimeHealthRecordEnvelope> = {
   pick: "earliest" | "latest";
 };
 
-export type RuntimeHealthStore<T extends RuntimeHealthRecordEnvelope> = {
+type RuntimeHealthStore<T extends RuntimeHealthRecordEnvelope> = {
   /** Persists a record under the key, overwriting any prior value. */
   register(key: string, record: T): void;
   /** One record per display group, restricted to live recorder processes. */

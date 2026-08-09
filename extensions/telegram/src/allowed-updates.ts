@@ -3,7 +3,7 @@ import { API_CONSTANTS } from "grammy";
 
 type TelegramUpdateType = (typeof API_CONSTANTS.ALL_UPDATE_TYPES)[number];
 
-export const DEFAULT_TELEGRAM_UPDATE_TYPES: ReadonlyArray<TelegramUpdateType> =
+const DEFAULT_TELEGRAM_UPDATE_TYPES: ReadonlyArray<TelegramUpdateType> =
   API_CONSTANTS.DEFAULT_UPDATE_TYPES;
 
 export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateType> {

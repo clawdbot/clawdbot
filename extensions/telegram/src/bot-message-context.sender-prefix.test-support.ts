@@ -1,10 +1,16 @@
 // Telegram plugin module implements bot message context.sender prefix support behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
-import {
-  isTelegramForumServiceMessage,
-  TELEGRAM_FORUM_SERVICE_FIELDS,
-} from "./forum-service-message.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+
+const TELEGRAM_FORUM_SERVICE_FIELDS = [
+  "forum_topic_created",
+  "forum_topic_edited",
+  "forum_topic_closed",
+  "forum_topic_reopened",
+  "general_forum_topic_hidden",
+  "general_forum_topic_unhidden",
+] as const;
 
 describe("isTelegramForumServiceMessage", () => {
   it("returns true for any Telegram forum service field", () => {

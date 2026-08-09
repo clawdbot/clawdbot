@@ -1,0 +1,22 @@
+title: Matrix reactions do not trigger a fresh bot reply
+scenario:
+  id: matrix-reaction-not-a-reply
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-send-read-edit-delete
+  execution:
+    kind: flow
+    channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Posts native reaction state against a fresh canary reply and cannot inherit a shared Matrix session.
+    timeoutMs: 8000
+    retryCount: 0
+    config:
+      matrixRequireCanary: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-reaction.js
+  call: runReactionNotAReplyScenario
+  args:
+    - expr: "scenarioContext"

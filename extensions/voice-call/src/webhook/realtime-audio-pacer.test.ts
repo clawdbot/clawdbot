@@ -1,11 +1,8 @@
 // Voice Call tests cover realtime audio pacer plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  RealtimeAudioPacer,
-  RealtimeMulawSpeechStartDetector,
-  calculateMulawRms,
-  type RealtimeAudioSerializer,
-} from "./realtime-audio-pacer.js";
+import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+
+type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[0]["serializer"];
 
 function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
   return {
@@ -21,6 +18,27 @@ function createTelnyxSerializer(): RealtimeAudioSerializer {
     clear: () => JSON.stringify({ event: "clear" }),
     mark: (name) => JSON.stringify({ event: "mark", mark: { name } }),
   };
+}
+
+function createCompactSerializer(): RealtimeAudioSerializer {
+  return {
+    media: (payload) => payload,
+    clear: () => "clear",
+    mark: (name) => `mark:${name}`,
+  };
+}
+
+function createSequencedAudio(frameCount: number): Buffer {
+  const audio = Buffer.alloc(frameCount * 160);
+  for (let index = 0; index < frameCount; index += 1) {
+    audio.fill(index % 256, index * 160, (index + 1) * 160);
+  }
+  return audio;
+}
+
+function inspectQueue(pacer: RealtimeAudioPacer): { length: number; head: number } {
+  const state = pacer as unknown as { queue: unknown[]; queueHead: number };
+  return { length: state.queue.length, head: state.queueHead };
 }
 
 describe("RealtimeAudioPacer", () => {
@@ -122,26 +140,57 @@ describe("RealtimeAudioPacer", () => {
       { event: "clear" },
     ]);
   });
-});
 
-describe("RealtimeMulawSpeechStartDetector", () => {
-  it("detects a speech start after consecutive loud chunks and resets after quiet", () => {
-    const detector = new RealtimeMulawSpeechStartDetector({
-      requiredLoudChunks: 2,
-      requiredQuietChunks: 2,
-      rmsThreshold: 0.02,
+  it("drains the full default audio backlog in order and resets queue storage", async () => {
+    vi.useFakeTimers();
+    const frameCount = 6_000;
+    const sentFrames: number[] = [];
+    const sentMarks: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        if (message.startsWith("mark:")) {
+          sentMarks.push(message);
+        } else {
+          sentFrames.push(Buffer.from(message, "base64")[0] ?? -1);
+        }
+        return true;
+      },
     });
-    const silence = Buffer.alloc(160, 0xff);
-    const speech = Buffer.alloc(160, 0x00);
 
-    expect(calculateMulawRms(silence)).toBeLessThan(0.02);
-    expect(calculateMulawRms(speech)).toBeGreaterThan(0.02);
-    expect(detector.accept(speech)).toBe(false);
-    expect(detector.accept(speech)).toBe(true);
-    expect(detector.accept(speech)).toBe(false);
-    expect(detector.accept(silence)).toBe(false);
-    expect(detector.accept(silence)).toBe(false);
-    expect(detector.accept(speech)).toBe(false);
-    expect(detector.accept(speech)).toBe(true);
+    pacer.sendAudio(createSequencedAudio(frameCount));
+    pacer.sendMark("complete");
+    await vi.advanceTimersByTimeAsync(frameCount * 20);
+
+    expect(sentFrames).toEqual(Array.from({ length: frameCount }, (_, index) => index % 256));
+    expect(sentMarks).toEqual(["mark:complete"]);
+    expect(inspectQueue(pacer)).toEqual({ length: 0, head: 0 });
+    expect(pacer.hasPendingAudio()).toBe(false);
+  });
+
+  it("compacts a long queue while preserving pending bytes through clear", async () => {
+    vi.useFakeTimers();
+    const frameCount = 800;
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    pacer.sendAudio(createSequencedAudio(frameCount));
+    await vi.advanceTimersByTimeAsync(500 * 20);
+
+    expect(sent).toHaveLength(501);
+    expect(inspectQueue(pacer)).toEqual({ length: 399, head: 100 });
+    expect(pacer.clearAudio()).toBe(299 * 160);
+    await vi.advanceTimersByTimeAsync(frameCount * 20);
+
+    expect(sent).toHaveLength(502);
+    expect(sent.at(-1)).toBe("clear");
+    expect(inspectQueue(pacer)).toEqual({ length: 0, head: 0 });
+    expect(pacer.hasPendingAudio()).toBe(false);
   });
 });

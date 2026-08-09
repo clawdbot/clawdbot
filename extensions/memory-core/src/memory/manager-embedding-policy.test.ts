@@ -1,12 +1,11 @@
 // Memory Core tests cover manager embedding policy plugin behavior.
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
-  isRetryableMemoryEmbeddingTransportError,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
-  isStructuredInputTooLargeMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -99,6 +98,66 @@ describe("memory embedding policy", () => {
     expect(waitForRetry).not.toHaveBeenCalled();
   });
 
+  it("aborts an in-progress retry delay without starting another provider request", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const abortReason = new Error("memory search was cancelled");
+      const run = vi.fn(async () => {
+        throw new Error("memory embeddings query timed out after 60s");
+      });
+      const waitForRetry = vi.fn(async (delayMs: number) => {
+        await sleepWithAbort(delayMs, controller.signal);
+      });
+
+      const pending = runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(run).toHaveBeenCalledOnce();
+      expect(waitForRetry).toHaveBeenCalledWith(500);
+      expect(vi.getTimerCount()).toBe(1);
+
+      controller.abort(abortReason);
+
+      await expect(pending).rejects.toMatchObject({
+        message: "aborted",
+        cause: abortReason,
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves permanent provider error identity without retrying", async () => {
+    const permanentError = new Error("embedding validation failed");
+    const run = vi.fn(async () => {
+      throw permanentError;
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toBe(permanentError);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
   it("retries transient socket/network embedding errors", () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",
@@ -109,21 +168,18 @@ describe("memory embedding policy", () => {
 
     for (const message of splittableMessages) {
       expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
-      expect(isRetryableMemoryEmbeddingTransportError(message)).toBe(true);
       expect(isSplittableMemoryEmbeddingTransportError(message)).toBe(true);
     }
-    expect(isRetryableMemoryEmbeddingTransportError("ECONNREFUSED")).toBe(true);
+    expect(isRetryableMemoryEmbeddingError("ECONNREFUSED")).toBe(true);
     expect(isSplittableMemoryEmbeddingTransportError("ECONNREFUSED")).toBe(false);
-    expect(isRetryableMemoryEmbeddingTransportError("EHOSTUNREACH")).toBe(true);
+    expect(isRetryableMemoryEmbeddingError("EHOSTUNREACH")).toBe(true);
     expect(isSplittableMemoryEmbeddingTransportError("EHOSTUNREACH")).toBe(false);
-    expect(isRetryableMemoryEmbeddingTransportError("memory embeddings batch timed out")).toBe(
-      true,
-    );
+    expect(isRetryableMemoryEmbeddingError("memory embeddings batch timed out")).toBe(true);
     expect(isSplittableMemoryEmbeddingTransportError("memory embeddings batch timed out")).toBe(
       false,
     );
-    expect(isRetryableMemoryEmbeddingTransportError("worker terminated by user")).toBe(false);
-    expect(isRetryableMemoryEmbeddingTransportError("embedding validation failed")).toBe(false);
+    expect(isRetryableMemoryEmbeddingError("worker terminated by user")).toBe(false);
+    expect(isRetryableMemoryEmbeddingError("embedding validation failed")).toBe(false);
   });
 
   it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {
@@ -269,16 +325,6 @@ describe("memory embedding policy", () => {
       }),
     ).rejects.toThrow("ECONNREFUSED");
     expect(run).toHaveBeenCalledTimes(2);
-  });
-
-  it("classifies oversized structured-input errors", () => {
-    expect(isStructuredInputTooLargeMemoryEmbeddingError("payload too large")).toBe(true);
-    expect(
-      isStructuredInputTooLargeMemoryEmbeddingError(
-        "gemini embeddings failed: request size exceeded input limit",
-      ),
-    ).toBe(true);
-    expect(isStructuredInputTooLargeMemoryEmbeddingError("connection reset by peer")).toBe(false);
   });
 
   it("caps retry jittered delays", () => {

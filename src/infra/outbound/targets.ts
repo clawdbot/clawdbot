@@ -14,10 +14,6 @@ import {
   mergeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type {
-  DeliverableMessageChannel,
-  GatewayMessageChannel,
-} from "../../utils/message-channel.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -34,38 +30,34 @@ import {
   type OutboundTargetResolution,
 } from "./targets-resolve-shared.js";
 
-/** Deliverable channel id accepted by outbound target resolution. */
-export type OutboundChannel = DeliverableMessageChannel;
-
-/** Heartbeat target channel id from agent/default heartbeat config. */
-type HeartbeatTarget = OutboundChannel;
-
 /** Resolved outbound delivery destination and routing hints. */
-export type OutboundTarget = {
-  channel: OutboundChannel;
+type OutboundTarget = {
+  channel: string;
   to?: string;
   chatType?: ChatType;
   reason?: string;
   accountId?: string;
   threadId?: string | number;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastAccountId?: string;
 };
 
 /** Sender identity context used when a heartbeat needs channel-compatible metadata. */
-export type HeartbeatSenderContext = {
+type HeartbeatSenderContext = {
   sender: string;
-  provider?: DeliverableMessageChannel;
+  provider?: string;
   allowFrom: string[];
 };
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
-  channel: GatewayMessageChannel;
+  channel: string;
+  plugin?: ChannelPlugin;
   to?: string;
   allowFrom?: string[];
   allowBootstrap?: boolean;
@@ -75,11 +67,13 @@ export function resolveOutboundTarget(params: {
 }): OutboundTargetResolution {
   return (
     resolveOutboundTargetWithPlugin({
-      plugin: resolveOutboundChannelPlugin({
-        channel: params.channel,
-        cfg: params.cfg,
-        allowBootstrap: params.allowBootstrap,
-      }),
+      plugin:
+        params.plugin ??
+        resolveOutboundChannelPlugin({
+          channel: params.channel,
+          cfg: params.cfg,
+          allowBootstrap: params.allowBootstrap,
+        }),
       target: params,
       onMissingPlugin: () =>
         params.channel === INTERNAL_MESSAGE_CHANNEL
@@ -105,7 +99,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
   const rawTarget = heartbeat?.target;
-  let target: HeartbeatTarget = "none";
+  let target = "none";
   let preparedExplicitPlugin: ChannelPlugin | undefined;
   let preparedExplicitTo: string | undefined;
   if (rawTarget === "none" || rawTarget === "last") {
@@ -123,7 +117,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
           allowBootstrap: true,
         });
         if (preparedExplicitPlugin) {
-          target = preparedExplicitPlugin.id as HeartbeatTarget;
+          target = preparedExplicitPlugin.id;
           preparedExplicitTo = explicitTo;
         }
       }
@@ -308,7 +302,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
 function buildNoHeartbeatDeliveryTarget(params: {
   reason: string;
   accountId?: string;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastAccountId?: string;
 }): OutboundTarget {
   return {
@@ -418,7 +412,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
 }
 
 function inferChatTypeFromTarget(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   to: string;
   plugin?: ChannelPlugin;
 }): ChatType | undefined {
@@ -445,7 +439,7 @@ function inferChatTypeFromTarget(params: {
 }
 
 function resolveHeartbeatDeliveryChatType(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   to: string;
   sessionChatType?: ChatType;
   plugin?: ChannelPlugin;
@@ -462,7 +456,7 @@ function resolveHeartbeatDeliveryChatType(params: {
 
 function shouldReuseHeartbeatRouteThreadId(params: {
   cfg: OpenClawConfig;
-  target: HeartbeatTarget;
+  target: string;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
   entry?: SessionEntry;
@@ -472,7 +466,9 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   const channel = params.resolvedTarget.channel;
   const messaging = params.plugin
     ? params.plugin.messaging
-    : channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+    : channel
+      ? resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging
+      : undefined;
   return (
     messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
     params.resolvedTarget.threadId == null &&
@@ -545,9 +541,9 @@ export function resolveHeartbeatSenderContext(params: {
   const sender = resolveHeartbeatSenderId({
     allowFrom,
     deliveryTo: params.delivery.to,
-    lastTo: params.entry?.lastTo,
+    lastTo: deliveryContextFromSession(params.entry)?.to,
     provider,
   });
 
-  return { sender, provider, allowFrom };
+  return { sender: expectDefined(sender, "resolved sender"), provider, allowFrom };
 }

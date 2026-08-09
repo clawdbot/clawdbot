@@ -99,7 +99,7 @@ describe("createChannelReplyPipeline", () => {
 
   it("resolves the live response prefix from selected-model context", () => {
     const pipeline = createChannelReplyPipeline({
-      cfg: { messages: { responsePrefix: "[{model} | {thinkingLevel}]" } },
+      cfg: { channels: { mattermost: { responsePrefix: "[{model} | {thinkingLevel}]" } } },
       agentId: "main",
       channel: "mattermost",
     });

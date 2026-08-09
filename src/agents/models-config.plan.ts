@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import {
   mergeProviders,
@@ -28,19 +29,24 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 /** Dependency hook for resolving implicit model providers while planning models.json. */
-export type ResolveImplicitProvidersForModelsJson = (params: {
+type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
+  discoveryAuthConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 }) => Promise<Record<string, ProviderConfig>>;
 
-/** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
+/**
+ * Planned models.json result. When present, pluginCatalogWrites is the complete
+ * replacement set; omission means the plan is non-authoritative for plugin catalogs.
+ */
 type ModelsJsonPlan =
   | {
       action: "skip";
@@ -92,13 +98,15 @@ function buildPluginCatalogWrites(
 }
 
 /** Resolves providers for models.json with injectable implicit-provider discovery. */
-export async function resolveProvidersForModelsJsonWithDeps(
+async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
+    discoveryAuthConfig?: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
     workspaceDir?: string;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
@@ -122,11 +130,15 @@ export async function resolveProvidersForModelsJsonWithDeps(
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
     config: cfg,
+    ...(params.discoveryAuthConfig ? { discoveryAuthConfig: params.discoveryAuthConfig } : {}),
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     explicitProviders,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.preparedStaticProviderCatalog
+      ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
       : {}),
     ...(params.providerDiscoveryProviderIds
       ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
@@ -200,16 +212,21 @@ function filterWritableProviders(
 }
 
 /** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
-export async function planOpenClawModelsJsonWithDeps(
+async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
+    discoveryAuthConfig?: OpenClawConfig;
     sourceConfigForSecrets?: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
     workspaceDir?: string;
     existingRaw: string;
     existingParsed: unknown;
-    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    pluginMetadataSnapshot?: Pick<
+      PluginMetadataSnapshot,
+      "index" | "manifestRegistry" | "owners" | "pluginIds"
+    >;
+    preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
@@ -222,11 +239,15 @@ export async function planOpenClawModelsJsonWithDeps(
   const providers = await resolveProvidersForModelsJsonWithDeps(
     {
       cfg,
+      ...(params.discoveryAuthConfig ? { discoveryAuthConfig: params.discoveryAuthConfig } : {}),
       agentDir,
       env,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
+      ...(params.preparedStaticProviderCatalog
+        ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
         : {}),
       ...(params.providerDiscoveryProviderIds
         ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
@@ -255,6 +276,10 @@ export async function planOpenClawModelsJsonWithDeps(
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
   const manifestPlugins = params.pluginMetadataSnapshot?.manifestRegistry.plugins;
+  const providerPolicyManifestRegistry =
+    params.pluginMetadataSnapshot?.pluginIds === undefined
+      ? params.pluginMetadataSnapshot?.manifestRegistry
+      : undefined;
   const normalizedProviders =
     normalizeProviders({
       providers,
@@ -265,6 +290,9 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
       manifestPlugins,
+      ...(providerPolicyManifestRegistry
+        ? { manifestRegistry: providerPolicyManifestRegistry }
+        : {}),
     }) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,
@@ -315,4 +343,11 @@ export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {
   return planOpenClawModelsJsonWithDeps(params);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelsConfigPlanTestApi")] = {
+    planOpenClawModelsJsonWithDeps,
+    resolveProvidersForModelsJsonWithDeps,
+  };
 }

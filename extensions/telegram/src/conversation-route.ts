@@ -24,7 +24,7 @@ import {
 type TelegramResolvedRoute = ReturnType<typeof resolveAgentRoute>;
 type ConfiguredTelegramBinding = NonNullable<ConfiguredBindingRouteResult["bindingResolution"]>;
 
-export type TelegramConversationBindingMode =
+type TelegramConversationBindingMode =
   | { kind: "none" }
   | {
       kind: "configured";

@@ -10,13 +10,17 @@ import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   adaptMessagePresentationForChannel,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
-import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import {
+  notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
+} from "../active-turn-thread-route.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -25,11 +29,23 @@ import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
+
+function withCurrentSourceReplyRoute<T>(result: AgentToolResult<T>): AgentToolResult<T> {
+  const details =
+    result.details && typeof result.details === "object" && !Array.isArray(result.details)
+      ? result.details
+      : {};
+  return {
+    ...result,
+    details: { ...details, sourceReplyRoute: "current-source" } as T,
+  };
+}
 
 function readCurrentDiscordTarget(
   toolContext: Pick<ChannelMessageActionContext, "toolContext">["toolContext"],
@@ -88,13 +104,61 @@ export async function handleDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
     ...readPolicyOptions,
   } as const;
-  const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
-    notifyDiscordInboundEventOutboundSuccess({
+  const notifyVisibleOutbound = (
+    result: AgentToolResult<unknown>,
+    to: string,
+    fallbackSessionKey?: string,
+  ) => {
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown })
+        : undefined;
+    // Resolved failures are not delivery receipts; clearing room history would
+    // otherwise permanently discard context without any visible reply.
+    if (details?.ok !== true) {
+      return;
+    }
+    discordInboundEventDelivery.notify({
       sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
       to,
       accountId,
       inboundEventKind: ctx.inboundEventKind,
     });
+  };
+  const withAdoptedThreadReplyRoute = (
+    result: AgentToolResult<unknown>,
+    to: string,
+    fallbackSessionKey?: string,
+  ) => {
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown })
+        : undefined;
+    // Only a positive runtime receipt may suppress the source fallback. A
+    // resolved failure must leave the turn eligible for visible error delivery.
+    if (details?.ok !== true) {
+      return result;
+    }
+    let target;
+    try {
+      target = parseDiscordTarget(to, { defaultKind: "channel" });
+    } catch {
+      // Route classification runs after delivery and must not turn a
+      // successfully resolved Discord target into a failed tool result.
+      return result;
+    }
+    if (
+      target?.kind === "channel" &&
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey: ctx.sessionKey ?? fallbackSessionKey,
+        accountId,
+        threadId: target.id,
+      })
+    ) {
+      return withCurrentSourceReplyRoute(result);
+    }
+    return result;
+  };
 
   const readTarget = () => {
     const target =
@@ -152,7 +216,7 @@ export async function handleDiscordMessageAction(
       ? undefined
       : (params.components ??
         presentationComponents ??
-        buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive)));
+        buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
@@ -198,8 +262,8 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to, sessionKey);
-    return result;
+    notifyVisibleOutbound(result, to, sessionKey);
+    return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
   if (action === "upload-file") {
@@ -237,8 +301,8 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to, sessionKey);
-    return result;
+    notifyVisibleOutbound(result, to, sessionKey);
+    return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
   if (action === "poll") {
@@ -263,7 +327,7 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to);
+    notifyVisibleOutbound(result, to);
     return result;
   }
 
@@ -385,7 +449,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
+    const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
       {
@@ -401,7 +465,21 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(resolveChannelId());
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown; thread?: { id?: unknown } })
+        : undefined;
+    if (details?.ok === true) {
+      const threadId = typeof details.thread?.id === "string" ? details.thread.id : undefined;
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: ctx.sessionKey,
+        accountId,
+        sourceChannelId: resolveChannelId(),
+        sourceMessageId: messageId,
+        threadId,
+      });
+    }
+    notifyVisibleOutbound(result, resolveChannelId());
     return result;
   }
 
@@ -423,7 +501,7 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to);
+    notifyVisibleOutbound(result, to);
     return result;
   }
 
@@ -447,10 +525,13 @@ export async function handleDiscordMessageAction(
     ctx,
     resolveChannelId,
     readPolicyOptions,
+    actionOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {
-      notifyVisibleOutbound(readStringParam(params, "threadId") ?? readTarget());
+      const threadId = readStringParam(params, "threadId") ?? readTarget();
+      notifyVisibleOutbound(adminResult, threadId);
+      return withAdoptedThreadReplyRoute(adminResult, threadId);
     }
     return adminResult;
   }

@@ -1,7 +1,7 @@
 // Verifies bundled plugin directory resolution.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
@@ -11,6 +11,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const originalTrustBundledPlugins = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
 const originalExecArgv = [...process.execArgv];
@@ -160,6 +161,10 @@ function requireBundledDir(value: string | null | undefined): string {
   return value;
 }
 
+beforeEach(() => {
+  delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   if (originalBundledDir === undefined) {
@@ -172,12 +177,21 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
   }
+  if (originalTrustBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPlugins;
+  }
   if (originalVitest === undefined) {
     delete process.env.VITEST;
   } else {
     process.env.VITEST = originalVitest;
   }
-  process.argv[1] = originalArgv1;
+  if (originalArgv1 === undefined) {
+    process.argv.splice(1, 1);
+  } else {
+    process.argv[1] = originalArgv1;
+  }
   process.execArgv.length = 0;
   process.execArgv.push(...originalExecArgv);
   cleanupTrackedTempDirs(tempDirs);
@@ -413,6 +427,7 @@ describe("resolveBundledPluginsDir", () => {
     process.argv[1] = path.join(installedRoot, "openclaw.mjs");
     process.execArgv.length = 0;
     delete process.env.VITEST;
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(installedRoot, "dist", "extensions");
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 

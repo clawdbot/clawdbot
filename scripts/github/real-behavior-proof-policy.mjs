@@ -7,7 +7,7 @@ export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_PR_CONTEXT_LABEL = "triage: needs-pr-context";
 const MAINTAINER_TEAM_SLUG = "maintainer";
-export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
 const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";

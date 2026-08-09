@@ -1,3 +1,9 @@
+import {
+  BASE_THINKING_LEVELS,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+  type ThinkingCatalogEntry,
+} from "../../../../src/auto-reply/thinking.shared.js";
 // Control UI module implements thinking behavior.
 import type {
   GatewaySessionRow,
@@ -9,74 +15,13 @@ import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
-export type ThinkingCatalogEntry = {
-  provider: string;
-  id: string;
-  reasoning?: boolean;
-};
-
-const BASE_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
-
-export function normalizeThinkLevel(raw?: string | null): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(raw);
-  const collapsed = key.replace(/[\s_-]+/g, "");
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  if (collapsed === "max") {
-    return "max";
-  }
-  if (collapsed === "ultra") {
-    return "ultra";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
-  if (key === "off" || key === "none") {
-    return "off";
-  }
-  if (["on", "enable", "enabled"].includes(key)) {
-    return "low";
-  }
-  if (["min", "minimal"].includes(key)) {
-    return "minimal";
-  }
-  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-    return "low";
-  }
-  if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-    return "medium";
-  }
-  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
-    return "high";
-  }
-  if (key === "think") {
-    return "minimal";
-  }
-  return undefined;
-}
-
-export function listThinkingLevelLabels(
+function listThinkingLevelLabels(
   provider?: string | null,
   model?: string | null,
 ): readonly string[] {
   void provider;
   void model;
   return BASE_THINKING_LEVELS;
-}
-
-export function resolveThinkingDefaultForModel(params: {
-  provider: string;
-  model: string;
-  catalog?: readonly ThinkingCatalogEntry[];
-}): string {
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  return candidate?.reasoning ? "low" : "off";
 }
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
@@ -255,16 +200,19 @@ function resolveThinkingLevelOptions(params: {
 
 export function resolveChatThinkingSelectState(params: {
   catalog: readonly ThinkingCatalogEntry[];
+  defaults?: SessionsListResult["defaults"];
+  session?: GatewaySessionRow;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 }): ChatThinkingSelectState {
-  const session = params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
+  const session =
+    params.session ?? params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
   const persisted = session?.thinkingLevel;
   const currentOverride =
     typeof persisted === "string" && persisted.trim()
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
-  const defaults = params.sessionsResult?.defaults;
+  const defaults = params.defaults ?? params.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
   const levels = resolveThinkingLevelOptions({
     catalog: params.catalog,
@@ -285,7 +233,7 @@ export function resolveChatThinkingSelectState(params: {
       ? resolveThinkingDefaultForModel({
           provider,
           model,
-          catalog: params.catalog,
+          catalog: [...params.catalog],
         })
       : "off");
   const effectiveOverride = levels.length === 0 && currentOverride === "off" ? "" : currentOverride;

@@ -112,7 +112,7 @@ function writeQaEvidence(params: {
   );
 }
 
-function allProfileScorecardFixture() {
+function allProfileScorecardFixture(evidenceEntryCount = 1) {
   const taxonomy = parseYaml(
     fs.readFileSync(path.join(repoRoot, "taxonomy.yaml"), "utf8"),
   ) as TaxonomyFixture;
@@ -155,7 +155,7 @@ function allProfileScorecardFixture() {
   );
   return {
     filters: { surface: null, category: null },
-    run: { evidenceEntryCount: 1 },
+    run: { evidenceEntryCount },
     categories: {
       total: categoryReports.length,
       fulfilled: 0,
@@ -239,6 +239,35 @@ describe("maturity docs renderer CLI", () => {
     expect(result.stderr).toContain("blocked-scenario (blocked)");
   });
 
+  it("allows incomplete evidence without awarding Coverage to non-passing checks", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [
+        { id: "failing-scenario", status: "fail" },
+        { id: "blocked-scenario", status: "blocked" },
+        { id: "skipped-scenario", status: "skipped" },
+      ],
+      scorecard: allProfileScorecardFixture(3),
+    });
+
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--allow-failures",
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).not.toContain("Incomplete QA evidence accepted.");
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain("0 passed, 1 failed, 1 blocked, 1 skipped");
+  });
+
   it("renders passing evidence without impossible failed or blocked result counts", () => {
     const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
     const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
@@ -254,9 +283,16 @@ describe("maturity docs renderer CLI", () => {
 
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
     expect(scorecard).toContain("1 passed, 1 skipped");
     expect(scorecard).not.toContain("0 failed");
     expect(scorecard).not.toContain("0 blocked");
+    expect(taxonomy).toMatch(
+      /<div className="maturity-category-docs">\n\n {4}\[[^\n]+\]\([^)]+\)[^\n]*\n\n {4}<\/div>/,
+    );
+    expect(taxonomy).not.toMatch(
+      /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
+    );
   });
 
   it("renders the maturity score from quality and completeness without coverage", () => {

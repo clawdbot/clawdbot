@@ -15,7 +15,6 @@ export {
   externalCliDiscoveryForConfigStatus,
   externalCliDiscoveryForProviderAuth,
   externalCliDiscoveryForProviders,
-  externalCliDiscoveryNone,
   externalCliDiscoveryScoped,
   type ExternalCliAuthDiscovery,
 } from "./auth-profiles/external-cli-discovery.js";
@@ -37,11 +36,14 @@ export {
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
+  removeAuthProfilesAcrossOwnerStores,
+  removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
   resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
 export {
   repairOAuthProfileIdMismatch,
@@ -55,10 +57,13 @@ export {
   type AuthProfilePortabilityReason,
 } from "./auth-profiles/portability.js";
 export {
+  clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotRevision,
   hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
@@ -70,6 +75,8 @@ export {
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
+  withEnvOnlyAuthProfileStore,
+  withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,
@@ -93,6 +100,9 @@ export {
   markAuthProfileCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  resolveInlineProviderApiKeyUnusableUntil,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   setAuthProfileFailureHook,

@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw sessions` (list stored sessions + usage)"
+summary: "CLI reference for listing, archiving, deleting, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
+  - You want to archive or delete sessions from a headless Gateway
 title: "Sessions"
 ---
 
@@ -51,10 +52,10 @@ Control UI uses that mode by default so deleted or disk-only agent stores do
 not reappear in the Sessions view.
 
 `--all-agents` reads configured agent stores. Gateway and ACP session
-discovery are broader: they also include disk-only stores found under the
-default `agents/` root or a templated `session.store` root. Those discovered
-stores must resolve to regular `sessions.json` files inside the agent root;
-symlinks and out-of-root paths are skipped.
+discovery are broader: they also include SQLite stores resolved from
+configured agent roots or a templated `session.store` root. Legacy selector
+paths must resolve inside the agent root; symlinks and out-of-root paths are
+skipped.
 
 `openclaw sessions --all-agents --json`:
 
@@ -78,6 +79,81 @@ symlinks and out-of-root paths are skipped.
 }
 ```
 
+## Archive sessions
+
+Archive one or more sessions through the running Gateway:
+
+```bash
+openclaw sessions archive "agent:main:scratch-1"
+openclaw sessions archive "agent:main:scratch-1" "agent:main:scratch-2"
+openclaw sessions archive "agent:work:scratch-1" --agent work
+openclaw sessions archive "agent:main:scratch-1" --dry-run
+openclaw sessions archive "agent:main:scratch-1" --json
+```
+
+Archive uses the same `sessions.patch` lifecycle operation as the Control UI.
+It keeps the transcript, marks the session archived, and removes the session
+from the default active list. Already archived sessions are successful no-ops.
+Use `--dry-run` to validate every key and preview the result without changing
+session state.
+
+## Delete sessions
+
+Delete one or more sessions through the running Gateway:
+
+```bash
+openclaw sessions delete "agent:main:scratch-1"
+openclaw sessions delete "agent:main:scratch-1" "agent:main:scratch-2" --yes
+openclaw sessions delete "agent:work:scratch-1" --agent work --yes
+openclaw sessions delete "agent:main:scratch-1" --dry-run
+openclaw sessions delete "agent:main:scratch-1" --yes --json
+```
+
+<Warning>
+  Delete is destructive. In an interactive terminal it asks once before
+  deleting the valid keys. Non-interactive and `--json` deletion requires
+  `--yes`. Use `--dry-run` first when scripting a bulk cleanup.
+</Warning>
+
+Delete uses the same `sessions.delete` lifecycle operation as the Control UI,
+with transcript cleanup enabled. The Gateway removes the live session row,
+transcript generations, session-owned runtime state, bindings, boards, and
+other lifecycle artifacts. For ordinary sessions it retains the transcript as
+a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
+removed without an archive. If a managed worktree cannot be removed safely,
+the command reports the preserved branch and path for manual cleanup.
+
+Both lifecycle commands:
+
+- accept multiple keys and report one ordered result per key;
+- use `--agent <id>` to select the owning agent, which is required for a
+  `global` key outside the default agent;
+- support `--url`, `--token`, `--password`, and `--timeout <ms>` Gateway
+  connection overrides;
+- return a non-zero exit when any key is unknown or any operation fails, while
+  still processing the other valid keys;
+- emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
+  when `--json` is set.
+
+Example mixed-result JSON:
+
+```json
+{
+  "ok": false,
+  "operation": "archive",
+  "dryRun": false,
+  "results": [
+    { "key": "agent:main:scratch-1", "ok": true, "status": "archived" },
+    {
+      "key": "agent:main:missing",
+      "ok": false,
+      "status": "not_found",
+      "error": "Session not found. Run openclaw sessions list --json to choose a valid key."
+    }
+  ]
+}
+```
+
 ## Tail trajectory progress
 
 ```bash
@@ -88,12 +164,12 @@ openclaw sessions --agent work tail --follow
 openclaw sessions --all-agents tail --follow
 ```
 
-`openclaw sessions tail` renders recent trajectory JSONL events as compact
+`openclaw sessions tail` renders recent runtime trajectory events as compact
 progress lines. Without `--session-key`, it tails running sessions first, then
 the latest stored session. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
-`--follow` keeps watching the selected trajectory files, including relocated
-files referenced by `<session>.trajectory-path.json`.
+`--follow` keeps watching the selected SQLite-backed session or an explicit
+legacy trajectory file.
 
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
@@ -129,12 +205,13 @@ openclaw sessions cleanup --json
 ([Configuration reference](/gateway/config-agents#session)):
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
-  transcripts, and trajectory sidecars. It does not prune cron run history,
-  which is managed by `cron.runLog.keepLines`
+  transcripts, trajectory rows, and legacy trajectory sidecars. It does not
+  prune cron run history, which automatically keeps the newest 2000 rows per job
   ([Cron configuration](/automation/cron-jobs#configuration)).
-- Cleanup also prunes unreferenced primary transcripts, compaction
-  checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`;
-  files still referenced by `sessions.json` are preserved.
+- Cleanup also prunes unreferenced legacy/archive transcript artifacts,
+  compaction checkpoints, and trajectory sidecars older than
+  `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
+  session rows are preserved.
 - Cleanup reports short-lived Gateway model-run probe cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
@@ -144,21 +221,22 @@ openclaw sessions cleanup --json
 
 Flags:
 
-| Flag                 | Description                                                                                                                                                                                                                                                                                         |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--dry-run`          | Preview how many entries would be pruned/capped without writing. In text mode, prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label.                                                                                                |
-| `--enforce`          | Apply maintenance even when `session.maintenance.mode` is `warn`.                                                                                                                                                                                                                                   |
-| `--fix-missing`      | Remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.                                                                                                                                                                          |
-| `--fix-dm-scope`     | When `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying removes those rows from `sessions.json` and preserves their transcripts as deleted archives. |
-| `--active-key <key>` | Protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                                                        |
-| `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                         |
-| `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                        |
-| `--store <path>`     | Run against a specific `sessions.json` file.                                                                                                                                                                                                                                                        |
-| `--json`             | Print a JSON summary. With `--all-agents`, output includes one summary per store.                                                                                                                                                                                                                   |
+| Flag                 | Description                                                                                                                                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`          | Preview how many entries would be pruned/capped without writing. In text mode, prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label.                                                                                                       |
+| `--enforce`          | Apply maintenance even when `session.maintenance.mode` is `warn`.                                                                                                                                                                                                                                          |
+| `--fix-missing`      | Remove legacy entries whose archived transcript artifacts are missing or header-only/empty, even if they would not normally age/count out yet.                                                                                                                                                             |
+| `--fix-dm-scope`     | When `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying removes those rows from SQLite and preserves their legacy transcript artifacts as deleted archives. |
+| `--active-key <key>` | Protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                                                               |
+| `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                                |
+| `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                               |
+| `--store <path>`     | Run against a specific legacy store selector path.                                                                                                                                                                                                                                                         |
+| `--json`             | Print a JSON summary. With `--all-agents`, output includes one summary per store.                                                                                                                                                                                                                          |
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a store file.
+traffic. Use `--store <path>` for explicit offline repair of a legacy store
+selector.
 
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 

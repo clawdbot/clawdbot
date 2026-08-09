@@ -8,6 +8,7 @@ const sourceCache = new Map();
 
 const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/config.ts",
+  "src/config/io.runtime.ts",
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
@@ -34,6 +35,11 @@ const AMBIENT_RUNTIME_LOAD_CONFIG_COMPAT_FILES = new Set([
 const PROCESS_BOUNDARY_DIRECT_CONFIG_LOAD_FILES = new Set([
   "src/cli/banner-config-lite.ts",
   "src/cli/daemon-cli/status.gather.ts",
+  // `agent exec --config <path>` must load one specific file. `getRuntimeConfig()`
+  // reads the ambient location and resolves from an already published runtime
+  // snapshot, so it cannot express a pinned run; the file-scoped loader is the
+  // point. Ambient resolution in the same command does use `getRuntimeConfig()`.
+  "src/commands/agent-exec.ts",
 ]);
 
 const BROAD_CONFIG_RUNTIME_COMPAT_FILES = new Set([

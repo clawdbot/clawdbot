@@ -52,15 +52,23 @@ describe("worker admission", () => {
     } as WorkerEnvironmentStore;
   });
 
-  const admission = (overrides: Partial<WorkerConnectParams["admission"]> = {}) => ({
-    environmentId: "worker-1",
-    credential: CREDENTIAL,
-    sessionId: null,
-    ownerEpoch: 1,
-    rpcSetVersion: 1,
-    handshake: RECEIPT,
-    ...overrides,
-  });
+  type AdmissionCommon = Omit<WorkerConnectParams["admission"], "sessionId" | "runId">;
+  type AdmissionOverrides =
+    | (Partial<AdmissionCommon> & { sessionId?: null; runId?: null })
+    | (Partial<AdmissionCommon> & { sessionId: string; runId: string });
+  const admission = (overrides: AdmissionOverrides = {}): WorkerConnectParams["admission"] => {
+    const common = {
+      environmentId: overrides.environmentId ?? "worker-1",
+      credential: overrides.credential ?? CREDENTIAL,
+      ownerEpoch: overrides.ownerEpoch ?? 1,
+      rpcSetVersion: overrides.rpcSetVersion ?? 1,
+      handshake: overrides.handshake ?? RECEIPT,
+    };
+    if (typeof overrides.sessionId === "string" && typeof overrides.runId === "string") {
+      return { ...common, sessionId: overrides.sessionId, runId: overrides.runId };
+    }
+    return { ...common, sessionId: null, runId: null };
+  };
   const admit = (workerAdmission = admission(), expectedBuild: typeof RECEIPT = RECEIPT) =>
     admitWorkerConnection({ store, admission: workerAdmission, expectedBuild, nowMs });
 
@@ -72,6 +80,7 @@ describe("worker admission", () => {
       identity: {
         environmentId: "worker-1",
         sessionId: null,
+        runId: null,
         ownerEpoch: 1,
         rpcSetVersion: 1,
         protocolFeatures: ["worker-heartbeat-v1"],
@@ -86,7 +95,7 @@ describe("worker admission", () => {
     ["environment-mismatch", () => admission({ environmentId: " worker-1 " })],
     ["bundle-mismatch", () => admission({ handshake: { ...RECEIPT, bundleHash: "b".repeat(64) } })],
     ["version-mismatch", () => admission({ handshake: { ...RECEIPT, openclawVersion: "other" } })],
-    ["session-mismatch", () => admission({ sessionId: "session-other" })],
+    ["session-mismatch", () => admission({ sessionId: "session-other", runId: "run-other" })],
     ["owner-epoch-mismatch", () => admission({ ownerEpoch: 2 })],
     ["rpc-set-mismatch", () => admission({ rpcSetVersion: 2 })],
     [

@@ -19,7 +19,8 @@ import {
   resolveApiKeyForProfileInTest,
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
-import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,

@@ -30,6 +30,10 @@ const HOT_RUNTIME_IMPORT_CASES = [
     "src/plugin-sdk/approval-gateway-runtime.ts",
     () => import("../../plugin-sdk/approval-gateway-runtime.js"),
   ],
+  [
+    "src/plugin-sdk/approval-reference-runtime.ts",
+    () => import("../../plugin-sdk/approval-reference-runtime.js"),
+  ],
   ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
   ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
   ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],

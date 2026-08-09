@@ -16,7 +16,7 @@ Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: mattermost
+channels: `mattermost`
 
 ## Related docs
 

@@ -27,6 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { confirm, isCancel } from "@clack/prompts";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { stylePromptMessage } from "../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import {
@@ -58,7 +59,7 @@ function parseArgs(args: string[]): Options {
   };
 
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], `shell completion argument at index ${index}`);
     if (arg === "--check-only") {
       options.checkOnly = true;
     } else if (arg === "--force") {

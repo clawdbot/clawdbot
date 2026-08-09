@@ -30,6 +30,7 @@ export type RunExit = {
   reason: TerminationReason;
   exitCode: number | null;
   exitSignal: NodeJS.Signals | number | null;
+  oomScoreWrapperSelected?: boolean;
   durationMs: number;
   stdout: string;
   stderr: string;
@@ -44,9 +45,9 @@ export type ManagedRun = {
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
   cancel: (reason?: TerminationReason) => void;
+  /** Stop delivering output callbacks before owner teardown kills the child. */
+  detachOutput?: () => void;
 };
-
-export type SpawnMode = "child" | "pty";
 
 export type ManagedRunStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
@@ -58,9 +59,15 @@ export type ManagedRunStdin = {
   writableFinished?: boolean;
 };
 
+export type SpawnSecretInput = {
+  fd: number;
+  createData: () => Buffer;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
+  oomScoreWrapperSelected?: boolean;
   onStdout: (listener: (chunk: string) => void) => void;
   onStderr: (listener: (chunk: string) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
@@ -97,6 +104,7 @@ type SpawnChildInput = SpawnBaseInput & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  secretInput?: SpawnSecretInput;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {

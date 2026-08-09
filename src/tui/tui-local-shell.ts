@@ -1,9 +1,11 @@
 // Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalShellDeps = {
   chatLog: {
@@ -58,7 +60,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         ],
         2,
       );
-      selector.onSelect = (item) => {
+      selector.onSelect = (item: SelectItem) => {
         deps.closeOverlay(overlayHandle);
         if (item.value === "yes") {
           localExecAllowed = true;
@@ -129,18 +131,23 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
-      // Output pipes may fail independently; child close/error remains authoritative.
+      let error: Error | undefined;
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
+      // Pipe errors are incidental; close owns completion after any recorded spawn error.
       const ignoreOutputStreamError = () => {};
       child.stdout.on("error", ignoreOutputStreamError);
       child.stderr.on("error", ignoreOutputStreamError);
       child.stdout.on("data", (buf) => {
-        stdout = appendWithCap(stdout, buf.toString("utf8"));
+        stdout = appendWithCap(stdout, stdoutDecoder.write(buf));
       });
       child.stderr.on("data", (buf) => {
-        stderr = appendWithCap(stderr, buf.toString("utf8"));
+        stderr = appendWithCap(stderr, stderrDecoder.write(buf));
       });
 
       child.on("close", (code, signal) => {
+        stdout = appendWithCap(stdout, stdoutDecoder.end());
+        stderr = appendWithCap(stderr, stderrDecoder.end());
         // Keep the tail (consistent with the streaming appendWithCap above) so a
         // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
         // end is what the operator needs most when output overflows the cap.
@@ -154,15 +161,14 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
             deps.chatLog.addSystem(`[local] ${lineLocal}`);
           }
         }
-        deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
+        const status = error ? `error: ${formatTuiErrorMessage(error)}` : `exit ${code ?? "?"}`;
+        deps.chatLog.addSystem(`[local] ${status}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
         resolve();
       });
 
       child.on("error", (err) => {
-        deps.chatLog.addSystem(`[local] error: ${String(err)}`);
-        deps.tui.requestRender();
-        resolve();
+        error = err;
       });
     });
   };

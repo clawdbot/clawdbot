@@ -56,6 +56,7 @@ export type MSTeamsActivityLike = MSTeamsActivityParams | string;
 type MSTeamsStreamer = {
   emit(activity: MSTeamsActivityParams | string): void;
   update(text: string): void;
+  clearText(): void;
   close(): Promise<unknown>;
   readonly canceled: boolean;
 };

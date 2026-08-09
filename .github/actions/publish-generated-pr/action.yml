@@ -8,8 +8,8 @@ inputs:
   contents-private-key:
     description: GitHub App private key with contents write access.
     required: true
-  pull-request-app-id:
-    description: GitHub App id with pull-request write access.
+  pull-request-client-id:
+    description: GitHub App client id with pull-request write access.
     required: true
   pull-request-private-key:
     description: GitHub App private key with pull-request write access.
@@ -43,6 +43,10 @@ inputs:
     description: Whether stale inputs or owned-path overlap defer to a successor run or fail.
     required: false
     default: defer
+  auto-merge:
+    description: Enable squash auto-merge; false rejects an inherited auto-merge request.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -53,8 +57,9 @@ runs:
       with:
         contents-client-id: ${{ inputs.contents-client-id }}
         contents-private-key: ${{ inputs.contents-private-key }}
-        pull-request-app-id: ${{ inputs.pull-request-app-id }}
+        pull-request-client-id: ${{ inputs.pull-request-client-id }}
         pull-request-private-key: ${{ inputs.pull-request-private-key }}
+        pull-request-contents-permission: ${{ inputs.auto-merge == 'true' && 'write' || '' }}
 
     - name: Publish generated pull request
       shell: bash
@@ -70,6 +75,7 @@ runs:
         GENERATED_PATHS: ${{ inputs.generated-paths }}
         INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
         OVERLAP_POLICY: ${{ inputs.overlap-policy }}
+        AUTO_MERGE: ${{ inputs.auto-merge }}
       run: |
         set -euo pipefail
         export GH_PROMPT_DISABLED=1
@@ -90,6 +96,13 @@ runs:
           defer | fail) ;;
           *)
             echo "Generated PR publication overlap policy must be 'defer' or 'fail'." >&2
+            exit 1
+            ;;
+        esac
+        case "${AUTO_MERGE}" in
+          true | false) ;;
+          *)
+            echo "Generated PR publication auto-merge must be 'true' or 'false'." >&2
             exit 1
             ;;
         esac
@@ -321,6 +334,7 @@ runs:
             if [[ -n "${final_pr_url}" ]]; then
               final_pr_head="${final_pr_record#*$'\t'}"
               if [[ "${final_pr_head}" = "${published_commit}" ]]; then
+                published_pr_url="${final_pr_url}"
                 echo "Generated pull request: ${final_pr_url}" >> "${GITHUB_STEP_SUMMARY}"
                 return 0
               fi
@@ -342,6 +356,99 @@ runs:
           fi
           echo "::error::Generated branch has no open same-repository pull request."
           return 1
+        }
+        read_auto_merge_record_for_head() {
+          local attempt auto_merge_record observed_head
+          local expected_head="$1"
+          local pr_url="$2"
+          for attempt in 1 2 3; do
+            auto_merge_record="$(
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh pr view "${pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                  --json autoMergeRequest,headRefOid \
+                  --jq '[.headRefOid, (.autoMergeRequest.mergeMethod // "")] | @tsv'
+            )"
+            observed_head="${auto_merge_record%%$'\t'*}"
+            if [[ "${observed_head}" = "${expected_head}" ]]; then
+              printf '%s\n' "${auto_merge_record}"
+              return 0
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking." >&2
+            sleep "${attempt}"
+          done
+        }
+        ensure_auto_merge_compatible() {
+          local attempt auto_merge_method auto_merge_record existing_pr_head existing_pr_record
+          local existing_pr_url
+          local expected_head="$1"
+          for attempt in 1 2 3; do
+            existing_pr_record="$(find_open_pr)"
+            existing_pr_url="${existing_pr_record%%$'\t'*}"
+            if [[ -z "${existing_pr_url}" ]]; then
+              return 0
+            fi
+            existing_pr_head="${existing_pr_record#*$'\t'}"
+            if [[ "${existing_pr_head}" = "${expected_head}" ]]; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::error::Generated pull request head does not match the observed automation branch."
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking."
+            sleep "${attempt}"
+          done
+          if ! auto_merge_record="$(
+            read_auto_merge_record_for_head "${expected_head}" "${existing_pr_url}"
+          )"; then
+            echo "::error::Generated pull request moved during auto-merge compatibility validation."
+            return 1
+          fi
+          auto_merge_method="${auto_merge_record#*$'\t'}"
+          if [[ "${AUTO_MERGE}" != "true" && -n "${auto_merge_method}" ]]; then
+            echo "::error::Generated pull request still has auto-merge enabled while publication opted out."
+            return 1
+          fi
+          if [[ -n "${auto_merge_method}" && "${auto_merge_method}" != "SQUASH" ]]; then
+            echo "::error::Generated pull request already uses incompatible ${auto_merge_method} auto-merge."
+            return 1
+          fi
+        }
+        enable_auto_merge() {
+          local auto_merge_method auto_merge_record current_remote_head
+          if [[ "${AUTO_MERGE}" != "true" || -z "${published_pr_url:-}" ]]; then
+            return 0
+          fi
+          if ! auto_merge_record="$(
+            read_auto_merge_record_for_head "${published_commit}" "${published_pr_url}"
+          )"; then
+            current_remote_head="$(read_remote_head)"
+            if [[ "${current_remote_head}" != "${published_commit}" ]]; then
+              echo "Generated pull request moved before auto-merge reconciliation." \
+                >> "${GITHUB_STEP_SUMMARY}"
+              return 0
+            fi
+            echo "::error::Generated pull request head did not converge for auto-merge reconciliation."
+            return 1
+          fi
+          auto_merge_method="${auto_merge_record#*$'\t'}"
+          if [[ "${auto_merge_method}" = "SQUASH" ]]; then
+            echo "Squash auto-merge already enabled for generated pull request: ${published_pr_url}" \
+              >> "${GITHUB_STEP_SUMMARY}"
+            return 0
+          fi
+          if [[ -n "${auto_merge_method}" ]]; then
+            echo "::error::Generated pull request already uses incompatible ${auto_merge_method} auto-merge."
+            return 1
+          fi
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+              --auto --squash --match-head-commit "${published_commit}"
+          echo "Enabled squash auto-merge for exact generated head: ${published_pr_url}" \
+            >> "${GITHUB_STEP_SUMMARY}"
         }
 
         source_commit="$(git rev-parse HEAD)"
@@ -388,6 +495,7 @@ runs:
 
         # Lease the exact observed automation head so a cancelled run cannot overwrite newer output.
         remote_head="$(read_remote_head)"
+        ensure_auto_merge_compatible "${remote_head}"
         push_log="${RUNNER_TEMP}/generated-pr-push.log"
         if ! push_generated_branch "${remote_head}"; then
           current_remote_head="$(read_remote_head)"
@@ -455,3 +563,4 @@ runs:
           fi
           exit 1
         fi
+        enable_auto_merge

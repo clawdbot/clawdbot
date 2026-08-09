@@ -1,4 +1,6 @@
 // Control UI chat module implements realtime talk conversation behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 type RealtimeTalkConversationRole = "user" | "assistant";
 
 export type RealtimeTalkConversationEntry = {
@@ -25,6 +27,9 @@ type RealtimeTalkTranscriptUpdate = {
 };
 
 const MAX_CONVERSATION_ENTRIES = 60;
+const MAX_CONVERSATION_ENTRY_CHARS = 8_000;
+const CONVERSATION_ENTRY_PREFIX_CHARS = 256;
+const CONVERSATION_ENTRY_TRUNCATION_MARKER = "\n…\n";
 const USER_FINAL_REWRITE_GRACE_MS = 1_500;
 
 export function createRealtimeTalkConversationState(): RealtimeTalkConversationState {
@@ -96,7 +101,12 @@ function upsertRealtimeConversationEntry(
     const id = `rt-${state.nextEntryId}`;
     const entries = [
       ...state.entries,
-      { id, role, text: text.trimStart(), isStreaming: !isFinal },
+      {
+        id,
+        role,
+        text: boundRealtimeConversationText(text.trimStart()),
+        isStreaming: !isFinal,
+      },
     ].slice(-MAX_CONVERSATION_ENTRIES);
     return rememberRealtimeConversationEntry(
       { ...state, entries, nextEntryId: state.nextEntryId + 1 },
@@ -112,10 +122,14 @@ function upsertRealtimeConversationEntry(
     return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
   }
   const entry = state.entries[targetIndex];
-  const updatedText =
+  if (!entry) {
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
+  }
+  const mergedText =
     role === "assistant"
       ? mergeAssistantTranscriptText(entry.text, text, isFinal)
       : mergeRealtimeTranscriptText(entry.text, text, isFinal);
+  const updatedText = boundRealtimeConversationText(mergedText);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal
       ? state.entries
@@ -145,7 +159,7 @@ function rememberRealtimeConversationEntry(
   return { ...state, assistantEntryId: isFinal ? null : entryId };
 }
 
-export function finishRealtimeConversationEntry(
+function finishRealtimeConversationEntry(
   state: RealtimeTalkConversationState,
   role: RealtimeTalkConversationRole,
   nowMs: number = Date.now(),
@@ -258,6 +272,27 @@ function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal
   }
   const separator = overlap > 0 || !shouldInsertTranscriptSpace(existing, suffix) ? "" : " ";
   return `${existing}${separator}${suffix}`;
+}
+
+function boundRealtimeConversationText(text: string): string {
+  if (text.length <= MAX_CONVERSATION_ENTRY_CHARS) {
+    return text;
+  }
+  // Keep the opening context for late full-final replacement detection and
+  // the newest tail for the visible conversation. Reuse the original prefix
+  // so repeated streaming deltas do not move the truncation boundary.
+  const markerIndex = text.indexOf(CONVERSATION_ENTRY_TRUNCATION_MARKER);
+  const hasBoundedPrefix =
+    markerIndex >= CONVERSATION_ENTRY_PREFIX_CHARS - 1 &&
+    markerIndex <= CONVERSATION_ENTRY_PREFIX_CHARS;
+  const prefixEnd = hasBoundedPrefix ? markerIndex : CONVERSATION_ENTRY_PREFIX_CHARS;
+  // A natural marker can follow malformed provider text ending in a lone high
+  // surrogate. Keep that code unit out of the retained truncation boundary.
+  const prefix = sliceUtf16Safe(text, 0, prefixEnd).replace(/[\uD800-\uDBFF]$/, "");
+  const tailChars =
+    MAX_CONVERSATION_ENTRY_CHARS - prefix.length - CONVERSATION_ENTRY_TRUNCATION_MARKER.length;
+  const tail = sliceUtf16Safe(text, -tailChars);
+  return `${prefix}${CONVERSATION_ENTRY_TRUNCATION_MARKER}${tail}`;
 }
 
 function looksLikeTranscriptReplacement(existing: string, incoming: string): boolean {

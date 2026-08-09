@@ -1,13 +1,5 @@
 // Shared string normalization helpers for media-generation packages.
-
-/** Normalize optional strings, returning undefined for non-strings or empty values. */
-export function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Return unique trimmed strings while preserving first-seen order. */
 export function uniqueTrimmedStrings(values: readonly unknown[]): string[] {

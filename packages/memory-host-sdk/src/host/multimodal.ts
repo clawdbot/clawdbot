@@ -1,5 +1,5 @@
 // Memory Host SDK module implements multimodal behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Multimodal memory settings and file classification helpers.
 
@@ -87,7 +87,7 @@ export function buildMemoryMultimodalLabel(
   return `${MEMORY_MULTIMODAL_SPECS[modality].labelPrefix}: ${normalizedPath}`;
 }
 
-/** Build a glob that matches an extension case-insensitively for QMD sources. */
+/** Build a glob that matches an extension case-insensitively for indexed sources. */
 export function buildCaseInsensitiveExtensionGlob(extension: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(extension).replace(/^\./, "");
   if (!normalized) {

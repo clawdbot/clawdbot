@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -58,8 +59,10 @@ describe("sessions_spawn context modes", () => {
       async (params: {
         agentId: string;
         fallbackEntry?: Record<string, unknown>;
+        parentSessionKey: string;
         parentStoreKeys?: string[];
         sessionKey: string;
+        storePath: string;
       }) => {
         const parentEntry = params.parentStoreKeys
           ?.map((key) => store[key])
@@ -103,6 +106,9 @@ describe("sessions_spawn context modes", () => {
         const fork = await forkSessionFromParentMock({
           parentEntry,
           agentId: params.agentId,
+          parentSessionKey: params.parentSessionKey,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
         });
         if (!fork) {
           return { status: "failed" };
@@ -196,11 +202,14 @@ describe("sessions_spawn context modes", () => {
 
     const accepted = requireAcceptedResult(result);
     expect(accepted.runId).toBe("run-1");
+    const childSessionKey = requireChildSessionKey(accepted);
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
+      parentSessionKey: "main",
+      sessionKey: childSessionKey,
+      storePath,
     });
-    const childSessionKey = requireChildSessionKey(accepted);
     const childEntry = requireStoreEntry(store, childSessionKey);
     expect(childEntry.sessionId).toBe("forked-session-id");
     expect(childEntry.sessionFile).toBe("/tmp/forked-session.jsonl");
@@ -367,6 +376,9 @@ describe("sessions_spawn context modes", () => {
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
+      parentSessionKey: "main",
+      sessionKey: result.childSessionKey,
+      storePath,
     });
     const cleanupRequest = requireGatewayRequest("sessions.delete");
     expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
@@ -394,7 +406,10 @@ describe("sessions_spawn context modes", () => {
     expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
     expect(resolveContextEngineMock).toHaveBeenCalledTimes(1);
     expect(ensureContextEnginesInitializedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolveContextEngineMock.mock.invocationCallOrder[0],
+      expectDefined(
+        resolveContextEngineMock.mock.invocationCallOrder[0],
+        "resolveContextEngineMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

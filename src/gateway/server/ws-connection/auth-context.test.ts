@@ -1,7 +1,9 @@
 // WebSocket auth-context tests cover token, password, bootstrap, and device-token decision state.
 import { describe, expect, it, vi } from "vitest";
 import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
-import { resolveConnectAuthDecision, type ConnectAuthState } from "./auth-context.js";
+import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
+
+type ConnectAuthState = Awaited<ReturnType<typeof resolveConnectAuthState>>;
 
 type VerifyDeviceTokenFn = Parameters<typeof resolveConnectAuthDecision>[0]["verifyDeviceToken"];
 type VerifyBootstrapTokenFn = Parameters<
@@ -27,11 +29,17 @@ function createRateLimiter(params?: { allowed?: boolean; retryAfterMs?: number }
   const check = vi.fn(() => ({ allowed, retryAfterMs }));
   const reset = vi.fn();
   const recordFailure = vi.fn();
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
+    async (ip, scope) => {
+      recordFailure(ip, scope);
+    },
+  );
   return {
     limiter: {
       check,
       reset,
       recordFailure,
+      recordFailureAndDelay,
     } as unknown as AuthRateLimiter,
     check,
     reset,
@@ -53,8 +61,13 @@ function createPerScopeRateLimiter(
   });
   const reset = vi.fn();
   const recordFailure = vi.fn();
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
+    async (ip, scope) => {
+      recordFailure(ip, scope);
+    },
+  );
   return {
-    limiter: { check, reset, recordFailure } as unknown as AuthRateLimiter,
+    limiter: { check, reset, recordFailure, recordFailureAndDelay } as unknown as AuthRateLimiter,
     check,
     reset,
     recordFailure,

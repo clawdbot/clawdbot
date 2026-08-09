@@ -1,6 +1,6 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -15,79 +15,76 @@ function writeJson(path: string, value: unknown): void {
 function writeMigratedSessionState(stateDir: string): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   const agentDbDir = join(stateDir, "agents", "main", "agent");
-  const mainSessionFile = join(agentSessionsDir, "upgrade-main-session.jsonl");
-  const directSessionFile = join(agentSessionsDir, "upgrade-direct-session.jsonl");
-  const groupSessionFile = join(agentSessionsDir, "upgrade-group-session.jsonl");
   mkdirSync(agentSessionsDir, { recursive: true });
   mkdirSync(agentDbDir, { recursive: true });
-  writeFileSync(mainSessionFile, '{"type":"main"}\n');
-  writeFileSync(directSessionFile, '{"type":"direct"}\n');
-  writeFileSync(groupSessionFile, '{"type":"group"}\n');
-  writeJson(join(agentSessionsDir, "sessions.json"), {
-    "agent:main:main": {
-      sessionFile: mainSessionFile,
-      sessionId: "upgrade-main-session",
-      skillsSnapshot: {
-        prompt: "legacy prompt survives as metadata",
-      },
-    },
-    "agent:main:+15551234567": {
-      sessionFile: directSessionFile,
-      sessionId: "upgrade-direct-session",
-    },
-    "agent:main:slack:channel:cupgrade": {
-      sessionFile: groupSessionFile,
-      sessionId: "upgrade-group-session",
-    },
-  });
 
   const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS cache_entries (
-        scope TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT,
-        blob BLOB,
-        expires_at INTEGER,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (scope, key)
+      CREATE TABLE session_nodes (
+        session_key TEXT PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_windows (
+        session_id TEXT PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE transcript_events (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, seq),
+        FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
       );
     `);
-    const insert = db.prepare(`
-      INSERT INTO cache_entries (scope, key, value_json, updated_at)
+    const insertSession = db.prepare(`
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
       VALUES (?, ?, ?, ?)
     `);
-    insert.run(
-      "session_entries",
-      "agent:main:main",
-      JSON.stringify({
-        sessionFile: mainSessionFile,
-        sessionId: "upgrade-main-session",
-        skillsSnapshot: {
-          prompt: "legacy prompt survives as metadata",
+    const insertEntry = db.prepare(`
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    const insertTranscript = db.prepare(`
+      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    const migratedSessions = [
+      {
+        entry: {
+          skillsSnapshot: {
+            prompt: "legacy prompt survives as metadata",
+          },
         },
-      }),
-      1710000000000,
-    );
-    insert.run(
-      "session_entries",
-      "agent:main:+15551234567",
-      JSON.stringify({
-        sessionFile: directSessionFile,
+        sessionId: "upgrade-main-session",
+        sessionKey: "agent:main:main",
+      },
+      {
+        entry: {},
         sessionId: "upgrade-direct-session",
-      }),
-      1710000000100,
-    );
-    insert.run(
-      "session_entries",
-      "agent:main:slack:channel:cupgrade",
-      JSON.stringify({
-        sessionFile: groupSessionFile,
+        sessionKey: "agent:main:+15551234567",
+      },
+      {
+        entry: {},
         sessionId: "upgrade-group-session",
-      }),
-      1710000000200,
-    );
+        sessionKey: "agent:main:slack:channel:cupgrade",
+      },
+    ];
+    for (const { entry, sessionId, sessionKey } of migratedSessions) {
+      insertSession.run(sessionId, sessionKey, 1710000000000, 1710000000000);
+      insertEntry.run(sessionKey, sessionId, JSON.stringify(entry), 1710000000000);
+      insertTranscript.run(
+        sessionId,
+        1,
+        JSON.stringify({ type: "session", id: sessionId }),
+        1710000000000,
+      );
+    }
   } finally {
     db.close();
   }
@@ -145,7 +142,177 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
   }
 }
 
+function createUpdateRunSelfUpgradeSummary() {
+  const sourceVersion = "2026.4.26";
+  const targetVersion = "2026.7.2";
+  const note = "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE";
+  return {
+    status: "passed",
+    source: { spec: `openclaw@${sourceVersion}`, version: sourceVersion },
+    target: { tag: "latest", resolvedVersion: targetVersion },
+    installedVersion: targetVersion,
+    expectedRestartNote: note,
+    updateRpcResult: {
+      ok: true,
+      result: {
+        status: "ok",
+        before: { version: sourceVersion },
+        after: { version: targetVersion },
+        steps: [{ name: "package manager install" }],
+      },
+      restart: { scheduled: true },
+      sentinel: { payload: { message: note } },
+    },
+    restartSentinel: {
+      kind: "update",
+      status: "ok",
+      message: note,
+      stats: {
+        before: { version: sourceVersion },
+        after: { version: targetVersion },
+      },
+    },
+    qaChannelInstallRecord: {
+      source: "path",
+      sourcePath: "/tmp/source/dist/extensions/qa-channel",
+      installPath: "/tmp/source/dist/extensions/qa-channel",
+      version: "2026.4.25",
+    },
+    sourcePluginInspect: {
+      plugin: { id: "qa-channel", status: "loaded" },
+    },
+    targetPluginIndex: {
+      installRecords: {
+        "qa-channel": {
+          source: "path",
+          sourcePath: "/tmp/source/dist/extensions/qa-channel",
+          installPath: "/tmp/source/dist/extensions/qa-channel",
+          version: "2026.4.25",
+        },
+      },
+    },
+    supervisorHandoff: {
+      servicePid: 4242,
+      systemctlInvocations: ["--user start openclaw-gateway.service"],
+      monitorEvents: [
+        "source Gateway exited through supervised update handoff",
+        "starting installed service without provider suppression",
+        "service Gateway started pid=4242",
+      ],
+    },
+    gateway: {
+      healthz: { body: { ok: true, status: "live" } },
+      readyz: { body: { ready: true } },
+      status: {
+        cli: { version: targetVersion },
+        gateway: { version: targetVersion },
+        rpc: { ok: true, version: targetVersion },
+      },
+    },
+    qaChannel: {
+      status: {
+        channelAccounts: {
+          "qa-channel": [{ accountId: "default", running: true, restartPending: false }],
+        },
+      },
+      busPollsAfterRestart: 2,
+    },
+  };
+}
+
+function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSelfUpgradeSummary>) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-update-run-self-upgrade-"));
+  try {
+    const summaryPath = join(root, "summary.json");
+    writeJson(summaryPath, summary);
+    execFileSync(
+      process.execPath,
+      [ASSERTIONS_PATH, "assert-update-run-self-upgrade", summaryPath],
+      { stdio: "pipe" },
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("upgrade survivor assertions", () => {
+  it("lists the dependency-free scenario contract", () => {
+    const scenarios = JSON.parse(
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "list-scenarios"], {
+        encoding: "utf8",
+      }),
+    ) as string[];
+
+    expect(scenarios).toContain("base");
+    expect(scenarios).toContain("acpx-openclaw-tools-bridge");
+    expect(new Set(scenarios).size).toBe(scenarios.length);
+  });
+
+  it("seeds recent ordered legacy session timestamps", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+
+      const beforeSeed = Date.now();
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+        },
+        stdio: "pipe",
+      });
+      const afterSeed = Date.now();
+
+      const sessions = JSON.parse(
+        readFileSync(join(stateDir, "sessions", "sessions.json"), "utf8"),
+      ) as Record<string, { sessionId?: unknown; updatedAt?: unknown }>;
+      const seededRows = [
+        sessions.main,
+        sessions["+15551234567"],
+        sessions["slack:channel:CUPGRADE"],
+      ];
+      expect(seededRows.map((row) => row?.sessionId)).toEqual([
+        "upgrade-main-session",
+        "upgrade-direct-session",
+        "upgrade-group-session",
+      ]);
+
+      const timestamps = seededRows.map((row) => row?.updatedAt);
+      for (const timestamp of timestamps) {
+        expect(typeof timestamp).toBe("number");
+      }
+      const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
+        number,
+        number,
+        number,
+      ];
+      expect(directUpdatedAt - mainUpdatedAt).toBe(100);
+      expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
+      expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
+      expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
+
+      const dayMs = 24 * 60 * 60 * 1000;
+      const thirtyDaysMs = 30 * dayMs;
+      for (const [timestamp, offset] of [
+        [mainUpdatedAt, 0],
+        [directUpdatedAt, 100],
+        [groupUpdatedAt, 200],
+      ] as const) {
+        expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
+        expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
+        expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
+        expect(timestamp).toBeLessThanOrEqual(afterSeed);
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
     try {
@@ -218,5 +385,61 @@ describe("upgrade survivor assertions", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it("accepts executed update.run package transition and post-restart health evidence", () => {
+    expect(() => assertUpdateRunSelfUpgrade(createUpdateRunSelfUpgradeSummary())).not.toThrow();
+  });
+
+  it("rejects no-op update.run package transitions", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.target.resolvedVersion = summary.source.version;
+    summary.installedVersion = summary.source.version;
+    summary.updateRpcResult.result.after.version = summary.source.version;
+    summary.restartSentinel.stats.after.version = summary.source.version;
+    summary.gateway.status.gateway.version = summary.source.version;
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not advance beyond source/);
+  });
+
+  it("rejects unsupported update.run paths that did not execute package steps", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.updateRpcResult.ok = false;
+    summary.updateRpcResult.result.status = "skipped";
+    summary.updateRpcResult.result.steps = [];
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not report ok/);
+  });
+
+  it("rejects QA channel payloads without a canonical path install record", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.qaChannelInstallRecord.source = "npm";
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/was not path-installed/);
+  });
+
+  it("rejects upgrades that lose the path install during SQLite migration", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    Reflect.deleteProperty(summary.targetPluginIndex.installRecords, "qa-channel");
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(
+      /target SQLite index did not preserve/,
+    );
+  });
+
+  it("rejects source fixtures that were never runtime-loaded", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.sourcePluginInspect.plugin.status = "error";
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/source package did not load/);
+  });
+
+  it("rejects duplicate target service starts during the supervised handoff", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.supervisorHandoff.systemctlInvocations.push(
+      "--user --quiet start openclaw-gateway.service",
+    );
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/target exactly once/);
   });
 });

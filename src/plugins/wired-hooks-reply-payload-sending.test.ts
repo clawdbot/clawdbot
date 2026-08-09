@@ -1,12 +1,13 @@
 /** Tests reply payload sending through wired plugin hook flows. */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import type { PluginHookReplyPayload } from "./hook-types.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 const replyPayloadSendingEvent = {
   payload: { text: "hello" } satisfies ReplyPayload,
@@ -29,6 +30,46 @@ function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
 }
 
 describe("reply_payload_sending hook runner", () => {
+  it("fails open after the default per-handler timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const firstStarted = createDeferred();
+      const first = vi.fn(() => {
+        firstStarted.resolve();
+        return new Promise<never>(() => {});
+      });
+      const second = vi.fn().mockResolvedValue({ payload: { text: "after timeout" } });
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          { hookName: "reply_payload_sending", handler: first },
+          { hookName: "reply_payload_sending", handler: second },
+        ],
+        { logger },
+      );
+
+      const resultPromise = runner.runReplyPayloadSending(
+        replyPayloadSendingEvent,
+        replyPayloadSendingCtx,
+      );
+      await firstStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toEqual({
+        payload: { text: "after timeout" },
+        cancel: undefined,
+        reason: undefined,
+      });
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] reply_payload_sending handler from test-plugin failed: timed out after 15000ms",
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("passes the latest payload between handlers", async () => {
     const first = vi.fn().mockResolvedValue({
       payload: {

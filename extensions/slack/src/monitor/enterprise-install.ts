@@ -9,6 +9,7 @@ export type SlackInstallationIdentity =
       kind: "workspace";
       apiAppId?: string;
       teamId: string;
+      teamName?: string;
       enterpriseId?: string;
     }
   | {
@@ -21,8 +22,19 @@ export type SlackInstallationIdentity =
       reason: "auth_test_failed";
     };
 
+export type SlackIdentityHealth =
+  | {
+      lifecycle: "ready";
+      lastError: null;
+    }
+  | {
+      lifecycle: "blocked";
+      lastError: string;
+    };
+
 export type SlackAuthTestIdentity = {
   app_id?: unknown;
+  team?: unknown;
   team_id?: unknown;
   enterprise_id?: unknown;
   is_enterprise_install?: unknown;
@@ -108,8 +120,8 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
-    values: config.dm?.allowFrom,
-    path: `channels.slack.accounts.${accountId}.dm.allowFrom`,
+    values: config.allowFrom,
+    path: `channels.slack.accounts.${accountId}.allowFrom`,
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
@@ -234,10 +246,34 @@ export function resolveSlackInstallationIdentity(params: {
   if (!teamId) {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
+  const teamName = normalizeOptionalString(auth.team);
   return {
     kind: "workspace",
     teamId,
+    ...(teamName ? { teamName } : {}),
     ...(apiAppId ? { apiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
+}
+
+export function resolveSlackIdentityHealth(params: {
+  installationIdentity: SlackInstallationIdentity;
+  botUserId: string;
+  authTestError?: string;
+  authIdentityWarning?: string;
+}): SlackIdentityHealth {
+  // Org-wide installs intentionally have no single workspace bot user. Their
+  // enterprise identity is sufficient; applying the workspace gate would
+  // report every healthy org install as degraded.
+  if (params.installationIdentity.kind === "enterprise") {
+    return { lifecycle: "ready", lastError: null };
+  }
+
+  const lastError =
+    normalizeOptionalString(params.authTestError) ??
+    normalizeOptionalString(params.authIdentityWarning) ??
+    (params.installationIdentity.kind === "degraded" || !params.botUserId.trim()
+      ? "slack bot identity unavailable"
+      : undefined);
+  return lastError ? { lifecycle: "blocked", lastError } : { lifecycle: "ready", lastError: null };
 }

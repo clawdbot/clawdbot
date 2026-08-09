@@ -6,11 +6,11 @@ read_when:
 title: "Matrix push rules for quiet previews"
 ---
 
-When `channels.matrix.streaming` is `"quiet"`, OpenClaw streams the reply by editing a single preview event in place. Previews are sent as non-notifying `m.notice` events, and the finalized edit is marked with `content["com.openclaw.finalized_preview"] = true`. Matrix clients notify on that final edit only if a per-user push rule matches the marker. This page is for operators who self-host Matrix and want to install that rule for each recipient account.
+When `channels.matrix.streaming.mode` is `"quiet"`, OpenClaw streams the reply by editing a single preview event in place. Previews are sent as non-notifying `m.notice` events, and the finalized edit is marked with `content["com.openclaw.finalized_preview"] = true`. Matrix clients notify on that final edit only if a per-user push rule matches the marker. This page is for operators who self-host Matrix and want to install that rule for each recipient account.
 
-`streaming: "progress"` finalizes its drafts through the same path, so the same rule also fires for progress-mode finalized edits.
+`streaming.mode: "progress"` finalizes its drafts through the same path, so the same rule also fires for progress-mode finalized edits.
 
-If you only want stock Matrix notification behavior, use `streaming: "partial"` or leave streaming off. See [Matrix channel setup](/channels/matrix#streaming-previews).
+If you only want stock Matrix notification behavior, use `streaming.mode: "partial"` or leave streaming off. See [Matrix channel setup](/channels/matrix#streaming-previews).
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ If you only want stock Matrix notification behavior, use `streaming: "partial"` 
 {
   channels: {
     matrix: {
-      streaming: "quiet",
+      streaming: { mode: "quiet" },
     },
   },
 }

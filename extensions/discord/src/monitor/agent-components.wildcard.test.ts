@@ -3,25 +3,55 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
 let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
-let createDiscordComponentButton: typeof import("./agent-components.js").createDiscordComponentButton;
-let createDiscordComponentChannelSelect: typeof import("./agent-components.js").createDiscordComponentChannelSelect;
-let createDiscordComponentMentionableSelect: typeof import("./agent-components.js").createDiscordComponentMentionableSelect;
+type DiscordComponentFactory =
+  (typeof import("./agent-components.js").createDiscordComponentControls)[number];
+let createDiscordComponentButton: DiscordComponentFactory;
+let createDiscordComponentChannelSelect: DiscordComponentFactory;
+let createDiscordComponentMentionableSelect: DiscordComponentFactory;
 let createDiscordComponentModal: typeof import("./agent-components.js").createDiscordComponentModal;
-let createDiscordComponentRoleSelect: typeof import("./agent-components.js").createDiscordComponentRoleSelect;
-let createDiscordComponentStringSelect: typeof import("./agent-components.js").createDiscordComponentStringSelect;
-let createDiscordComponentUserSelect: typeof import("./agent-components.js").createDiscordComponentUserSelect;
+let createDiscordComponentRoleSelect: DiscordComponentFactory;
+let createDiscordComponentStringSelect: DiscordComponentFactory;
+let createDiscordComponentUserSelect: DiscordComponentFactory;
+
+function requireComponentFactory(
+  factories: readonly DiscordComponentFactory[],
+  index: number,
+): DiscordComponentFactory {
+  const factory = factories[index];
+  if (!factory) {
+    throw new Error(`missing Discord component factory ${index}`);
+  }
+  return factory;
+}
 
 beforeAll(async () => {
   ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } = await import("../components.js"));
-  ({
-    createDiscordComponentButton,
-    createDiscordComponentChannelSelect,
-    createDiscordComponentMentionableSelect,
-    createDiscordComponentModal,
-    createDiscordComponentRoleSelect,
-    createDiscordComponentStringSelect,
-    createDiscordComponentUserSelect,
-  } = await import("./agent-components.js"));
+  const components = await import("./agent-components.js");
+  ({ createDiscordComponentModal } = components);
+  createDiscordComponentButton = requireComponentFactory(
+    components.createDiscordComponentControls,
+    0,
+  );
+  createDiscordComponentStringSelect = requireComponentFactory(
+    components.createDiscordComponentControls,
+    1,
+  );
+  createDiscordComponentUserSelect = requireComponentFactory(
+    components.createDiscordComponentControls,
+    2,
+  );
+  createDiscordComponentRoleSelect = requireComponentFactory(
+    components.createDiscordComponentControls,
+    3,
+  );
+  createDiscordComponentMentionableSelect = requireComponentFactory(
+    components.createDiscordComponentControls,
+    4,
+  );
+  createDiscordComponentChannelSelect = requireComponentFactory(
+    components.createDiscordComponentControls,
+    5,
+  );
 });
 
 type WildcardComponent = {
@@ -34,7 +64,7 @@ function asWildcardComponent(value: unknown): WildcardComponent {
 }
 
 function createWildcardComponents() {
-  const context = {} as Parameters<typeof createDiscordComponentButton>[0];
+  const context = {} as Parameters<DiscordComponentFactory>[0];
   return [
     asWildcardComponent(createDiscordComponentButton(context)),
     asWildcardComponent(createDiscordComponentStringSelect(context)),

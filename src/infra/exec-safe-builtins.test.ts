@@ -1,4 +1,5 @@
 // Tests shell builtin detection for safe execution policy.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   evaluateExecAllowlist,
@@ -16,8 +17,8 @@ const builtinSegment = (argv: string[], resolvedPath?: string) => ({
   raw: argv.join(" "),
   resolution: makeMockCommandResolution({
     execution: makeMockExecutableResolution({
-      rawExecutable: argv[0],
-      executableName: argv[0],
+      rawExecutable: expectDefined(argv[0], "argv[0] test invariant"),
+      executableName: expectDefined(argv[0], "argv[0] test invariant"),
       resolvedPath,
     }),
   }),

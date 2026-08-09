@@ -16,7 +16,7 @@ Adds LM Studio model provider support to OpenClaw.
 
 ## Surface
 
-providers: lmstudio; contracts: memoryEmbeddingProviders
+providers: `lmstudio`; contracts: `memoryEmbeddingProviders`
 
 ## Related docs
 

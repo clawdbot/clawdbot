@@ -3,12 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import v8 from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type {
   DiagnosticMemoryPressureEvent,
   DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
@@ -245,15 +247,6 @@ function buildBundlePath(dir: string, now: Date, reason: string): string {
 
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
 }
 
 function readObject(value: unknown, label: string): Record<string, unknown> {
@@ -1027,10 +1020,10 @@ function collectActiveResources(): DiagnosticActiveResourceSummary | undefined {
 function sanitizeSessionEvidencePath(relativePath: string): string {
   const parts = relativePath.split("/");
   if (parts.length === 4 && parts[0] === "agents" && parts[2] === "sessions") {
-    return `agents/<agent>/sessions/${sanitizeSessionEvidenceFileName(parts[3])}`;
+    return `agents/<agent>/sessions/${sanitizeSessionEvidenceFileName(expectDefined(parts[3], "parts entry at 3"))}`;
   }
   if (parts.length === 2 && parts[0] === "sessions") {
-    return `sessions/${sanitizeSessionEvidenceFileName(parts[1])}`;
+    return `sessions/${sanitizeSessionEvidenceFileName(expectDefined(parts[1], "parts entry at 1"))}`;
   }
   return redactSensitiveText(relativePath, { mode: "tools" });
 }
@@ -1233,7 +1226,7 @@ function listDiagnosticStabilityBundleFilesSync(
       })
       .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return [];
     }
     throw error;
@@ -1420,3 +1413,4 @@ export function uninstallDiagnosticStabilityFatalHook(): void {
 export function resetDiagnosticStabilityBundleForTest(): void {
   uninstallDiagnosticStabilityFatalHook();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

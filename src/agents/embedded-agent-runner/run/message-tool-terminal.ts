@@ -20,7 +20,7 @@ function argsRecordForToolCall(context: AfterToolCallContext): Record<string, un
  * in message-tool-only delivery mode. Only implicit-route, non-dry-run,
  * delivered sends qualify; explicit routes and errors are not source replies.
  */
-export function isDeliveredMessageToolOnlySourceReply(params: {
+function isDeliveredMessageToolOnlySourceReply(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
   hookResult?: AfterToolCallResult;

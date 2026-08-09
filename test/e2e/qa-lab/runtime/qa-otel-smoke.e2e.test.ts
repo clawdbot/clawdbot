@@ -331,13 +331,13 @@ describe("qa-otel-smoke receiver bounds", () => {
 
       await Promise.race([
         receiver.close(),
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("receiver close timed out");
         }),
       ]);
       await Promise.race([
         socketClosed,
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("socket close timed out");
         }),
       ]);
@@ -569,7 +569,8 @@ describe("qa-otel-smoke receiver bounds", () => {
       stopDockerContainer,
       waitForLocalPort: async () => {},
       writeFile: async (_path, config) => {
-        writtenConfig = String(config);
+        writtenConfig =
+          typeof config === "string" ? config : Buffer.from(config as Uint8Array).toString("utf8");
       },
     });
 

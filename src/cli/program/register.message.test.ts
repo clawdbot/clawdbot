@@ -127,15 +127,56 @@ describe("registerMessageCommands", () => {
     }
   });
 
-  it("shows command help when root message command is invoked", async () => {
+  it("shows root message help without reporting a command failure", async () => {
     const program = new Command().exitOverride();
     registerMessageCommands(program, ctx);
     const message = requireProgramCommand(program, "message");
-    const helpSpy = vi.spyOn(message, "help").mockImplementation(() => {
-      throw new Error("help-called");
-    });
+    const helpSpy = vi.spyOn(message, "outputHelp").mockImplementation(() => {});
+    const originalExitCode = process.exitCode;
 
-    await expect(program.parseAsync(["message"], { from: "user" })).rejects.toThrow("help-called");
-    expect(helpSpy).toHaveBeenCalledWith({ error: true });
+    try {
+      process.exitCode = undefined;
+
+      await expect(program.parseAsync(["message"], { from: "user" })).resolves.toBe(program);
+
+      expect(helpSpy).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each([
+    ["thread", registerMessageThreadCommandsMock],
+    ["emoji", registerMessageEmojiCommandsMock],
+    ["sticker", registerMessageStickerCommandsMock],
+    ["role", registerMessageDiscordAdminCommandsMock],
+    ["channel", registerMessageDiscordAdminCommandsMock],
+    ["member", registerMessageDiscordAdminCommandsMock],
+    ["voice", registerMessageDiscordAdminCommandsMock],
+    ["event", registerMessageDiscordAdminCommandsMock],
+  ])("shows message %s help without reporting a command failure", async (name, registerCommand) => {
+    registerCommand.mockImplementationOnce((message: Command) => {
+      message
+        .command(name)
+        .command("action")
+        .action(() => {});
+    });
+    const program = new Command().exitOverride();
+    registerMessageCommands(program, ctx);
+    const parent = requireProgramCommand(requireProgramCommand(program, "message"), name);
+    const helpSpy = vi.spyOn(parent, "outputHelp").mockImplementation(() => {});
+    const originalExitCode = process.exitCode;
+
+    try {
+      process.exitCode = undefined;
+
+      await expect(program.parseAsync(["message", name], { from: "user" })).resolves.toBe(program);
+
+      expect(helpSpy).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.exitCode = originalExitCode;
+    }
   });
 });

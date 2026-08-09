@@ -16,7 +16,7 @@ OpenClaw Featherless AI provider plugin.
 
 ## Surface
 
-providers: featherless
+providers: `featherless`
 
 ## Related docs
 

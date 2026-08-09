@@ -17,6 +17,16 @@ private func toolCallContent(name: String) -> OpenClawChatMessageContent {
         name: name)
 }
 
+private func thinkingContent(_ thinking: String) -> OpenClawChatMessageContent {
+    OpenClawChatMessageContent(
+        type: "thinking",
+        text: nil,
+        thinking: thinking,
+        mimeType: nil,
+        fileName: nil,
+        content: nil)
+}
+
 @Suite("ChatMessageVisibleText")
 struct ChatMessageVisibleTextTests {
     @Test func `assistant visible text skips non text blocks`() {
@@ -40,6 +50,73 @@ struct ChatMessageVisibleTextTests {
             timestamp: 1)
 
         #expect(ChatMessageVisibleText.visibleText(in: message) == "What is <final>up</final>?")
+    }
+
+    @Test func `assistant copy excludes thinking while user copy stays exact`() {
+        let assistant = OpenClawChatMessage(
+            role: "assistant",
+            content: [textContent("<think>private reasoning</think>\nVisible **answer**")],
+            timestamp: 1)
+        let user = OpenClawChatMessage(
+            role: "user",
+            content: [textContent("Keep <think>this literal tag</think>")],
+            timestamp: 1)
+
+        #expect(ChatMessageVisibleText.copyText(in: assistant) == "Visible **answer**")
+        #expect(ChatMessageVisibleText.copyText(in: user) == "Keep <think>this literal tag</think>")
+    }
+
+    @Test func `assistant display includes structured thinking only when enabled`() {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                thinkingContent("Check the persisted state."),
+                textContent("Here is the answer."),
+                toolCallContent(name: "read"),
+            ],
+            timestamp: 1)
+
+        #expect(ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            == "Here is the answer.")
+        #expect(ChatMessageVisibleText.displayText(in: message, includeThinking: true)
+            == "<think>\nCheck the persisted state.\n</think>\nHere is the answer.")
+        #expect(ChatMessageVisibleText.copyText(in: message) == "Here is the answer.")
+    }
+
+    @Test func `history decode retains transcript identity and truncation signals`() throws {
+        let metadata = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(#"{"role":"assistant","content":"short","__openclaw":{"id":"msg-1","truncated":true}}"#.utf8))
+        let marker = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(#"{"role":"assistant","content":"short\n...(truncated)...","__openclaw":{"id":"msg-2"}}"#.utf8))
+
+        #expect(metadata.transcriptMessageID == "msg-1")
+        #expect(metadata.isTruncated)
+        #expect(marker.transcriptMessageID == "msg-2")
+        #expect(marker.isTruncated)
+    }
+
+    @Test func `transcript metadata survives message coding round trip`() throws {
+        let original = OpenClawChatMessage(
+            role: "assistant",
+            content: [textContent("short\n...(truncated)...")],
+            timestamp: 1,
+            transcriptMessageID: "msg-round-trip",
+            isTruncated: true)
+
+        let decoded = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: JSONEncoder().encode(original))
+
+        #expect(decoded.transcriptMessageID == "msg-round-trip")
+        #expect(decoded.isTruncated)
+    }
+
+    @Test func `legacy trace mapping sets both independent display options`() {
+        #expect(OpenClawChatDisplayOptions.assistantTrace(true) == [.reasoning, .toolActivity])
+        #expect(OpenClawChatDisplayOptions.assistantTrace(false).isEmpty)
+        #expect(OpenClawChatDisplayOptions.reasoning != .toolActivity)
     }
 
     @Test func `has visible text ignores tool blank and thinking only messages`() {

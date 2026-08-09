@@ -1,7 +1,7 @@
 // Qqbot tests cover typing keepalive plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReplyLimiter } from "../messaging/reply-limiter.js";
-import { TypingKeepAlive, TYPING_INPUT_SECOND, TYPING_RENEWAL_LIMIT } from "./typing-keepalive.js";
+import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
 
 function createTypingClaim(messageId: string) {
   const limiter = new ReplyLimiter({ limit: 5 });
@@ -58,12 +58,11 @@ describe("TypingKeepAlive", () => {
 
     keepAlive.start();
 
-    await vi.advanceTimersByTimeAsync(5_000 * TYPING_RENEWAL_LIMIT);
-    expect(TYPING_RENEWAL_LIMIT).toBe(3);
-    expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
+    await vi.advanceTimersByTimeAsync(5_000 * 3);
+    expect(sendInputNotify).toHaveBeenCalledTimes(3);
 
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
+    expect(sendInputNotify).toHaveBeenCalledTimes(3);
   });
 
   it("counts token-refresh retry attempts against the renewal budget", async () => {
@@ -91,7 +90,7 @@ describe("TypingKeepAlive", () => {
 
     // Only one renewal attempt remains before the reserved final-reply slot.
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
+    expect(sendInputNotify).toHaveBeenCalledTimes(3);
   });
 
   it("suppresses overlapping renewals while a send is still in flight", async () => {

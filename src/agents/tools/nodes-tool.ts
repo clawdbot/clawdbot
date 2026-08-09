@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
@@ -37,6 +36,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_snap",
   "camera_list",
   "camera_clip",
+  "camera_ptz",
   "photos_latest",
   "screen_record",
   "screen_snapshot",
@@ -47,6 +47,7 @@ const NODES_TOOL_ACTIONS = [
   "device_info",
   "device_permissions",
   "device_health",
+  "which",
   "invoke",
 ] as const;
 
@@ -54,6 +55,7 @@ const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
+const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
@@ -110,7 +112,29 @@ const NodesToolSchema = Type.Object({
   maxWidth: optionalPositiveIntegerSchema(),
   quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
   delayMs: optionalNonNegativeIntegerSchema(),
-  deviceId: Type.Optional(Type.String()),
+  deviceId: Type.Optional(
+    Type.String({
+      description:
+        "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+    }),
+  ),
+  // camera_ptz
+  ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
+    description:
+      "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+  }),
+  panDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  tiltDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  zoomPercent: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+  }),
   limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
@@ -127,6 +151,14 @@ const NodesToolSchema = Type.Object({
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
+  // which
+  bins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: "which: executable names to resolve on the selected node.",
+    }),
+  ),
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
@@ -135,7 +167,7 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string | number;
@@ -152,7 +184,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "List paired nodes with status; describe/control a specific node by passing node. Supports pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -213,8 +245,8 @@ export function createNodesTool(options?: {
               nodeId,
               command: "system.notify",
               params: {
-                title: title.trim() || undefined,
-                body: body.trim() || undefined,
+                title: title.trim(),
+                body: body.trim(),
                 sound: typeof params.sound === "string" ? params.sound : undefined,
                 priority: typeof params.priority === "string" ? params.priority : undefined,
                 delivery: typeof params.delivery === "string" ? params.delivery : undefined,
@@ -242,6 +274,7 @@ export function createNodesTool(options?: {
             });
           }
           case "camera_list":
+          case "camera_ptz":
           case "notifications_list":
           case "device_status":
           case "device_info":
@@ -251,6 +284,7 @@ export function createNodesTool(options?: {
               action: action as NodeCommandAction,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -260,6 +294,7 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -296,6 +331,17 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
+              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
+            });
+          }
+          case "which": {
+            return await executeNodeCommandAction({
+              action,
+              input: params,
+              gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -305,6 +351,7 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -321,7 +368,10 @@ export function createNodesTool(options?: {
             : "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
-        const pairing = action === "invoke" ? readConnectPairingRequiredMessage(message) : null;
+        const pairing =
+          action === "invoke" || action === "which"
+            ? readConnectPairingRequiredMessage(message)
+            : null;
         if (pairing) {
           const requestId = pairing.requestId ?? null;
           const approveHint = requestId

@@ -63,52 +63,13 @@ function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
   );
 }
 
-function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
-  signal: AbortSignal;
-  cleanup(): void;
-} {
-  const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (present.length === 0) {
-    return { signal: new AbortController().signal, cleanup: () => undefined };
-  }
-  if (present.length === 1) {
-    return { signal: present[0], cleanup: () => undefined };
-  }
-  const anyFn = (
-    AbortSignal as unknown as {
-      any?: (signals: AbortSignal[]) => AbortSignal;
-    }
-  ).any;
-  if (typeof anyFn === "function") {
-    return { signal: anyFn(present), cleanup: () => undefined };
-  }
-  const controller = new AbortController();
-  const alreadyAborted = present.find((signal) => signal.aborted);
-  if (alreadyAborted) {
-    controller.abort((alreadyAborted as { reason?: unknown }).reason);
-    return { signal: controller.signal, cleanup: () => undefined };
-  }
-  const unsubscribe: Array<() => void> = [];
-  for (const signal of present) {
-    const onAbort = () => controller.abort((signal as { reason?: unknown }).reason);
-    signal.addEventListener("abort", onAbort, { once: true });
-    unsubscribe.push(() => signal.removeEventListener("abort", onAbort));
-  }
-  return {
-    signal: controller.signal,
-    cleanup() {
-      for (const remove of unsubscribe) {
-        remove();
-      }
-      unsubscribe.length = 0;
-    },
-  };
-}
-
 const STALLED_STREAM_ERROR_MESSAGE =
   "opencode-go stream timed out after provider-owned SSE boundary stalled";
 
-function buildStalledErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
+function buildStalledErrorEvent(
+  partial: AssistantMessage | undefined,
+  model: Parameters<ProviderStreamFn>[0],
+): AssistantMessageEvent {
   if (partial) {
     return {
       type: "error",
@@ -123,11 +84,14 @@ function buildStalledErrorEvent(partial: AssistantMessage | undefined): Assistan
   return {
     type: "error",
     reason: "error",
-    error: synthesizeMinimalAssistantMessage(STALLED_STREAM_ERROR_MESSAGE, "error"),
+    error: synthesizeMinimalAssistantMessage(STALLED_STREAM_ERROR_MESSAGE, "error", model),
   };
 }
 
-function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
+function buildUnterminatedErrorEvent(
+  partial: AssistantMessage | undefined,
+  model: Parameters<ProviderStreamFn>[0],
+): AssistantMessageEvent {
   if (partial) {
     return {
       type: "error",
@@ -145,6 +109,7 @@ function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): Ass
     error: synthesizeMinimalAssistantMessage(
       "opencode-go stream ended without a terminal event",
       "error",
+      model,
     ),
   };
 }
@@ -152,6 +117,7 @@ function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): Ass
 function buildCaughtErrorEvent(
   partial: AssistantMessage | undefined,
   error: unknown,
+  model: Parameters<ProviderStreamFn>[0],
 ): AssistantMessageEvent {
   const message = error instanceof Error ? error.message : String(error);
   if (partial) {
@@ -168,20 +134,21 @@ function buildCaughtErrorEvent(
   return {
     type: "error",
     reason: "error",
-    error: synthesizeMinimalAssistantMessage(message, "error"),
+    error: synthesizeMinimalAssistantMessage(message, "error", model),
   };
 }
 
 function synthesizeMinimalAssistantMessage(
   errorMessage: string,
   stopReason: AssistantMessage["stopReason"],
+  model: Parameters<ProviderStreamFn>[0],
 ): AssistantMessage {
   return {
     role: "assistant",
     content: [],
-    api: "openai-completions",
-    provider: "opencode-go",
-    model: "",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
     usage: {
       input: 0,
       output: 0,
@@ -239,17 +206,17 @@ export function createOpencodeGoStalledStreamWrapper(
     const idleTimeoutMs = resolveTimeoutMs(model, idleTimeoutMsDefault);
     const firstEventTimeoutMs = resolveTimeoutMs(model, firstEventTimeoutMsDefault);
     const controller = new AbortController();
-    const combinedSignal = combineAbortSignals([
-      (callOptions as { signal?: AbortSignal } | undefined)?.signal,
-      controller.signal,
-    ]);
+    const callerSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, controller.signal])
+      : controller.signal;
     const wrappedOptions = {
       ...callOptions,
       // This provider owns the raw SSE stall policy. Preserve that longer first
       // event window when delegating to OpenAI-compatible streams so the generic
       // embedded-runner default cannot shorten opencode-go prompt evaluation.
       firstEventTimeoutMs,
-      signal: combinedSignal.signal,
+      signal,
     };
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let lastSeenPartial: AssistantMessage | undefined;
@@ -265,7 +232,6 @@ export function createOpencodeGoStalledStreamWrapper(
 
     const cleanup = () => {
       clearIdleTimer();
-      combinedSignal.cleanup();
     };
 
     const releaseBaseStream = () => {
@@ -293,9 +259,8 @@ export function createOpencodeGoStalledStreamWrapper(
       settled = true;
       clearIdleTimer();
       controller.abort(new Error("opencode-go stream stalled"));
-      combinedSignal.cleanup();
       releaseBaseStream();
-      output.push(buildStalledErrorEvent(lastSeenPartial));
+      output.push(buildStalledErrorEvent(lastSeenPartial, model));
       output.end();
     };
 
@@ -350,7 +315,7 @@ export function createOpencodeGoStalledStreamWrapper(
             return;
           }
           if (result.done) {
-            finishWith(buildUnterminatedErrorEvent(lastSeenPartial));
+            finishWith(buildUnterminatedErrorEvent(lastSeenPartial, model));
             return;
           }
           const event = result.value;
@@ -367,7 +332,7 @@ export function createOpencodeGoStalledStreamWrapper(
         }
       } catch (error) {
         if (!settled) {
-          finishWith(buildCaughtErrorEvent(lastSeenPartial, error));
+          finishWith(buildCaughtErrorEvent(lastSeenPartial, error, model));
         }
       } finally {
         cleanup();

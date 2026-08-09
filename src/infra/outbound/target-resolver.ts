@@ -28,10 +28,10 @@ import {
 } from "./target-normalization.js";
 
 /** Directory-backed destination kind used by outbound target resolution. */
-export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
+type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
 /** Strategy for resolving multiple matching directory entries. */
-export type ResolveAmbiguousMode = "error" | "best" | "first";
+type ResolveAmbiguousMode = "error" | "best" | "first";
 
 /** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
@@ -43,7 +43,7 @@ export type ResolvedMessagingTarget = {
 };
 
 /** Result of resolving a user-supplied outbound target. */
-export type ResolveMessagingTargetResult =
+type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
@@ -74,8 +74,12 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
 /** Clears cached directory entries for all channels or one channel/account scope. */
-export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
-  if (!params?.channel) {
+export function resetDirectoryCache(params?: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}) {
+  if (!params) {
     directoryCache.clear();
     return;
   }
@@ -89,7 +93,7 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
       return true;
     }
     return key.startsWith(`${channelKey}:${accountKey}:`);
-  });
+  }, params.cfg);
 }
 
 function normalizeQuery(value: string): string {
@@ -408,7 +412,7 @@ function pickAmbiguousMatch(
 }
 
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
-export async function resolveMessagingTarget(params: {
+async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   input: string;
@@ -479,6 +483,9 @@ export async function resolveMessagingTarget(params: {
   });
   if (match.kind === "single") {
     const entry = match.entry;
+    if (!entry) {
+      throw new Error("Single directory match is missing its entry");
+    }
     return {
       ok: true,
       target: {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
+import { isPathInside } from "../../../infra/path-safety.js";
 import { resolveConfigDir, resolveUserPath } from "../../../utils.js";
 import { removeStalePluginRuntimeSymlinks } from "./plugin-runtime-symlinks.js";
 
@@ -19,7 +20,7 @@ interface CleanupTarget {
   readonly rawPath?: string;
 }
 
-export interface LegacyPluginDependencyStateIssue {
+interface LegacyPluginDependencyStateIssue {
   readonly kind: "legacy-plugin-dependency-state";
   readonly path: string;
 }
@@ -90,11 +91,6 @@ async function isFile(targetPath: string): Promise<boolean> {
   return stat?.isFile() === true;
 }
 
-function isPathInsideRoot(candidate: string, root: string): boolean {
-  const relativePath = path.relative(root, candidate);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
-}
-
 async function collectDirectChildren(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   return entries.map((entry) => path.join(root, entry.name));
@@ -109,7 +105,7 @@ async function isDirectoryInCleanupRoot(
     return false;
   }
   const realPath = await fs.realpath(candidate).catch(() => null);
-  return realPath !== null && isPathInsideRoot(realPath, cleanupRootRealPath);
+  return realPath !== null && isPathInside(cleanupRootRealPath, realPath);
 }
 
 async function collectLegacyExtensionDebris(
@@ -253,7 +249,7 @@ function filterLegacyStaleRootCandidates(
       warnings.push(`Skipped legacy plugin dependency state ${targetPath}: unexpected path name`);
       continue;
     }
-    if (!cleanupRootPaths.some((rootPath) => isPathInsideRoot(targetPath, rootPath))) {
+    if (!cleanupRootPaths.some((rootPath) => isPathInside(rootPath, targetPath))) {
       warnings.push(
         `Skipped legacy plugin dependency state ${targetPath}: outside OpenClaw cleanup roots`,
       );
@@ -295,7 +291,7 @@ async function resolveSafeRemovalTarget(
     }
     return { target: targetPath };
   }
-  if (!cleanupRoots.some((root) => isPathInsideRoot(realPath, root.realPath))) {
+  if (!cleanupRoots.some((root) => isPathInside(root.realPath, realPath))) {
     return {
       warning: `Skipped legacy plugin dependency state ${targetPath}: resolved outside OpenClaw cleanup roots`,
     };
@@ -475,9 +471,8 @@ export async function cleanupLegacyPluginDependencyState(params: {
   return { changes, warnings };
 }
 
-export const testing = {
-  collectLegacyPluginDependencyTargets,
-  detectLegacyPluginDependencyStateIssues,
-  legacyPluginDependencyStateIssueToHealthFinding,
-};
-export { testing as __testing };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.pluginDependencyCleanupTestApi")
+  ] = { collectLegacyPluginDependencyTargets };
+}

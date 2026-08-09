@@ -1,5 +1,6 @@
 // web_fetch SSRF tests cover URL, DNS, redirect, and proxy policy enforcement
 // before network requests reach fetch or provider fallbacks.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -15,7 +16,7 @@ function redirectResponse(location: string): Response {
     ok: false,
     status: 302,
     headers: makeFetchHeaders({ location }),
-    body: { cancel: vi.fn() },
+    body: { cancel: vi.fn(async () => undefined) },
   } as unknown as Response;
 }
 
@@ -44,13 +45,16 @@ function expectRawFetchSuccessDetails(details: unknown) {
 
 function firstFetchUrl(fetchSpy: ReturnType<typeof setMockFetch>): string {
   const input = fetchSpy.mock.calls[0]?.[0];
-  return input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+  return expectDefined(
+    input instanceof Request ? input.url : input instanceof URL ? input.href : input,
+    "input instanceof Request ? input.url : input instanceof URL ? input.h... test invariant",
+  );
 }
 
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
   useTrustedEnvProxy?: boolean;
-  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
+  ssrfPolicy?: ssrf.SsrFPolicy;
   cacheTtlMinutes?: number;
 }) {
   return createWebFetchTool({
@@ -128,6 +132,26 @@ describe("web_fetch SSRF protection", () => {
     }
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "private-network opt-in",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    },
+    {
+      name: "exact hostname opt-in",
+      ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+    },
+  ])("allows loopback with an explicit $name", async ({ ssrfPolicy }) => {
+    lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("local ok"));
+    const tool = createWebFetchToolForTest({ ssrfPolicy });
+
+    const result = await tool?.execute?.("call", { url: "http://127.0.0.1/test" });
+
+    expectRawFetchSuccessDetails(result?.details);
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
   it("blocks when DNS resolves to private addresses", async () => {

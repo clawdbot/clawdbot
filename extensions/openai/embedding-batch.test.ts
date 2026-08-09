@@ -1,7 +1,7 @@
 // Openai tests cover embedding batch plugin behavior.
 import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
-import { parseOpenAiBatchOutput, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -82,11 +82,159 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
   });
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 describe("OpenAI embedding batch output", () => {
-  it("wraps malformed JSONL output", () => {
-    expect(() => parseOpenAiBatchOutput('{"custom_id":"ok"}\n{not json')).toThrow(
-      "OpenAI embedding batch output contained malformed JSONL",
-    );
+  it.each([
+    {
+      name: "pending status",
+      pollIntervalMs: 2_000,
+      expectedWaits: [500],
+      retryFirstStatus: false,
+    },
+    {
+      name: "retry backoff",
+      pollIntervalMs: 500,
+      expectedWaits: [500, 500],
+      retryFirstStatus: true,
+    },
+  ])("clamps $name waits to the remaining batch timeout", async (scenario) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // Provider error-body reads own independent 10s chunk timers; only poll
+    // delays belong to the embedding batch's 1s operation deadline.
+    const pollTimeoutCalls = () =>
+      setTimeoutSpy.mock.calls.filter(([, timeout]) =>
+        scenario.expectedWaits.includes(Number(timeout)),
+      );
+    let statusCalls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "in_progress" });
+      }
+      if (url.endsWith("/batches/batch-0")) {
+        statusCalls += 1;
+        if (scenario.retryFirstStatus && statusCalls === 1) {
+          return jsonResponse({ error: { message: "retry status" } }, 503);
+        }
+        return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+      }
+      if (url.endsWith("/files/output-0/content")) {
+        return new Response(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [1] }] } },
+          }),
+        );
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    const result = runOpenAiEmbeddingBatches({
+      openAi: {
+        baseUrl: "https://openai-compatible.example/v1",
+        headers: { Authorization: "Bearer test" },
+        model: "text-embedding-3-small",
+        fetchImpl,
+      },
+      agentId: "main",
+      requests: [
+        {
+          custom_id: "0",
+          method: "POST",
+          url: "/v1/embeddings",
+          body: { model: "text-embedding-3-small", input: "payload" },
+        },
+      ],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: scenario.pollIntervalMs,
+      timeoutMs: 1_000,
+      debug: (message) => {
+        if (!scenario.retryFirstStatus && message.includes("batch-0 in_progress")) {
+          vi.setSystemTime(500);
+        }
+      },
+    });
+    const rejection = expect(result).rejects.toMatchObject({
+      message: "openai batch batch-0 timed out after 1000ms",
+      ...(scenario.retryFirstStatus ? { cause: { status: 503 } } : {}),
+    });
+
+    for (const [index, waitMs] of scenario.expectedWaits.entries()) {
+      for (let attempt = 0; attempt < 100 && pollTimeoutCalls().length < index + 1; attempt++) {
+        await Promise.resolve();
+      }
+      expect(pollTimeoutCalls()).toHaveLength(index + 1);
+      expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
+      await vi.advanceTimersByTimeAsync(waitMs);
+    }
+    await rejection;
+    expect(statusCalls).toBe(scenario.retryFirstStatus ? 1 : 0);
+  });
+
+  it("reads a completed error file before downloading successful output", async () => {
+    let outputFetched = false;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "input-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({
+          id: "batch-0",
+          status: "completed",
+          output_file_id: "output-0",
+          error_file_id: "error-0",
+        });
+      }
+      if (url.endsWith("/files/error-0/content")) {
+        return new Response(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 500, message: "provider rejected request" },
+            error: null,
+          }),
+        );
+      }
+      if (url.endsWith("/files/output-0/content")) {
+        outputFetched = true;
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches({
+        openAi: {
+          baseUrl: "https://openai-compatible.example/v1",
+          headers: { Authorization: "Bearer test" },
+          model: "text-embedding-3-small",
+          fetchImpl,
+        },
+        agentId: "main",
+        requests: [
+          {
+            custom_id: "0",
+            method: "POST",
+            url: "/v1/embeddings",
+            body: { model: "text-embedding-3-small", input: "payload" },
+          },
+        ],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("openai batch batch-0 completed: provider rejected request");
+    expect(outputFetched).toBe(false);
   });
 
   it("splits provider uploads by serialized JSONL byte cap", async () => {
@@ -586,6 +734,63 @@ describe("OpenAI embedding batch output", () => {
     expect(outputChunksSent).toBeLessThan(outputChunkCount);
   });
 
+  it("retries normalized transient batch-status errors", async () => {
+    let statusCalls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "in_progress" });
+      }
+      if (url.endsWith("/batches/batch-0")) {
+        statusCalls += 1;
+        return statusCalls === 1
+          ? jsonResponse({ error: { message: "retry status" } }, 503)
+          : jsonResponse({
+              id: "batch-0",
+              status: "completed",
+              output_file_id: "output-0",
+            });
+      }
+      if (url.endsWith("/files/output-0/content")) {
+        return new Response(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [1] }] } },
+          }),
+        );
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    const result = await runOpenAiEmbeddingBatches({
+      openAi: {
+        baseUrl: "https://openai-compatible.example/v1",
+        headers: { Authorization: "Bearer test" },
+        model: "text-embedding-3-small",
+        fetchImpl,
+      },
+      agentId: "main",
+      requests: [
+        {
+          custom_id: "0",
+          method: "POST",
+          url: "/v1/embeddings",
+          body: { model: "text-embedding-3-small", input: "payload" },
+        },
+      ],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1,
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual(new Map([["0", [1]]]));
+    expect(statusCalls).toBe(2);
+  });
+
   it("bounds batch resource error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
       status: 400,
@@ -633,7 +838,7 @@ describe("OpenAI embedding batch output", () => {
         pollIntervalMs: 1,
         timeoutMs: 60_000,
       }),
-    ).rejects.toThrow(/openai batch status failed: 400 batch status unavailable/);
+    ).rejects.toMatchObject({ name: "ProviderHttpError", status: 400, statusCode: 400 });
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });

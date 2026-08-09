@@ -17,7 +17,7 @@ import {
   consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
   writeGatewayRestartIntentSync,
-} from "./restart.js";
+} from "./restart-intent.js";
 
 const tempDirs: string[] = [];
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;

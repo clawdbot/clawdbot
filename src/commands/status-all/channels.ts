@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
@@ -25,15 +26,17 @@ import {
   markConfiguredUnavailableCredentialStatusesAvailable,
 } from "../../channels/status/read-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   summarizeTokenConfig,
   type ChannelAccountTokenSummaryRow,
 } from "./channels-token-summary.js";
 import { formatTimeAgo } from "./format.js";
 
-export type ChannelRow = {
+type ChannelRow = {
   id: ChannelId;
   label: string;
   enabled: boolean;
@@ -153,12 +156,16 @@ const buildAccountNotes = (params: {
     plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ?? snapshot.allowFrom;
   if (allowFrom?.length) {
     // Cap allow-list output so large channel policies do not dominate the status table.
+    const allowInternationalDigits =
+      plugin.configSchema?.uiHints?.allowFrom?.presentation === "phone-number";
     const formatted = formatChannelAllowFrom({
       plugin,
       cfg,
       accountId: snapshot.accountId,
       allowFrom,
-    }).slice(0, 3);
+    })
+      .slice(0, 3)
+      .map((allowEntry) => formatPhoneNumberForCli(allowEntry, { allowInternationalDigits }));
     if (formatted.length > 0) {
       notes.push(`allow:${formatted.join(",")}`);
     }
@@ -250,9 +257,17 @@ export async function buildChannelsTable(
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
   const credentialResolutionSkipped = opts?.credentialResolutionSkipped === true;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
+    config: cfg,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
+  });
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins,
+    metadataSnapshot,
   });
   for (const plugin of readOnlyPlugins.plugins) {
     // Use the plugin's default account even when no accounts are configured so setup guidance is concrete.
@@ -374,7 +389,7 @@ export async function buildChannelsTable(
         if (link.statusState === "linked") {
           const extra: string[] = [];
           if (link.selfE164) {
-            extra.push(link.selfE164);
+            extra.push(formatPhoneNumberForCli(link.selfE164));
           }
           if (link.authAgeMs != null && link.authAgeMs >= 0) {
             extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
@@ -393,7 +408,7 @@ export async function buildChannelsTable(
         const base = link.linked ? "linked" : "not linked";
         const extra: string[] = [];
         if (link.linked && link.selfE164) {
-          extra.push(link.selfE164);
+          extra.push(formatPhoneNumberForCli(link.selfE164));
         }
         if (link.linked && link.authAgeMs != null && link.authAgeMs >= 0) {
           extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
@@ -510,15 +525,19 @@ export async function buildChannelsTable(
     ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
     ...listExplicitConfiguredChannelIdsForConfig(cfg),
   ]);
+  const missingHintsByChannelId = new Map(
+    resolveMissingOfficialExternalChannelPluginRepairHints({
+      config: cfg,
+      activationSourceConfig: sourceConfig,
+      channelIds: missingCandidateChannelIds,
+      manifestRecords: metadataSnapshot.plugins,
+    }).map((hint) => [hint.channelId, hint]),
+  );
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
       continue;
     }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-      config: cfg,
-      activationSourceConfig: sourceConfig,
-      channelId,
-    });
+    const hint = missingHintsByChannelId.get(channelId);
     if (!hint || hint.channelId !== channelId) {
       if (!includeSetupFallbackPlugins && explicitConfiguredChannelIds.has(channelId)) {
         // Fast mode intentionally skips setup fallback plugins, but configured ids still deserve visibility.

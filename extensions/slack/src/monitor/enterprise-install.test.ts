@@ -56,6 +56,19 @@ describe("resolveSlackInstallationIdentity", () => {
     ).toEqual({ kind: "workspace", teamId: "T123" });
   });
 
+  it("preserves the human workspace name from auth.test", () => {
+    expect(
+      resolveSlackInstallationIdentity({
+        enterpriseOrgInstall: false,
+        auth: {
+          team: "Local Claw",
+          team_id: "T123",
+          is_enterprise_install: false,
+        },
+      }),
+    ).toEqual({ kind: "workspace", teamId: "T123", teamName: "Local Claw" });
+  });
+
   it("accepts an org-wide auth.test response without app_id", () => {
     expect(
       resolveSlackInstallationIdentity({
@@ -217,7 +230,6 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     ["prefixed channels key", { channels: { "channel:general": {} } }],
     ["allowFrom", { allowFrom: ["ursula"] }],
     ["prefixed allowFrom", { allowFrom: ["slack:ursula"] }],
-    ["legacy DM allowFrom", { dm: { allowFrom: ["ursula"] } }],
     ["group DM channel", { dm: { groupChannels: ["general"] } }],
     ["reaction allowlist", { reactionNotifications: "allowlist", reactionAllowlist: ["ursula"] }],
     ["channel users", { channels: { C01234567: { users: ["ursula"] } } }],

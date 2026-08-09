@@ -5,6 +5,7 @@ type Continuation = NonNullable<SessionEntry["cronRunContinuation"]>;
 const mocks = vi.hoisted(() => ({
   deleteEntry: vi.fn(async () => ({ deleted: true, archivedTranscripts: [] })),
   hasPendingMedia: vi.fn(() => false),
+  loadPendingSessionDeliveries: vi.fn(async () => []),
   loadEntry: vi.fn<() => SessionEntry | undefined>(),
 }));
 
@@ -16,6 +17,12 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 }));
 vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "current-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) =>
+    generation === "current-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
+}));
+vi.mock("../infra/session-delivery-queue.js", () => ({
+  loadPendingSessionDeliveries: mocks.loadPendingSessionDeliveries,
 }));
 vi.mock("./task-status-access.js", () => ({
   hasPendingGeneratedMediaTaskForSessionKey: mocks.hasPendingMedia,
@@ -50,6 +57,7 @@ describe("removeCronRunContinuationSessionIfIdle", () => {
   beforeEach(() => {
     mocks.deleteEntry.mockClear();
     mocks.hasPendingMedia.mockReset();
+    mocks.loadPendingSessionDeliveries.mockReset().mockResolvedValue([]);
     mocks.loadEntry.mockReset();
   });
 
@@ -65,5 +73,49 @@ describe("removeCronRunContinuationSessionIfIdle", () => {
     await removeCronRunContinuationSessionIfIdle(sessionKey);
 
     expect(mocks.deleteEntry).toHaveBeenCalledTimes(deleted ? 1 : 0);
+  });
+
+  it("keeps a continuation while its durable session delivery is pending", async () => {
+    mocks.loadPendingSessionDeliveries.mockResolvedValueOnce([
+      {
+        id: "pending-media",
+        kind: "agentTurn",
+        sessionKey,
+        message: "generated image ready",
+        messageId: "image:task-1:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+      },
+    ] as never);
+
+    await removeCronRunContinuationSessionIfIdle(sessionKey);
+
+    expect(mocks.loadEntry).not.toHaveBeenCalled();
+    expect(mocks.deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("removes a continuation while finalizing its settled delivery row", async () => {
+    mocks.loadPendingSessionDeliveries.mockResolvedValueOnce([
+      {
+        id: "settled-media",
+        kind: "agentTurn",
+        sessionKey,
+        message: "generated image ready",
+        messageId: "image:task-1:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        settlementOutcome: "recovered",
+      },
+    ] as never);
+    mocks.loadEntry.mockReturnValue({
+      sessionId: "run-123",
+      updatedAt: 123,
+      lifecycleRevision: "revision-1",
+      cronRunContinuation: marker(),
+    });
+
+    await removeCronRunContinuationSessionIfIdle(sessionKey, "settled-media");
+
+    expect(mocks.deleteEntry).toHaveBeenCalledTimes(1);
   });
 });

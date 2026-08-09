@@ -1,23 +1,23 @@
 // Postinstall Bundled Plugins tests cover postinstall bundled plugins script behavior.
-import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import {
   applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
   MAX_INSTALLED_DIST_SCAN_ENTRIES,
-  pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
   pruneLegacyPluginRuntimeDepsState,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
-import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
@@ -68,12 +68,49 @@ async function writeBaileysMediaFile(packageRoot: string, text: string) {
 }
 
 describe("bundled plugin postinstall", () => {
-  function existsSyncWithoutGlobalCompileCache(value: string) {
-    if (path.resolve(value) === path.join(tmpdir(), "node-compile-cache")) {
-      return false;
+  it("resolves TypeScript from NODE_PATH during external modules-dir installs", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-node-path-");
+    const scriptRoot = path.join(packageRoot, "scripts");
+    const externalModulesDir = path.join(packageRoot, "external-node-modules");
+    await fs.mkdir(path.join(scriptRoot, "lib"), { recursive: true });
+    await fs.mkdir(externalModulesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
+    );
+    for (const relativePath of [
+      "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/guard-inventory-utils.mjs",
+    ]) {
+      await fs.copyFile(
+        fileURLToPath(new URL(`../../${relativePath}`, import.meta.url)),
+        path.join(packageRoot, relativePath),
+      );
     }
-    return existsSyncOriginal(value);
-  }
+    await fs.symlink(
+      fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+      path.join(externalModulesDir, "typescript"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(scriptRoot, "postinstall-bundled-plugins.mjs")],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_PATH: [externalModulesDir, process.env.NODE_PATH]
+            .filter(Boolean)
+            .join(path.delimiter),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
 
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
@@ -89,131 +126,82 @@ describe("bundled plugin postinstall", () => {
     ).toBe(true);
   });
 
-  it("prunes Node versioned compile cache dirs during package postinstall", () => {
-    const configuredBase = path.join("/tmp", "openclaw-cache");
-    const defaultBase = path.join(tmpdir(), "node-compile-cache");
-    const removed: string[] = [];
-    const existsSync = vi.fn((value: string) => value === configuredBase || value === defaultBase);
-    const readdirSync = vi.fn((value: string) => {
-      if (value === configuredBase) {
-        return [
-          { name: "v22.13.1-x64-efe9a9df-1001", isDirectory: () => true },
-          { name: "openclaw", isDirectory: () => true },
-          { name: "README", isDirectory: () => false },
-        ];
+  it.each([
+    { cacheMode: "disabled", disableCompileCache: "1" },
+    { cacheMode: "enabled", disableCompileCache: undefined },
+  ])(
+    "preserves shared default and configured Node caches during $cacheMode packaged postinstall",
+    async ({ disableCompileCache }) => {
+      const packageRoot = await createTempDirAsync("openclaw-packaged-compile-cache-");
+      const scriptRoot = path.join(packageRoot, "scripts");
+      const temporaryRoot = path.join(packageRoot, "temporary");
+      const configuredCacheRoot = path.join(packageRoot, "configured-node-cache");
+      const defaultCacheRoot = path.join(temporaryRoot, "node-compile-cache");
+      const sentinels = [
+        path.join(defaultCacheRoot, "v22.22.3-x64-another-app", "keep.txt"),
+        path.join(defaultCacheRoot, "v24.15.0-x64-other-install", "keep.txt"),
+        path.join(configuredCacheRoot, "v25.9.0-x64-another-app", "keep.txt"),
+        path.join(configuredCacheRoot, "v26.4.0-x64-other-install", "keep.txt"),
+      ];
+
+      await fs.mkdir(path.join(scriptRoot, "lib"), { recursive: true });
+      await fs.mkdir(path.join(packageRoot, "home"), { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
+      );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url)),
+        path.join(scriptRoot, "postinstall-bundled-plugins.mjs"),
+      );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/lib/package-dist-imports.mjs", import.meta.url)),
+        path.join(scriptRoot, "lib", "package-dist-imports.mjs"),
+      );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/lib/guard-inventory-utils.mjs", import.meta.url)),
+        path.join(scriptRoot, "lib", "guard-inventory-utils.mjs"),
+      );
+      await fs.mkdir(path.join(packageRoot, "node_modules"), { recursive: true });
+      await fs.symlink(
+        fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+        path.join(packageRoot, "node_modules", "typescript"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      for (const sentinel of sentinels) {
+        await fs.mkdir(path.dirname(sentinel), { recursive: true });
+        await fs.writeFile(sentinel, "owned by another Node application\n");
       }
-      if (value === defaultBase) {
-        return [{ name: "v24.14.1-x64-efe9a9df-1001", isDirectory: () => true }];
+
+      const result = spawnSync(
+        process.execPath,
+        [path.join(scriptRoot, "postinstall-bundled-plugins.mjs")],
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: path.join(packageRoot, "home"),
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
+            OPENCLAW_HOME: path.join(packageRoot, "home"),
+            OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
+            STATE_DIRECTORY: undefined,
+            NODE_COMPILE_CACHE: configuredCacheRoot,
+            NODE_DISABLE_COMPILE_CACHE: disableCompileCache,
+            TEMP: temporaryRoot,
+            TMP: temporaryRoot,
+            TMPDIR: temporaryRoot,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      for (const sentinel of sentinels) {
+        await expectPathExists(sentinel);
       }
-      throw new Error(`unexpected readdir: ${value}`);
-    });
-    const rmSync = vi.fn((value: string) => {
-      removed.push(value);
-    });
-
-    pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: configuredBase },
-      existsSync,
-      readdirSync,
-      rmSync,
-      log: { warn: vi.fn() },
-    });
-
-    expect(removed).toEqual([
-      path.join(configuredBase, "v22.13.1-x64-efe9a9df-1001"),
-      path.join(defaultBase, "v24.14.1-x64-efe9a9df-1001"),
-    ]);
-    expect(removed).not.toContain(path.join(configuredBase, "openclaw"));
-    for (const cacheDir of removed) {
-      expect(rmSync).toHaveBeenCalledWith(cacheDir, {
-        recursive: true,
-        force: true,
-        maxRetries: 2,
-        retryDelay: 100,
-      });
-    }
-  });
-
-  it("keeps pruning sibling compile cache dirs after one removal fails", () => {
-    const configuredBase = path.join("/tmp", "openclaw-cache");
-    const attempted: string[] = [];
-    const warn = vi.fn();
-    const firstCacheDir = path.join(configuredBase, "v22.13.1-x64-efe9a9df-1001");
-    const secondCacheDir = path.join(configuredBase, "v22.13.1-x64-efe9a9df-1002");
-    const rmSync = vi.fn((value: string) => {
-      attempted.push(value);
-      if (value === firstCacheDir) {
-        throw new Error("locked");
-      }
-    });
-
-    pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: configuredBase },
-      existsSync: vi.fn((value: string) => value === configuredBase),
-      readdirSync: vi.fn(() => [
-        { name: path.basename(firstCacheDir), isDirectory: () => true },
-        { name: path.basename(secondCacheDir), isDirectory: () => true },
-      ]),
-      rmSync,
-      log: { warn },
-    });
-
-    expect(attempted).toEqual([firstCacheDir, secondCacheDir]);
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] could not prune OpenClaw compile cache: Error: locked",
-    );
-  });
-
-  it("does not warn when compile-cache pruning hits EACCES or EPERM (shared caches)", () => {
-    const base = path.join("/tmp", "openclaw-shared-compile-cache");
-    const dirA = path.join(base, "v22.13.1-x64-efe9a9df-1001");
-    const dirB = path.join(base, "v22.13.1-x64-efe9a9df-1002");
-    const warn = vi.fn();
-    const rmSync = vi.fn((value: string) => {
-      if (value === dirA) {
-        throw Object.assign(new Error(`permission denied pruning ${value}`), { code: "EACCES" });
-      }
-      if (value === dirB) {
-        throw Object.assign(new Error(`operation not permitted pruning ${value}`), {
-          code: "EPERM",
-        });
-      }
-    });
-
-    pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: base },
-      existsSync: vi.fn((value: string) => value === base),
-      readdirSync: vi.fn(() => [
-        { name: path.basename(dirA), isDirectory: () => true },
-        { name: path.basename(dirB), isDirectory: () => true },
-      ]),
-      rmSync,
-      log: { warn },
-    });
-
-    expect(rmSync).toHaveBeenCalledTimes(2);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("does not warn when the compile-cache base directory cannot be listed (EACCES)", () => {
-    const base = path.join("/tmp", "openclaw-compile-cache-no-list");
-    const warn = vi.fn();
-    const rmSync = vi.fn();
-    const err = Object.assign(new Error(`EACCES: ${base}`), { code: "EACCES" });
-
-    pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: base },
-      existsSync: vi.fn(() => true),
-      readdirSync: vi.fn(() => {
-        throw err;
-      }),
-      rmSync,
-      log: { warn },
-    });
-
-    expect(rmSync).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it("patches the Baileys upload helper dispatcher guard", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
@@ -482,27 +470,35 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
-  it("surfaces deprecated plugin registry migration break-glass warnings", async () => {
-    const warn = vi.fn();
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {
-        deprecationWarnings: ["OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated"],
-      },
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+  it("does not migrate operator plugin state from a source checkout", async () => {
+    const packageRoot = "/source";
+    const existingPaths = new Set([
+      path.join(packageRoot, ".git"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(
+        packageRoot,
+        "dist",
+        "commands",
+        "doctor",
+        "shared",
+        "plugin-registry-migration.js",
+      ),
+    ]);
+    const importModule = vi.fn();
 
-    await runPluginRegistryPostinstallMigration({
-      packageRoot: "/pkg",
-      existsSync: vi.fn(() => true),
-      importModule,
-      log: { log: vi.fn(), warn },
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot,
+        existsSync: vi.fn((filePath: string) => existingPaths.has(filePath)),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "source-checkout",
     });
-
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated",
-    );
+    expect(importModule).not.toHaveBeenCalled();
   });
 
   it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
@@ -519,54 +515,6 @@ describe("bundled plugin postinstall", () => {
       reason: "missing-dist-entry",
     });
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("honors plugin registry postinstall migration disable env", async () => {
-    const importModule = vi.fn(async () => {
-      throw new Error("dist migration module should not import when migration is disabled");
-    });
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toEqual({
-      status: "disabled",
-      migrated: false,
-      reason: "disabled-env",
-    });
-    expect(importModule).not.toHaveBeenCalled();
-  });
-
-  it("does not disable plugin registry migration for falsey env flag strings", async () => {
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
-
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toEqual({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    });
-    expect(importModule).toHaveBeenCalledOnce();
-    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
-      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-      packageRoot: "/pkg",
-    });
   });
 
   it("prunes stale dist files from packaged installs", async () => {
@@ -592,7 +540,7 @@ describe("bundled plugin postinstall", () => {
   it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
     const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
-    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "testing.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "channel-test-helpers.js");
     const nestedTestHelperFile = path.join(
       packageRoot,
       "dist",
@@ -611,7 +559,7 @@ describe("bundled plugin postinstall", () => {
     const inventory = await writePackageDistInventory(packageRoot);
 
     expect(inventory).toContain("dist/plugin-sdk/runtime.js");
-    expect(inventory).not.toContain("dist/plugin-sdk/testing.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/channel-test-helpers.js");
     expect(inventory).not.toContain(
       "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
     );
@@ -671,7 +619,6 @@ describe("bundled plugin postinstall", () => {
         STATE_DIRECTORY: systemState,
       },
       packageRoot,
-      existsSync: existsSyncWithoutGlobalCompileCache,
       log,
     });
 
@@ -796,6 +743,40 @@ describe("bundled plugin postinstall", () => {
 
     await expectPathExists(importedChunk);
     await expectPathMissing(staleFile);
+  });
+
+  it("keeps named imported chunks without preserving template-literal pseudoimports", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-named-import-");
+    const entryFile = path.join(packageRoot, "dist", "cli", "run-main.js");
+    const importedChunk = path.join(packageRoot, "dist", "memory-state-current.js");
+    const phantomChunk = path.join(packageRoot, "dist", "memory-state-phantom.js");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(
+      entryFile,
+      [
+        "import {",
+        "  value,",
+        '} from "../memory-state-current.js";',
+        "const example = `",
+        'import "../memory-state-phantom.js"',
+        "`;",
+        "export { value, example };",
+        "",
+      ].join("\n"),
+    );
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(importedChunk, "export const value = 42;\n");
+    await fs.writeFile(phantomChunk, "export const stale = true;\n");
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/memory-state-phantom.js"]);
+
+    await expectPathExists(importedChunk);
+    await expectPathMissing(phantomChunk);
   });
 
   it("does not abort dist pruning when a listed chunk disappears before import expansion", async () => {

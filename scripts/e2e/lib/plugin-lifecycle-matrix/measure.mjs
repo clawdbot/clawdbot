@@ -200,6 +200,12 @@ function finishChildClosedResultIfGroupDrained() {
   }
 }
 
+// Child readiness can become externally visible before the initial /proc scan.
+// Install handlers first so early parent termination still reaches the detached group.
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.once(signal, () => handleParentSignal(signal));
+}
+
 updateMetrics();
 const interval = setInterval(updateMetrics, pollMs);
 const timeoutTimer =
@@ -301,10 +307,6 @@ function handleParentSignal(signal) {
     },
     Math.min(50, timeoutKillGraceMs),
   );
-}
-
-for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
-  process.once(signal, () => handleParentSignal(signal));
 }
 
 process.once("exit", () => {

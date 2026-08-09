@@ -40,6 +40,7 @@ type Args = {
   evidenceDir?: string;
   check: boolean;
   strictInputs: boolean;
+  allowFailures: boolean;
 };
 
 type EvidenceSummary = {
@@ -98,6 +99,7 @@ function parseArgs(argv: string[]): Args {
     evidenceDir: undefined,
     check: false,
     strictInputs: false,
+    allowFailures: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -110,6 +112,10 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--strict-inputs") {
       args.strictInputs = true;
+      continue;
+    }
+    if (arg === "--allow-failures") {
+      args.allowFailures = true;
       continue;
     }
     const next = (): string => {
@@ -145,6 +151,7 @@ Options:
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
   --check               Fail when output files are stale
   --strict-inputs       Fail on score or evidence input warnings
+  --allow-failures      Render valid incomplete QA evidence; non-passing checks earn no Coverage
   -h, --help            Show this help
 `);
       process.exit(0);
@@ -157,8 +164,14 @@ Options:
 
 function familyTitle(value: string): string {
   const titles: Record<string, string> = {
+    googlechat: "Google Chat",
+    imessage: "iMessage",
+    msteams: "Microsoft Teams",
+    openai: "OpenAI",
+    openclaw: "OpenClaw",
     "platform-app": "Platform",
     "provider-tool": "Provider and tool",
+    whatsapp: "WhatsApp",
   };
   return (
     titles[value] ??
@@ -841,7 +854,7 @@ function copyStaticSourceAssets({
   taxonomyPath: string;
 }): string[] {
   fs.mkdirSync(staticAssetsDir, { recursive: true });
-  const copied = [
+  const copied: Array<[string, string]> = [
     [taxonomyPath, path.join(staticAssetsDir, "taxonomy.yaml")],
     [scoresPath, path.join(staticAssetsDir, "maturity-scores.yaml")],
   ];
@@ -1117,7 +1130,11 @@ function renderTaxonomy({
           `    <div>${scoreMeter(coverageScore)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.quality)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.completeness)}</div>`,
-          `    <div className="maturity-category-docs">${docs || "No linked docs"}</div>`,
+          '    <div className="maturity-category-docs">',
+          "",
+          docs || "No linked docs",
+          "",
+          "</div>",
           "  </div>",
         );
       }
@@ -1214,7 +1231,9 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  rejectBlockingEvidence(evidenceSummaries);
+  if (!args.allowFailures) {
+    rejectBlockingEvidence(evidenceSummaries);
+  }
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,

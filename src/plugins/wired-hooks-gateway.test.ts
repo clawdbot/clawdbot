@@ -6,7 +6,7 @@
  * and validating the integration pattern.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
   PluginHookCronChangedEvent,
   PluginHookCronReconciledContext,

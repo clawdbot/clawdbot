@@ -2,26 +2,28 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import {
-  parseSessionFileEntriesWithWarnings,
-  type SessionFileParseWarning,
-} from "../../agents/sessions/session-file-parser.js";
-import {
   migrateSessionEntries,
+  type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
   type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
-import { pathExists } from "../../infra/fs-safe.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
   parseExportCommandOutputPath,
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
+import { writeSessionExportFile } from "./commands-export-session-file.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -40,10 +42,6 @@ interface SessionData {
 
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
   return (
@@ -90,8 +88,13 @@ function isBackendDelegatedSession(
   );
 }
 
+type SessionExportEventWarning = {
+  code: "invalid-session-row";
+  row: number;
+};
+
 type SessionExportWarningSummary = {
-  code: SessionFileParseWarning["code"];
+  code: "invalid-session-json" | "invalid-session-row";
   count: number;
   rows: number[];
 };
@@ -188,35 +191,48 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
     ["JS", templateJs],
-  ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
+  ].reduce(
+    (html, [name, value]) =>
+      replaceHtmlPlaceholder(
+        html,
+        expectDefined(name, "commands export session name"),
+        expectDefined(value, "commands export session value"),
+      ),
+    template,
+  );
 }
 
-function addCollisionSuffix(filePath: string, suffix: number): string {
-  const ext = path.extname(filePath);
-  const baseName = path.basename(filePath, ext);
-  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
-}
-
-async function writeNewDefaultExportFile(filePath: string, html: string): Promise<string> {
-  for (let suffix = 1; suffix <= 100; suffix++) {
-    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
-    try {
-      await fsp.writeFile(candidate, html, { encoding: "utf-8", flag: "wx" });
-      return candidate;
-    } catch (error) {
-      if (typeof error === "object" && error && "code" in error && error.code === "EEXIST") {
-        continue;
-      }
-      throw error;
-    }
+function isSessionFileEntry(value: unknown): value is SessionFileEntry {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
   }
-  throw new Error(`Could not find an unused export filename near ${filePath}`);
+  if (value.type !== "message") {
+    return true;
+  }
+  const message = value.message;
+  return isRecord(message) && typeof message.role === "string";
+}
+
+function filterSessionEntriesWithWarnings(events: unknown[]): {
+  entries: SessionFileEntry[];
+  warnings: SessionExportEventWarning[];
+} {
+  const entries: SessionFileEntry[] = [];
+  const warnings: SessionExportEventWarning[] = [];
+  for (const [index, event] of events.entries()) {
+    if (isSessionFileEntry(event)) {
+      entries.push(event);
+      continue;
+    }
+    warnings.push({ code: "invalid-session-row", row: index + 1 });
+  }
+  return { entries, warnings };
 }
 
 function summarizeSessionExportWarnings(
-  warnings: SessionFileParseWarning[],
+  warnings: SessionExportEventWarning[],
 ): SessionExportWarningSummary[] {
-  const summaries = new Map<SessionFileParseWarning["code"], SessionExportWarningSummary>();
+  const summaries = new Map<SessionExportEventWarning["code"], SessionExportWarningSummary>();
   for (const warning of warnings) {
     const summary = summaries.get(warning.code);
     if (summary) {
@@ -240,7 +256,10 @@ function formatSkippedRows(count: number): string {
 }
 
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
-  const rows = summary.rows.length > 0 ? ` rows ${summary.rows.join(", ")}` : "";
+  const rows =
+    summary.rows.length > 0
+      ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
+      : "";
   const verb = summary.count === 1 ? "was" : "were";
   switch (summary.code) {
     case "invalid-session-json":
@@ -254,15 +273,33 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
   return unreachable;
 }
 
-async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+async function readSessionDataFromIdentity(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<{
   header: SessionHeader | null;
   entries: AgentSessionEntry[];
   leafId: string | null;
   hasLeafControl: boolean;
   warnings: SessionExportWarningSummary[];
 }> {
-  const raw = await fsp.readFile(sessionFile, "utf-8");
-  const { entries: fileEntries, warnings } = parseSessionFileEntriesWithWarnings(raw);
+  const events = await loadTranscriptEvents(params);
+  const { entries, warnings } = filterSessionEntriesWithWarnings(events);
+  return readSessionDataFromEntries(entries, summarizeSessionExportWarnings(warnings));
+}
+
+function readSessionDataFromEntries(
+  fileEntries: SessionFileEntry[],
+  warnings: SessionExportWarningSummary[],
+): {
+  header: SessionHeader | null;
+  entries: AgentSessionEntry[];
+  leafId: string | null;
+  hasLeafControl: boolean;
+  warnings: SessionExportWarningSummary[];
+} {
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -284,7 +321,7 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
     entries,
     leafId: tree.leafId,
     hasLeafControl,
-    warnings: summarizeSessionExportWarnings(warnings),
+    warnings,
   };
 }
 
@@ -300,15 +337,16 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
   }
-  const { entry, sessionFile } = sessionTarget;
+  const { entry } = sessionTarget;
 
-  if (!(await pathExists(sessionFile))) {
-    return { text: `❌ Session file not found: ${sessionFile}` };
-  }
-
-  // 2. Load session entries
-  const { entries, header, leafId, hasLeafControl, warnings } =
-    await readSessionDataFromTranscript(sessionFile);
+  // Active exports run after startup migration, so SQLite rows are canonical.
+  // Do not read sessionFile here; a SQLite marker is an identifier, not a path.
+  const { entries, header, leafId, hasLeafControl, warnings } = await readSessionDataFromIdentity({
+    agentId: sessionTarget.agentId,
+    sessionId: sessionTarget.sessionId,
+    sessionKey: sessionTarget.sessionKey,
+    storePath: sessionTarget.storePath,
+  });
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
@@ -344,27 +382,21 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
-  let outputPath = args.outputPath
-    ? path.resolve(
-        args.outputPath.startsWith("~")
-          ? args.outputPath.replace("~", process.env.HOME ?? "")
-          : args.outputPath,
-      )
-    : path.join(params.workspaceDir, defaultFileName);
-
-  // Ensure directory exists
-  const outputDir = path.dirname(outputPath);
-  await fsp.mkdir(outputDir, { recursive: true });
-
-  // 7. Write file
-  if (args.outputPath) {
-    await fsp.writeFile(outputPath, html, "utf-8");
-  } else {
-    outputPath = await writeNewDefaultExportFile(outputPath, html);
+  let displayPath: string;
+  try {
+    const written = await writeSessionExportFile({
+      workspaceDir: params.workspaceDir,
+      requestedPath: args.outputPath,
+      defaultFileName,
+      contents: html,
+    });
+    displayPath = written.displayPath;
+  } catch (error) {
+    if (error instanceof FsSafeError && error.category === "policy") {
+      return { text: "❌ Output path must be a regular file inside the workspace." };
+    }
+    throw error;
   }
-
-  const relativePath = path.relative(params.workspaceDir, outputPath);
-  const displayPath = relativePath.startsWith("..") ? outputPath : relativePath;
 
   return {
     text: [

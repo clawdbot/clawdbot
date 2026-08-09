@@ -2,13 +2,13 @@ title: Docker upgrade survivor
 
 scenario:
   id: docker-upgrade-survivor
-  surface: cli-install-update-onboard-doctor
-  category: cli-install-update-onboard-doctor.updates-and-upgrades
+  surface: cli
+  category: cli.updates-and-upgrades
   coverage:
     primary:
       - cli.update-status-and-rpc
     secondary:
-      - docker.release-path-install
+      - containers.release-path-install
   objective: Verify dirty existing user state survives package update, doctor repair, Gateway startup, health probes, and RPC status in Docker.
   successCriteria:
     - The packed candidate installs over seeded existing-user state with agents, channels, plugin allowlists, workspaces, sessions, and stale dependency debris.

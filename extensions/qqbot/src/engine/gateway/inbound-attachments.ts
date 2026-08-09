@@ -8,9 +8,6 @@ import { getQQBotMediaDir } from "../utils/platform.js";
 import { normalizeOptionalString } from "../utils/string-normalize.js";
 import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
 
-// Re-export the port type for convenience.
-export type { AudioConvertPort } from "../adapter/audio.port.js";
-
 interface RawAttachment {
   content_type: string;
   url: string;

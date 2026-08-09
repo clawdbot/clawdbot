@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 
 describe("normalizeSignalMessagingTarget", () => {
+  it("canonicalizes username target prefixes", () => {
+    expect(normalizeSignalMessagingTarget("username:Alice.42")).toBe("username:alice.42");
+    expect(normalizeSignalMessagingTarget("signal:u:Alice.42")).toBe("username:alice.42");
+  });
+
   it("normalizes uuid targets by stripping uuid:", () => {
     expect(normalizeSignalMessagingTarget("uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
       "123e4567-e89b-12d3-a456-426614174000",

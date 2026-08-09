@@ -1,10 +1,11 @@
 // Versioned metadata-only activity audit query payloads.
-import { Type, type TProperties, type TSchema } from "typebox";
+import { type TProperties, type TSchema, Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
-export const AuditActivityStatusV1Schema: TSchema = Type.Union([
+const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("started"),
   Type.Literal("succeeded"),
   Type.Literal("failed"),
@@ -14,13 +15,13 @@ export const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-export const AuditActivityKindV1Schema: TSchema = Type.Union([
+const AuditActivityKindV1Schema: TSchema = Type.Union([
   Type.Literal("agent_run"),
   Type.Literal("tool_action"),
   Type.Literal("message"),
 ]);
 
-export const AuditActivityDirectionV1Schema: TSchema = Type.Union([
+const AuditActivityDirectionV1Schema: TSchema = Type.Union([
   Type.Literal("inbound"),
   Type.Literal("outbound"),
 ]);
@@ -36,38 +37,26 @@ const AuditActivityHmacRefV1Schema = Type.String({
   pattern: "^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$",
 });
 
-const AuditActivityAgentActorV1Schema = Type.Object(
-  {
-    type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
-    id: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+const AuditActivityAgentActorV1Schema = closedObject({
+  type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+  id: NonEmptyString,
+});
 
 const AuditActivityInboundActorV1Schema = Type.Union([
-  Type.Object(
-    {
-      type: Type.Literal("channel_sender"),
-      id: AuditActivityHmacRefV1Schema,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      type: Type.Literal("system"),
-      id: NonEmptyString,
-    },
-    { additionalProperties: false },
-  ),
+  closedObject({
+    type: Type.Literal("channel_sender"),
+    id: AuditActivityHmacRefV1Schema,
+  }),
+  closedObject({
+    type: Type.Literal("system"),
+    id: NonEmptyString,
+  }),
 ]);
 
-const AuditActivityOutboundActorV1Schema = Type.Object(
-  {
-    type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
-    id: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+const AuditActivityOutboundActorV1Schema = closedObject({
+  type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+  id: NonEmptyString,
+});
 
 const commonProperties = {
   schemaVersion: AuditActivitySchemaVersionV1Schema,
@@ -270,6 +259,7 @@ const inboundCompletedReasonSchema = Type.Union([
   Type.Literal("before_dispatch_handled"),
   Type.Literal("acp_dispatch_completed"),
   Type.Literal("acp_dispatch_empty"),
+  Type.Literal("active_run_injected"),
 ]);
 
 const inboundSkippedReasonSchema = Type.Union([
@@ -433,28 +423,200 @@ export const AuditActivityEventV1Schema: TSchema = Type.Union([
 ]);
 
 /** Bounded newest-first V1 activity query filters. */
-export const AuditActivityListParamsSchema: TSchema = Type.Object(
-  {
-    agentId: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(NonEmptyString),
-    runId: Type.Optional(NonEmptyString),
-    kind: Type.Optional(AuditActivityKindV1Schema),
-    status: Type.Optional(AuditActivityStatusV1Schema),
-    direction: Type.Optional(AuditActivityDirectionV1Schema),
-    channel: Type.Optional(NonEmptyString),
-    after: Type.Optional(Type.Integer({ minimum: 0 })),
-    before: Type.Optional(Type.Integer({ minimum: 0 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    cursor: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const AuditActivityListParamsSchema: TSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
+  kind: Type.Optional(AuditActivityKindV1Schema),
+  status: Type.Optional(AuditActivityStatusV1Schema),
+  direction: Type.Optional(AuditActivityDirectionV1Schema),
+  channel: Type.Optional(NonEmptyString),
+  after: Type.Optional(Type.Integer({ minimum: 0 })),
+  before: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+  cursor: Type.Optional(NonEmptyString),
+});
 
 /** Stable sequence-cursor V1 activity page. */
-export const AuditActivityListResultSchema: TSchema = Type.Object(
-  {
-    events: Type.Array(AuditActivityEventV1Schema),
-    nextCursor: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const AuditActivityListResultSchema: TSchema = closedObject({
+  events: Type.Array(AuditActivityEventV1Schema),
+  nextCursor: Type.Optional(NonEmptyString),
+});
+
+/** Metadata-only audit query payloads. */
+// These wire types stay explicit because the runtime schemas use JSON Schema
+// `allOf` correlations that TypeBox cannot infer without expanding the public
+// declaration graph far beyond the compact protocol contract.
+type AuditActivityRecordBaseV1 = {
+  schemaVersion: 1;
+  eventId: string;
+  sequence: number;
+  sourceSequence: number;
+  occurredAt: number;
+  redaction: "metadata_only";
+};
+
+type AuditActivityAgentRecordBaseV1 = AuditActivityRecordBaseV1 & {
+  actor: { type: "agent" | "system"; id: string };
+  agentId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  runId: string;
+};
+
+type AuditActivityAgentRunV1Terminal =
+  | { action: "agent.run.started"; status: "started"; errorCode?: never }
+  | { action: "agent.run.finished"; status: "succeeded"; errorCode?: never }
+  | { action: "agent.run.finished"; status: "failed"; errorCode: "run_failed" }
+  | { action: "agent.run.finished"; status: "cancelled"; errorCode: "run_cancelled" }
+  | { action: "agent.run.finished"; status: "timed_out"; errorCode: "run_timed_out" }
+  | { action: "agent.run.finished"; status: "blocked"; errorCode: "run_blocked" };
+export type AuditActivityAgentRunV1 = AuditActivityAgentRecordBaseV1 & {
+  eventType: "agent_run";
+  kind: "agent_run";
+} & AuditActivityAgentRunV1Terminal;
+
+type AuditActivityToolActionV1Terminal =
+  | { action: "tool.action.started"; status: "started"; errorCode?: never }
+  | { action: "tool.action.finished"; status: "succeeded"; errorCode?: never }
+  | { action: "tool.action.finished"; status: "failed"; errorCode: "tool_failed" }
+  | { action: "tool.action.finished"; status: "cancelled"; errorCode: "tool_cancelled" }
+  | { action: "tool.action.finished"; status: "timed_out"; errorCode: "tool_timed_out" }
+  | { action: "tool.action.finished"; status: "blocked"; errorCode: "tool_blocked" }
+  | {
+      action: "tool.action.finished";
+      status: "unknown";
+      errorCode: "tool_outcome_unknown";
+    };
+export type AuditActivityToolActionV1 = AuditActivityAgentRecordBaseV1 & {
+  eventType: "tool_action";
+  kind: "tool_action";
+  toolCallId?: string;
+  toolName?: string;
+} & AuditActivityToolActionV1Terminal;
+
+type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
+  kind: "message";
+  channel: string;
+  conversationKind: "direct" | "group" | "channel" | "unknown";
+  durationMs?: number;
+  resultCount?: number;
+  agentId?: string;
+  runId?: string;
+  accountRef?: string;
+  conversationRef?: string;
+  messageRef?: string;
+  targetRef?: string;
+  sessionKey?: never;
+  sessionId?: never;
+  toolCallId?: never;
+  toolName?: never;
+};
+
+type AuditActivityInboundMessageV1Terminal =
+  | {
+      status: "succeeded";
+      outcome: "completed";
+      errorCode?: never;
+      reasonCode?:
+        | "fast_abort"
+        | "plugin_bound_handled"
+        | "plugin_bound_unavailable"
+        | "plugin_bound_declined"
+        | "before_dispatch_handled"
+        | "acp_dispatch_completed"
+        | "acp_dispatch_empty"
+        | "active_run_injected";
+    }
+  | {
+      status: "blocked";
+      outcome: "skipped";
+      errorCode?: never;
+      reasonCode?:
+        | "duplicate"
+        | "reply_operation_active"
+        | "reply_operation_aborted"
+        | "acp_dispatch_aborted";
+    }
+  | {
+      status: "failed";
+      outcome: "failed";
+      errorCode: "message_processing_failed";
+      reasonCode?: "acp_dispatch_failed" | "plugin_bound_error";
+    };
+export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
+  eventType: "inbound_message";
+  action: "message.inbound.processed";
+  direction: "inbound";
+  actor: { type: "channel_sender"; id: string } | { type: "system"; id: string };
+  deliveryKind?: never;
+  failureStage?: never;
+} & AuditActivityInboundMessageV1Terminal;
+
+type AuditActivityOutboundMessageV1Terminal =
+  | {
+      status: "succeeded";
+      outcome: "sent";
+      errorCode?: never;
+      reasonCode?: never;
+      failureStage?: never;
+      deliveryKind?: "text" | "media" | "other";
+    }
+  | {
+      status: "blocked";
+      outcome: "suppressed";
+      errorCode?: never;
+      reasonCode:
+        | "cancelled_by_message_sending_hook"
+        | "cancelled_by_reply_payload_sending_hook"
+        | "empty_after_message_sending_hook"
+        | "empty_after_reply_payload_sending_hook"
+        | "no_visible_payload";
+      failureStage?: never;
+      deliveryKind?: never;
+    }
+  | {
+      status: "failed";
+      outcome: "failed";
+      errorCode: "message_delivery_failed" | "message_delivery_partial_failure";
+      reasonCode?: never;
+      failureStage: "platform_send" | "queue" | "unknown";
+      deliveryKind?: "text" | "media" | "other";
+    }
+  | {
+      status: "unknown";
+      outcome: "unknown";
+      errorCode?: never;
+      reasonCode?: never;
+      failureStage: "platform_send" | "queue" | "unknown";
+      deliveryKind?: never;
+    };
+export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
+  eventType: "outbound_message";
+  action: "message.outbound.finished";
+  direction: "outbound";
+  actor: { type: "agent" | "system"; id: string };
+} & AuditActivityOutboundMessageV1Terminal;
+
+export type AuditActivityEventV1 =
+  | AuditActivityAgentRunV1
+  | AuditActivityToolActionV1
+  | AuditActivityInboundMessageV1
+  | AuditActivityOutboundMessageV1;
+export type AuditActivityListParams = {
+  agentId?: string;
+  sessionKey?: string;
+  runId?: string;
+  kind?: "agent_run" | "tool_action" | "message";
+  status?: "started" | "succeeded" | "failed" | "cancelled" | "timed_out" | "blocked" | "unknown";
+  direction?: "inbound" | "outbound";
+  channel?: string;
+  after?: number;
+  before?: number;
+  limit?: number;
+  cursor?: string;
+};
+export type AuditActivityListResult = {
+  events: AuditActivityEventV1[];
+  nextCursor?: string;
+};

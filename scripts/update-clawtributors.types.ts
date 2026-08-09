@@ -8,6 +8,7 @@ export type MapConfig = {
 };
 
 export type ApiContributor = {
+  id?: number;
   login?: string;
   html_url?: string;
   avatar_url?: string;
@@ -17,6 +18,7 @@ export type ApiContributor = {
 };
 
 export type User = {
+  id?: number;
   login: string;
   html_url: string;
   avatar_url: string;
@@ -26,7 +28,7 @@ export type Entry = {
   key: string;
   login?: string;
   display: string;
-  html_url: string;
+  html_url: string | null;
   avatar_url: string;
   lines: number;
   commits: number;

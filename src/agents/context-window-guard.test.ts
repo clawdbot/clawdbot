@@ -229,6 +229,23 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("uses the selected agent cap instead of the default", () => {
+    const info = resolveContextWindowInfo({
+      cfg: { agents: { defaults: { contextTokens: 20_000 } } },
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      agentContextTokens: 40_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "agentContextTokens",
+      tokens: 40_000,
+      referenceTokens: 200_000,
+    });
+  });
+
   it("does not override when cap exceeds base window", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 128_000 } },
@@ -378,7 +395,7 @@ describe("context-window-guard", () => {
     ).toContain("This looks like a local model endpoint.");
   });
 
-  it("points config-backed block remediation at agents.defaults.contextTokens", () => {
+  it("points agent-cap block remediation at the agent contextTokens setting", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 8_000, source: "agentContextTokens" },
     });
@@ -388,7 +405,12 @@ describe("context-window-guard", () => {
       runtimeBaseUrl: "http://127.0.0.1:11434/v1",
     });
 
-    expect(message).toContain("OpenClaw is capped by agents.defaults.contextTokens.");
+    // A per-agent contextTokens overrides the default, so the remediation must
+    // name the agent setting. resolveAgentConfig reads both roster shapes, so it
+    // must name agents.list[] and agents.entries.*, not just defaults (#118678).
+    expect(message).toContain("agents.list[].contextTokens");
+    expect(message).toContain("agents.entries.<id>.contextTokens");
+    expect(message).toContain("agents.defaults.contextTokens");
     expect(message).not.toContain("choose a larger model");
   });
 

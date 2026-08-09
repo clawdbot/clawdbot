@@ -23,7 +23,8 @@
  * vitest (which resolves bare specifiers via `resolve.alias`, not Node CJS).
  */
 
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -39,8 +40,9 @@ import {
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
-const loadMediaRuntimeModule = createLazyRuntimeModule(
+const loadReadRemoteMediaBuffer = createLazyRuntimeNamedExport(
   () => import("openclaw/plugin-sdk/media-runtime"),
+  "readRemoteMediaBuffer",
 );
 
 function createBuiltinAdapter(): PlatformAdapter {
@@ -57,7 +59,7 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
-      const { readRemoteMediaBuffer } = await loadMediaRuntimeModule();
+      const readRemoteMediaBuffer = await loadReadRemoteMediaBuffer();
       const result = await readRemoteMediaBuffer({ url, filePathHint: filename });
       const fs = await import("node:fs");
       const path = await import("node:path");
@@ -70,12 +72,14 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async fetchMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-      const { readRemoteMediaBuffer } = await loadMediaRuntimeModule();
+      const readRemoteMediaBuffer = await loadReadRemoteMediaBuffer();
       const result = await readRemoteMediaBuffer({
         url: options.url,
         filePathHint: options.filePathHint,
         maxBytes: options.maxBytes,
         maxRedirects: options.maxRedirects,
+        timeoutMs: options.timeoutMs,
+        responseHeaderTimeoutMs: options.responseHeaderTimeoutMs,
         ssrfPolicy: options.ssrfPolicy,
         requestInit: options.requestInit,
       });
@@ -98,22 +102,22 @@ function createBuiltinAdapter(): PlatformAdapter {
       return normalizeResolvedSecretInputString(params) ?? undefined;
     },
 
-    async resolveApproval(approvalId: string, decision: string): Promise<boolean> {
+    async resolveApproval(params): Promise<ApprovalResolveResult> {
       try {
         const { getRuntimeConfig } = await import("openclaw/plugin-sdk/runtime-config-snapshot");
         const { resolveApprovalOverGateway } =
           await import("openclaw/plugin-sdk/approval-gateway-runtime");
         const cfg = getRuntimeConfig();
-        await resolveApprovalOverGateway({
+        return await resolveApprovalOverGateway({
           cfg,
-          approvalId,
-          decision: decision as "allow-once" | "allow-always" | "deny",
+          approvalId: params.approvalId,
+          approvalKind: params.approvalKind,
+          decision: params.decision,
           clientDisplayName: "QQBot Approval Handler",
         });
-        return true;
       } catch (err) {
         getBridgeLogger().error(`[qqbot] resolveApproval failed: ${String(err)}`);
-        return false;
+        throw err;
       }
     },
   };

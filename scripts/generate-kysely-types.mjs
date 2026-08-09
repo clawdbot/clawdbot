@@ -10,15 +10,11 @@ const SCHEMAS = [
     name: "openclaw-state",
     schema: "src/state/openclaw-state-schema.sql",
     outFile: "src/state/openclaw-state-db.generated.d.ts",
-    schemaOutFile: "src/state/openclaw-state-schema.generated.ts",
-    schemaExport: "OPENCLAW_STATE_SCHEMA_SQL",
   },
   {
     name: "openclaw-agent",
     schema: "src/state/openclaw-agent-schema.sql",
     outFile: "src/state/openclaw-agent-db.generated.d.ts",
-    schemaOutFile: "src/state/openclaw-agent-schema.generated.ts",
-    schemaExport: "OPENCLAW_AGENT_SCHEMA_SQL",
   },
 ];
 
@@ -51,14 +47,14 @@ function columnBaseType(columnTypeLocal) {
 
 function columnType(column, primaryKeyColumnCount) {
   const baseType = columnBaseType(String(column.type ?? ""));
-  const generated =
-    column.dflt_value != null ||
-    (primaryKeyColumnCount === 1 &&
-      Number(column.pk) > 0 &&
-      String(column.type ?? "")
-        .toUpperCase()
-        .includes("INT"));
-  const nullable = Number(column.notnull) !== 1 && !generated;
+  const generatedPrimaryKey =
+    primaryKeyColumnCount === 1 &&
+    Number(column.pk) > 0 &&
+    String(column.type ?? "")
+      .toUpperCase()
+      .includes("INT");
+  const generated = column.dflt_value != null || generatedPrimaryKey;
+  const nullable = Number(column.notnull) !== 1 && !generatedPrimaryKey;
   const valueType = nullable ? `${baseType} | null` : baseType;
   return generated ? `Generated<${valueType}>` : valueType;
 }
@@ -118,39 +114,19 @@ function readUtf8(file) {
   return fs.readFileSync(file, "utf8");
 }
 
-function generatedSchemaModule(schema) {
-  const source = readUtf8(schema.schema).trimEnd();
-  const literal = source.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
-  return [
-    "/**",
-    " * This file was generated from the SQLite schema source.",
-    " * Please do not edit it manually.",
-    " */",
-    "",
-    `export const ${schema.schemaExport} = \`${literal}\\n\`;`,
-    "",
-  ].join("\n");
-}
-
 function generate(schema) {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec(readUtf8(schema.schema));
     const typesSource = generateTypes(db);
-    const schemaSource = generatedSchemaModule(schema);
 
     if (verify) {
       if (typesSource !== readUtf8(schema.outFile)) {
         console.error(`${schema.outFile} is out of date. Run pnpm db:kysely:gen.`);
         process.exitCode = 1;
       }
-      if (schemaSource !== readUtf8(schema.schemaOutFile)) {
-        console.error(`${schema.schemaOutFile} is out of date. Run pnpm db:kysely:gen.`);
-        process.exitCode = 1;
-      }
     } else {
       fs.writeFileSync(schema.outFile, typesSource);
-      fs.writeFileSync(schema.schemaOutFile, schemaSource);
     }
   } finally {
     db.close();

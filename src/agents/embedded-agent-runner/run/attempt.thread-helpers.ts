@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 
 /** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
-export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
+const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
 /**
  * Combines hook-provided system context with the base prompt while preserving

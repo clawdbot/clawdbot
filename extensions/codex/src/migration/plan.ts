@@ -1,4 +1,5 @@
 // Codex plugin module implements plan behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createMigrationItem,
@@ -13,16 +14,21 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  canonicalPathFromExistingAncestor,
+  extractErrorCode,
+  isPathInside,
+} from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
 import { exists, sanitizeName } from "./helpers.js";
+import type { CodexMemorySource, CodexSkillSource } from "./source-files.js";
 import {
   codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
   type CodexPluginSource,
-  type CodexSkillSource,
 } from "./source.js";
 import { resolveCodexMigrationTargets } from "./targets.js";
 
@@ -38,6 +44,7 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
 ] as const;
 const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
 const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
+const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
@@ -46,12 +53,76 @@ export type CodexPluginMigrationConfigEntry = {
   allowDestructiveActions?: "auto" | "ask";
 };
 
-type CodexPluginMigrationBlockSkipDetails = {
-  pluginName: string;
-  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
-  apps?: NonNullable<CodexPluginSource["migrationBlock"]>["apps"];
-  error?: string;
-};
+async function lstatIfExists(filePath: string) {
+  try {
+    return await fs.lstat(filePath);
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function buildCodexMemoryItems(params: {
+  memoryFiles: readonly CodexMemorySource[];
+  workspaceDir: string;
+  overwrite?: boolean;
+}): Promise<MigrationItem[]> {
+  const items: MigrationItem[] = [];
+  for (const memory of params.memoryFiles) {
+    const target = path.join(
+      params.workspaceDir,
+      "memory",
+      "imports",
+      "codex",
+      path.basename(memory.path),
+    );
+    const targetStat = await lstatIfExists(target);
+    const targetNotRegular = targetStat !== undefined && !targetStat.isFile();
+    if (!targetNotRegular) {
+      const [source, workspace, destination] = await Promise.all([
+        fs.realpath(path.dirname(memory.path)),
+        canonicalPathFromExistingAncestor(params.workspaceDir),
+        canonicalPathFromExistingAncestor(target),
+      ]);
+      if (!isPathInside(workspace, destination)) {
+        throw new Error("Codex memory import destination must stay in the selected workspace.");
+      }
+      if (isPathInside(source, destination) || isPathInside(destination, source)) {
+        throw new Error(
+          "Codex memory source and OpenClaw import destination must be separate paths.",
+        );
+      }
+    }
+    const targetConflict = targetStat !== undefined && !params.overwrite;
+    items.push(
+      createMigrationItem({
+        id: memory.id,
+        kind: "memory",
+        action: "copy",
+        source: memory.path,
+        target,
+        status: targetNotRegular || targetConflict ? "conflict" : "planned",
+        reason: targetNotRegular
+          ? MIGRATION_REASON_TARGET_NOT_REGULAR
+          : targetConflict
+            ? MIGRATION_REASON_TARGET_EXISTS
+            : undefined,
+        message: "Copy consolidated Codex memory into the OpenClaw memory index.",
+        details: {
+          sourceType: "codex-memory",
+          sourceLabel: memory.label,
+          collectionId: "codex",
+          collectionLabel: "Codex",
+          relativePath: path.basename(memory.path),
+        },
+      }),
+    );
+  }
+  return items;
+}
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
   const base = sanitizeName(skill.name) || "codex-skill";
@@ -62,63 +133,46 @@ function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): 
   return sanitizeName(["codex", parent, base].filter(Boolean).join("-")) || base;
 }
 
-async function buildSkillItems(params: {
+async function buildCodexSkillItems(params: {
   skills: CodexSkillSource[];
   workspaceDir: string;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
-  const baseCounts = new Map<string, number>();
+  const counts = new Map<string, number>();
   for (const skill of params.skills) {
     const base = sanitizeName(skill.name) || "codex-skill";
-    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
+    counts.set(base, (counts.get(base) ?? 0) + 1);
   }
-  const resolvedCounts = new Map<string, number>();
   const planned = params.skills.map((skill) => {
-    const name = uniqueSkillName(skill, baseCounts);
-    resolvedCounts.set(name, (resolvedCounts.get(name) ?? 0) + 1);
+    const name = uniqueSkillName(skill, counts);
     return { skill, name, target: path.join(params.workspaceDir, "skills", name) };
   });
-  const items: MigrationItem[] = [];
-  for (const item of planned) {
-    const collides = (resolvedCounts.get(item.name) ?? 0) > 1;
-    const targetExists = await exists(item.target);
-    items.push(
-      createMigrationItem({
+  const resolvedCounts = planned.reduce((resolved, item) => {
+    resolved.set(item.name, (resolved.get(item.name) ?? 0) + 1);
+    return resolved;
+  }, new Map<string, number>());
+  return await Promise.all(
+    planned.map(async (item) => {
+      const collision = (resolvedCounts.get(item.name) ?? 0) > 1;
+      const targetExists = await exists(item.target);
+      const conflict = collision || (targetExists && !params.overwrite);
+      return createMigrationItem({
         id: `skill:${item.name}`,
         kind: "skill",
         action: "copy",
         source: item.skill.source,
         target: item.target,
-        status: collides ? "conflict" : targetExists && !params.overwrite ? "conflict" : "planned",
-        reason: collides
+        status: conflict ? "conflict" : "planned",
+        reason: collision
           ? `multiple Codex skills normalize to "${item.name}"`
-          : targetExists && !params.overwrite
+          : conflict
             ? MIGRATION_REASON_TARGET_EXISTS
             : undefined,
         message: `Copy ${item.skill.sourceLabel} into this OpenClaw agent workspace.`,
-        details: {
-          skillName: item.name,
-          sourceLabel: item.skill.sourceLabel,
-        },
-      }),
-    );
-  }
-  return items;
-}
-
-function uniquePluginConfigKey(
-  plugin: CodexPluginSource,
-  counts: Map<string, number>,
-  usedCounts: Map<string, number>,
-): string {
-  const base = sanitizeName(plugin.pluginName ?? plugin.name) || "codex-plugin";
-  const total = counts.get(base) ?? 0;
-  if (total <= 1) {
-    return base;
-  }
-  const next = (usedCounts.get(base) ?? 0) + 1;
-  usedCounts.set(base, next);
-  return sanitizeName(`${base}-${next}`) || base;
+        details: { skillName: item.name, sourceLabel: item.skill.sourceLabel },
+      });
+    }),
+  );
 }
 
 function readExistingCodexPluginEntries(
@@ -186,13 +240,7 @@ function buildPluginItems(
   ctx: MigrationProviderContext,
   plugins: readonly CodexPluginSource[],
 ): MigrationItem[] {
-  const baseCounts = new Map<string, number>();
-  for (const plugin of plugins.filter((entry) => entry.migratable)) {
-    const base = sanitizeName(plugin.pluginName ?? plugin.name) || "codex-plugin";
-    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
-  }
   const existingPluginEntries = readExistingCodexPluginEntries(ctx.config);
-  const usedCounts = new Map<string, number>();
   let manualIndex = 0;
   const items: MigrationItem[] = [];
   for (const plugin of plugins) {
@@ -201,7 +249,7 @@ function buildPluginItems(
       plugin.marketplaceName === CODEX_PLUGINS_MARKETPLACE_NAME &&
       plugin.pluginName
     ) {
-      const configKey = uniquePluginConfigKey(plugin, baseCounts, usedCounts);
+      const configKey = plugin.pluginName;
       const plannedEntry = {
         enabled: true,
         marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -231,6 +279,7 @@ function buildPluginItems(
           action: "install",
           status: conflict ? "conflict" : "planned",
           reason: conflict ? MIGRATION_REASON_PLUGIN_EXISTS : undefined,
+          applyPhase: "after-promotion",
           source: plugin.source,
           target: `plugins.entries.codex.config.codexPlugins.plugins.${configKey}`,
           message: `Install Codex plugin "${plugin.pluginName}" in the OpenClaw-managed Codex app-server runtime.`,
@@ -255,12 +304,6 @@ function buildPluginItems(
 
     manualIndex += 1;
     if (plugin.migrationBlock && plugin.pluginName) {
-      const details: CodexPluginMigrationBlockSkipDetails = {
-        pluginName: plugin.pluginName,
-        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-        ...(plugin.migrationBlock.apps ? { apps: plugin.migrationBlock.apps } : {}),
-        ...(plugin.migrationBlock.error ? { error: plugin.migrationBlock.error } : {}),
-      };
       items.push(
         createMigrationItem({
           id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
@@ -272,7 +315,12 @@ function buildPluginItems(
           message:
             plugin.message ??
             `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
-          details: { ...details },
+          details: {
+            pluginName: plugin.pluginName,
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            ...(plugin.migrationBlock.apps ? { apps: plugin.migrationBlock.apps } : {}),
+            ...(plugin.migrationBlock.error ? { error: plugin.migrationBlock.error } : {}),
+          },
         }),
       );
       continue;
@@ -285,7 +333,7 @@ function buildPluginItems(
           plugin.message ??
           `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
         recommendation:
-          "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path>.",
+          "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path> --force.",
       }),
     );
   }
@@ -346,11 +394,8 @@ function normalizeExistingAllowDestructiveActions(
 }
 
 function readExistingPluginPolicyRepairs(
-  config: MigrationProviderContext["config"] | undefined,
+  config: MigrationProviderContext["config"],
 ): Record<string, unknown> {
-  if (config === undefined) {
-    return {};
-  }
   return Object.fromEntries(
     Object.entries(readExistingCodexPluginEntries(config)).flatMap(([configKey, entry]) => {
       const pluginEntry = isRecord(entry) ? entry : undefined;
@@ -364,12 +409,10 @@ function readExistingPluginPolicyRepairs(
 
 export function buildCodexPluginsConfigValue(
   entries: readonly CodexPluginMigrationConfigEntry[],
-  params: {
-    config?: MigrationProviderContext["config"];
-  } = {},
+  config: MigrationProviderContext["config"],
 ): Record<string, unknown> {
   const plugins = {
-    ...readExistingPluginPolicyRepairs(params.config),
+    ...readExistingPluginPolicyRepairs(config),
     ...Object.fromEntries(
       entries
         .toSorted((a, b) => a.configKey.localeCompare(b.configKey))
@@ -386,19 +429,16 @@ export function buildCodexPluginsConfigValue(
         ]),
     ),
   };
-  const config: Record<string, unknown> = {
+  const pluginConfig: Record<string, unknown> = {
     codexPlugins: {
       enabled: true,
-      allow_destructive_actions:
-        params.config === undefined
-          ? true
-          : (readExistingAllowDestructiveActions(params.config) ?? true),
+      allow_destructive_actions: readExistingAllowDestructiveActions(config) ?? true,
       plugins,
     },
   };
   return {
     enabled: true,
-    config,
+    config: pluginConfig,
   };
 }
 
@@ -468,7 +508,7 @@ function buildPluginConfigItem(
   if (entries.length === 0) {
     return undefined;
   }
-  const value = buildCodexPluginsConfigValue(entries, { config: ctx.config });
+  const value = buildCodexPluginsConfigValue(entries, ctx.config);
   const conflict = !ctx.overwrite && hasCodexPluginConfigConflict(ctx.config, value);
   return createMigrationItem({
     id: CODEX_PLUGIN_CONFIG_ITEM_ID,
@@ -477,6 +517,7 @@ function buildPluginConfigItem(
     target: "plugins.entries.codex.config.codexPlugins",
     status: conflict ? "conflict" : "planned",
     reason: conflict ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+    applyPhase: "after-promotion",
     message:
       "Enable OpenClaw's Codex plugin integration and record migrated source-installed curated plugins.",
     details: {
@@ -490,9 +531,14 @@ export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
   const targets = resolveCodexMigrationTargets(ctx);
+  const memoryOnly =
+    ctx.itemKinds !== undefined &&
+    ctx.itemKinds.length > 0 &&
+    ctx.itemKinds.every((kind) => kind === "memory");
   const source = await discoverCodexSource({
     input: ctx.source,
-    evaluatePluginMigrationEligibility: true,
+    memoryOnly,
+    evaluatePluginMigrationEligibility: !memoryOnly,
     verifyPluginApps: shouldVerifyPluginApps(ctx),
   });
   if (!hasCodexSource(source)) {
@@ -501,33 +547,42 @@ export async function buildCodexMigrationPlan(
     );
   }
   const items: MigrationItem[] = [];
-  items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
   items.push(
-    ...(await buildSkillItems({
-      skills: source.skills,
+    ...(await buildCodexMemoryItems({
+      memoryFiles: source.memoryFiles,
       workspaceDir: targets.workspaceDir,
       overwrite: ctx.overwrite,
     })),
   );
-  const pluginItems = buildPluginItems(ctx, source.plugins);
-  items.push(...pluginItems);
-  const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
-  if (pluginConfigItem) {
-    items.push(pluginConfigItem);
-  }
-  for (const archivePath of source.archivePaths) {
+  if (!memoryOnly) {
+    items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
     items.push(
-      createMigrationItem({
-        id: archivePath.id,
-        kind: "archive",
-        action: "archive",
-        source: archivePath.path,
-        message:
-          archivePath.message ??
-          "Archived in the migration report for manual review; not imported into live config.",
-        details: { archiveRelativePath: archivePath.relativePath },
-      }),
+      ...(await buildCodexSkillItems({
+        skills: source.skills,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
     );
+    const pluginItems = buildPluginItems(ctx, source.plugins);
+    items.push(...pluginItems);
+    const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
+    if (pluginConfigItem) {
+      items.push(pluginConfigItem);
+    }
+    for (const archivePath of source.archivePaths) {
+      items.push(
+        createMigrationItem({
+          id: archivePath.id,
+          kind: "archive",
+          action: "archive",
+          source: archivePath.path,
+          message:
+            archivePath.message ??
+            "Archived in the migration report for manual review; not imported into live config.",
+          details: { archiveRelativePath: archivePath.relativePath },
+        }),
+      );
+    }
   }
   const warnings = [
     ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
@@ -558,10 +613,12 @@ export async function buildCodexMigrationPlan(
     summary: summarizeMigrationItems(items),
     items,
     warnings,
-    nextSteps: [
-      "Run openclaw doctor after applying the migration.",
-      "Review skipped or auth-required Codex plugin/config/hook items before exposing them in OpenClaw sessions.",
-    ],
+    nextSteps: memoryOnly
+      ? []
+      : [
+          "Run openclaw doctor after applying the migration.",
+          "Review skipped or auth-required Codex plugin/config/hook items before exposing them in OpenClaw sessions.",
+        ],
     metadata: {
       agentDir: targets.agentDir,
       codexHome: source.codexHome,

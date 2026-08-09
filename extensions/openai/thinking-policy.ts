@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 
 type OpenAIThinkingCompat = ProviderDefaultThinkingPolicyContext["compat"];
+type OpenAIThinkingApi = ProviderDefaultThinkingPolicyContext["api"];
 
 const OPENAI_THINKING_BASE_LEVELS = [
   { id: "off" },
@@ -80,6 +81,7 @@ function buildOpenAIThinkingProfile(params: {
   modelId: string;
   xhighModelIds: readonly string[];
   agentRuntime?: string | null;
+  api?: OpenAIThinkingApi;
   compat?: OpenAIThinkingCompat;
 }): ProviderThinkingProfile {
   const modelId = normalizeModelId(params.modelId);
@@ -89,8 +91,8 @@ function buildOpenAIThinkingProfile(params: {
   const isTerra = modelId === "gpt-5.6-terra";
   const isLuna = modelId === "gpt-5.6-luna";
   const codexEfforts = params.compat?.supportedReasoningEfforts?.map(normalizeModelId);
-  const hasDirectOpenAICompat = codexEfforts?.includes("none") === true;
-  const authoritativeCodexEfforts = hasDirectOpenAICompat ? undefined : codexEfforts;
+  const authoritativeCodexEfforts =
+    params.api === "openai-chatgpt-responses" ? codexEfforts : undefined;
   const fallbackCodexMax = isSol || isTerra || isLuna;
   const codexSupportsMax = authoritativeCodexEfforts
     ? authoritativeCodexEfforts.includes("max")
@@ -101,14 +103,14 @@ function buildOpenAIThinkingProfile(params: {
   const codexSupportsUltra = authoritativeCodexEfforts
     ? authoritativeCodexEfforts.includes("ultra")
     : fallbackCodexUltra;
-  // OpenClaw owns its logical Ultra orchestration. Native Codex owns its Ultra
-  // catalog; direct API metadata must not erase the known native fallback.
+  // OpenClaw owns its logical Ultra orchestration. Native Codex capabilities
+  // come only from the selected ChatGPT route's catalog metadata.
   const supportsUltra =
     (isBare || isSol || isTerra || isLuna) &&
     (agentRuntime === "openclaw" ||
       agentRuntime === "auto" ||
       (agentRuntime === "codex" && codexSupportsUltra));
-  const defaultLevel = isSol ? "low" : isTerra || isLuna ? "medium" : undefined;
+  const defaultLevel = isSol || isTerra || isLuna ? "medium" : undefined;
   const fallbackLevels: ProviderThinkingProfile["levels"] = [
     ...OPENAI_THINKING_BASE_LEVELS,
     ...(matchesExactOrPrefix(params.modelId, params.xhighModelIds)
@@ -132,11 +134,13 @@ export function resolveOpenAICodexThinkingProfile(
   modelId: string,
   agentRuntime?: string | null,
   compat?: OpenAIThinkingCompat,
+  api?: OpenAIThinkingApi,
 ): ProviderThinkingProfile {
   return buildOpenAIThinkingProfile({
     modelId,
     xhighModelIds: OPENAI_CODEX_XHIGH_MODEL_IDS,
     agentRuntime,
+    api,
     compat,
   });
 }
@@ -145,11 +149,13 @@ export function resolveUnifiedOpenAIThinkingProfile(
   modelId: string,
   agentRuntime?: string | null,
   compat?: OpenAIThinkingCompat,
+  api?: OpenAIThinkingApi,
 ): ProviderThinkingProfile {
   return buildOpenAIThinkingProfile({
     modelId,
     xhighModelIds: OPENAI_UNIFIED_XHIGH_MODEL_IDS,
     agentRuntime,
+    api,
     compat,
   });
 }

@@ -5,6 +5,7 @@ import {
   type RealtimeTranscriptionProviderPlugin,
   type RealtimeTranscriptionSession,
   type RealtimeTranscriptionSessionCreateRequest,
+  type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -48,6 +49,7 @@ type DeepgramRealtimeTranscriptionEvent = {
   };
   is_final?: boolean;
   speech_final?: boolean;
+  from_finalize?: boolean;
   error?: unknown;
   message?: string;
 };
@@ -60,6 +62,8 @@ const DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
 const DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const DEEPGRAM_REALTIME_RECONNECT_DELAY_MS = 1000;
 const DEEPGRAM_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
+const DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES = 256 * 1024;
+const DEEPGRAM_REALTIME_FINALIZE_FALLBACK_MS = DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS - 100;
 
 function readNestedDeepgramConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
@@ -90,15 +94,36 @@ function normalizeDeepgramEncoding(
 }
 
 function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
-  return (
-    normalizeOptionalString(value ?? process.env.DEEPGRAM_BASE_URL) ??
-    DEFAULT_DEEPGRAM_AUDIO_BASE_URL
-  );
+  const resolved = normalizeOptionalString(value ?? process.env.DEEPGRAM_BASE_URL);
+  if (!resolved) {
+    return DEFAULT_DEEPGRAM_AUDIO_BASE_URL;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(resolved);
+  } catch {
+    throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
+  }
+  const { protocol } = parsed;
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "ws:" && protocol !== "wss:") {
+    // Endpoint URLs can contain userinfo or sensitive query values. Keep the
+    // error actionable without echoing the configured value.
+    throw new Error(
+      `Invalid Deepgram baseUrl: unsupported scheme "${protocol}" (expected http, https, ws, or wss)`,
+    );
+  }
+  return resolved;
 }
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
   const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  // Self-hosted Deepgram may explicitly use ws:// without TLS. Translate only
+  // matching HTTP schemes so direct WebSocket endpoints keep their contract.
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  }
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/listen`;
   url.searchParams.set("model", config.model);
   url.searchParams.set("encoding", config.encoding);
@@ -148,36 +173,110 @@ function readTranscriptText(event: DeepgramRealtimeTranscriptionEvent): string |
 function createDeepgramRealtimeTranscriptionSession(
   config: DeepgramRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
-  let lastTranscript: string | undefined;
   let speechStarted = false;
+  let finalizedTranscript = "";
+  let pendingPartial = "";
+  let finalizeRequested = false;
+  let finalizeFallbackFired = false;
+  let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let openedOnce = false;
 
-  const emitTranscript = (text: string) => {
-    if (text === lastTranscript) {
-      return;
+  const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
+
+  const joinTranscript = (left: string, right: string) =>
+    collapseWhitespace(left && right ? `${left} ${right}` : left || right);
+
+  const clearFinalizeFallback = () => {
+    if (finalizeFallbackTimer) {
+      clearTimeout(finalizeFallbackTimer);
+      finalizeFallbackTimer = undefined;
     }
-    lastTranscript = text;
-    config.onTranscript?.(text);
   };
 
-  const handleEvent = (event: DeepgramRealtimeTranscriptionEvent) => {
+  const clearTurn = () => {
+    clearFinalizeFallback();
+    finalizedTranscript = "";
+    pendingPartial = "";
+    speechStarted = false;
+  };
+
+  const updateTurn = (
+    nextFinalized: string,
+    nextPartial: string,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ) => {
+    const retainedBytes =
+      Buffer.byteLength(nextFinalized, "utf8") + Buffer.byteLength(nextPartial, "utf8");
+    if (retainedBytes > DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES) {
+      clearTurn();
+      config.onError?.(
+        new Error(
+          `Deepgram realtime retained transcript exceeded ${DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES} bytes`,
+        ),
+      );
+      transport.closeNow();
+      return false;
+    }
+    finalizedTranscript = nextFinalized;
+    pendingPartial = nextPartial;
+    return true;
+  };
+
+  const flushTurn = () => {
+    const full = joinTranscript(finalizedTranscript, pendingPartial);
+    clearTurn();
+    if (full) {
+      config.onTranscript?.(full);
+    }
+  };
+
+  const flushFinalizedTurn = () => {
+    const full = collapseWhitespace(finalizedTranscript);
+    clearTurn();
+    if (full) {
+      config.onTranscript?.(full);
+    }
+  };
+
+  const handleEvent = (
+    event: DeepgramRealtimeTranscriptionEvent,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ) => {
     switch (event.type) {
       case "Results": {
-        const text = readTranscriptText(event);
-        if (!text) {
+        if (finalizeFallbackFired) {
           return;
         }
-        if (!speechStarted) {
+        const text = readTranscriptText(event);
+        if (text && !speechStarted) {
           speechStarted = true;
           config.onSpeechStart?.();
         }
-        if (event.is_final || event.speech_final) {
-          emitTranscript(text);
-          if (event.speech_final) {
-            speechStarted = false;
+        if (event.speech_final || event.from_finalize) {
+          const nextFinalized = text
+            ? joinTranscript(finalizedTranscript, text)
+            : finalizedTranscript;
+          if (!updateTurn(nextFinalized, "", transport)) {
+            return;
           }
+          flushTurn();
           return;
         }
-        config.onPartial?.(text);
+        if (!text) {
+          return;
+        }
+        if (event.is_final) {
+          const nextFinalized = joinTranscript(finalizedTranscript, text);
+          if (!updateTurn(nextFinalized, "", transport)) {
+            return;
+          }
+          config.onPartial?.(nextFinalized);
+        } else {
+          if (!updateTurn(finalizedTranscript, text, transport)) {
+            return;
+          }
+          config.onPartial?.(joinTranscript(finalizedTranscript, text));
+        }
         return;
       }
       case "SpeechStarted":
@@ -207,13 +306,46 @@ function createDeepgramRealtimeTranscriptionSession(
     connectClosedBeforeReadyMessage:
       "Deepgram realtime transcription connection closed before ready",
     reconnectLimitMessage: "Deepgram realtime transcription reconnect limit reached",
+    onOpen: () => {
+      if (openedOnce) {
+        // The replacement stream cannot replay confirmed text from the old
+        // connection. Emit it as an interrupted turn, but discard its partial tail.
+        flushFinalizedTurn();
+      } else {
+        openedOnce = true;
+        clearTurn();
+      }
+      finalizeRequested = false;
+      finalizeFallbackFired = false;
+    },
     sendAudio: (audio, transport) => {
       transport.sendBinary(audio);
     },
     onClose: (transport) => {
+      if (finalizeRequested) {
+        return;
+      }
+      finalizeRequested = true;
+      if (finalizedTranscript) {
+        // Finalize may produce no Results event when Deepgram has no buffered
+        // audio left. Preserve already-finalized text before core force-closes.
+        finalizeFallbackTimer = setTimeout(() => {
+          finalizeFallbackTimer = undefined;
+          finalizeFallbackFired = true;
+          try {
+            flushFinalizedTurn();
+          } catch (error) {
+            try {
+              config.onError?.(error instanceof Error ? error : new Error(String(error)));
+            } catch {
+              // Error observers must not turn close fallback into an uncaught timer exception.
+            }
+          }
+        }, DEEPGRAM_REALTIME_FINALIZE_FALLBACK_MS);
+      }
       transport.sendJson({ type: "Finalize" });
     },
-    onMessage: handleEvent,
+    onMessage: (event, transport) => handleEvent(event, transport),
   });
 }
 
@@ -247,9 +379,3 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
     },
   };
 }
-
-export const testing = {
-  normalizeProviderConfig,
-  toDeepgramRealtimeWsUrl,
-};
-export { testing as __testing };

@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { decodeStrictBase64 } from "./subagent-attachments.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -27,53 +26,6 @@ beforeAll(async () => {
     getRuntimeConfig: () => configOverride,
     updateSessionStoreMock,
     workspaceDir: workspaceDirOverride || os.tmpdir(),
-  });
-});
-
-describe("decodeStrictBase64", () => {
-  const maxBytes = 1024;
-
-  it("valid base64 returns buffer with correct bytes", () => {
-    const input = "hello world";
-    const encoded = Buffer.from(input).toString("base64");
-    const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result?.toString("utf8")).toBe(input);
-  });
-
-  it("empty string returns null", () => {
-    expect(decodeStrictBase64("", maxBytes)).toBeNull();
-  });
-
-  it("bad padding (length % 4 !== 0) returns null", () => {
-    expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
-  });
-
-  it("non-base64 chars returns null", () => {
-    expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
-  });
-
-  it("whitespace-only returns null (empty after strip)", () => {
-    expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
-  });
-
-  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
-    // Pre-decode guard rejects obviously oversized payloads before allocating
-    // the decoded buffer.
-    const oversized = "A".repeat(2737);
-    expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
-  });
-
-  it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
-    const bigBuf = Buffer.alloc(1025, 0x42);
-    const encoded = bigBuf.toString("base64");
-    expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
-  });
-
-  it("valid base64 at exact boundary returns Buffer", () => {
-    const exactBuf = Buffer.alloc(1024, 0x41);
-    const encoded = exactBuf.toString("base64");
-    const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result?.byteLength).toBe(1024);
   });
 });
 
@@ -124,6 +76,39 @@ describe("spawnSubagentDirect filename validation", () => {
       ctx,
     );
   }
+
+  it.each([
+    ["empty", ""],
+    ["bad padding", "abc"],
+    ["invalid characters", "!@#$"],
+    ["whitespace only", "   "],
+    ["pre-decode oversize", "A".repeat(2737)],
+    ["decoded oversize", Buffer.alloc(1025, 0x42).toString("base64")],
+  ])("rejects %s base64 attachments through the spawn boundary", async (_label, content) => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      tools: {
+        sessions_spawn: {
+          attachments: {
+            enabled: true,
+            maxFiles: 50,
+            maxFileBytes: 1024,
+            maxTotalBytes: 5 * 1024 * 1024,
+          },
+        },
+      },
+    });
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.bin", content, encoding: "base64" }],
+      },
+      ctx,
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("attachments_invalid_base64_or_too_large"),
+    });
+  });
 
   it("name with / returns attachments_invalid_name", async () => {
     const result = await spawnWithName("foo/bar");
@@ -232,58 +217,5 @@ describe("spawnSubagentDirect filename validation", () => {
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
-  });
-
-  it("removes materialized attachments when lineage patching fails", async () => {
-    // Attachments are created before the child session lineage patch; failures
-    // must delete both the child session and materialized files.
-    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
-    const store: Record<string, Record<string, unknown>> = {};
-    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
-      if (typeof mutator !== "function") {
-        throw new Error("missing session store mutator");
-      }
-      await mutator(store);
-      if (Object.values(store).some((entry) => typeof entry.spawnedBy === "string")) {
-        throw new Error("lineage patch failed");
-      }
-      return store;
-    });
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      calls.push(request);
-      if (request.method === "sessions.delete") {
-        return { ok: true };
-      }
-      return {};
-    });
-
-    const { spawnSubagentDirect } = subagentSpawnModule;
-    const result = await spawnSubagentDirect(
-      {
-        task: "test",
-        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
-      },
-      ctx,
-    );
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("lineage patch failed");
-    const attachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
-    const retainedDirs = fs.existsSync(attachmentsRoot)
-      ? fs.readdirSync(attachmentsRoot).filter((entry) => !entry.startsWith("."))
-      : [];
-    expect(retainedDirs).toHaveLength(0);
-    const deleteCall = calls.find((entry) => entry.method === "sessions.delete");
-    const deleteParams = deleteCall?.params as
-      | {
-          key?: string;
-          deleteTranscript?: boolean;
-          emitLifecycleHooks?: boolean;
-        }
-      | undefined;
-    expect(deleteParams?.key).toMatch(/^agent:main:subagent:/);
-    expect(deleteParams?.deleteTranscript).toBe(true);
-    expect(deleteParams?.emitLifecycleHooks).toBe(false);
   });
 });

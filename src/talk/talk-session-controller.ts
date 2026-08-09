@@ -250,4 +250,4 @@ export function normalizeTalkTransport(value: string | undefined): string | unde
   return normalized;
 }
 
-export type { TalkBrain, TalkEvent, TalkEventContext, TalkEventInput, TalkMode, TalkTransport };
+export type { TalkBrain, TalkEvent, TalkEventInput, TalkMode, TalkTransport };

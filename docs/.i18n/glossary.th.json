@@ -78,5 +78,13 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "ขั้นตอนการรีวิว pull request"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "ไปป์ไลน์ CI"
   }
 ]

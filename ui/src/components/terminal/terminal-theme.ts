@@ -1,5 +1,8 @@
 // Maps the Control UI light/dark surfaces onto the terminal's 16-color theme.
-import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
+import type {
+  CreateGhosttyTerminalOptions,
+  TerminalDefaultColors,
+} from "@openclaw/libterminal/browser";
 
 type TerminalTheme = NonNullable<
   NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]
@@ -26,14 +29,26 @@ const ANSI = {
   brightWhite: "#ffffff",
 } as const;
 
+// Dark mirrors the claw tokens in styles/base.css (`--bg` #0e1015,
+// `--accent` #ff5c5c) — keep them in sync when the tokens change. Light is a
+// deliberate neutral cool white: the light theme families diverge (ivory,
+// cool white, parchment) and the canvas gets only a binary mode.
+const DYNAMIC_COLORS = {
+  dark: { background: "#0e1015", cursor: "#ff5c5c", foreground: "#d7dae0" },
+  light: { background: "#f7f8fa", cursor: "#1b1e26", foreground: "#1b1e26" },
+} as const satisfies Record<"dark" | "light", TerminalDefaultColors>;
+
+export function terminalDynamicColors(mode: "dark" | "light"): TerminalDefaultColors {
+  return DYNAMIC_COLORS[mode];
+}
+
 /** Builds the terminal theme for the given Control UI color mode. */
 export function terminalTheme(mode: "dark" | "light"): TerminalTheme {
+  const colors = terminalDynamicColors(mode);
   if (mode === "light") {
     return {
       ...ANSI,
-      background: "#f7f8fa",
-      foreground: "#1b1e26",
-      cursor: "#1b1e26",
+      ...colors,
       cursorAccent: "#f7f8fa",
       selectionBackground: "rgba(90, 162, 255, 0.30)",
       black: "#3a3f4b",
@@ -42,9 +57,7 @@ export function terminalTheme(mode: "dark" | "light"): TerminalTheme {
   }
   return {
     ...ANSI,
-    background: "#0e1015",
-    foreground: "#d7dae0",
-    cursor: "#ff5c5c",
+    ...colors,
     cursorAccent: "#0e1015",
     selectionBackground: "rgba(90, 162, 255, 0.32)",
   };

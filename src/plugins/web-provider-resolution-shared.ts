@@ -1,15 +1,15 @@
 // Shares web-provider plugin resolution helpers without eager runtime imports.
-import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
+import { resolveBundledCompatActivationInputs } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
-export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
-export type WebProviderConfigKey = "webSearch" | "webFetch";
+type WebProviderContract = "webSearchProviders" | "webFetchProviders";
+type WebProviderConfigKey = "webSearch" | "webFetch";
 
 /** Manifest-backed plugin id candidates for a web provider family. */
-export type WebProviderCandidateResolution = {
+type WebProviderCandidateResolution = {
   pluginIds: string[] | undefined;
   manifestRecords?: readonly PluginManifestRecord[];
 };
@@ -168,16 +168,12 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
-  const activation = resolveBundledPluginCompatibleLoadValues({
+  const activation = resolveBundledCompatActivationInputs({
     rawConfig: params.config,
     env: params.env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
-    compatMode: {
-      enablement: "always",
-      vitest: params.config !== undefined,
-    },
-    resolveCompatPluginIds: (compatParams) =>
+    resolveBundledPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({
         contract: params.contract,
         ...compatParams,

@@ -1,26 +1,35 @@
 // Matrix tests cover event helpers plugin behavior.
-import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
-import { describe, expect, it } from "vitest";
+import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { describe, expect, it, vi } from "vitest";
 import { buildHttpError, matrixEventToRaw, parseMxc } from "./event-helpers.js";
 
-const makeEditedMessageEvent = (): MatrixEvent =>
-  ({
-    getId: () => "$root",
-    getSender: () => "@alice:example.org",
-    getType: () => "m.room.message",
-    getTs: () => 1000,
-    getOriginalContent: () => ({ body: "original", msgtype: "m.text" }),
-    getContent: () => ({
-      body: "@bot edited",
-      "m.mentions": { user_ids: ["@bot:example.org"] },
-      msgtype: "m.text",
-    }),
-    getUnsigned: () => ({
+const makeEditedMessageEvent = (): MatrixEvent => {
+  const event = new MatrixEvent({
+    event_id: "$root",
+    sender: "@alice:example.org",
+    type: "m.room.message",
+    origin_server_ts: 1000,
+    content: { body: "original", msgtype: "m.text" },
+    unsigned: {
       "m.relations": {
         "m.replace": { event_id: "$edit" },
       },
+    },
+  });
+  event.makeReplaced(
+    new MatrixEvent({
+      type: "m.room.message",
+      content: {
+        "m.new_content": {
+          body: "@bot edited",
+          "m.mentions": { user_ids: ["@bot:example.org"] },
+          msgtype: "m.text",
+        },
+      },
     }),
-  }) as unknown as MatrixEvent;
+  );
+  return event;
+};
 
 describe("event-helpers", () => {
   it("parses mxc URIs", () => {
@@ -49,41 +58,26 @@ describe("event-helpers", () => {
     expect(buildHttpError(502, `${invalidPrefix}🎉tail`).message).toBe(invalidPrefix);
   });
 
-  it("serializes Matrix events and resolves state key from available sources", () => {
-    const viaGetter = {
-      getId: () => "$1",
-      getSender: () => "@alice:example.org",
-      getType: () => "m.room.member",
-      getTs: () => 1000,
-      getContent: () => ({ membership: "join" }),
-      getUnsigned: () => ({ age: 1 }),
-      getStateKey: () => "@alice:example.org",
-    } as unknown as MatrixEvent;
-    expect(matrixEventToRaw(viaGetter).state_key).toBe("@alice:example.org");
+  it("serializes native Matrix state events", () => {
+    const event = new MatrixEvent({
+      event_id: "$1",
+      sender: "@alice:example.org",
+      type: "m.room.member",
+      origin_server_ts: 1000,
+      content: { membership: "join" },
+      unsigned: { age: 1 },
+      state_key: "@alice:example.org",
+    });
 
-    const viaWire = {
-      getId: () => "$2",
-      getSender: () => "@bob:example.org",
-      getType: () => "m.room.member",
-      getTs: () => 2000,
-      getContent: () => ({ membership: "join" }),
-      getUnsigned: () => ({}),
-      getStateKey: () => undefined,
-      getWireContent: () => ({ state_key: "@bob:example.org" }),
-    } as unknown as MatrixEvent;
-    expect(matrixEventToRaw(viaWire).state_key).toBe("@bob:example.org");
-
-    const viaRaw = {
-      getId: () => "$3",
-      getSender: () => "@carol:example.org",
-      getType: () => "m.room.member",
-      getTs: () => 3000,
-      getContent: () => ({ membership: "join" }),
-      getUnsigned: () => ({}),
-      getStateKey: () => undefined,
-      event: { state_key: "@carol:example.org" },
-    } as unknown as MatrixEvent;
-    expect(matrixEventToRaw(viaRaw).state_key).toBe("@carol:example.org");
+    expect(matrixEventToRaw(event)).toEqual({
+      event_id: "$1",
+      sender: "@alice:example.org",
+      type: "m.room.member",
+      origin_server_ts: 1000,
+      content: { membership: "join" },
+      unsigned: { age: 1 },
+      state_key: "@alice:example.org",
+    });
   });
 
   it("serializes current content by default for read APIs", () => {
@@ -106,26 +100,32 @@ describe("event-helpers", () => {
   });
 
   it("preserves original thread relation when serializing edited current content", () => {
-    const event = {
-      getId: () => "$root",
-      getSender: () => "@alice:example.org",
-      getType: () => "m.room.message",
-      getTs: () => 1000,
-      getOriginalContent: () => ({
+    const event = new MatrixEvent({
+      event_id: "$root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 1000,
+      content: {
         body: "original",
         msgtype: "m.text",
         "m.relates_to": {
           rel_type: "m.thread",
           event_id: "$thread",
         },
+      },
+    });
+    event.makeReplaced(
+      new MatrixEvent({
+        type: "m.room.message",
+        content: {
+          "m.new_content": {
+            body: "@bot edited",
+            "m.mentions": { user_ids: ["@bot:example.org"] },
+            msgtype: "m.text",
+          },
+        },
       }),
-      getContent: () => ({
-        body: "@bot edited",
-        "m.mentions": { user_ids: ["@bot:example.org"] },
-        msgtype: "m.text",
-      }),
-      getUnsigned: () => ({}),
-    } as unknown as MatrixEvent;
+    );
 
     expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual({
       rel_type: "m.thread",
@@ -133,29 +133,51 @@ describe("event-helpers", () => {
     });
   });
 
-  it("preserves wire thread relation for decrypted encrypted events", () => {
-    const event = {
-      getId: () => "$encrypted",
-      getSender: () => "@alice:example.org",
-      getType: () => "m.room.message",
-      getTs: () => 1000,
-      getContent: () => ({
-        body: "decrypted edit",
+  it("preserves reply-only wire relations for encrypted events with clear content", () => {
+    const event = new MatrixEvent({
+      event_id: "$encrypted",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 1000,
+      content: {
+        body: "decrypted reply",
         msgtype: "m.text",
-      }),
-      getUnsigned: () => ({}),
-      getWireContent: () => ({
+      },
+    });
+    event.makeEncrypted(
+      "m.room.encrypted",
+      {
+        algorithm: "m.megolm.v1.aes-sha2",
         "m.relates_to": {
-          rel_type: "m.thread",
-          event_id: "$thread",
+          "m.in_reply_to": { event_id: "$parent" },
         },
-      }),
-    } as unknown as MatrixEvent;
+      },
+      "curve-key",
+      "ed-key",
+    );
 
     expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual({
-      rel_type: "m.thread",
-      event_id: "$thread",
+      "m.in_reply_to": { event_id: "$parent" },
     });
+  });
+
+  it("preserves packed wire state keys when clear state is unavailable", () => {
+    const event = new MatrixEvent({
+      event_id: "$encrypted-state",
+      sender: "@alice:example.org",
+      type: "m.room.member",
+      state_key: "@alice:example.org",
+      content: { membership: "join" },
+    });
+    event.makeEncrypted(
+      "m.room.encrypted",
+      { algorithm: "m.megolm.v1.aes-sha2" },
+      "curve-key",
+      "ed-key",
+    );
+    vi.spyOn(event, "getStateKey").mockReturnValue(undefined);
+
+    expect(matrixEventToRaw(event).state_key).toBe("m.room.member:@alice:example.org");
   });
 
   it("can serialize original content for inbound trigger filtering", () => {

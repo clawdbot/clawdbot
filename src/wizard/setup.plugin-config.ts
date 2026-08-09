@@ -79,6 +79,15 @@ function formatCurrentValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function parseJsonNumberInput(value: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Discover plugins that have non-advanced uiHints fields.
  * Returns only plugins that have at least one promptable field.
@@ -274,8 +283,8 @@ async function promptPluginFields(params: {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
         } else {
-          const parsed = Number(trimmed);
-          if (Number.isFinite(parsed)) {
+          const parsed = parseJsonNumberInput(trimmed);
+          if (parsed !== undefined && (schemaProp.type === "number" || Number.isInteger(parsed))) {
             setPathCreateStrict(updatedConfig, pathSegments, parsed);
             changed = true;
           }

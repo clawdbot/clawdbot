@@ -1,12 +1,9 @@
 // Daemon program argument tests cover CLI argument construction for services.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetWindowsInstallRootsForTests } from "../infra/windows-install-roots.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
-const childProcessMocks = vi.hoisted(() => ({
-  execFileSync: vi.fn(),
-}));
+const execFileSyncMock = vi.hoisted(() => vi.fn());
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -32,21 +29,19 @@ vi.mock("node:fs/promises", async () => {
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    execFileSync: childProcessMocks.execFileSync,
-  };
+  return { ...actual, execFileSync: execFileSyncMock };
 });
 
 import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
+const originalExecPath = process.execPath;
 
 afterEach(() => {
   process.argv = [...originalArgv];
+  process.execPath = originalExecPath;
   vi.resetAllMocks();
   vi.unstubAllEnvs();
-  resetWindowsInstallRootsForTests();
 });
 
 describe("resolveGatewayProgramArguments", () => {
@@ -159,22 +154,24 @@ describe("resolveGatewayProgramArguments", () => {
     ]);
   });
 
-  it("uses src/entry.ts for bun dev mode", async () => {
+  it("uses Node with tsx for source-checkout dev mode", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");
     process.argv = ["/usr/local/bin/node", repoIndexPath];
     fsMocks.realpath.mockResolvedValue(repoIndexPath);
     fsMocks.access.mockResolvedValue(undefined);
-    childProcessMocks.execFileSync.mockReturnValue("/usr/local/bin/bun\n");
 
     const result = await resolveGatewayProgramArguments({
       dev: true,
       port: 18789,
-      runtime: "bun",
+      runtime: "node",
+      nodePath: "/usr/local/bin/node",
     });
 
     expect(result.programArguments).toEqual([
-      "/usr/local/bin/bun",
+      "/usr/local/bin/node",
+      "--import",
+      "tsx",
       repoEntryPath,
       "gateway",
       "--port",
@@ -183,32 +180,70 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.workingDirectory).toBe(path.resolve("/repo"));
   });
 
-  it("uses trusted Windows where.exe when resolving dev runtime binaries", async () => {
+  it("uses trusted Windows where.exe when resolving the Node runtime", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    process.argv = [String.raw`D:\nodejs\node.exe`, repoIndexPath];
+    const launcherPath = String.raw`D:\OpenClaw\openclaw.exe`;
+    process.argv = [launcherPath, repoIndexPath];
+    process.execPath = launcherPath;
     vi.stubEnv("SystemRoot", String.raw`D:\Windows`);
-    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     fsMocks.realpath.mockResolvedValue(repoIndexPath);
     fsMocks.access.mockResolvedValue(undefined);
-    childProcessMocks.execFileSync.mockReturnValue(String.raw`D:\Tools\bun.exe` + "\r\n");
+    execFileSyncMock.mockReturnValue(String.raw`D:\Tools\node.exe` + "\r\n");
 
     let result: Awaited<ReturnType<typeof resolveGatewayProgramArguments>> | undefined;
     await withMockedWindowsPlatform(async () => {
       result = await resolveGatewayProgramArguments({
         dev: true,
         port: 18789,
-        runtime: "bun",
+        runtime: "node",
       });
     });
 
-    expect(childProcessMocks.execFileSync).toHaveBeenCalledWith(
+    expect(execFileSyncMock).toHaveBeenCalledWith(
       path.win32.join(String.raw`D:\Windows`, "System32", "where.exe"),
-      ["bun"],
-      { encoding: "utf8" },
+      ["node"],
+      { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" },
     );
     expect(result?.programArguments).toEqual([
-      String.raw`D:\Tools\bun.exe`,
+      String.raw`D:\Tools\node.exe`,
+      "--import",
+      "tsx",
+      repoEntryPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("bounds POSIX Node runtime lookup", async () => {
+    const repoIndexPath = path.resolve("/repo/src/index.ts");
+    const repoEntryPath = path.resolve("/repo/src/entry.ts");
+    process.argv = ["/usr/local/bin/bun", repoIndexPath];
+    process.execPath = "/usr/local/bin/bun";
+    fsMocks.realpath.mockResolvedValue(repoIndexPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    execFileSyncMock.mockReturnValue("/usr/local/bin/node\n");
+
+    const result = await withMockedPlatform(
+      "linux",
+      async () =>
+        await resolveGatewayProgramArguments({
+          dev: true,
+          port: 18789,
+          runtime: "node",
+        }),
+    );
+
+    expect(execFileSyncMock).toHaveBeenCalledWith("which", ["node"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
+    expect(result.programArguments).toEqual([
+      "/usr/local/bin/node",
+      "--import",
+      "tsx",
       repoEntryPath,
       "gateway",
       "--port",

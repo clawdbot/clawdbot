@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -20,17 +21,17 @@ class CronJobDetailTest {
     assertEquals("Daily report", detail.name)
     assertEquals("sha256:fixture", detail.configRevision)
     assertEquals("cron", detail.scheduleKind)
-    assertEquals("0 9 * * *", detail.scheduleLabel)
-    assertEquals("0 9 * * * · Europe/Vienna · Stagger Every 5m", detail.scheduleDetail)
+    assertEquals("0 9 * * *", detail.scheduleLabel.resolveNativeText())
+    assertEquals("0 9 * * * · Europe/Vienna · Stagger Every 5m", detail.scheduleDetail.resolveNativeText())
     assertEquals("0 9 * * *", detail.scheduleCronExpr)
     assertEquals("Europe/Vienna", detail.scheduleTimezone)
     assertEquals(300000L, detail.scheduleStaggerMs)
-    assertEquals("Agent turn · openai/gpt-5.5 · Thinking high", detail.payloadLabel)
+    assertEquals("Agent turn · openai/gpt-5.5 · Thinking high", detail.payloadLabel.resolveNativeText())
     assertEquals("Summarize the day", detail.payloadText)
     assertEquals("openai/gpt-5.5", detail.payloadModel)
     assertEquals("high", detail.payloadThinking)
-    assertEquals("Announce · telegram · chat-42 · Account primary", detail.deliveryLabel)
-    assertEquals("After 3 · Announce · telegram · ops · Cooldown Every 1h", detail.failureAlertLabel)
+    assertEquals("Announce · telegram · chat-42 · Account primary", detail.deliveryLabel.resolveNativeText())
+    assertEquals("After 3 · Announce · telegram · ops · Cooldown Every 1h", detail.failureAlertLabel.resolveNativeText())
     assertEquals(2L, detail.consecutiveErrors)
     assertEquals("error", detail.lastRunStatus)
   }
@@ -49,6 +50,24 @@ class CronJobDetailTest {
     assertEquals("printf done", detail.payloadText)
     assertEquals(listOf("printf", "done"), detail.payloadCommandArgv)
     assertFalse(detail.payloadText.orEmpty().contains("secret-value"))
+  }
+
+  @Test
+  fun parsesScriptPayloadAsReadOnlyDetail() {
+    val script = "const result = await agent('check status')"
+    val detail =
+      parseGatewayCronJobDetail(
+        parseJob(
+          payload =
+            """{"kind":"script","script":"$script","timeoutSeconds":90,"toolBudget":4}""",
+        ),
+      )
+
+    requireNotNull(detail)
+    assertEquals("script", detail.payloadKind)
+    assertEquals(script, detail.payloadText)
+    assertEquals("Script · Timeout 90s · 4 tools", detail.payloadLabel.resolveNativeText())
+    assertNull(detail.payloadCommandArgv)
   }
 
   @Test

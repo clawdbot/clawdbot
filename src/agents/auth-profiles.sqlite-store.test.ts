@@ -20,6 +20,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
+  inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
@@ -125,9 +126,37 @@ describe("auth profile sqlite store", () => {
         "utf8",
       );
 
-      const loaded = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
+        "requires legacy credential migration",
+      );
+    });
+  });
 
-      expect(loaded.profiles["openai:default"]).toBeUndefined();
+  it("fails closed when a credential source appears during a successful SQLite read", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
+      saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
+      const legacyPath = path.join(agentDir, "auth.json");
+      const existsSync = fs.existsSync.bind(fs);
+      let legacyChecks = 0;
+      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+        if (path.resolve(String(pathname)) === path.resolve(legacyPath)) {
+          legacyChecks += 1;
+          if (legacyChecks === 2) {
+            fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
+            return true;
+          }
+          return false;
+        }
+        return existsSync(pathname);
+      });
+      try {
+        expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
+          "requires legacy credential migration",
+        );
+      } finally {
+        existsSpy.mockRestore();
+      }
+      expect(fs.existsSync(legacyPath)).toBe(true);
     });
   });
 
@@ -148,6 +177,31 @@ describe("auth profile sqlite store", () => {
         status: "missing",
         reason: "table",
       });
+    });
+  });
+
+  it("classifies each missing auth table through an existing database handle", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-partial-schema-", (agentDir) => {
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      database.exec(`
+        CREATE TABLE auth_profile_store (
+          store_key TEXT NOT NULL PRIMARY KEY,
+          store_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      try {
+        expect(inspectPersistedAuthProfileStoreRaw(agentDir, { db: database })).toEqual({
+          status: "missing",
+          reason: "row",
+        });
+        expect(inspectPersistedAuthProfileStateRaw(agentDir, { db: database })).toEqual({
+          status: "missing",
+          reason: "table",
+        });
+      } finally {
+        database.close();
+      }
     });
   });
 

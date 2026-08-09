@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -66,12 +66,12 @@ function resolveSystemBrowser(value?: string): SystemBrowser {
   throw new Error(`unsupported system browser "${value}"; use chrome, brave, edge, or chromium`);
 }
 
-export function resolveSystemBrowserRoot(browser: SystemBrowser, homeDir = os.homedir()): string {
+function resolveSystemBrowserRoot(browser: SystemBrowser, homeDir = os.homedir()): string {
   return path.join(homeDir, "Library", "Application Support", ...SYSTEM_BROWSER_DIRS[browser]);
 }
 
 /** Prefer Chrome's current Network/Cookies location, then its legacy location. */
-export function resolveSystemCookiesFile(root: string, profileId: string): string | undefined {
+function resolveSystemCookiesFile(root: string, profileId: string): string | undefined {
   const candidates = [
     path.join(root, profileId, "Network", "Cookies"),
     path.join(root, profileId, "Cookies"),
@@ -134,7 +134,7 @@ export function listSystemProfiles(
 }
 
 /** Create a transactionally coherent snapshot while Chrome may be writing its WAL. */
-export function snapshotCookieDatabase(source: string): {
+function snapshotCookieDatabase(source: string): {
   databasePath: string;
   cleanup: () => void;
 } {
@@ -142,7 +142,7 @@ export function snapshotCookieDatabase(source: string): {
   fs.mkdirSync(tmpRoot, { recursive: true });
   const tempDir = fs.mkdtempSync(path.join(tmpRoot, "openclaw-system-cookies-"));
   const databasePath = path.join(tempDir, "Cookies");
-  const sourceDatabase = new DatabaseSync(source, { readOnly: true });
+  const sourceDatabase = openNodeSqliteDatabase(source, { readOnly: true });
   try {
     sourceDatabase.exec("PRAGMA busy_timeout = 5000");
     sourceDatabase.prepare("VACUUM INTO ?").run(databasePath);

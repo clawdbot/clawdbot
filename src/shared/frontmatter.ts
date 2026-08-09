@@ -57,7 +57,7 @@ export function resolveOpenClawManifestBlock(params: {
   }
 }
 
-export type OpenClawManifestRequires = {
+type OpenClawManifestRequires = {
   /** All binaries that must be available. */
   bins: string[];
   /** Alternative binaries where any one match is enough. */
@@ -103,7 +103,7 @@ export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>):
   return normalizeStringList(metadataObj.os);
 }
 
-export type ParsedOpenClawManifestInstallBase = {
+type ParsedOpenClawManifestInstallBase = {
   /** Original install entry for caller-specific parsing. */
   raw: Record<string, unknown>;
   /** Normalized install kind accepted by the caller. */

@@ -14,7 +14,7 @@ export function hasTopLevelShellControlOperator(raw: string): boolean {
   let wordStart = true;
 
   for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+    const ch = raw.charAt(i);
     if (escaped) {
       escaped = false;
       wordStart = false;
@@ -69,7 +69,7 @@ export function splitShellArgs(raw: string): string[] | null {
   };
 
   for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+    const ch = raw.charAt(i);
     if (escaped) {
       buf += ch;
       escaped = false;

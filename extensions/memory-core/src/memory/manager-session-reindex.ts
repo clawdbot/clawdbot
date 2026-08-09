@@ -15,7 +15,7 @@ export function shouldSyncSessionsForReindex(params: {
   if (params.sync?.sessions?.some((session) => session.sessionId.trim().length > 0)) {
     return true;
   }
-  if (params.sync?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+  if (params.sync?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
     return true;
   }
   if (params.sync?.force) {

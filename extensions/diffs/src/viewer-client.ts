@@ -1,11 +1,6 @@
 // Diffs plugin module implements viewer client behavior.
 import { FileDiff, preloadHighlighter } from "@pierre/diffs";
-import type {
-  FileContents,
-  FileDiffMetadata,
-  FileDiffOptions,
-  SupportedLanguages,
-} from "@pierre/diffs";
+import type { FileDiffOptions, SupportedLanguages } from "@pierre/diffs";
 import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
@@ -21,7 +16,7 @@ function readInjectedLanguagePackFlag(): boolean | undefined {
     : undefined;
 }
 
-export function resolveViewerLanguagePackAvailability(
+function resolveViewerLanguagePackAvailability(
   buildFlag: boolean | undefined = readInjectedLanguagePackFlag(),
 ): boolean {
   return buildFlag === true;
@@ -39,7 +34,7 @@ type DiffController = {
   diff: FileDiff;
 };
 
-export const controllers: DiffController[] = [];
+const controllers: DiffController[] = [];
 
 const viewerState: ViewerState = {
   theme: "dark",
@@ -72,35 +67,6 @@ function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {
     }
   }
   return cards;
-}
-
-function ensureShadowRoot(host: HTMLElement): void {
-  if (host.shadowRoot) {
-    return;
-  }
-  const template = host.querySelector<HTMLTemplateElement>(
-    ":scope > template[shadowrootmode='open']",
-  );
-  if (!template) {
-    return;
-  }
-  const shadowRoot = host.attachShadow({ mode: "open" });
-  shadowRoot.append(template.content.cloneNode(true));
-  template.remove();
-}
-
-function getHydrateProps(payload: DiffViewerPayload): {
-  fileDiff?: FileDiffMetadata;
-  oldFile?: FileContents;
-  newFile?: FileContents;
-} {
-  if (payload.fileDiff) {
-    return { fileDiff: payload.fileDiff };
-  }
-  return {
-    oldFile: payload.oldFile,
-    newFile: payload.newFile,
-  };
 }
 
 type ToolbarIconName =
@@ -346,12 +312,13 @@ export async function hydrateViewer(): Promise<void> {
 
   for (const { host, payload } of cards) {
     try {
-      ensureShadowRoot(host);
       const diff = new FileDiff(createRenderOptions(payload));
       diff.hydrate({
         fileContainer: host,
         prerenderedHTML: payload.prerenderedHTML,
-        ...getHydrateProps(payload),
+        fileDiff: payload.fileDiff,
+        oldFile: payload.oldFile,
+        newFile: payload.newFile,
       });
       const controller = { payload, diff };
       applyState(controller);
@@ -372,7 +339,7 @@ async function main(): Promise<void> {
   }
 }
 
-export const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
 
 const autoStartDisabled = Boolean(
   (globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey],

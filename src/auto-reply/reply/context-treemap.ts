@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
@@ -150,13 +151,13 @@ function layoutBinary<T extends { value: number }>(rawItems: T[], rect: Rect): P
     return [];
   }
   if (items.length === 1) {
-    return [{ item: items[0], rect }];
+    return [{ item: expectDefined(items[0], "items entry at 0"), rect }];
   }
   const total = totalValue(items);
   let splitIndex = 1;
   let splitSum = items[0]?.value ?? 0;
   for (let i = 1; i < items.length - 1; i += 1) {
-    const next = splitSum + items[i].value;
+    const next = splitSum + expectDefined(items[i], "items entry at i").value;
     if (Math.abs(total / 2 - next) > Math.abs(total / 2 - splitSum)) {
       break;
     }
@@ -234,9 +235,9 @@ class PngCanvas {
     const cursorY = Math.floor(y);
     for (const rawChar of text) {
       const char = rawChar.toUpperCase();
-      const glyph = FONT[char] ?? FONT[" "];
+      const glyph = expectDefined(FONT[char] ?? FONT[" "], "treemap font glyph");
       for (let row = 0; row < glyph.length; row += 1) {
-        const line = glyph[row];
+        const line = expectDefined(glyph[row], "treemap glyph row");
         for (let col = 0; col < line.length; col += 1) {
           if (line[col] !== "1") {
             continue;

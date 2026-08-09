@@ -1,10 +1,10 @@
 // Shared subagent tool test harness for gateway/config/queue dependency overrides.
 import { vi } from "vitest";
-import { testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.js";
+import { testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.test-support.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
-import { testing as subagentControlTesting } from "./subagent-control.js";
+import { testing as subagentControlTesting } from "./subagent-control.test-support.js";
 
 type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 

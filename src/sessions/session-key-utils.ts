@@ -4,6 +4,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -15,7 +17,7 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
-export type ParsedSessionDeliveryRoute = {
+type ParsedSessionDeliveryRoute = {
   accountId?: string;
   channel: string;
   peerId: string;
@@ -23,7 +25,7 @@ export type ParsedSessionDeliveryRoute = {
   threadId?: string;
 };
 
-export type ParsedCronRunScopeSuffix = {
+type ParsedCronRunScopeSuffix = {
   baseSessionKey: string | undefined;
   runId: string | undefined;
 };
@@ -65,7 +67,7 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
-export function isCasePreservingPeer(
+function isCasePreservingPeer(
   channel: string | undefined | null,
   peerKind: string | undefined | null,
 ): boolean {
@@ -124,10 +126,6 @@ export function normalizeSessionPeerId(params: {
     : normalizeLowercaseStringOrEmpty(peerId);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 type PreservedSpan = { start: number; end: number; trim: boolean };
 
 const NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES = 2048;
@@ -145,13 +143,7 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
     return;
   }
   normalizedSessionKeyCache.set(raw, normalized);
-  while (normalizedSessionKeyCache.size > NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES) {
-    const oldest = normalizedSessionKeyCache.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    normalizedSessionKeyCache.delete(oldest);
-  }
+  pruneMapToMaxSize(normalizedSessionKeyCache, NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES);
 }
 
 function mayContainCasePreservingPeer(raw: string): boolean {

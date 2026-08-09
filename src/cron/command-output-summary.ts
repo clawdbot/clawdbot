@@ -76,7 +76,7 @@ export function buildCronCommandSummary(params: {
   return tail ? `${actionBlock}\n\n${tail}` : actionBlock;
 }
 
-export function cronCommandSummaryNeedsExternalRedaction(summary: string | undefined): boolean {
+function cronCommandSummaryNeedsExternalRedaction(summary: string | undefined): boolean {
   if (!summary) {
     return false;
   }

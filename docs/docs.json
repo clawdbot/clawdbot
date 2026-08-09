@@ -53,12 +53,32 @@
   },
   "redirects": [
     {
+      "source": "/gateway/security/shrinkwrap",
+      "destination": "/gateway/security/dependency-locking"
+    },
+    {
+      "source": "/cli/crestodian",
+      "destination": "/cli/openclaw"
+    },
+    {
       "source": "/channels/bluebubbles",
       "destination": "/channels/imessage-from-bluebubbles"
     },
     {
       "source": "/install/migrating-matrix",
       "destination": "/channels/matrix-migration"
+    },
+    {
+      "source": "/concepts/qa-matrix",
+      "destination": "/concepts/qa-e2e-automation#matrix-live-lane"
+    },
+    {
+      "source": "/plugins/reference/qa-matrix",
+      "destination": "/plugins/reference/qa-lab"
+    },
+    {
+      "source": "/plugins/reference/fish-audio",
+      "destination": "/plugins/reference/fish-audio-speech"
     },
     {
       "source": "/concepts/openclaw-sdk",
@@ -151,6 +171,10 @@
     {
       "source": "/tools/capability-cookbook",
       "destination": "/plugins/adding-capabilities"
+    },
+    {
+      "source": "/reference/code-mode",
+      "destination": "/tools/code-mode"
     },
     {
       "source": "/brave-search",
@@ -1090,6 +1114,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
@@ -1131,7 +1156,9 @@
                 "group": "Mainstream messaging",
                 "pages": [
                   "channels/discord",
+                  "channels/discord-activities",
                   "channels/slack",
+                  "channels/sms",
                   "channels/telegram",
                   "channels/whatsapp",
                   "channels/signal",
@@ -1148,10 +1175,13 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/buzz",
+                  "channels/clickclack",
                   "channels/irc",
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/reef",
                   "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
@@ -1163,6 +1193,7 @@
                 "pages": [
                   "channels/line",
                   "channels/wechat",
+                  "channels/wecom",
                   "channels/qqbot",
                   "channels/feishu",
                   "channels/yuanbao",
@@ -1182,8 +1213,7 @@
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
-                  "channels/troubleshooting",
-                  "channels/qa-channel"
+                  "channels/troubleshooting"
                 ]
               }
             ]
@@ -1208,23 +1238,28 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
-                  "concepts/personal-agent-benchmark-pack",
-                  "concepts/qa-matrix"
+                  "concepts/personal-agent-benchmark-pack"
                 ]
               },
               {
                 "group": "Sessions and memory",
                 "pages": [
+                  "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
+                  "concepts/session-state",
                   "concepts/session-tool",
                   {
                     "group": "Memory",
                     "pages": [
                       "concepts/memory",
+                      "concepts/memory-architecture",
+                      "concepts/user-model",
+                      "concepts/standing-intents",
                       "concepts/memory-builtin",
-                      "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
@@ -1239,6 +1274,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/agent-bindings",
                   "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
@@ -1284,12 +1320,17 @@
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/logbook",
+                  "plugins/meeting-plugins",
                   "plugins/google-meet",
+                  "plugins/teams-meetings",
+                  "plugins/zoom-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+                  "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
+                  "plugins/onepassword",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1315,6 +1356,7 @@
                 "pages": [
                   "tools/skills",
                   "tools/skill-workshop",
+                  "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1336,9 +1378,12 @@
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
+                  "tools/ask-user",
                   "tools/btw",
                   "tools/code-execution",
+                  "tools/code-mode",
                   "tools/diffs",
+                  "tools/screen",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1349,6 +1394,7 @@
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/media-overview",
+                  "tools/mcp",
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
@@ -1399,6 +1445,7 @@
                   "tools/goal",
                   "tools/steer",
                   "tools/subagents",
+                  "tools/swarm",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
@@ -1479,6 +1526,7 @@
                   "providers/deepseek",
                   "providers/ds4",
                   "providers/elevenlabs",
+                  "providers/fish-audio",
                   "providers/fal",
                   "providers/featherless",
                   "providers/fireworks",
@@ -1510,7 +1558,6 @@
                   "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
-                  "providers/qwen-oauth",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",
@@ -1541,7 +1588,9 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
+                  "platforms/chromeos",
                   "platforms/ios",
+                  "platforms/ios-healthkit",
                   "platforms/easyrunner"
                 ]
               },
@@ -1608,6 +1657,7 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
                     ]
@@ -1633,6 +1683,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
                     ]
@@ -1643,8 +1694,9 @@
                       "gateway/security/index",
                       "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
-                      "gateway/security/shrinkwrap",
+                      "gateway/security/dependency-locking",
                       "gateway/security/audit-checks",
+                      "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
@@ -1655,6 +1707,8 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      "gateway/clients",
+                      "gateway/embedding",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
@@ -1680,6 +1734,7 @@
                 "pages": [
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
+                  "gateway/stable-https-url",
                   "gateway/tailscale"
                 ]
               },
@@ -1696,11 +1751,13 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/presence",
                   "nodes/troubleshooting",
                   {
                     "group": "Media capabilities",
                     "pages": [
                       "nodes/media-understanding",
+                      "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
                       "nodes/camera",
@@ -1723,8 +1780,11 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
-                  "web/workspaces",
+                  "web/notifications",
+                  "web/urls",
                   "web/dashboard",
+                  "web/dashboards",
+                  "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
                   "web/lobster"
@@ -1743,7 +1803,7 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
-                      "cli/crestodian",
+                      "cli/openclaw",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/fleet",
@@ -1766,6 +1826,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",
@@ -1799,7 +1860,8 @@
                       "cli/flows",
                       "cli/node",
                       "cli/nodes",
-                      "cli/sandbox"
+                      "cli/sandbox",
+                      "cli/worker"
                     ]
                   },
                   {
@@ -1825,6 +1887,7 @@
                     "pages": [
                       "cli/attach",
                       "cli/dashboard",
+                      "cli/resume",
                       "cli/tui"
                     ]
                   },
@@ -1848,7 +1911,6 @@
                 "pages": [
                   "reference/rpc",
                   "gateway/external-apps",
-                  "reference/code-mode",
                   "reference/device-models"
                 ]
               },
@@ -1904,7 +1966,6 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
-                  "reference/templates/TOOLS",
                   "reference/templates/USER"
                 ]
               },
@@ -1919,6 +1980,7 @@
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/database-schemas",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
@@ -1942,20 +2004,42 @@
                 ]
               },
               {
-                "group": "Release and CI",
+                "group": "Contributing",
                 "pages": [
-                  {
-                    "group": "Release notes",
-                    "pages": [
-                      "releases/index",
-                      "releases/2026.6.11"
-                    ]
-                  },
+                  "reference/pull-request-review-flow"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Release & CI",
+            "groups": [
+              {
+                "group": "Release notes",
+                "pages": [
+                  "releases/index",
+                  "releases/2026.7.1",
+                  "releases/2026.6.11"
+                ]
+              },
+              {
+                "group": "Maturity",
+                "pages": [
                   "maturity/scorecard",
-                  "maturity/taxonomy",
+                  "maturity/taxonomy"
+                ]
+              },
+              {
+                "group": "Release process",
+                "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
-                  "reference/release-performance-sweep",
+                  "reference/release-performance-sweep"
+                ]
+              },
+              {
+                "group": "Testing and CI",
+                "pages": [
                   "reference/test",
                   "ci",
                   "help/scripts"

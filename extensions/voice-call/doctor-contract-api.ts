@@ -2,13 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
+// lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
+import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
   type PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   buildVoiceCallLegacyJsonlEventKey,
   CALL_RECORD_CHUNK_MAX_ENTRIES,
@@ -22,6 +25,7 @@ import {
   RAW_CALL_RECORD_CHUNK_BYTES,
   resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
+import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
 import type { CallRecord } from "./src/types.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
@@ -123,7 +127,32 @@ function resolveVoiceCallStorePath(params: {
   if (configuredStore) {
     return resolveUserPath(configuredStore, params.env);
   }
-  return path.join(resolveHome(params.env), ".openclaw", "voice-calls");
+  return resolveDefaultVoiceCallStoreDir(params.env);
+}
+
+function resolveVoiceCallStateDatabaseEnv(
+  params: PluginDoctorStateMigrationParams,
+): NodeJS.ProcessEnv {
+  return {
+    ...params.env,
+    OPENCLAW_STATE_DIR: resolveVoiceCallStorePath(params),
+  };
+}
+
+function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
+  switch (migration.kind) {
+    case "agent-databases-composite-primary-key":
+      return "agent database registry primary key -> agent_id,path";
+    case "audit-events-v2":
+      return "audit event ledger -> versioned message lifecycle schema";
+    case "operator-approvals-system-agent":
+      return "operator approvals -> OpenClaw system changes";
+    case "session-watch-cursor-provenance-v4":
+      return "session watch cursors -> provenance column";
+    case "strict-tables-v3":
+      return "tables -> SQLite STRICT typing";
+  }
+  return migration.kind satisfies never;
 }
 
 /** Return true when a path exists and is a file. */
@@ -274,29 +303,62 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "voice-call-calls-jsonl-to-plugin-state",
     label: "Voice Call call log",
     async detectLegacyState(params) {
+      const { detectOpenClawStateDatabaseSchemaMigrations } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const storePath = resolveVoiceCallStorePath(params);
       const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
       const { entries } = await readLegacyCallRecords(filePath);
-      if (entries.length === 0) {
+      const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
+        env: resolveVoiceCallStateDatabaseEnv(params),
+      });
+      if (entries.length === 0 && schemaMigrations.length === 0) {
         return null;
       }
       return {
         preview: [
-          `- Voice Call call log: ${entries.length} ${entries.length === 1 ? "record" : "records"} -> plugin state (${CALL_RECORD_EVENTS_NAMESPACE})`,
+          ...schemaMigrations.map(
+            (migration) =>
+              `- Voice Call SQLite schema: ${describeVoiceCallSchemaMigration(migration)}`,
+          ),
+          ...(entries.length > 0
+            ? [
+                `- Voice Call call log: ${entries.length} ${entries.length === 1 ? "record" : "records"} -> plugin state (${CALL_RECORD_EVENTS_NAMESPACE})`,
+              ]
+            : []),
         ],
       };
     },
     async migrateLegacyState(params) {
+      const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const changes: string[] = [];
       const warnings: string[] = [];
       const storePath = resolveVoiceCallStorePath(params);
       const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
       const { entries, warnings: readWarnings } = await readLegacyCallRecords(filePath);
       warnings.push(...readWarnings);
+      const stateDatabaseEnv = resolveVoiceCallStateDatabaseEnv(params);
+      const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
+        env: stateDatabaseEnv,
+      });
+      if (schemaMigrations.length > 0) {
+        const repaired = repairOpenClawStateDatabaseSchema({ env: stateDatabaseEnv });
+        warnings.push(...repaired.warnings);
+        if (repaired.warnings.length > 0) {
+          return { changes, warnings };
+        }
+        changes.push(
+          ...repaired.changes.map((change) =>
+            change
+              .replace(/^Migrated shared state /, "Migrated Voice Call SQLite ")
+              .replaceAll("→", "->"),
+          ),
+        );
+      }
       if (entries.length === 0) {
         return { changes, warnings };
       }
-      const env = { ...params.env, OPENCLAW_STATE_DIR: storePath };
+      const env = stateDatabaseEnv;
       const eventStore = params.context.openPluginStateKeyedStore<CallRecordEventMeta>({
         namespace: CALL_RECORD_EVENTS_NAMESPACE,
         maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,

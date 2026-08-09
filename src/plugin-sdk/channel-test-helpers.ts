@@ -4,6 +4,7 @@ export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directo
 export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
+  installChannelDmPolicyContractSuite,
   installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
@@ -14,14 +15,13 @@ export {
   createOutboundTestPlugin,
   createTestRegistry,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
-/** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
-export { deliverOutboundPayloads } from "./test-helpers/outbound-delivery.js";
 export {
+  createTestInboundDebounceFlush,
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,

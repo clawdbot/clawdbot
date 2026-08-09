@@ -7,7 +7,7 @@ import {
   type ClawHubPromotion,
 } from "../../infra/clawhub.js";
 import { markPromotionSlugsNotified } from "../../infra/promotions-feed.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 function formatWindowEnd(promotion: ClawHubPromotion): string {
   const daysLeft = Math.max(0, Math.ceil((promotion.endsAt - Date.now()) / 86_400_000));
@@ -25,18 +25,18 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
     if (!(error instanceof ClawHubRequestError) || error.status !== 404) {
       throw error;
     }
-    runtime.log(
-      opts.json
-        ? JSON.stringify({ promotions: [] }, null, 2)
-        : "Promotions are not available from ClawHub yet.",
-    );
+    if (opts.json) {
+      writeRuntimeJson(runtime, { promotions: [] });
+    } else {
+      runtime.log("Promotions are not available from ClawHub yet.");
+    }
     return;
   }
   // The user has now seen these offers; suppress the one-time passive
   // discovery notice for them (`models list` reads the same markers).
   markPromotionSlugsNotified(promotions.map((promotion) => promotion.slug));
   if (opts.json) {
-    runtime.log(JSON.stringify({ promotions }, null, 2));
+    writeRuntimeJson(runtime, { promotions });
     return;
   }
   if (promotions.length === 0) {

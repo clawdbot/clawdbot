@@ -25,3 +25,13 @@ internal fun buildNodeMainSessionKey(
   val resolvedAgentId = agentId?.trim().orEmpty().ifEmpty { "main" }
   return "agent:$resolvedAgentId:node-${deviceId.take(12)}"
 }
+
+/** Human-readable, device-unique label applied when Android creates or adopts its session. */
+internal fun buildAndroidAppSessionLabel(
+  displayName: String?,
+  deviceId: String,
+): String {
+  val deviceSuffix = deviceId.take(12)
+  val displaySuffix = displayName?.trim()?.takeUtf16Safe(96)?.takeIf { it.isNotEmpty() }
+  return listOfNotNull("OpenClaw App", displaySuffix, deviceSuffix).joinToString(" · ")
+}

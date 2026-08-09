@@ -1,6 +1,6 @@
 // Verifies plugin hardlink policy decisions.
 import { describe, expect, it } from "vitest";
-import { isNixStorePluginRoot, shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 
 const nixEnv: NodeJS.ProcessEnv = { OPENCLAW_NIX_MODE: "1" };
 
@@ -34,19 +34,4 @@ describe("plugin hardlink policy", () => {
       }),
     ).toBe(true);
   });
-
-  it.runIf(process.platform !== "win32")(
-    "does not reject hardlinked external plugin files when Nix mode loads from the Nix store",
-    () => {
-      expect(isNixStorePluginRoot("/nix/store/abc-openclaw-plugin")).toBe(true);
-      expect(isNixStorePluginRoot("/tmp/nix/store/abc-openclaw-plugin")).toBe(false);
-      expect(
-        shouldRejectHardlinkedPluginFiles({
-          origin: "config",
-          rootDir: "/nix/store/abc-openclaw-plugin",
-          env: nixEnv,
-        }),
-      ).toBe(false);
-    },
-  );
 });

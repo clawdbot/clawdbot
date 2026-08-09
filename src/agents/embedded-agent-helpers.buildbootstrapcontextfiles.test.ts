@@ -1,21 +1,16 @@
 // Covers bootstrap context rendering, truncation, and transcript header setup.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
-  DEFAULT_BOOTSTRAP_MAX_CHARS,
-  DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
-  DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
-  ensureSessionHeader,
   resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
+
+const EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
+const EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 
 const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
@@ -30,23 +25,6 @@ const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
   makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
   makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
 ];
-
-describe("ensureSessionHeader", () => {
-  it("creates transcript files with restrictive permissions", async () => {
-    // Session transcripts can contain private prompts and tool outputs, so both
-    // the directory and file need restrictive permissions from creation.
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-header-"));
-    try {
-      const sessionFile = path.join(tempDir, "nested", "session.jsonl");
-      await ensureSessionHeader({ sessionFile, sessionId: "session-1", cwd: tempDir });
-
-      expect((await fs.stat(path.dirname(sessionFile))).mode & 0o777).toBe(0o700);
-      expect((await fs.stat(sessionFile)).mode & 0o777).toBe(0o600);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("buildBootstrapContextFiles", () => {
   it("keeps missing markers", () => {
@@ -66,7 +44,7 @@ describe("buildBootstrapContextFiles", () => {
     const head = `HEAD-${"a".repeat(600)}`;
     const tail = `${"b".repeat(300)}-TAIL`;
     const long = `${head}${tail}`;
-    const files = [makeFile({ name: "TOOLS.md", content: long })];
+    const files = [makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: long })];
     const warnings: string[] = [];
     const maxChars = 200;
     const [result] = buildBootstrapContextFiles(files, {
@@ -74,10 +52,10 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    expect(kept?.slice(0, 3)).toStrictEqual(["kept 74+24 chars", "74", "24"]);
+    expect(kept?.slice(0, 3)).toStrictEqual(["kept 75+25 chars", "75", "25"]);
     const headChars = Number(kept?.[1]);
     const tailChars = Number(kept?.[2]);
-    expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
+    expect(result?.content).toContain("[...truncated, read SOUL.md for full content...]");
     expect(result?.content.length).toBe(199);
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
@@ -86,21 +64,74 @@ describe("buildBootstrapContextFiles", () => {
       expect(result?.content.endsWith(long.slice(-tailChars))).toBe(true);
     }
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("TOOLS.md");
+    expect(warnings[0]).toContain("SOUL.md");
     expect(warnings[0]).toContain("limit 200");
   });
+  it("keeps generic and AGENTS.md truncation valid at UTF-16 boundaries", () => {
+    const cases = [
+      {
+        file: makeFile({
+          name: "SOUL.md",
+          path: "/tmp/SOUL.md",
+          content: `${"h".repeat(73)}😀${"m".repeat(200)}😀${"t".repeat(23)}`,
+        }),
+        maxChars: 200,
+        expectedHead: "h".repeat(73),
+        expectedTail: "t".repeat(23),
+      },
+      {
+        file: makeFile({
+          content: `${"a".repeat(269)}😀${"b".repeat(638)}😀${"c".repeat(89)}`,
+        }),
+        maxChars: 600,
+        expectedHead: "a".repeat(269),
+        expectedTail: "c".repeat(89),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const [result] = buildBootstrapContextFiles([testCase.file], {
+        maxChars: testCase.maxChars,
+      });
+
+      expect(result?.content.startsWith(testCase.expectedHead)).toBe(true);
+      expect(result?.content.endsWith(testCase.expectedTail)).toBe(true);
+      expect(result?.content).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+    }
+  });
   it("fits the rendered truncation marker inside the per-file budget", () => {
-    const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
+    const maxChars = EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS;
     const files = [
       makeFile({
-        name: "HEARTBEAT.md",
-        path: "/tmp/HEARTBEAT.md",
+        name: "USER.md",
+        path: "/tmp/USER.md",
         content: "a".repeat(maxChars * 2),
       }),
     ];
     const [result] = buildBootstrapContextFiles(files, { maxChars });
-    expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
+    expect(result?.content).toContain("[...truncated, read USER.md for full content...]");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("gives USER.md its own small bootstrap budget", () => {
+    const files = [
+      makeFile({
+        name: "USER.md",
+        path: "/tmp/USER.md",
+        content: "u".repeat(10_000),
+      }),
+      makeFile({
+        name: "MEMORY.md",
+        path: "/tmp/MEMORY.md",
+        content: "m".repeat(10_000),
+      }),
+    ];
+    const result = buildBootstrapContextFiles(files);
+
+    expect(result[0]?.content.length).toBeLessThanOrEqual(4_000);
+    expect(result[0]?.content).toContain("read USER.md for full content");
+    expect(result[1]?.content).toBe("m".repeat(10_000));
   });
   it("keeps policy digest lines from oversized AGENTS.md middle content", () => {
     // AGENTS.md truncation keeps scoped-policy signals from the middle so model
@@ -129,8 +160,8 @@ describe("buildBootstrapContextFiles", () => {
     const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
     const files = [
       makeFile({
-        name: "HEARTBEAT.md",
-        path: "/tmp/HEARTBEAT.md",
+        name: "USER.md",
+        path: "/tmp/USER.md",
         content,
       }),
     ];
@@ -145,8 +176,8 @@ describe("buildBootstrapContextFiles", () => {
     const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
     const files = [
       makeFile({
-        name: "HEARTBEAT.md",
-        path: "/tmp/HEARTBEAT.md",
+        name: "USER.md",
+        path: "/tmp/USER.md",
         content,
       }),
     ];
@@ -156,7 +187,7 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain("H");
   });
   it("keeps content under the default limit", () => {
-    const long = "a".repeat(DEFAULT_BOOTSTRAP_MAX_CHARS - 10);
+    const long = "a".repeat(EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS - 10);
     const files = [makeFile({ content: long })];
     const [result] = buildBootstrapContextFiles(files);
     expect(result?.content).toBe(long);
@@ -169,9 +200,10 @@ describe("buildBootstrapContextFiles", () => {
     const files = createLargeBootstrapFiles();
     const result = buildBootstrapContextFiles(files);
     const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
-    expect(totalChars).toBeLessThanOrEqual(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
+    expect(totalChars).toBeLessThanOrEqual(EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
     expect(result).toHaveLength(3);
-    expect(result[2]?.content).toBe("c".repeat(10_000));
+    expect(result[2]?.content.length).toBeLessThanOrEqual(4_000);
+    expect(result[2]?.content).toContain("read USER.md for full content");
   });
 
   it("caps total injected bootstrap characters when totalMaxChars is configured", () => {
@@ -277,12 +309,12 @@ const BOOTSTRAP_LIMIT_RESOLVERS: BootstrapLimitResolverCase[] = [
   {
     name: "bootstrapMaxChars",
     resolve: resolveBootstrapMaxChars,
-    defaultValue: DEFAULT_BOOTSTRAP_MAX_CHARS,
+    defaultValue: EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS,
   },
   {
     name: "bootstrapTotalMaxChars",
     resolve: resolveBootstrapTotalMaxChars,
-    defaultValue: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+    defaultValue: EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
   },
 ];
 
@@ -333,38 +365,5 @@ describe("bootstrap limit resolvers", () => {
       } as OpenClawConfig;
       expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
     }
-  });
-});
-
-describe("resolveBootstrapPromptTruncationWarningMode", () => {
-  it("defaults to always", () => {
-    expect(resolveBootstrapPromptTruncationWarningMode()).toBe("always");
-    expect(DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
-  });
-
-  it("accepts explicit valid modes", () => {
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
-      } as OpenClawConfig),
-    ).toBe("off");
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
-      } as OpenClawConfig),
-    ).toBe("once");
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },
-      } as OpenClawConfig),
-    ).toBe("always");
-  });
-
-  it("falls back to default for invalid values", () => {
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "invalid" } },
-      } as unknown as OpenClawConfig),
-    ).toBe(DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE);
   });
 });

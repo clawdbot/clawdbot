@@ -1,5 +1,5 @@
+import { nip19 } from "nostr-tools";
 import { describe, expect, it } from "vitest";
-import { pubkeyToNpub } from "./nostr-key-utils.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 
 describe("Nostr outbound session routing", () => {
@@ -8,7 +8,7 @@ describe("Nostr outbound session routing", () => {
     const route = resolveNostrOutboundSessionRoute({
       cfg: {},
       agentId: "main",
-      target: pubkeyToNpub(hexPubkey),
+      target: nip19.npubEncode(hexPubkey),
     });
 
     expect(route).toMatchObject({

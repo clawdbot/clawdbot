@@ -1,5 +1,6 @@
 /** Selection helpers for filtering migration plan items before apply. */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -7,15 +8,11 @@ import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
-// Public selection tokens and skip reasons shared with prompt tests and apply filtering.
-export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
-export const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
+// Selection tokens are shared with the command and prompt implementations.
+const MIGRATION_NOT_SELECTED_REASON = "not selected for migration";
 export const MIGRATION_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
 export const MIGRATION_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
 export const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
-export const MIGRATION_SKILL_SELECTION_ACCEPT = MIGRATION_SELECTION_ACCEPT;
-export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = MIGRATION_SELECTION_TOGGLE_ALL_ON;
-export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = MIGRATION_SELECTION_TOGGLE_ALL_OFF;
 
 type InteractiveMigrationSelection = { action: "select"; selectedItemIds: Set<string> };
 /** Interactive skill selection result consumed by the apply flow. */
@@ -130,7 +127,9 @@ function resolveSelectedMigrationItemIds(params: {
     const available = params.items
       .map(params.formatSelectionLabel)
       .toSorted((a, b) => a.localeCompare(b));
-    const titleKind = params.kindLabel[0].toUpperCase() + params.kindLabel.slice(1);
+    const titleKind =
+      expectDefined(params.kindLabel[0], "kind label entry at 0").toUpperCase() +
+      params.kindLabel.slice(1);
     const parts: string[] = [];
     if (unknownRefs.length > 0) {
       parts.push(
@@ -271,7 +270,7 @@ export function applyMigrationSelectedSkillItemIds(
     if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
       return item;
     }
-    return markMigrationItemSkipped(item, MIGRATION_SKILL_NOT_SELECTED_REASON);
+    return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
   });
   return {
     ...plan,
@@ -326,7 +325,7 @@ export function applyMigrationSelectedPluginItemIds(
     if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
       return item;
     }
-    return markMigrationItemSkipped(item, MIGRATION_PLUGIN_NOT_SELECTED_REASON);
+    return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
   });
   return {
     ...plan,
@@ -374,7 +373,7 @@ function applyCodexPluginConfigSelection(
     Object.entries(codexPlugins.plugins).filter(([configKey]) => selectedConfigKeys.has(configKey)),
   );
   if (Object.keys(plugins).length === 0) {
-    return markMigrationItemSkipped(item, MIGRATION_PLUGIN_NOT_SELECTED_REASON);
+    return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
   }
   return {
     ...item,

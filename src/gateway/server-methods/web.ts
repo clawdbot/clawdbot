@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Web login methods delegate QR-login start/wait requests to the active channel
 // plugin that owns web login gateway methods.
 import {
@@ -8,7 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -40,23 +41,19 @@ function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): strin
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
     return null;
   }
-  const hints = Object.keys(channels)
-    .map((channelId) =>
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: cfg,
-        channelId,
-      }),
-    )
-    .filter((hint): hint is NonNullable<typeof hint> => Boolean(hint));
+  const hints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    channelIds: Object.keys(channels),
+  });
   if (hints.length === 0) {
     return null;
   }
   if (hints.length === 1) {
-    return hints[0].repairHint;
+    return expectDefined(hints[0], "hints entry at 0").repairHint;
   }
   const labels = [...new Set(hints.map((hint) => hint.label))];
   const installCommands = [...new Set(hints.map((hint) => hint.installCommand))];
-  const doctorFixCommand = hints[0].doctorFixCommand;
+  const doctorFixCommand = expectDefined(hints[0], "hints entry at 0").doctorFixCommand;
   return `Configured official external channel plugins are missing for ${labels.join(", ")}. Install them with: ${installCommands.join("; ")}, or run: ${doctorFixCommand}.`;
 }
 

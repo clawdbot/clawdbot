@@ -19,7 +19,7 @@ import {
   type ResolvedIrcAccount,
 } from "./accounts.js";
 import { startIrcGatewayAccount } from "./gateway.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -105,7 +105,6 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    clearIrcRuntime();
   });
 
   it("parses valid ports and falls back for invalid values", () => {

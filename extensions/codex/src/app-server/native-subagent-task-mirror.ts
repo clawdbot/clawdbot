@@ -18,13 +18,13 @@ import type {
 import { isJsonObject } from "./protocol.js";
 
 /** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
-export type TaskLifecycleRuntime = Pick<
+type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
   "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
 >;
 
 /** Stable parent/session context used while mirroring native subagent tasks. */
-export type CodexNativeSubagentTaskMirrorParams = {
+type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
   agentId?: string;
@@ -57,8 +57,8 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   markAuthoritativeCompletionExpected(childThreadId: string): void {
-    // Local transcripts and V2 agent paths can supply the real result later.
-    // Remote V1 lacks both and must keep collab-completed as its fallback.
+    // App-server history or streamed terminal events supply the real result.
+    // Callers without either path keep mirror terminal states as their fallback.
     this.expectedAuthoritativeRunIds.add(codexNativeSubagentRunId(childThreadId));
   }
 
@@ -157,7 +157,6 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "idle") {
-      this.terminalRunIds.add(runId);
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -166,6 +165,15 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "systemError") {
+      if (this.expectedAuthoritativeRunIds.has(runId)) {
+        this.terminalRunIds.delete(runId);
+        this.runtime.recordTaskRunProgressByRunId({
+          runId,
+          lastEventAt: eventAt,
+          progressSummary: "Codex native subagent hit a system error; awaiting recovery.",
+        });
+        return;
+      }
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
@@ -350,7 +358,9 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const eventAt = this.now();
-    if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
+    if (isNonTerminalAgentStateStatus(normalizedStatus)) {
+      // Codex interrupted agents remain open and can resume; finalizing here
+      // makes cancellation sticky and discards their later successful result.
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -358,7 +368,9 @@ export class CodexNativeSubagentTaskMirror {
           trimOptional(message) ??
           (normalizedStatus === "pendingInit"
             ? "Codex native subagent is initializing."
-            : "Codex native subagent is running."),
+            : normalizedStatus === "interrupted"
+              ? "Codex native subagent was interrupted."
+              : "Codex native subagent is running."),
       });
       return;
     }
@@ -401,10 +413,7 @@ export class CodexNativeSubagentTaskMirror {
     this.terminalRunIds.add(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
-      status:
-        normalizedStatus === "interrupted" || normalizedStatus === "shutdown"
-          ? "cancelled"
-          : "failed",
+      status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
       error: trimOptional(message) ?? `Codex native subagent status: ${normalizedStatus}`,
@@ -420,7 +429,7 @@ export function codexNativeSubagentRunId(threadId: string): string {
 }
 
 /** Reads a subagent thread-spawn source only when it belongs to the expected parent thread. */
-export function readSubagentThreadSpawnSource(
+function readSubagentThreadSpawnSource(
   source: CodexSessionSource | null | undefined,
   parentThreadId: string,
 ): CodexSubAgentThreadSpawnSource | undefined {
@@ -536,7 +545,7 @@ function isBlockedOrFailedCollabToolCallStatus(value: string | undefined): boole
 }
 
 function isNonTerminalAgentStateStatus(value: string | undefined): boolean {
-  return value === "pendingInit" || value === "running";
+  return value === "pendingInit" || value === "running" || value === "interrupted";
 }
 
 function isTerminalAgentStateStatus(value: string | undefined): boolean {

@@ -9,16 +9,17 @@ import {
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
-import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
+import { isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
   workingDirectory?: string;
 };
 
-type GatewayRuntimePreference = "auto" | "node" | "bun";
+type GatewayRuntimePreference = "auto" | "node";
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
+const NODE_BINARY_LOOKUP_TIMEOUT_MS = 5_000;
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -155,11 +156,6 @@ function resolveRepoRootForDev(): string {
   return parts.slice(0, srcIndex).join(path.sep);
 }
 
-async function resolveBunPath(): Promise<string> {
-  const bunPath = await resolveBinaryPath("bun");
-  return bunPath;
-}
-
 async function resolveNodePath(): Promise<string> {
   const nodePath = await resolveBinaryPath("node");
   return nodePath;
@@ -168,7 +164,11 @@ async function resolveNodePath(): Promise<string> {
 async function resolveBinaryPath(binary: string): Promise<string> {
   const cmd = process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
   try {
-    const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
+    const output = execFileSync(cmd, [binary], {
+      encoding: "utf8",
+      timeout: NODE_BINARY_LOOKUP_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
     if (!resolved) {
       throw new Error("empty");
@@ -176,11 +176,8 @@ async function resolveBinaryPath(binary: string): Promise<string> {
     await fs.access(resolved);
     return resolved;
   } catch {
-    if (binary === "bun") {
-      throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
-    }
     throw new Error(
-      "Node not found in PATH. Install Node 24 (recommended) or Node 22 LTS (22.19+).",
+      "Node not found in PATH. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+).",
     );
   }
 }
@@ -224,70 +221,22 @@ async function resolveCliProgramArguments(params: {
   }
 
   const execPath = process.execPath;
-  const runtime = params.runtime ?? "auto";
+  const nodePath =
+    params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
 
-  if (runtime === "node") {
-    const nodePath =
-      params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
-    const cliEntrypointPath = await resolveCliEntrypointPathForService();
+  if (params.dev) {
+    const repoRoot = resolveRepoRootForDev();
+    const devCliPath = path.join(repoRoot, "src", "entry.ts");
+    await fs.access(devCliPath);
     return {
-      programArguments: [nodePath, cliEntrypointPath, ...params.args],
-    };
-  }
-
-  if (runtime === "bun") {
-    if (params.dev) {
-      const repoRoot = resolveRepoRootForDev();
-      const devCliPath = path.join(repoRoot, "src", "entry.ts");
-      await fs.access(devCliPath);
-      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
-      return {
-        programArguments: [bunPath, devCliPath, ...params.args],
-        workingDirectory: repoRoot,
-      };
-    }
-
-    const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
-    const cliEntrypointPath = await resolveCliEntrypointPathForService();
-    return {
-      programArguments: [bunPath, cliEntrypointPath, ...params.args],
-    };
-  }
-
-  if (!params.dev) {
-    try {
-      const cliEntrypointPath = await resolveCliEntrypointPathForService();
-      return {
-        programArguments: [execPath, cliEntrypointPath, ...params.args],
-      };
-    } catch (error) {
-      // Non-Node runtimes may execute the CLI wrapper directly; Node needs the
-      // built dist entrypoint so service restarts survive package layout.
-      if (!isNodeRuntime(execPath)) {
-        return { programArguments: [execPath, ...params.args] };
-      }
-      throw error;
-    }
-  }
-
-  // Dev mode: use bun to run TypeScript directly.
-  const repoRoot = resolveRepoRootForDev();
-  const devCliPath = path.join(repoRoot, "src", "entry.ts");
-  await fs.access(devCliPath);
-
-  // If already running under bun, use current execPath.
-  if (isBunRuntime(execPath)) {
-    return {
-      programArguments: [execPath, devCliPath, ...params.args],
+      programArguments: [nodePath, "--import", "tsx", devCliPath, ...params.args],
       workingDirectory: repoRoot,
     };
   }
 
-  // Otherwise resolve bun from PATH.
-  const bunPath = await resolveBunPath();
+  const cliEntrypointPath = await resolveCliEntrypointPathForService();
   return {
-    programArguments: [bunPath, devCliPath, ...params.args],
-    workingDirectory: repoRoot,
+    programArguments: [nodePath, cliEntrypointPath, ...params.args],
   };
 }
 
@@ -316,6 +265,7 @@ export async function resolveNodeProgramArguments(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
@@ -339,6 +289,9 @@ export async function resolveNodeProgramArguments(params: {
   }
   if (params.displayName) {
     args.push("--display-name", params.displayName);
+  }
+  if (params.installedAppsSharing !== undefined) {
+    args.push(params.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps");
   }
   return resolveCliProgramArguments({
     args,

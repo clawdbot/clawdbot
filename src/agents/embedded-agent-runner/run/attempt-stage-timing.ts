@@ -78,6 +78,40 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
+/**
+ * Builds the shared "emit stage summary" closure used by run startup and
+ * attempt prep: warn when thresholds trip, trace otherwise, stay silent when
+ * neither applies.
+ */
+export function createEmbeddedRunStageSummaryEmitter(options: {
+  label: string;
+  log: {
+    isEnabled: (level: "trace") => boolean;
+    warn: (message: string) => void;
+    trace: (message: string) => void;
+  };
+  runId: string;
+  sessionId?: string;
+  tracker: EmbeddedRunStageTracker;
+}): (phase: string) => void {
+  return (phase) => {
+    const summary = options.tracker.snapshot();
+    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+    if (!shouldWarn && !options.log.isEnabled("trace")) {
+      return;
+    }
+    const message = formatEmbeddedRunStageSummary(
+      `[trace:embedded-run] ${options.label}: runId=${options.runId} sessionId=${options.sessionId} phase=${phase}`,
+      summary,
+    );
+    if (shouldWarn) {
+      options.log.warn(message);
+    } else {
+      options.log.trace(message);
+    }
+  };
+}
+
 /** Formats stage timing into compact log text for startup/attempt diagnostics. */
 export function formatEmbeddedRunStageSummary(
   prefix: string,

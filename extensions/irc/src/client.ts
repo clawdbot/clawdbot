@@ -48,6 +48,7 @@ type IrcPrivmsgEvent = {
   senderNick: string;
   senderUser?: string;
   senderHost?: string;
+  connectedNick: string;
   target: string;
   text: string;
   rawLine: string;
@@ -100,7 +101,7 @@ function toError(err: unknown): Error {
 
 let nickCollisionFallbackSeq = 0;
 
-export function buildFallbackNick(nick: string): string {
+function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
@@ -117,7 +118,7 @@ function normalizeIrcNick(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
-export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
+function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
   if (!options || options.enabled === false) {
     return [];
   }
@@ -387,7 +388,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       if (line.command === "PRIVMSG") {
         const targetParam = line.params[0];
         const target = targetParam ? targetParam.trim() : "";
-        const text = line.trailing != null ? line.trailing : "";
+        const text = line.trailing ?? line.params[1] ?? "";
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick ? prefix.nick.trim() : "";
         if (!target || !senderNick || !text.trim()) {
@@ -399,6 +400,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               senderNick,
               senderUser: prefix.user ? prefix.user.trim() : undefined,
               senderHost: prefix.host ? prefix.host.trim() : undefined,
+              connectedNick: currentNick,
               target,
               text,
               rawLine,

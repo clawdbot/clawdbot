@@ -35,9 +35,12 @@ export function createMockQaProviderDefinition(
       openaiWsWarmup: false,
     }),
     resolveTurnTimeoutMs: ({ fallbackMs }) => fallbackMs,
-    buildGatewayModels: ({ providerBaseUrl }) => ({
+    buildGatewayModels: ({ providerBaseUrl, primaryModel, alternateModel }) => ({
       mode: "replace",
-      providers: createMockProviderMap(params.mode, providerBaseUrl),
+      providers: createMockProviderMap(params.mode, providerBaseUrl, [
+        primaryModel,
+        alternateModel,
+      ]),
     }),
     mockAuthProviders: params.mockAuthProviders,
     usesModelProviderPlugins: false,

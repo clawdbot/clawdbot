@@ -41,6 +41,11 @@ function canIgnorePrivateChmodError(target: string, code: string | undefined): b
   if (code && CHMOD_UNSUPPORTED_CODES.has(code)) {
     return true;
   }
+  if (code === "EROFS") {
+    // WSL can report EROFS for chmod on an already-private path. Never waive
+    // broad permissions for this anomalous code.
+    return hasRestrictivePermissions(target);
+  }
   if (code !== "EPERM") {
     return false;
   }

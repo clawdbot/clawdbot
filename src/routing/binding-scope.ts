@@ -6,20 +6,20 @@ import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
 // Route binding scopes constrain a configured agent/account binding to a guild,
 // team, group space, and optionally channel/platform role ids.
-export type RouteBindingScopeConstraint = {
+type RouteBindingScopeConstraint = {
   guildId?: string | null;
   teamId?: string | null;
   roles?: string[] | null;
 };
 
-export type RouteBindingScope = {
+type RouteBindingScope = {
   guildId?: string | null;
   teamId?: string | null;
   groupSpace?: string | null;
   memberRoleIds?: Iterable<string> | null;
 };
 
-export type NormalizedRouteBindingMatch = {
+type NormalizedRouteBindingMatch = {
   agentId: string;
   accountId: string;
   channelId: string;

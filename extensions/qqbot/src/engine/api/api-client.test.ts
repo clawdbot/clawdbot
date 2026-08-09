@@ -1,11 +1,18 @@
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 // Qqbot tests cover api-client plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../../../test-support/streaming-error-response.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const ssrfRuntimeActual = vi.hoisted(() => ({
+  fetchWithSsrFGuard: undefined as
+    | typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard
+    | undefined,
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  ssrfRuntimeActual.fetchWithSsrFGuard = actual.fetchWithSsrFGuard;
   return {
     ...actual,
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -39,6 +46,7 @@ function cancelTrackedResponse(
 
 describe("ApiClient", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     fetchWithSsrFGuardMock.mockReset();
   });
@@ -79,14 +87,110 @@ describe("ApiClient", () => {
           "Content-Type": "application/json",
           "User-Agent": "QQBotPlugin/unknown",
         },
-        signal: expect.any(AbortSignal),
       },
       auditContext: "qqbot-api",
       policy: {
         hostnameAllowlist: ["qqbot.test"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
     });
+  });
+
+  it("adds network and whitelist guidance to DNS failures without suggesting credentials", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new Error("getaddrinfo ENOTFOUND api.sgroup.qq.com"),
+    );
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "GET", "/v2/users/@me");
+    } catch (caught) {
+      error = caught;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("Network error [/v2/users/@me]");
+    expect(message).toContain("network connectivity and DNS");
+    expect(message).toContain("server IP whitelist");
+    expect(message).not.toContain("appId");
+    expect(message).not.toContain("clientSecret");
+  });
+
+  it("adds credential guidance to structured HTTP 401 errors", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":11241,"message":"invalid credentials"}', {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "POST", "/v2/messages", { content: "hi" });
+    } catch (caught) {
+      error = caught;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("API Error [/v2/messages]: invalid credentials");
+    expect(message).toContain("QQBot account appId and clientSecret");
+    expect(message).toContain("https://q.qq.com/");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds credential guidance when QQ reports an expired token as HTTP 500", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":11244,"message":"token not exist or expire"}', {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "GET", "/gateway");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ httpStatus: 500, bizCode: 11244 });
+    expect((error as Error).message).toContain("QQBot account appId and clientSecret");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps non-auth structured API guidance generic", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":40034025,"message":"invalid event id"}', {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "POST", "/v2/messages", { content: "hi" });
+    } catch (caught) {
+      error = caught;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("API Error [/v2/messages]: invalid event id");
+    expect(message).toContain("QQBot API troubleshooting");
+    expect(message).not.toContain("appId");
+    expect(message).not.toContain("clientSecret");
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("bounds successful response bodies without using response.text()", async () => {
@@ -119,4 +223,58 @@ describe("ApiClient", () => {
     expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it.each([0, 25])(
+    "keeps the %dms request deadline active while reading a hanging response body",
+    async (timeoutMs) => {
+      vi.useFakeTimers();
+      const actualGuard = ssrfRuntimeActual.fetchWithSsrFGuard;
+      if (!actualGuard) {
+        throw new Error("expected the real SSRF guard implementation");
+      }
+      let requestSignal: AbortSignal | undefined;
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("expected the guarded fetch to pass its deadline signal");
+        }
+        requestSignal = signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+      const lookupFn = vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+      ]) as unknown as LookupFn;
+      fetchWithSsrFGuardMock.mockImplementationOnce(
+        async (request: Parameters<typeof actualGuard>[0]) =>
+          await actualGuard({ ...request, fetchImpl, lookupFn }),
+      );
+
+      const client = new ApiClient({
+        baseUrl: "https://qqbot.test",
+        defaultTimeoutMs: timeoutMs,
+      });
+
+      const rejection = expect(client.request("token-1", "GET", "/v2/users/@me")).rejects.toThrow(
+        `Request timeout [/v2/users/@me]: exceeded ${timeoutMs}ms`,
+      );
+      const guardedTimeoutMs = Math.max(1, timeoutMs);
+      await vi.advanceTimersByTimeAsync(guardedTimeoutMs);
+
+      await rejection;
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: guardedTimeoutMs }),
+      );
+      expect(requestSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });

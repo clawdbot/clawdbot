@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import type { Model, Tool } from "../types.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-projection.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
@@ -11,7 +12,7 @@ import {
 } from "./openai-tool-schema.js";
 
 /** Options for converting internal tool schemas to OpenAI Responses function tools. */
-export interface ConvertResponsesToolsOptions {
+interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
   model?: Model;
   supportsStrictMode?: boolean;
@@ -36,14 +37,6 @@ const LOG_SUBSYSTEM = "llm/openai-responses";
 const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
 const loggedStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
-/** Converts tools to deterministic OpenAI Responses function tool definitions. */
-export function convertResponsesTools(
-  tools: Tool[],
-  options?: ConvertResponsesToolsOptions,
-): OpenAITool[] {
-  return convertResponsesToolPayload(tools, options).tools;
-}
-
 /** Converts and returns the projection used to reconcile tool choices. */
 export function convertResponsesToolPayload(
   tools: Tool[],
@@ -53,7 +46,7 @@ export function convertResponsesToolPayload(
   const strictSetting = resolveResponsesStrictToolSetting(options);
   const strict = resolveResponsesStrictToolFlag(projection, strictSetting, options?.model);
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
-  const convertedTools = sortResponsesToolsByName(projection.tools).map((tool) => {
+  const convertedTools = sortPromptCacheToolsByName(projection.tools).map((tool) => {
     const result: ResponsesFunctionTool = {
       type: "function",
       name: tool.name,
@@ -146,26 +139,4 @@ function shouldLogStrictToolDowngradeDiagnostic(
   }
   loggedStrictToolDowngradeDiagnosticKeys.add(key);
   return true;
-}
-
-function compareToolText(left: string | undefined, right: string | undefined): number {
-  const leftText = left ?? "";
-  const rightText = right ?? "";
-  if (leftText < rightText) {
-    return -1;
-  }
-  if (leftText > rightText) {
-    return 1;
-  }
-  return 0;
-}
-
-function sortResponsesToolsByName<T extends { name?: string; description?: string }>(
-  tools: readonly T[],
-): T[] {
-  return tools.toSorted(
-    (left, right) =>
-      compareToolText(left.name, right.name) ||
-      compareToolText(left.description, right.description),
-  );
 }

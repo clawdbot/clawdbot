@@ -63,6 +63,9 @@ In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disable
 
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
+If the install has already migrated sessions to SQLite, restore archived legacy
+transcript artifacts before starting an older file-backed version. See
+[Doctor: Downgrading after session SQLite migration](/cli/doctor#downgrading-after-session-sqlite-migration).
 </Warning>
 
 ## `update status`
@@ -171,6 +174,13 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+Package-manager updates normally keep using the Node binary recorded in the
+managed service. If that Node cannot run the target release, but the current
+CLI Node can and the service is proven to belong to the package being updated,
+a restart-enabled update uses the current Node for finalization and rewrites
+the service metadata to that runtime. `--no-restart` cannot repair service
+metadata, so the same runtime mismatch stops before package mutation.
+
 On macOS, the post-update check also verifies the LaunchAgent is
 loaded/running for the active profile and the configured loopback port is
 healthy. If the plist is installed but launchd is not supervising it, OpenClaw
@@ -241,7 +251,7 @@ returns the latest sentinel.
     Dev only.
   </Step>
   <Step title="Preflight build (dev only)">
-    Runs the TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest buildable commit. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
+    Runs the TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest buildable commit. Content-addressed declaration outputs from the successful candidate are reused by the final checkout build; rebased source changes automatically invalidate the affected cache groups. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
   </Step>
   <Step title="Rebase">
     Rebases onto the selected commit (dev only).
@@ -249,8 +259,8 @@ returns the latest sentinel.
   <Step title="Install dependencies">
     Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@11` fallback) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
   </Step>
-  <Step title="Build Control UI">
-    Builds the gateway and the Control UI.
+  <Step title="Build checkout">
+    Builds the gateway and Control UI once in the final checkout. The updater runs the standalone Control UI build only when a target build omitted those assets or doctor later removes them.
   </Step>
   <Step title="Run doctor">
     `openclaw doctor` runs as the final safe-update check.
@@ -274,9 +284,9 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (for example an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`.
+Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (for example an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`. When a failed update leaves a managed plugin unusable, OpenClaw disables its runtime entry and resets active slots without changing the operator-authored `plugins.allow` or `plugins.deny` policy.
 
-After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway restarts: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly declared `main` exists). Failures from this pass, and an invalid config snapshot, return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json`. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here (mirroring the `skipDisabledPlugins` policy used by the missing-payload check), so a stale disabled plugin record cannot block an otherwise valid update.
+After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway restarts: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable and its declared `openclaw.extensions` entries are loadable. When a package does not declare OpenClaw extensions, the check instead verifies any explicitly declared npm `main`. Failures from this pass, and an invalid config snapshot, return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json`. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here (mirroring the `skipDisabledPlugins` policy used by the missing-payload check), so a stale disabled plugin record cannot block an otherwise valid update.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts are handed to the CLI managed-service path, so the package swap happens outside the old Gateway process and the service health checks decide whether the update can be reported as complete.
 </Note>
@@ -291,9 +301,14 @@ third-party packages, and non-npm sources keep their existing intent.
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
 install: OpenClaw installs the new package into a temporary npm prefix,
-verifies the packaged `dist` inventory there, then swaps that clean package
-tree into the real global prefix. If verification fails, post-update doctor,
-plugin sync, and restart work do not run from the suspect tree. Even when the
+lets the candidate package validate the host Node version during `preinstall`,
+and verifies the packaged `dist` inventory there. A packed completion guard
+stays outside that inventory until `preinstall` succeeds, so package managers
+that skip lifecycle scripts also stop before activation. On npm 12 and newer,
+the updater approves only the candidate OpenClaw lifecycle; transitive
+dependency scripts remain blocked. OpenClaw then swaps the clean package tree
+into the real global prefix. If verification fails, post-update doctor, plugin
+sync, and restart work do not run from the suspect tree. Even when the
 installed version already matches the target, the command refreshes the
 global package install, then runs plugin sync, a core-command completion
 refresh, and restart work. This keeps packaged sidecars and channel-owned

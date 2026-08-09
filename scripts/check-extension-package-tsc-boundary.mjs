@@ -14,7 +14,9 @@ import {
 import { createRequire } from "node:module";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
+import pMap from "p-map";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
@@ -22,7 +24,7 @@ import {
 } from "./vitest-process-group.mjs";
 
 const require = createRequire(import.meta.url);
-const repoRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const tscBin = require.resolve("typescript/bin/tsc");
 const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
 const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
@@ -631,29 +633,29 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
 export async function runNodeStepsWithConcurrency(steps, concurrency) {
   const abortController = new AbortController();
   let firstFailure = null;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, steps.length) }, async () => {
-    while (true) {
+  await pMap(
+    steps,
+    async (step) => {
       if (abortController.signal.aborted) {
         return;
       }
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= steps.length) {
-        return;
+      try {
+        step.onStart?.();
+        const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
+          abortController,
+          onFailure(error) {
+            firstFailure ??= error;
+          },
+        });
+        step.onSuccess?.(result);
+      } catch (error) {
+        // Keep the mapper fulfilled so pMap waits for active process-group cleanup.
+        firstFailure ??= error;
+        abortSiblingSteps(abortController);
       }
-      const step = steps[index];
-      step.onStart?.();
-      const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
-        abortController,
-        onFailure(error) {
-          firstFailure ??= error;
-        },
-      });
-      step.onSuccess?.(result);
-    }
-  });
-  await Promise.allSettled(workers);
+    },
+    { concurrency, stopOnError: false },
+  );
   if (firstFailure) {
     throw toLintErrorObject(firstFailure, "Non-Error thrown");
   }

@@ -54,7 +54,15 @@ export type TraceEvent = {
 /** Canonicalizes volatile fields (ids, timestamps) before compare/write. */
 export type TraceNormalizer = (event: TraceEvent) => TraceEvent;
 
-/** Agent-side lifecycle steps a channel maps onto its dispatcher wiring. */
+/**
+ * Agent-side lifecycle steps a channel maps onto its dispatcher wiring.
+ *
+ * `wire-fault` declares mocked wire-client misbehavior in the script instead
+ * of hand-armed mock state in setup: `rate-limit` scripts a retryable
+ * 429-shaped rejection honored after `retryAfterMs`; `write-error` makes the
+ * next and every later wire write throw an error whose `name` is `errorName`
+ * (e.g. the msteams SDK's StreamCancelledError on user Stop).
+ */
 export type DeliveryTraceInStep =
   | { kind: "reply-start" }
   | { kind: "partial"; text: string }
@@ -63,15 +71,23 @@ export type DeliveryTraceInStep =
   | { kind: "final"; text?: string; mediaUrls?: string[]; isError?: boolean }
   | { kind: "cancel" }
   | { kind: "idle" }
-  | { kind: "wire-fault"; fault: "rate-limit"; retryAfterMs: number };
+  | { kind: "wire-fault"; fault: "rate-limit"; retryAfterMs: number }
+  | { kind: "wire-fault"; fault: "write-error"; errorName: string };
 
 export type DeliveryTraceStep = DeliveryTraceInStep | { kind: "advance"; ms: number };
 
 export type DeliveryTraceScenario = {
-  name: DeliveryTraceScenarioName;
+  /**
+   * Golden filename key. Shared-library scenarios use the closed
+   * DeliveryTraceScenarioName union; channels may record channel-specific
+   * scenarios under their own names. `string & {}` keeps completion for the
+   * shared names without closing the set — the runner never branches on it.
+   */
+  name: DeliveryTraceScenarioName | (string & {});
   steps: readonly DeliveryTraceStep[];
 };
 
+/** Names in the shared scenario library (`deliveryTraceScenarios`). */
 export type DeliveryTraceScenarioName =
   | "streaming-happy"
   | "final-only"

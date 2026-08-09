@@ -54,7 +54,8 @@ describe("Kimi implicit provider (#22409)", () => {
       headers: {
         "User-Agent": "claude-code/0.1.0",
       },
-      models: [
+      // Credential-aware catalog assembly may prioritize the configured default.
+      models: expect.arrayContaining([
         {
           id: "kimi-for-coding",
           name: "Kimi Code",
@@ -65,8 +66,8 @@ describe("Kimi implicit provider (#22409)", () => {
           maxTokens: 32768,
         },
         {
-          id: "kimi-code",
-          name: "Kimi Code (legacy kimi-code)",
+          id: "kimi-for-coding-highspeed",
+          name: "Kimi K2.7 Code HighSpeed",
           reasoning: true,
           input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -74,17 +75,47 @@ describe("Kimi implicit provider (#22409)", () => {
           maxTokens: 32768,
         },
         {
-          id: "k2p5",
-          name: "Kimi Code (legacy k2p5)",
+          id: "k3",
+          name: "Kimi K3",
           reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: "low",
+            low: "low",
+            medium: "high",
+            high: "high",
+            xhigh: "max",
+            max: "max",
+          },
           input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
+          compat: { codeMode: "preferred" },
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+          contextWindow: 1048576,
+          maxTokens: 131072,
         },
-      ],
+        {
+          id: "k3-256k",
+          name: "Kimi K3 (256k)",
+          reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: "low",
+            low: "low",
+            medium: "high",
+            high: "high",
+            xhigh: "max",
+            max: "max",
+          },
+          input: ["text", "image"],
+          compat: { codeMode: "preferred" },
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 131072,
+        },
+      ]),
       apiKey: "test-key",
     });
+    expect(provider.models).toHaveLength(4);
   });
 
   it("ignores retired kimi-coding provider overrides", async () => {

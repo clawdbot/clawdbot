@@ -5,6 +5,7 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
@@ -104,7 +105,7 @@ describe("agent tool definition adapter", () => {
     const [definition] = toToolDefinitions([tool]);
     const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
 
-    const existing = await definition.execute(
+    const existing = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-existing-cwd",
       {
         command: "echo denied",
@@ -114,7 +115,7 @@ describe("agent tool definition adapter", () => {
       undefined,
       extensionContext,
     );
-    const missing = await definition.execute(
+    const missing = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-missing-cwd",
       {
         command: "echo denied",
@@ -150,7 +151,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-denied-backend-cwd",
       {
         command: "echo denied",
@@ -175,7 +176,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-exec-params",
       "not-an-object",
       undefined,
@@ -205,7 +206,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-backend-sandbox-exec-params",
       "not-an-object",
       undefined,
@@ -229,7 +230,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-elevated-exec-params",
       {},
       undefined,
@@ -259,7 +260,7 @@ describe("agent tool definition adapter", () => {
     });
     const [definition] = toToolDefinitions([tool]);
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-malformed-backend-sandbox-exec-params",
       {
         workdir: "/remote/workspace/generated",
@@ -420,10 +421,19 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(calledWith).toEqual({ query: "hello" });
   });
 
-  it("falls back to empty object for invalid JSON string", async () => {
-    const { calledWith } = await executeClientTool("not-json");
-    expect(calledWith).toStrictEqual({});
-  });
+  it.each(["not-json", "[1,2,3]", "42", '"query"'])(
+    "returns a visible error instead of dispatching malformed client arguments: %s",
+    async (params) => {
+      const { calledWith, result } = await executeClientTool(params);
+      expect(calledWith).toBeUndefined();
+      expect(result.details).toMatchObject({
+        status: "error",
+        tool: "search",
+        error: expect.stringContaining("client tool arguments"),
+      });
+      expect(result.terminate).not.toBe(true);
+    },
+  );
 
   it("falls back to empty object for empty string", async () => {
     const { calledWith } = await executeClientTool("");
@@ -440,9 +450,52 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(calledWith).toStrictEqual({});
   });
 
-  it("falls back to empty object for a JSON array string", async () => {
-    const { calledWith } = await executeClientTool("[1,2,3]");
-    expect(calledWith).toStrictEqual({});
+  it.each([null, undefined, "", {}])(
+    "rejects missing required client arguments without reserving a completed call: %s",
+    async (params) => {
+      const clientTool = makeClientTool("search");
+      clientTool.function.parameters = {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      };
+      const reserve = vi.fn();
+      const complete = vi.fn();
+      const discard = vi.fn();
+      const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
+      const result = await expectDefined(definition, "client tool definition").execute(
+        "call-required-client-args",
+        params,
+        undefined,
+        undefined,
+        extensionContext,
+      );
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("query"),
+      });
+      expect(result.terminate).not.toBe(true);
+      expect(complete).not.toHaveBeenCalled();
+      expect(discard).toHaveBeenCalledWith("call-required-client-args", "search");
+    },
+  );
+
+  it("keeps absent arguments valid for a parameterless client tool", async () => {
+    const clientTool = makeClientTool("ping");
+    clientTool.function.parameters = { type: "object", properties: {} };
+    const complete = vi.fn();
+    const [definition] = toClientToolDefinitions([clientTool], { complete });
+    const result = await expectDefined(definition, "client tool definition").execute(
+      "call-parameterless-client-tool",
+      undefined,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(complete).toHaveBeenCalledWith("call-parameterless-client-tool", "ping", {});
+    expect(result.terminate).toBe(true);
   });
 
   it("handles nested JSON string correctly", async () => {

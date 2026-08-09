@@ -3,36 +3,12 @@ import { describe, expect, it } from "vitest";
 import { styleSelectParams } from "./prompt-select-styled-params.js";
 
 describe("styleSelectParams", () => {
-  it("styles message and option hints before select receives params", () => {
-    expect(
-      styleSelectParams(
-        {
-          message: "Pick channel",
-          options: [
-            { value: "stable", label: "Stable", hint: "Tagged releases" },
-            { value: "dev", label: "Dev" },
-          ],
-        },
-        {
-          message: (value) => `msg:${value}`,
-          hint: (value) => `hint:${value}`,
-        },
-      ),
-    ).toEqual({
-      message: "msg:Pick channel",
-      options: [
-        { value: "stable", label: "Stable", hint: "hint:Tagged releases" },
-        { value: "dev", label: "Dev" },
-      ],
-    });
-  });
-
-  it("keeps unhinted options unchanged", () => {
+  it("styles messages and hints without replacing unhinted options", () => {
     const option = { value: "dev", label: "Dev" };
     const params = styleSelectParams(
       {
         message: "Pick channel",
-        options: [option],
+        options: [{ value: "stable", label: "Stable", hint: "Tagged releases" }, option],
       },
       {
         message: (value) => `msg:${value}`,
@@ -42,8 +18,11 @@ describe("styleSelectParams", () => {
 
     expect(params).toEqual({
       message: "msg:Pick channel",
-      options: [{ value: "dev", label: "Dev" }],
+      options: [
+        { value: "stable", label: "Stable", hint: "hint:Tagged releases" },
+        { value: "dev", label: "Dev" },
+      ],
     });
-    expect(params.options[0]).toBe(option);
+    expect(params.options[1]).toBe(option);
   });
 });

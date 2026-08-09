@@ -64,15 +64,26 @@ describe("MattermostConfigSchema", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
+        preview: { commandText: "raw" },
       },
       accounts: {
         quiet: {
-          streaming: "off",
+          streaming: { mode: "off" },
         },
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects retired scalar streaming and flat delivery keys", () => {
+    // Scalar/boolean streaming and the flat delivery keys are doctor-migrated
+    // legacy input; the runtime schema accepts the nested shape only.
+    expect(MattermostConfigSchema.safeParse({ streaming: "partial" }).success).toBe(false);
+    expect(MattermostConfigSchema.safeParse({ streaming: false }).success).toBe(false);
+    expect(MattermostConfigSchema.safeParse({ blockStreaming: true }).success).toBe(false);
+    expect(MattermostConfigSchema.safeParse({ chunkMode: "newline" }).success).toBe(false);
   });
 
   it("accepts groups with requireMention", () => {
@@ -93,6 +104,30 @@ describe("MattermostConfigSchema", () => {
           groups: {
             "*": { requireMention: true },
           },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts account-scoped message read action toggles", () => {
+    const result = MattermostConfigSchema.safeParse({
+      actions: { messages: false },
+      accounts: {
+        reader: {
+          actions: { messages: true },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts implicit mention policy at root and account scope", () => {
+    const result = MattermostConfigSchema.safeParse({
+      implicitMentions: { threadParticipation: false },
+      accounts: {
+        main: {
+          implicitMentions: { replyToBot: false },
         },
       },
     });

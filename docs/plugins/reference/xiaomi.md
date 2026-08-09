@@ -12,11 +12,11 @@ Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/xiaomi-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/xiaomi-provider`
 
 ## Surface
 
-providers: xiaomi, xiaomi-token-plan; contracts: speechProviders, usageProviders
+providers: `xiaomi`, `xiaomi-token-plan`; contracts: `speechProviders`, `usageProviders`
 
 ## Related docs
 

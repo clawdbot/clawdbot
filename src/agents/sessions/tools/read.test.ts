@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
-import { DEFAULT_MAX_BYTES } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() => vi.fn(() => ""));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,6 +41,21 @@ function textContent(
 ): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
+}
+
+const plainTheme = {
+  fg: (_token: string, text: string) => text,
+  bold: (text: string) => text,
+} as never;
+
+function renderReadCall(args: { path: string; offset?: number; limit?: number }): string {
+  const tool = createReadToolDefinition("/workspace");
+  const component = tool.renderCall?.(args, plainTheme, {
+    lastComponent: undefined,
+    expanded: true,
+    cwd: "/workspace",
+  } as never);
+  return component?.render(120).join("\n").trimEnd() ?? "";
 }
 
 describe("read tool", () => {
@@ -104,6 +119,17 @@ describe("read tool", () => {
     );
   });
 
+  it("explains that directory paths must be listed before reading a file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-directory-");
+    const tool = createReadToolDefinition(tempDir);
+
+    await expect(
+      tool.execute("call-directory", { path: "." }, undefined, undefined, {} as never),
+    ).rejects.toThrow(
+      "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
+    );
+  });
+
   it("shell-quotes the long-first-line fallback path", async () => {
     // The fallback command is shown to the model; quote the path so suggested
     // follow-up commands cannot execute path text as shell syntax.
@@ -149,6 +175,14 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it.each([
+    { limit: -1, range: ":1-1" },
+    { limit: 1.5, range: ":1-1" },
+    { limit: Number.POSITIVE_INFINITY, range: `:1-${DEFAULT_MAX_LINES}` },
+  ])("normalizes read call line ranges for limit $limit", ({ limit, range }) => {
+    expect(renderReadCall({ path: "notes.txt", limit })).toBe(`read notes.txt${range}`);
   });
 
   it.each([0, -1, 1.5])("rejects invalid offset %s before accessing the file", async (offset) => {
@@ -223,6 +257,26 @@ describe("read tool", () => {
 
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
     expect(textContent(result)).toBe(bytes.toString("utf8"));
+  });
+
+  it("strips one leading UTF-8 BOM without changing embedded markers", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from("\uFEFFimport value\nconst marker = '\uFEFF';"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "source.ts" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
   });
 
   it("uses an injected backend decoder when declared", async () => {

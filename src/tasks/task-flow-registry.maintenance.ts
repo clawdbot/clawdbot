@@ -9,6 +9,7 @@ import {
 import {
   deleteTaskFlowRecordById,
   getTaskFlowById,
+  getTaskFlowRegistryRestoreFailure,
   listTaskFlowRecords,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
@@ -22,10 +23,19 @@ type TaskFlowRegistryMaintenanceSummary = {
   pruned: number;
 };
 
+export function assertTaskFlowRegistryMaintenanceReady(): void {
+  const restoreFailure = getTaskFlowRegistryRestoreFailure();
+  if (restoreFailure) {
+    throw new Error(
+      `Task-flow registry restore failed: ${restoreFailure}. Refusing task maintenance.`,
+    );
+  }
+}
+
 function isTerminalFlow(flow: TaskFlowRecord): boolean {
   return (
     flow.status === "succeeded" ||
-    flow.status === "blocked" ||
+    (flow.status === "blocked" && flow.endedAt != null) ||
     flow.status === "failed" ||
     flow.status === "cancelled" ||
     flow.status === "lost"

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
 
@@ -34,7 +35,10 @@ describe("exec approvals gateway methods", () => {
     );
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.get"],
+      'execApprovalsHandlers["exec.approvals.get"] test invariant',
+    )({
       req: { type: "req", id: "req-1", method: "exec.approvals.get", params: {} },
       params: {},
       client: null,
@@ -59,7 +63,10 @@ describe("exec approvals gateway methods", () => {
     updateExecApprovalsMock.mockRejectedValueOnce(new Error("disk full while saving approvals"));
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
       req: { type: "req", id: "req-2", method: "exec.approvals.set", params: {} },
       params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
       client: null,
@@ -86,7 +93,10 @@ describe("exec approvals gateway methods", () => {
     updateExecApprovalsMock.mockResolvedValueOnce(null);
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
       req: { type: "req", id: "req-conflict", method: "exec.approvals.set", params: {} },
       params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
       client: null,
@@ -118,7 +128,10 @@ describe("exec approvals gateway methods", () => {
     readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
       req: { type: "req", id: "req-deleted", method: "exec.approvals.set", params: {} },
       params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
       client: null,
@@ -167,7 +180,10 @@ describe("exec approvals gateway methods", () => {
     );
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.set"],
+      'execApprovalsHandlers["exec.approvals.set"] test invariant',
+    )({
       req: { type: "req", id: "req-bootstrap", method: "exec.approvals.set", params: {} },
       params: { file: { version: 1, agents: { main: {} } } },
       client: null,
@@ -209,13 +225,16 @@ describe("exec approvals gateway methods", () => {
         baseHash: "base-hash",
       },
       commands: ["system.execApprovals.set"],
-      config: { gateway: { nodes: { denyCommands: ["system.execApprovals.set"] } } },
+      config: { gateway: { nodes: { commands: { deny: ["system.execApprovals.set"] } } } },
     },
   ])("blocks $method outside the effective command policy", async (testCase) => {
     const invoke = vi.fn();
     const respond = vi.fn();
 
-    await execApprovalsHandlers[testCase.method]({
+    await expectDefined(
+      execApprovalsHandlers[testCase.method],
+      "execApprovalsHandlers[testCase.method] test invariant",
+    )({
       req: {
         type: "req",
         id: "req-node-blocked",
@@ -232,6 +251,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [testCase.command],
@@ -270,7 +290,10 @@ describe("exec approvals gateway methods", () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-node-allowed",
@@ -287,6 +310,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             clientId: "openclaw-macos",
             clientMode: "node",
             platform: "macOS 26.5.2",
@@ -301,8 +325,11 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: { includeResolvedDefaults: true },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -354,7 +381,10 @@ describe("exec approvals gateway methods", () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-node-legacy-params",
@@ -371,6 +401,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             clientId: identity.clientId,
             clientMode: identity.clientMode,
             platform: identity.platform,
@@ -385,8 +416,11 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -407,7 +441,10 @@ describe("exec approvals gateway methods", () => {
       baseHash: "sha256:current",
     };
 
-    await execApprovalsHandlers["exec.approvals.node.set"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.set"],
+      'execApprovalsHandlers["exec.approvals.node.set"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-native-set",
@@ -424,6 +461,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "windows-node",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [command],
@@ -436,12 +474,15 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "windows-node",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: {
         defaultAction: "deny",
         rules: [{ pattern: "hostname", action: "allow" }],
         baseHash: "sha256:current",
       },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { updated: true, hash: "sha256:next" }, undefined);
   });
@@ -450,7 +491,10 @@ describe("exec approvals gateway methods", () => {
     const command = "system.execApprovals.get";
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-invalid-native-get",
@@ -467,6 +511,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "windows-node",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [command],
@@ -494,7 +539,10 @@ describe("exec approvals gateway methods", () => {
     });
     const respond = vi.fn();
 
-    await execApprovalsHandlers["exec.approvals.node.get"]({
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.node.get"],
+      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
+    )({
       req: {
         type: "req",
         id: "req-node-missing",
@@ -515,6 +563,7 @@ describe("exec approvals gateway methods", () => {
       nodeId: "missing-node",
       command: "system.execApprovals.get",
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -523,6 +572,7 @@ describe("exec approvals gateway methods", () => {
         code: "UNAVAILABLE",
         details: {
           nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+          nodeCommandDispatched: false,
         },
       }),
     );

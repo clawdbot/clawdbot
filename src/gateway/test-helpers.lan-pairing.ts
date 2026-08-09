@@ -10,7 +10,7 @@ import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import { pickPrimaryLanIPv4 } from "./net.js";
 import { connectReq, startServer, trackConnectChallengeNonce } from "./test-helpers.js";
 
-export const LAN_NODE_PAIRING_TOKEN = "secret";
+const LAN_NODE_PAIRING_TOKEN = "secret";
 
 const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -81,7 +81,7 @@ async function canUseLanSelfConnect(host: string): Promise<boolean> {
   });
 }
 
-export type LanNodePairingContext = {
+type LanNodePairingContext = {
   lanIp: string;
   loaded: ReturnType<typeof loadDeviceIdentity>;
   /** Open a fresh LAN WebSocket, run the node connect handshake, close it. */
@@ -123,13 +123,15 @@ export async function withLanNodePairingAttempt(params: {
           deviceIdentityPath: loaded.identityPath,
         });
       } finally {
-        ws.close();
+        // These tests cover pairing, not the WebSocket close handshake. Terminate so
+        // gateway cleanup never waits on a client that has already returned its result.
+        ws.terminate();
       }
     };
     await params.run({ lanIp, loaded, connectNode });
   } finally {
     for (const ws of openSockets) {
-      ws.close();
+      ws.terminate();
     }
     await started.server.close();
     started.envSnapshot.restore();

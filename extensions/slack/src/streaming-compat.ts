@@ -1,8 +1,10 @@
 // Slack plugin module implements streaming compat behavior.
+// channel-streaming-config exports the same helpers without channel-outbound's
+// reply-pipeline/channel-registry graph, which doctor enumeration cold-loads.
 import {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,
-} from "openclaw/plugin-sdk/channel-outbound";
+} from "openclaw/plugin-sdk/channel-streaming-config";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -92,6 +94,12 @@ export function resolveSlackNativeStreaming(
   const canonical = resolveChannelStreamingNativeTransport(params);
   if (typeof canonical === "boolean") {
     return canonical;
+  }
+  // Doctor migration input: the runtime helper no longer reads the legacy flat
+  // key, so raw pre-migration configs must resolve it here or `nativeStreaming:
+  // false` would migrate to `streaming.nativeTransport: true`.
+  if (typeof params.nativeStreaming === "boolean") {
+    return params.nativeStreaming;
   }
   if (typeof params.streaming === "boolean") {
     return params.streaming;

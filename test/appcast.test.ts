@@ -1,5 +1,6 @@
 // Appcast tests validate generated update appcast metadata.
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { canonicalSparkleBuildFromVersion } from "../scripts/sparkle-build.ts";
 
@@ -59,6 +60,7 @@ describe("appcast.xml", () => {
         throw new Error(`Appcast entry missing version fields: ${item.raw}`);
       }
       expect(item.sparkleVersion).toBe(canonicalSparkleBuildFromVersion(item.shortVersion));
+      expect(item.raw).toMatch(/sparkle:edSignature="[^"]+"/u);
     }
   });
 
@@ -69,10 +71,13 @@ describe("appcast.xml", () => {
     );
 
     expect(stableItems.length).toBeGreaterThan(0);
-    const firstStable = stableItems[0];
-    const newestStable = [...stableItems].toSorted(
-      (left, right) => (right.sparkleVersion ?? 0) - (left.sparkleVersion ?? 0),
-    )[0];
+    const firstStable = expectDefined(stableItems[0], "first stable appcast item");
+    const newestStable = expectDefined(
+      [...stableItems].toSorted(
+        (left, right) => (right.sparkleVersion ?? 0) - (left.sparkleVersion ?? 0),
+      )[0],
+      "newest stable appcast item",
+    );
 
     expect(firstStable.sparkleVersion).toBe(newestStable.sparkleVersion);
     expect(firstStable.shortVersion).toBe(newestStable.shortVersion);

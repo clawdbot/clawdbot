@@ -22,7 +22,7 @@
  * @module @openclaw/oc-path/emit
  */
 
-import type { FrontmatterEntry, MdAst } from "./ast.js";
+import type { MdAst } from "./ast.js";
 import { guardSentinel } from "./sentinel.js";
 
 /**
@@ -30,7 +30,7 @@ import { guardSentinel } from "./sentinel.js";
  * present and not flagged as dirty; `mode: 'render'` always
  * re-renders.
  */
-export interface EmitOptions {
+interface EmitOptions {
   readonly mode?: "roundtrip" | "render";
   /**
    * When provided, the emitter walks every emitted leaf string through
@@ -127,4 +127,3 @@ function formatFrontmatterValue(value: string): string {
 
 // Re-export the frontmatter type for convenience so tests don't need
 // to import from ast.ts.
-export type { FrontmatterEntry };

@@ -16,6 +16,8 @@ export function extractSwiftHandledEvents(
   source: unknown,
   constants?: Map<unknown, unknown>,
 ): Set<unknown>;
+/** Extracts generated Kotlin enum entries whose constructor stores a wire string. */
+export function extractKotlinEnumStringConstants(source: unknown): Map<string, string>;
 /**
  * Extracts event names a Kotlin source handles: string-literal case labels of
  * `when (event)` blocks plus `event == "..."` comparisons, both scoped to
@@ -26,7 +28,10 @@ export function extractSwiftHandledEvents(
  * stays tree-wide because Swift consumption always reads `.event` off a
  * received EventFrame, which does not have that false-positive shape.
  */
-export function extractKotlinHandledEvents(source: unknown): Set<unknown>;
+export function extractKotlinHandledEvents(
+  source: unknown,
+  constants?: ReadonlyMap<string, string>,
+): Set<string>;
 /**
  * Compares a client's handled events against the gateway catalog and its
  * allowlist. Returns human-readable error strings. Client-only names (e.g. the

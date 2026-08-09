@@ -33,10 +33,15 @@ const SpawnTaskToolSchema = Type.Object(
       Type.String({
         minLength: 1,
         maxLength: 4_096,
-        description: "Absolute project directory; defaults to the current project.",
+        description: "Absolute path inside a git checkout; defaults to the current project.",
       }),
     ),
   },
+  { additionalProperties: false },
+);
+
+const SpawnTaskOutputSchema = Type.Object(
+  { task_id: Type.String() },
   { additionalProperties: false },
 );
 
@@ -69,11 +74,11 @@ export function createTaskSuggestionTools(params: {
       name: "spawn_task",
       displaySummary: SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
       description: [
-        "Suggest valuable follow-up work discovered during the current task.",
-        "Use only for confirmed, out-of-scope work such as dead code, stale docs, missing coverage, a verified TODO, or a security issue.",
-        "This creates an operator-facing suggestion only; it does not start work.",
+        "Suggest confirmed valuable out-of-scope follow-up: dead code, stale docs, missing coverage, verified TODO, security issue.",
+        "Operator suggestion only; does not start work. cwd must be an absolute path inside a git checkout.",
       ].join(" "),
       parameters: SpawnTaskToolSchema,
+      outputSchema: SpawnTaskOutputSchema,
       execute: async (_toolCallId, args) => {
         const input = args as Record<string, unknown>;
         const title = readStringParam(input, "title", { required: true });
@@ -106,7 +111,7 @@ export function createTaskSuggestionTools(params: {
       name: "dismiss_task",
       displaySummary: DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
       description:
-        "Withdraw a still-pending spawn_task suggestion that became stale or irrelevant. Suggestions already accepted by the operator cannot be withdrawn.",
+        "Withdraw stale/irrelevant pending spawn_task. Accepted suggestion cannot withdraw.",
       parameters: DismissTaskToolSchema,
       execute: async (_toolCallId, args) => {
         const input = args as Record<string, unknown>;

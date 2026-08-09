@@ -16,7 +16,7 @@ OpenClaw GMI Cloud provider plugin.
 
 ## Surface
 
-providers: gmi, gmi-cloud, gmicloud
+providers: `gmi`, `gmi-cloud`, `gmicloud`
 
 ## Related docs
 

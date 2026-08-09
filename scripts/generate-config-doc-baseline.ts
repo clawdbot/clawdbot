@@ -20,23 +20,36 @@ const result = await writeConfigDocBaselineArtifacts({
 
 if (checkOnly) {
   if (!result.changed) {
-    console.log(`OK ${path.relative(repoRoot, result.hashPath)}`);
+    console.log(
+      `OK ${path.relative(repoRoot, result.hashPath)} and ${path.relative(repoRoot, result.countsPath)}`,
+    );
     process.exit(0);
   }
-  console.error(
-    [
-      "Config baseline drift detected.",
-      `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
-      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated hash file.",
-      "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
-    ].join("\n"),
-  );
+  if (result.countBudgetError) {
+    console.error(
+      `Config baseline count budget invalid: ${result.countBudgetError}. Run \`pnpm config:docs:gen\` to recreate ${path.relative(repoRoot, result.countsPath)}.`,
+    );
+  }
+  for (const violation of result.countViolations) {
+    console.error(violation.message);
+  }
+  if (result.hashChanged) {
+    console.error(
+      [
+        "Config baseline drift detected.",
+        `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
+        "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated hash file.",
+        "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
+      ].join("\n"),
+    );
+  }
   process.exit(1);
 }
 
 console.log(
   [
     `Wrote ${path.relative(repoRoot, result.hashPath)}`,
+    `Wrote ${path.relative(repoRoot, result.countsPath)}`,
     `Wrote ${path.relative(repoRoot, result.jsonPaths.combined)} (gitignored, local only)`,
     `Wrote ${path.relative(repoRoot, result.jsonPaths.core)} (gitignored, local only)`,
     `Wrote ${path.relative(repoRoot, result.jsonPaths.channel)} (gitignored, local only)`,

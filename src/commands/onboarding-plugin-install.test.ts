@@ -1,6 +1,7 @@
 // Onboarding plugin install tests cover install sources, trust checks, and install records.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
@@ -116,7 +117,8 @@ vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
 }));
 
-import { ensureOnboardingPluginInstalled, testing } from "./onboarding-plugin-install.js";
+import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
+import { testing } from "./onboarding-plugin-install.test-support.js";
 
 describe("plugin install error summaries", () => {
   it("keeps bounded terminal text UTF-16 well-formed", () => {
@@ -360,7 +362,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -497,7 +498,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -638,7 +638,12 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(renderedWarning).toContain("Security scan: suspicious");
     expect(renderedWarning).toContain("\n│ Review before installing.");
     expect(renderedWarning).not.toContain("\\n│ Review before installing.");
-    expect(log.mock.invocationCallOrder[0]).toBeLessThan(text.mock.invocationCallOrder[0]);
+    expect(log.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        text.mock.invocationCallOrder[0],
+        "text.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
@@ -650,7 +655,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -1840,3 +1844,4 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

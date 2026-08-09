@@ -11,6 +11,9 @@ const mocks = await vi.hoisted(async () => {
     lifecycle: vi.fn(),
     upgrade: vi.fn(),
     remove: vi.fn(),
+    backup: vi.fn(),
+    restore: vi.fn(),
+    doctor: vi.fn(),
   };
 });
 
@@ -24,6 +27,9 @@ vi.mock("../../fleet/service.runtime.js", () => ({
     lifecycle: mocks.lifecycle,
     upgrade: mocks.upgrade,
     remove: mocks.remove,
+    backup: mocks.backup,
+    restore: mocks.restore,
+    doctor: mocks.doctor,
   }),
 }));
 
@@ -33,6 +39,9 @@ import {
   runFleetLogsCommand,
   runFleetRemoveCommand,
   runFleetStatusCommand,
+  runFleetBackupCommand,
+  runFleetRestoreCommand,
+  runFleetDoctorCommand,
 } from "./commands.runtime.js";
 
 describe("fleet command output", () => {
@@ -40,6 +49,58 @@ describe("fleet command output", () => {
     vi.clearAllMocks();
     mocks.runtimeLogs.length = 0;
     mocks.runtimeErrors.length = 0;
+    process.exitCode = undefined;
+  });
+
+  it("writes backup and restore JSON results", async () => {
+    const backup = {
+      tenant: "acme",
+      archivePath: "/tmp/a.tgz",
+      fileCount: 1,
+      skippedSymlinks: 0,
+      skippedSpecial: 0,
+      note: "secret note",
+    };
+    const restore = {
+      tenant: "acme",
+      archivePath: "/tmp/a.tgz",
+      token: "new-token",
+      tokenNote: "Shown once.",
+      started: false,
+      url: "http://127.0.0.1:19100",
+    };
+    mocks.backup.mockResolvedValue(backup);
+    mocks.restore.mockResolvedValue(restore);
+    await runFleetBackupCommand({ tenant: "acme", json: true });
+    await runFleetRestoreCommand({ tenant: "acme", from: "/tmp/a.tgz", force: false, json: true });
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenNthCalledWith(1, backup);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenNthCalledWith(2, restore);
+  });
+
+  it("surfaces skipped symlink counts in human backup output", async () => {
+    mocks.backup.mockResolvedValue({
+      tenant: "acme",
+      archivePath: "/tmp/a.tgz",
+      fileCount: 3,
+      skippedSymlinks: 2,
+      skippedSpecial: 1,
+      note: "secret note",
+    });
+    await runFleetBackupCommand({ tenant: "acme", json: false });
+    expect(mocks.runtimeLogs.join("\n")).toContain("Skipped 2 symlink(s) and 1 special file(s)");
+  });
+
+  it("sets exitCode when doctor reports a failure", async () => {
+    const reports = [
+      {
+        tenant: "acme",
+        findings: [{ check: "port-binding", status: "fail", detail: "bad binding" }],
+      },
+    ];
+    mocks.doctor.mockResolvedValue(reports);
+    await runFleetDoctorCommand({ tenant: "acme", json: true });
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(reports);
+    expect(process.exitCode).toBe(1);
   });
 
   it("writes the documented secret-bearing create JSON shape", async () => {

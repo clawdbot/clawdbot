@@ -3,12 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   resolveQaWindowsPowerShellExePath,
   resolveQaWindowsSystem32ExePath,
-  resolveQaWindowsSystemRoot,
 } from "./windows-system-tools.js";
 
 describe("qa-lab windows system tools", () => {
   it("resolves System32 executables from a trusted SystemRoot", () => {
-    expect(resolveQaWindowsSystemRoot({ SystemRoot: "D:\\Windows\\" })).toBe("D:\\Windows");
     expect(resolveQaWindowsSystem32ExePath("taskkill.exe", { SystemRoot: "D:\\Windows\\" })).toBe(
       "D:\\Windows\\System32\\taskkill.exe",
     );

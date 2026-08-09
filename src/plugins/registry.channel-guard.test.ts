@@ -4,7 +4,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 import type { OpenClawPluginChannelRegistration } from "./types.js";
 
 function createTestRegistry() {

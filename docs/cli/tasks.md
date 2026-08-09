@@ -22,6 +22,8 @@ openclaw tasks list --status running
 openclaw tasks show <lookup>
 openclaw tasks notify <lookup> state_changes
 openclaw tasks cancel <lookup>
+openclaw tasks retry <lookup> [lookup...]
+openclaw tasks dismiss <lookup> [lookup...]
 openclaw tasks audit
 openclaw tasks maintenance
 openclaw tasks maintenance --apply
@@ -71,6 +73,27 @@ openclaw tasks cancel <lookup>
 ```
 
 Cancels a running background task.
+
+### `retry`
+
+```bash
+openclaw tasks retry <lookup> [lookup...]
+```
+
+Retries 1-10 blocked subagent completion deliveries. The child execution stays
+successful; retry creates a fenced delivery generation from the retained
+canonical result. An ambiguous earlier acknowledgement can still cause a
+duplicate visible result.
+
+### `dismiss`
+
+```bash
+openclaw tasks dismiss <lookup> [lookup...]
+```
+
+Records intentional non-delivery for 1-10 blocked subagent completions. The task
+continues to show a blocked terminal outcome and retains its result until the
+7-day completion-retention window expires.
 
 ### `audit`
 

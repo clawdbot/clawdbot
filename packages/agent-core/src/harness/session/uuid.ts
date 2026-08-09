@@ -1,8 +1,6 @@
-// Agent Core module implements uuid behavior.
 let lastTimestamp = -Infinity;
 let sequence = 0;
 
-// Small UUIDv7 generator for browser/node package builds without a runtime dep.
 function fillRandomBytes(bytes: Uint8Array): void {
   const crypto = globalThis.crypto;
   if (crypto?.getRandomValues) {
@@ -24,8 +22,6 @@ export function uuidv7(): string {
     sequence = new DataView(random.buffer, random.byteOffset + 6, 4).getUint32(0);
     lastTimestamp = timestamp;
   } else {
-    // Same-ms calls increment the sequence so generated ids remain sortable and
-    // unique even when random bytes repeat.
     sequence = (sequence + 1) >>> 0;
     if (sequence === 0) {
       lastTimestamp++;

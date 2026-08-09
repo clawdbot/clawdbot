@@ -8,42 +8,64 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MIN_NODE_MAJOR = 22;
-const MIN_NODE_MINOR = 19;
-const MIN_NODE_23_MINOR = 11;
-const RECOMMENDED_NODE_MAJOR = 24;
-const SUPPORTED_NODE_RANGE = ">=22.19.0 <23 or >=23.11.0";
-const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
+const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
+const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
+const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
+const RECOMMENDED_NODE_MAJOR = 26;
+const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const parseNodeVersion = (rawVersion) => {
-  const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
+  const [majorRaw = "0", minorRaw = "0", patchRaw = "0"] = rawVersion.split(".");
   return {
     major: Number(majorRaw),
     minor: Number(minorRaw),
+    patch: Number(patchRaw),
   };
 };
 
+const isAtLeastNodeVersion = (version, minimum) => {
+  if (version.major !== minimum.major) {
+    return version.major > minimum.major;
+  }
+  if (version.minor !== minimum.minor) {
+    return version.minor > minimum.minor;
+  }
+  return version.patch >= minimum.patch;
+};
+
 const isSupportedNodeVersion = (version) => {
-  if (version.major === MIN_NODE_MAJOR) {
-    return version.minor >= MIN_NODE_MINOR;
+  if (version.major === MIN_NODE_22.major) {
+    return isAtLeastNodeVersion(version, MIN_NODE_22);
   }
-  if (version.major === 23) {
-    return version.minor >= MIN_NODE_23_MINOR;
+  if (version.major === MIN_NODE_24.major) {
+    return isAtLeastNodeVersion(version, MIN_NODE_24);
   }
-  return version.major > 23;
+  if (version.major === MIN_NODE_25.major) {
+    return isAtLeastNodeVersion(version, MIN_NODE_25);
+  }
+  return version.major > MIN_NODE_25.major;
 };
 
-const isNodeVersionAffectedByCompileCacheDeadlock = (rawVersion) => {
-  const version = parseNodeVersion(rawVersion);
-  return version.major === 24 && version.minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
-};
-
-const shouldSkipCompileCacheForWindowsNode24 = () =>
-  process.platform === "win32" &&
-  isNodeVersionAffectedByCompileCacheDeadlock(process.versions.node);
-
-const ensureSupportedNodeVersion = () => {
+const ensureSupportedRuntimeVersion = () => {
+  if (process.versions.bun) {
+    // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
+    // rejecting Bun outright so capable Bun builds can run OpenClaw.
+    let hasNodeSqlite;
+    try {
+      hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
+    } catch {
+      hasNodeSqlite = false;
+    }
+    if (hasNodeSqlite) {
+      return;
+    }
+    process.stderr.write(
+      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
+        `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
+    );
+    process.exit(1);
+  }
   if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
     return;
   }
@@ -58,7 +80,7 @@ const ensureSupportedNodeVersion = () => {
   process.exit(1);
 };
 
-ensureSupportedNodeVersion();
+ensureSupportedRuntimeVersion();
 
 if (tryOutputLauncherVersion(process.argv)) {
   process.exit(0);
@@ -71,6 +93,7 @@ const isSourceCheckoutLauncher = () =>
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 const sanitizeCompileCachePathSegment = (value) => {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";
@@ -128,6 +151,8 @@ const runRespawnedChild = (command, args, env) => {
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
+  let firstForwardedSignal = null;
+  let hardKillBackstopStarted = false;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -160,6 +185,7 @@ const runRespawnedChild = (command, args, env) => {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         process.exit(1);
@@ -168,7 +194,8 @@ const runRespawnedChild = (command, args, env) => {
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = () => {
+  const scheduleParentExit = (signal) => {
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -184,7 +211,7 @@ const runRespawnedChild = (command, args, env) => {
       } catch {
         // Best-effort signal forwarding.
       }
-      scheduleParentExit();
+      scheduleParentExit(signal);
     };
     try {
       process.on(signal, listener);
@@ -196,7 +223,15 @@ const runRespawnedChild = (command, args, env) => {
   child.once("exit", (code, signal) => {
     detach();
     if (signal) {
-      process.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      process.exit(forwardedSignalExitCode ?? 1);
     }
     process.exit(code ?? 1);
   });
@@ -213,9 +248,7 @@ const runRespawnedChild = (command, args, env) => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  const needsDisabledCompileCacheRespawn =
-    isSourceCheckoutLauncher() || shouldSkipCompileCacheForWindowsNode24();
-  if (!needsDisabledCompileCacheRespawn) {
+  if (!isSourceCheckoutLauncher()) {
     return false;
   }
   if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
@@ -238,11 +271,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (
-    isSourceCheckoutLauncher() ||
-    isNodeCompileCacheDisabled() ||
-    shouldSkipCompileCacheForWindowsNode24()
-  ) {
+  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
     return false;
   }
   if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
@@ -268,16 +297,18 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   );
 };
 
+// Codex owns the relay timeout by PID. Keep the launcher as that exact process
+// so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
-  respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded();
+  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (
   !waitingForCompileCacheRespawn &&
   module.enableCompileCache &&
   !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher() &&
-  !shouldSkipCompileCacheForWindowsNode24()
+  !isSourceCheckoutLauncher()
 ) {
   try {
     module.enableCompileCache(resolvePackagedCompileCacheDirectory());
@@ -432,8 +463,7 @@ const hasLauncherContainerTarget = (argv) => {
     return true;
   }
   const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (const arg of args) {
     if (!arg || arg === "--") {
       return false;
     }
@@ -627,8 +657,8 @@ function resolveLauncherCommit() {
     return envCommit;
   }
   return (
-    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
     formatLauncherCommit(readLauncherJson("./package.json")?.githead)
   );

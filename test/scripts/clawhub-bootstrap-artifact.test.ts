@@ -285,6 +285,8 @@ describe("ClawHub bootstrap artifact manifest", () => {
   it("rejects preexisting and symlinked download output roots before fetching", async () => {
     const paths = fixture();
     const downloadOptions = {
+      workflowHeadBranch: "main",
+      workflowRef: "refs/heads/main",
       artifactDigest: "d".repeat(64),
       artifactId: "456",
       artifactName: `clawhub-bootstrap-${targetSha.slice(0, 12)}-123-2`,
@@ -313,6 +315,14 @@ describe("ClawHub bootstrap artifact manifest", () => {
         outputRoot: existingRoot,
       }),
     ).rejects.toThrow("output directory must not already exist");
+    await expect(
+      downloadClawHubBootstrapArtifact({
+        ...downloadOptions,
+        outputRoot: existingRoot,
+        workflowHeadBranch: `release-publish/${workflowSha.slice(0, 12)}-123`,
+        workflowRef: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
+      }),
+    ).rejects.toThrow("output directory must not already exist");
 
     const symlinkTarget = join(paths.artifactRoot, "symlink-target");
     const symlinkRoot = join(paths.artifactRoot, "symlink-output");
@@ -324,6 +334,15 @@ describe("ClawHub bootstrap artifact manifest", () => {
         outputRoot: symlinkRoot,
       }),
     ).rejects.toThrow("output directory must not already exist");
+
+    await expect(
+      downloadClawHubBootstrapArtifact({
+        ...downloadOptions,
+        outputRoot: join(paths.artifactRoot, "unused-output"),
+        workflowHeadBranch: `release-publish/${workflowSha.slice(0, 12)}-123`,
+        workflowRef: `refs/heads/release-publish/${workflowSha.slice(0, 12)}-123`,
+      }),
+    ).rejects.toThrow("workflowRef must be main or the SHA-pinned release-publish tag");
   });
 });
 

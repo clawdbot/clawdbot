@@ -5,6 +5,7 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 export {
   forceMemoryIndex,
@@ -12,11 +13,11 @@ export {
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
-  runQaCli,
   startAgentRun,
   waitForAgentHistoryReply,
   waitForAgentRun,
 } from "./suite-runtime-agent-process.js";
+export { runQaCli } from "./qa-cli-process.js";
 export {
   ensureImageGenerationConfigured,
   extractMediaPathFromText,

@@ -7,6 +7,7 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
     type RichMessageParams = {
       chat_id?: string | number;
       rich_message?: {
+        blocks?: unknown[];
         markdown?: string;
         html?: string;
       };
@@ -23,7 +24,9 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
         sendRichMessage: vi.fn(async (params: RichMessageParams) =>
           sendMessage(
             params.chat_id,
-            params.rich_message?.markdown ?? params.rich_message?.html ?? "",
+            params.rich_message?.blocks
+              ? JSON.stringify(params.rich_message.blocks)
+              : (params.rich_message?.markdown ?? params.rich_message?.html ?? ""),
             Object.fromEntries(
               Object.entries(params).filter(([key]) => key !== "chat_id" && key !== "rich_message"),
             ),

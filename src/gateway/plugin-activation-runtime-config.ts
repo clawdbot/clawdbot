@@ -1,5 +1,6 @@
 // Plugin/channel activation config merge helpers.
 // Carries activation enablement into runtime config without copying stale state.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
@@ -125,6 +126,7 @@ export function resolveGatewayStartupPluginActivationConfig(params: {
   env: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): OpenClawConfig {
   return mergeActivationSectionsIntoRuntimeConfig({
     runtimeConfig: params.runtimeConfig,
@@ -133,6 +135,32 @@ export function resolveGatewayStartupPluginActivationConfig(params: {
       env: params.env,
       ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
       discovery: params.discovery,
+      ambientEnvTriggers: params.ambientEnvTriggers,
     }).config,
   });
+}
+
+/** Re-derives source-owned plugin activation and carries it into one reload candidate. */
+export function resolveGatewayReloadPluginActivationCandidate(params: {
+  runtimeConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}): { runtimeConfig: OpenClawConfig; compareConfig: OpenClawConfig } {
+  const activationConfig = applyPluginAutoEnable({
+    config: params.sourceConfig,
+    env: params.env,
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+    discovery: params.discovery,
+    ambientEnvTriggers: params.ambientEnvTriggers,
+  }).config;
+  return {
+    runtimeConfig: mergeActivationSectionsIntoRuntimeConfig({
+      runtimeConfig: params.runtimeConfig,
+      activationConfig,
+    }),
+    compareConfig: activationConfig,
+  };
 }

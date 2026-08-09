@@ -4,9 +4,8 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { resetAcpActiveTurnsForTests } from "./active-turns.js";
+import { resetAcpActiveTurnsForTests } from "./active-turns.test-support.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
 
@@ -59,17 +58,6 @@ export async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
     await Promise.resolve();
   }
-}
-
-export function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
 }
 
 export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -338,7 +326,6 @@ export function installAcpSessionManagerTestLifecycle(): void {
     } else {
       setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
-    resetHeartbeatWakeStateForTests();
     resetAcpManagerTaskStateForTests();
   });
 }

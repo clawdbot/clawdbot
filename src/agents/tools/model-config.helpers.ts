@@ -28,6 +28,7 @@ import {
   hasRuntimeAvailableProviderAuth,
   resolveProviderEntryApiKeyProfileReference,
   resolveEnvApiKey,
+  type RuntimeProviderAuthLookup,
 } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
@@ -69,12 +70,14 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   // Env-key resolution is config/workspace aware: plugin-provider env candidates
   // come from the metadata snapshot resolved for this config. Non-bundled or
   // config-scoped provider plugins are invisible without it, so a config-blind
   // lookup would wrongly report "no auth" for env-key providers.
   if (
+    !params.runtimeLookup &&
     resolveEnvApiKey(params.provider, undefined, {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -131,6 +134,7 @@ export function hasProviderAuthForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   if (
     hasRuntimeAvailableProviderAuth({
@@ -138,22 +142,27 @@ export function hasProviderAuthForTool(params: {
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       allowPluginSyntheticAuth: false,
+      runtimeLookup: params.runtimeLookup,
+      // Without the store, inline provider keys in billing cooldown would
+      // still be advertised as available to model-backed tools.
+      store: loadAuthStoreForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
     })
   ) {
     return true;
   }
-  if (
-    hasAuthForProvider({
-      provider: params.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    })
-  ) {
-    return true;
-  }
-  return false;
+  return hasAuthForProvider({
+    provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    runtimeLookup: params.runtimeLookup,
+  });
 }
 
 function formatProviderModelRef(provider: string, model: string): string {
@@ -240,7 +249,7 @@ function hasAuthProfileTypeForProvider(params: {
 }
 
 /** Returns whether a provider has direct API-key-capable auth for model-backed tools. */
-export function hasDirectProviderApiKeyAuthForTool(params: {
+function hasDirectProviderApiKeyAuthForTool(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -259,6 +268,14 @@ export function hasDirectProviderApiKeyAuthForTool(params: {
       workspaceDir: params.workspaceDir,
       modelApi: params.modelApi,
       allowPluginSyntheticAuth: false,
+      // Without the store, inline provider keys in billing cooldown would
+      // still be advertised as direct API-key auth for tools.
+      store: loadAuthStoreForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
     })
   ) {
     return true;
@@ -270,6 +287,12 @@ export function hasDirectProviderApiKeyAuthForTool(params: {
     authStore: params.authStore,
     type: "api_key",
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelConfigHelpersTestApi")] = {
+    hasDirectProviderApiKeyAuthForTool,
+  };
 }
 
 function hasCanonicalOpenAiCodexAuthSignal(params: {
@@ -332,17 +355,6 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
   return undefined;
 }
 
-function hasCodexSyntheticMediaRoute(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-}): boolean {
-  return hasRuntimeAvailableProviderAuth({
-    provider: CODEX_MEDIA_PROVIDER_ID,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-}
-
 /** Resolves the implicit OpenAI image slot without letting OAuth-only auth pick direct OpenAI. */
 export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
@@ -350,7 +362,7 @@ export function resolveOpenAiImageMediaCandidate(params: {
   agentDir: string;
   authStore?: AuthProfileStore;
   openAiModel: string;
-  codexModel?: string;
+  resolveCodexMediaRoute?: () => { model: string } | undefined;
 }): OpenAiImageMediaCandidateDecision {
   const openAiModel = params.openAiModel.trim();
   if (!openAiModel) {
@@ -372,15 +384,13 @@ export function resolveOpenAiImageMediaCandidate(params: {
     };
   }
 
-  const codexModel = params.codexModel?.trim();
-  // Codex's bundled synthetic marker only proves the app-server route exists.
-  // Require canonical OpenAI subscription-style auth too so fresh installs do
-  // not route to Codex media just because the bundled plugin is present.
-  if (
-    codexModel &&
-    hasCanonicalOpenAiCodexAuthSignal(params) &&
-    hasCodexSyntheticMediaRoute(params)
-  ) {
+  // Check canonical subscription auth before resolving plugin capability so a
+  // fresh install cannot route there from bundled-plugin presence alone.
+  if (!hasCanonicalOpenAiCodexAuthSignal(params)) {
+    return { kind: "drop" };
+  }
+  const codexModel = params.resolveCodexMediaRoute?.()?.model.trim();
+  if (codexModel) {
     return {
       kind: "substitute",
       provider: CODEX_MEDIA_PROVIDER_ID,

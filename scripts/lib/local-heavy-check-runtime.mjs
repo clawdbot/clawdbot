@@ -6,6 +6,7 @@ import path from "node:path";
 
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
+const DEFAULT_LOCAL_GO_MAX_PROCS = 2;
 const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
 const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -36,6 +37,67 @@ export function resolveLocalHeavyCheckEnv(env = process.env) {
     ...env,
     OPENCLAW_LOCAL_CHECK: "1",
   };
+}
+
+/** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
+export function resolveRepoToolBinPath(
+  toolName,
+  { cwd = process.cwd(), fileExists = fs.existsSync, resolveCommonDir = resolveGitCommonDir } = {},
+) {
+  const localPath = path.resolve(cwd, "node_modules", ".bin", toolName);
+  if (fileExists(localPath)) {
+    return localPath;
+  }
+
+  const commonDir = resolveCommonDir(cwd);
+  if (!commonDir || path.basename(commonDir) !== ".git") {
+    return localPath;
+  }
+
+  // Linked worktrees share the primary checkout's .git directory. Its parent
+  // owns the installed toolchain that dependency-less worktrees can reuse.
+  const primaryPath = path.join(path.dirname(commonDir), "node_modules", ".bin", toolName);
+  return fileExists(primaryPath) ? primaryPath : localPath;
+}
+
+/** Link a dependency-less worktree to the primary checkout toolchain selected above. */
+export function ensureRepoToolNodeModulesLink(
+  toolPath,
+  {
+    cwd = process.cwd(),
+    fileExists = fs.existsSync,
+    resolveCommonDir = resolveGitCommonDir,
+    symlink = fs.symlinkSync,
+    platform = process.platform,
+  } = {},
+) {
+  const localNodeModules = path.resolve(cwd, "node_modules");
+  if (fileExists(localNodeModules)) {
+    return localNodeModules;
+  }
+
+  const commonDir = resolveCommonDir(cwd);
+  if (!commonDir || path.basename(commonDir) !== ".git") {
+    return null;
+  }
+
+  const primaryNodeModules = path.join(path.dirname(commonDir), "node_modules");
+  const toolNodeModules = path.dirname(path.dirname(path.resolve(toolPath)));
+  if (toolNodeModules !== path.resolve(primaryNodeModules) || !fileExists(primaryNodeModules)) {
+    return null;
+  }
+
+  try {
+    // Match run-vitest.mjs's hydrated-toolchain behavior: keep one stable link
+    // so compilers can resolve imports from worktree source paths.
+    symlink(primaryNodeModules, localNodeModules, platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    // Another local runner may have installed the same stable link concurrently.
+    if (!fileExists(localNodeModules)) {
+      throw error;
+    }
+  }
+  return localNodeModules;
 }
 
 function hasFlag(args, name) {
@@ -76,10 +138,16 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
     );
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources, "auto")) {
+  const resolvedHostResources = resolveHostResources(hostResources);
+  if (shouldThrottleLocalHeavyChecks(nextEnv, resolvedHostResources, "auto")) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
 
+    if (!nextEnv.GOMAXPROCS) {
+      nextEnv.GOMAXPROCS = String(
+        Math.min(DEFAULT_LOCAL_GO_MAX_PROCS, Math.max(1, resolvedHostResources.logicalCpuCount)),
+      );
+    }
     if (!nextEnv.GOGC) {
       nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
     }

@@ -379,11 +379,12 @@ openclaw_e2e_terminate_gateways() {
 openclaw_e2e_start_mock_openai() { openclaw_e2e_start_tracked_process "$2" env "MOCK_PORT=$1" node scripts/e2e/mock-openai-server.mjs; }
 openclaw_e2e_wait_mock_openai() {
   local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
+  local base_url="${4:-http://127.0.0.1:${port}}"
   for _ in $(seq 1 "$attempts"); do
-    openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms" && return 0
+    openclaw_e2e_probe_http "${base_url}/health" ok "$timeout_ms" && return 0
     sleep 0.1
   done
-  openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms"
+  openclaw_e2e_probe_http "${base_url}/health" ok "$timeout_ms"
 }
 openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }

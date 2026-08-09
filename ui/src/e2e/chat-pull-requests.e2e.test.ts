@@ -1,6 +1,8 @@
 // Control UI tests cover session pull request chips above the chat composer.
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,22 +17,48 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
-const openBrowsers = new Set<Browser>();
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
+const openContexts = new Set<BrowserContext>();
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  openBrowsers.add(browser);
-  return browser.newContext({
+  const context = await browser.newContext({
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 800, width: 1180 },
   });
+  openContexts.add(context);
+  return context;
 }
 
-async function closeBrowsers(): Promise<void> {
-  await Promise.all([...openBrowsers].map((browser) => browser.close().catch(() => {})));
-  openBrowsers.clear();
+async function closeContexts(): Promise<void> {
+  await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
+  openContexts.clear();
+}
+
+async function waitForWatchedSessionKey(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+): Promise<string> {
+  let watchedKey = "";
+  await expect
+    .poll(async () => {
+      const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+      for (const request of requests.toReversed()) {
+        const params = request.params;
+        if (!params || typeof params !== "object" || !("sessionKeys" in params)) {
+          continue;
+        }
+        const keys = (params as { sessionKeys?: unknown }).sessionKeys;
+        if (Array.isArray(keys) && typeof keys[0] === "string") {
+          watchedKey = keys[0];
+          break;
+        }
+      }
+      return watchedKey;
+    })
+    .not.toBe("");
+  return watchedKey;
 }
 
 describeControlUiE2e("session pull request chips", () => {
@@ -38,23 +66,37 @@ describeControlUiE2e("session pull request chips", () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
-    await closeBrowsers();
+    await closeContexts();
+    await browser?.close();
     await server?.close();
   });
 
-  afterEach(closeBrowsers);
+  afterEach(closeContexts);
 
   it("pins detected PR chips above the composer with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "controlUi.sessionPullRequests"],
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
-        "controlUi.sessionPullRequests": {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    const watchedKey = await waitForWatchedSessionKey(gateway);
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
           pullRequests: [
             {
               number: 103469,
@@ -89,10 +131,10 @@ describeControlUiE2e("session pull request chips", () => {
             },
           ],
           rateLimited: true,
+          status: "rate-limited",
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
 
     // Three detected PRs collapse to two chips; merged history hides first.
     const chips = page.locator(".chat-pr");
@@ -156,5 +198,65 @@ describeControlUiE2e("session pull request chips", () => {
     await expect
       .poll(() => chips.first().locator(".chat-pr__number").textContent())
       .toBe("#103469");
+  });
+
+  it("offers a Create PR row with the stale warning while rate limited pre-PR", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    const watchedKey = await waitForWatchedSessionKey(gateway);
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
+          pullRequests: [],
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "claude/cloud-workers-live-events",
+            additions: 2819,
+            deletions: 205,
+            createUrl:
+              "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+          },
+          rateLimited: true,
+          status: "rate-limited",
+        },
+      },
+    });
+
+    const row = page.locator('.chat-pr[data-state="branch"]');
+    await expect.poll(() => row.count()).toBe(1);
+    await expect.poll(() => row.locator(".chat-pr__repo").textContent()).toBe("openclaw");
+    await expect
+      .poll(() => row.locator(".chat-pr__branch").textContent())
+      .toBe("claude/cloud-workers-live-events");
+    // Locale-formatted diff stats, sized like the PR the branch would open.
+    await expect.poll(() => row.locator(".chat-pr__additions").textContent()).toBe("+2,819");
+    await expect.poll(() => row.locator(".chat-pr__deletions").textContent()).toBe("−205");
+    // While rate limited "no PR found" is unreliable, so the warning shows.
+    await expect.poll(() => row.locator(".chat-pr__warning").count()).toBe(1);
+    const create = row.locator(".chat-pr__create");
+    await expect.poll(() => create.textContent()).toContain("Create PR");
+    await expect
+      .poll(() => create.getAttribute("href"))
+      .toBe("https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events");
+    // No dismiss control: the row reflects the checkout itself.
+    await expect.poll(() => row.locator(".chat-pr__dismiss").count()).toBe(0);
+
+    // The row shares the composer's centered width; it is part of the input
+    // stack, not a full-pane banner.
+    const rowBox = await page.locator(".chat-prs").boundingBox();
+    const composerBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+    expect(rowBox && composerBox).toBeTruthy();
+    if (rowBox && composerBox) {
+      expect(Math.abs(rowBox.width - composerBox.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(rowBox.x - composerBox.x)).toBeLessThanOrEqual(1);
+    }
   });
 });

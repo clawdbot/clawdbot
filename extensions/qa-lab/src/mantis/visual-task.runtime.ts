@@ -58,7 +58,7 @@ export type MantisVisualDriverOptions = {
   visionTimeoutMs?: number;
 };
 
-export type MantisVisualTaskResult = {
+type MantisVisualTaskResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;
@@ -818,3 +818,4 @@ export async function runMantisVisualTask(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

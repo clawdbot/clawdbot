@@ -15,6 +15,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { collectSlackCursorPages } from "../cursor-pages.js";
 import {
   allowListMatches,
   normalizeAllowList,
@@ -47,7 +48,7 @@ type SlackSystemEventAuthorization =
       channelName?: string;
     };
 
-let slackChannelMembersCache = new WeakMap<
+const slackChannelMembersCache = new WeakMap<
   SlackMonitorContext,
   Map<string, SlackChannelMembersCacheEntry>
 >();
@@ -203,34 +204,22 @@ export async function resolveSlackEffectiveAllowFrom(
   return normalizeAllowListLower([...base, ...storeAllowFrom]);
 }
 
-export function clearSlackAllowFromCacheForTest(): void {
-  slackChannelMembersCache = new WeakMap<
-    SlackMonitorContext,
-    Map<string, SlackChannelMembersCacheEntry>
-  >();
-}
-
 async function fetchSlackChannelMemberIds(
   ctx: SlackMonitorContext,
   channelId: string,
   eventScope?: SlackEventScope,
 ): Promise<Set<string>> {
-  const members = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const response = await (eventScope?.client ?? ctx.app.client).conversations.members({
-      token: ctx.botToken,
-      channel: channelId,
-      limit: 999,
-      ...(cursor ? { cursor } : {}),
-    });
-    for (const member of normalizeAllowListLower(response.members)) {
-      members.add(member);
-    }
-    const nextCursor = response.response_metadata?.next_cursor?.trim();
-    cursor = nextCursor ? nextCursor : undefined;
-  } while (cursor);
-  return members;
+  const members = await collectSlackCursorPages({
+    fetchPage: (cursor) =>
+      (eventScope?.client ?? ctx.app.client).conversations.members({
+        token: ctx.botToken,
+        channel: channelId,
+        limit: 999,
+        ...(cursor ? { cursor } : {}),
+      }),
+    collectPageItems: (response) => normalizeAllowListLower(response.members),
+  });
+  return new Set(members);
 }
 
 async function resolveSlackChannelMemberIds(

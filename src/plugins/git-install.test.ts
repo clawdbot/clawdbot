@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
@@ -544,7 +545,10 @@ describe("installPluginFromGitSpec", () => {
       }
 
       const cloneArgv = commandArgvAt(0);
-      const cloneDest = cloneArgv[cloneArgv.length - 1];
+      const cloneDest = expectDefined(
+        cloneArgv[cloneArgv.length - 1],
+        "cloneArgv[cloneArgv.length - 1] test invariant",
+      );
       const persistentRepoDir = expectedGitRepoDir({
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
@@ -593,11 +597,13 @@ describe("installPluginFromGitSpec", () => {
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
       });
-      expect(path.dirname(targetPrefix)).toBe(await fs.realpath(path.dirname(persistentRepoDir)));
+      expect(path.dirname(expectDefined(targetPrefix, "targetPrefix test invariant"))).toBe(
+        await fs.realpath(path.dirname(persistentRepoDir)),
+      );
       // withTempDir roots fallback staging at resolvePreferredOpenClawTmpDir(), which
       // prefers /tmp/openclaw and only degrades to a uid-scoped os.tmpdir path when
       // that is unsafe. Recompute it here so the assertion holds on every host.
-      expect(path.dirname(fallbackPrefix)).toBe(
+      expect(path.dirname(expectDefined(fallbackPrefix, "fallbackPrefix test invariant"))).toBe(
         await fs.realpath(resolvePreferredOpenClawTmpDir()),
       );
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
@@ -631,7 +637,12 @@ describe("installPluginFromGitSpec", () => {
 
       expect(result.ok).toBe(true);
       const cloneArgv = commandArgvAt(0);
-      const cloneDest = path.resolve(cloneArgv[cloneArgv.length - 1]);
+      const cloneDest = path.resolve(
+        expectDefined(
+          cloneArgv[cloneArgv.length - 1],
+          "cloneArgv[cloneArgv.length - 1] test invariant",
+        ),
+      );
       expect(path.relative(gitDir, cloneDest).split(path.sep)[0]).toBe("..");
       await expect(fs.access(gitDir)).rejects.toThrow();
     } finally {

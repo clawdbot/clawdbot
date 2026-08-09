@@ -8,6 +8,8 @@ const FULL_RELEASE_WORKFLOW = "Full Release Validation";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const PINNED_BRANCH_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
+const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
+const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 
 function normalizeWorkflowPathRef(ref) {
   if (!ref || ref.startsWith("refs/")) {
@@ -144,14 +146,22 @@ export function validateFullReleaseValidationEvidence({
   }
   if (Object.hasOwn(manifest, "evidenceReuse")) {
     const reuse = manifest.evidenceReuse;
+    const exactTarget =
+      reuse?.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
+      reuse.evidenceSha === expectedTargetSha &&
+      Array.isArray(reuse.changedPaths) &&
+      reuse.changedPaths.length === 0;
+    const changelogOnly =
+      reuse?.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
+      reuse.evidenceSha !== expectedTargetSha &&
+      Array.isArray(reuse.changedPaths) &&
+      reuse.changedPaths.length === 1 &&
+      reuse.changedPaths[0] === "CHANGELOG.md";
     if (
       !reuse ||
       typeof reuse !== "object" ||
       Array.isArray(reuse) ||
-      reuse.policy !== "exact-target-full-validation-v1" ||
-      reuse.evidenceSha !== expectedTargetSha ||
-      !Array.isArray(reuse.changedPaths) ||
-      reuse.changedPaths.length !== 0 ||
+      (!exactTarget && !changelogOnly) ||
       !/^[1-9][0-9]*$/u.test(String(reuse.runId ?? "")) ||
       !/^[1-9][0-9]*$/u.test(String(reuse.selectedRunId ?? ""))
     ) {
@@ -170,8 +180,11 @@ export function validateFullReleaseValidationEvidence({
       strictEvidence.valid !== true ||
       String(strictEvidence.current?.runId ?? "") !== String(expectedRunId) ||
       strictEvidence.current?.targetSha !== expectedTargetSha ||
-      strictEvidence.root?.targetSha !== expectedTargetSha ||
-      strictEvidence.evidenceReuse?.evidenceSha !== expectedTargetSha ||
+      strictEvidence.root?.targetSha !== reuse.evidenceSha ||
+      strictEvidence.evidenceReuse?.evidenceSha !== reuse.evidenceSha ||
+      strictEvidence.evidenceReuse?.policy !== reuse.policy ||
+      JSON.stringify(strictEvidence.evidenceReuse?.changedPaths) !==
+        JSON.stringify(reuse.changedPaths) ||
       String(strictEvidence.evidenceReuse?.rootRunId ?? "") !== String(reuse.runId) ||
       String(strictEvidence.evidenceReuse?.selectedRunId ?? "") !== String(reuse.selectedRunId) ||
       strictEvidence.conclusions?.allRequiredSucceeded !== true

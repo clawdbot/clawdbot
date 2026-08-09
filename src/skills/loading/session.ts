@@ -1,15 +1,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import ignore from "ignore";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
-import { parseFrontmatter } from "../../agents/utils/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
+import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -18,13 +17,6 @@ const MAX_NAME_LENGTH = 64;
 
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
-
-export interface SkillFrontmatter {
-  name?: string;
-  description?: string;
-  "disable-model-invocation"?: boolean;
-  [key: string]: unknown;
-}
 
 export interface Skill {
   name: string;
@@ -37,7 +29,7 @@ export interface Skill {
   disableModelInvocation: boolean;
 }
 
-export interface LoadSkillsResult {
+interface LoadSkillsResult {
   skills: Skill[];
   diagnostics: ResourceDiagnostic[];
 }
@@ -83,13 +75,6 @@ function validateDescription(description: string | undefined): string[] {
   return errors;
 }
 
-export interface LoadSkillsFromDirOptions {
-  /** Directory to scan for skills */
-  dir: string;
-  /** Source identifier for these skills */
-  source: string;
-}
-
 function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
   switch (source) {
     case "user":
@@ -114,19 +99,6 @@ function createSkillSourceInfo(filePath: string, baseDir: string, source: string
   }
 }
 
-/**
- * Load skills from a directory.
- *
- * Discovery rules:
- * - if a directory contains SKILL.md, treat it as a skill root and do not recurse further
- * - otherwise, load direct .md children in the root
- * - recurse into subdirectories to find SKILL.md
- */
-export function loadSkillsFromDir(options: LoadSkillsFromDirOptions): LoadSkillsResult {
-  const { dir, source } = options;
-  return loadSkillsFromDirInternal(dir, source, true);
-}
-
 function loadSkillsFromDirInternal(
   dir: string,
   source: string,
@@ -142,8 +114,9 @@ function loadSkillsFromDirInternal(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -242,7 +215,8 @@ function loadSkillFromFile(
 
   try {
     const rawContent = readFileSync(filePath, "utf-8");
-    const { frontmatter } = parseFrontmatter<SkillFrontmatter>(rawContent);
+    const frontmatter = parseFrontmatter(rawContent);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
     const parentDirName = basename(skillDir);
 
@@ -275,7 +249,7 @@ function loadSkillFromFile(
         promptVersion: computeSkillPromptVersion(rawContent),
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
-        disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+        disableModelInvocation: invocation.disableModelInvocation,
       },
       diagnostics,
     };
@@ -299,7 +273,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
   return formatSkillContractForPrompt(visibleSkills);
 }
 
-export interface LoadSkillsOptions {
+interface LoadSkillsOptions {
   /** Working directory for project-local skills. */
   cwd: string;
   /** Agent config directory for global skills. */

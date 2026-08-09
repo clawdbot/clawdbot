@@ -1,15 +1,37 @@
 // Covers source-delivery target matching, message-tool ownership plans, and
 // fallback satisfaction outcomes.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 vi.mock("./target-normalization.js", () => ({
   normalizeTargetForProvider: (_provider: string, raw?: string) => raw?.trim(),
 }));
-import {
-  createSourceDeliveryPlan,
-  resolveSourceDeliveryOutcome,
-  sourceDeliveryTargetsMatch,
-} from "./source-delivery-plan.js";
+import { createSourceDeliveryPlan, resolveSourceDeliveryOutcome } from "./source-delivery-plan.js";
+
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry());
+});
+
+function isVerifiedSourceDeliveryTarget(
+  target: NonNullable<
+    Parameters<typeof resolveSourceDeliveryOutcome>[1]["messageToolSentTargets"]
+  >[number],
+  delivery: NonNullable<Parameters<typeof createSourceDeliveryPlan>[0]["target"]>,
+): boolean {
+  const plan = createSourceDeliveryPlan({
+    owner: "message_tool_then_direct_fallback",
+    reason: "cron_announce",
+    target: delivery,
+  });
+  return resolveSourceDeliveryOutcome(plan, {
+    didSendViaMessageTool: true,
+    messageToolSentTargets: [target],
+  }).verifiedMessageToolDelivery;
+}
 
 describe("source delivery plan", () => {
   it("projects message-tool-owned delivery to existing source reply and message tool fields", () => {
@@ -208,76 +230,143 @@ describe("source delivery plan", () => {
 
   it("matches source targets through the same provider normalization used by delivery", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "message", to: "channel:C1" },
         { channel: "slack", to: "channel:C1" },
       ),
     ).toBe(true);
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "discord", to: "channel:C1" },
         { channel: "slack", to: "channel:C1" },
       ),
     ).toBe(false);
   });
 
-  it("matches same-kind delivery target prefixes without normalizing provider-owned IDs", () => {
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "slack", to: "Channel: C1" },
-        { channel: "slack", to: "channel:C1" },
-      ),
-    ).toBe(true);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "slack", to: "channel:C2" },
-        { channel: "slack", to: "channel:C1" },
-      ),
-    ).toBe(false);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "slack", to: "channel:c1" },
-        { channel: "slack", to: "channel:C1" },
-      ),
-    ).toBe(true);
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "mattermost", to: "channel: abc" },
-        { channel: "mattermost", to: "channel:ABC" },
-      ),
-    ).toBe(false);
-  });
+  it.each([
+    {
+      name: "case-sensitive metadata",
+      channel: "exact-chat",
+      comparison: "case-sensitive" as const,
+      targetTo: "channel:abc",
+      deliveryTo: "channel:ABC",
+      expected: false,
+    },
+    {
+      name: "lowercase metadata",
+      channel: "folded-chat",
+      comparison: "lowercase" as const,
+      targetTo: "Channel: c1",
+      deliveryTo: "channel:C1",
+      expected: true,
+    },
+    {
+      name: "undeclared generic normalization",
+      channel: "generic-chat",
+      comparison: undefined,
+      targetTo: "channel:abc",
+      deliveryTo: "channel:ABC",
+      expected: false,
+    },
+  ])(
+    "uses $name for prefixed target ids",
+    ({ channel, comparison, targetTo, deliveryTo, expected }) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: channel,
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: channel, label: channel }),
+              messaging: comparison ? { targetIdComparison: comparison } : {},
+            },
+          },
+        ]),
+      );
+
+      expect(
+        isVerifiedSourceDeliveryTarget(
+          { provider: channel, to: targetTo },
+          { channel, to: deliveryTo },
+        ),
+      ).toBe(expected);
+    },
+  );
 
   it("matches threaded delivery only with explicit or supported implicit thread evidence", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "telegram", to: "-100:topic:462" },
         { channel: "telegram", to: "-100", threadId: 462 },
       ),
     ).toBe(true);
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "telegram", to: "-100" },
         { channel: "telegram", to: "-100", threadId: 462 },
       ),
     ).toBe(false);
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "telegram", to: "-100", threadImplicit: true },
         { channel: "telegram", to: "-100", threadId: 462 },
       ),
     ).toBe(true);
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "telegram", to: "-100", threadImplicit: true, threadSuppressed: true },
         { channel: "telegram", to: "-100", threadId: 462 },
       ),
     ).toBe(false);
     expect(
-      sourceDeliveryTargetsMatch(
+      isVerifiedSourceDeliveryTarget(
         { provider: "telegram", to: "-100", threadId: "111" },
         { channel: "telegram", to: "-100", threadId: 462 },
       ),
     ).toBe(false);
   });
+
+  it.each([
+    [
+      "missing destination recipient",
+      { provider: "telegram", to: "123456" },
+      { channel: "telegram", to: undefined },
+      false,
+    ],
+    [
+      "missing destination channel",
+      { provider: "telegram", to: "123456" },
+      { channel: undefined, to: "123456" },
+      false,
+    ],
+    [
+      "missing observed recipient",
+      { provider: "telegram", to: undefined },
+      { channel: "telegram", to: "123456" },
+      false,
+    ],
+    [
+      "different account owners",
+      { provider: "telegram", to: "123456", accountId: "bot-a" },
+      { channel: "telegram", to: "123456", accountId: "bot-b" },
+      false,
+    ],
+    [
+      "inferred message-tool account",
+      { provider: "message", to: "123456" },
+      { channel: "telegram", to: "123456", accountId: "bot-a" },
+      true,
+    ],
+    [
+      "matching account owners",
+      { provider: "telegram", to: "123456", accountId: "bot-a" },
+      { channel: "telegram", to: "123456", accountId: "bot-a" },
+      true,
+    ],
+  ] as const)(
+    "verifies source delivery through its public outcome: %s",
+    (_name, observed, destination, verified) => {
+      expect(isVerifiedSourceDeliveryTarget(observed, destination)).toBe(verified);
+    },
+  );
 });

@@ -1,6 +1,7 @@
 // Gateway log-tail helpers for status diagnostics.
 // Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
+import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -99,22 +100,18 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     }
 
     // "[openai] Token refresh failed: 401 { ...json... }"
-    const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
+    const tokenRefresh = line.match(
+      /^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)(?:\s+(\{.*))?\s*$/,
+    );
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
       const status = tokenRefresh[2] ?? "unknown";
       const block = consumeJsonBlock(lines, i);
       if (block) {
         i = block.endIndex;
-        const parsed = (() => {
-          try {
-            return JSON.parse(block.json) as {
-              error?: { code?: string; message?: string };
-            };
-          } catch {
-            return null;
-          }
-        })();
+        const parsed = (safeParseJson(block.json) ?? null) as {
+          error?: { code?: string; message?: string };
+        } | null;
         const code = normalizeOptionalString(parsed?.error?.code) ?? null;
         const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
         const refreshReason = classifyOAuthRefreshFailureReason(msg ?? "");

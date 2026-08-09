@@ -8,7 +8,5 @@ export { convertToLlm } from "../../../packages/agent-core/src/harness/messages.
 
 export type {
   BashExecutionMessage,
-  BranchSummaryMessage,
-  CompactionSummaryMessage,
   CustomMessage,
 } from "../../../packages/agent-core/src/harness/messages.js";

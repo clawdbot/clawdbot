@@ -14,11 +14,16 @@ function downloadTextFile(filename: string, content: string, type = "text/plain"
   URL.revokeObjectURL(url);
 }
 
-function csvEscape(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replaceAll('"', '""')}"`;
+function neutralizeSpreadsheetFormulaCell(value: string): string {
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) ? `'${value}` : value;
+}
+
+function csvEscape(value: string, neutralizeFormulas = true): string {
+  const safeValue = neutralizeFormulas ? neutralizeSpreadsheetFormulaCell(value) : value;
+  if (/[",\r\n]/.test(safeValue)) {
+    return `"${safeValue.replaceAll('"', '""')}"`;
   }
-  return value;
+  return safeValue;
 }
 
 function toCsvRow(values: Array<string | number | undefined | null>): string {
@@ -27,7 +32,7 @@ function toCsvRow(values: Array<string | number | undefined | null>): string {
       if (value === undefined || value === null) {
         return "";
       }
-      return csvEscape(String(value));
+      return csvEscape(String(value), typeof value === "string");
     })
     .join(",");
 }
@@ -136,9 +141,12 @@ const buildQuerySuggestions = (
     return [];
   }
   const tokens = trimmed.length ? trimmed.split(/\s+/) : [];
-  const lastToken = tokens.length ? tokens[tokens.length - 1] : "";
-  const [rawKey, rawValue] = lastToken.includes(":")
-    ? [lastToken.slice(0, lastToken.indexOf(":")), lastToken.slice(lastToken.indexOf(":") + 1)]
+  const lastQueryWord = tokens.at(-1) ?? "";
+  const [rawKey, rawValue] = lastQueryWord.includes(":")
+    ? [
+        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
+        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
+      ]
     : ["", ""];
 
   const key = normalizeLowercaseStringOrEmpty(rawKey);

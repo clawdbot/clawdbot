@@ -2,13 +2,12 @@
  * Ref-index store — SQLite KV-backed store for message reference index.
  */
 
-import { formatErrorMessage } from "../utils/format.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { debugError } from "../utils/log.js";
 import { buildQQBotStateKey, openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 import type { RefAttachmentSummary, RefIndexEntry } from "./types.js";
 
-// Re-export types and format function for convenience.
-export type { RefIndexEntry, RefAttachmentSummary } from "./types.js";
+// Re-export the formatter for convenience.
 export { formatRefEntryForAgent } from "./format-ref-entry.js";
 
 const MAX_ENTRIES = 50000;

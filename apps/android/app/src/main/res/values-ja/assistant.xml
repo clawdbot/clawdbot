@@ -1,0 +1,7 @@
+<resources>
+    <string-array name="ask_openclaw_query_patterns">
+        <item>"OpenClaw に %1$s を尋ねる"</item>
+        <item>"OpenClaw に %1$s するよう伝える"</item>
+        <item>"OpenClaw を開いて %1$s を尋ねる"</item>
+    </string-array>
+</resources>

@@ -1,6 +1,7 @@
 // Voice Call plugin module implements twilio behavior.
 import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "../http-headers.js";
@@ -117,23 +118,27 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   /**
-   * Delete stored TwiML for a call, addressed by Twilio's provider call SID.
-   *
-   * This is used when we only have `providerCallId` (e.g. hangup).
+   * Release all process-local metadata owned by one Twilio call.
+   * Terminal webhooks can be replayed, so this must stay idempotent.
    */
-  private deleteStoredTwimlForProviderCall(providerCallId: string): void {
+  private releaseCallState(providerCallId: string, callId?: string): void {
     const webhookUrl = this.callWebhookUrls.get(providerCallId);
-    if (!webhookUrl) {
-      return;
+    let resolvedCallId = callId;
+    if (!resolvedCallId && webhookUrl) {
+      try {
+        resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
+      } catch {
+        // The provider only stores URLs it constructed, but cleanup must still
+        // release provider-keyed state if a malformed value is injected.
+      }
     }
-
-    const callIdMatch = webhookUrl.match(/callId=([^&]+)/);
-    if (!callIdMatch) {
-      return;
+    if (resolvedCallId) {
+      this.deleteStoredTwiml(resolvedCallId);
     }
-
-    this.deleteStoredTwiml(callIdMatch[1]);
+    this.callWebhookUrls.delete(providerCallId);
+    this.callStreamMap.delete(providerCallId);
     this.streamAuthTokens.delete(providerCallId);
+    this.activeStreamCalls.delete(providerCallId);
   }
 
   constructor(config: TwilioProviderConfig, options: TwilioProviderOptions = {}) {
@@ -386,12 +391,9 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const endReason = mapProviderStatusToEndReason(callStatus);
     if (endReason) {
-      this.streamAuthTokens.delete(callSid);
-      this.activeStreamCalls.delete(callSid);
-      if (callIdOverride) {
-        this.deleteStoredTwiml(callIdOverride);
-      }
-      return { ...baseEvent, type: "call.ended", reason: endReason };
+      const event = { ...baseEvent, type: "call.ended" as const, reason: endReason };
+      this.releaseCallState(callSid, callIdOverride);
+      return event;
     }
 
     return null;
@@ -591,17 +593,12 @@ export class TwilioProvider implements VoiceCallProvider {
    * Hang up a call via Twilio API.
    */
   async hangupCall(input: HangupCallInput): Promise<void> {
-    this.deleteStoredTwimlForProviderCall(input.providerCallId);
-
-    this.callWebhookUrls.delete(input.providerCallId);
-    this.streamAuthTokens.delete(input.providerCallId);
-    this.activeStreamCalls.delete(input.providerCallId);
-
     await this.apiRequest(
       `/Calls/${input.providerCallId}.json`,
       { Status: "completed" },
       { allowNotFound: true },
     );
+    this.releaseCallState(input.providerCallId, input.callId);
   }
 
   /**
@@ -766,9 +763,14 @@ export class TwilioProvider implements VoiceCallProvider {
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
         if (waitMs > 0) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, Math.ceil(waitMs));
-          });
+          try {
+            await sleepWithAbort(Math.ceil(waitMs), signal);
+          } catch (error) {
+            if (!signal.aborted) {
+              throw error;
+            }
+            break;
+          }
         }
         nextChunkDueAt += CHUNK_DELAY_MS;
         if (signal.aborted) {

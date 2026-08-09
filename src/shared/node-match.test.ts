@@ -1,18 +1,27 @@
 // Node match tests cover node selection from names, ids, and address hints.
 import { describe, expect, it } from "vitest";
-import { normalizeNodeKey, resolveNodeIdFromCandidates } from "./node-match.js";
+import { resolveNodeIdFromCandidates } from "./node-match.js";
 
 describe("shared/node-match", () => {
   it("normalizes node keys by lowercasing and collapsing separators", () => {
-    expect(normalizeNodeKey(" Mac Studio! ")).toBe("mac-studio");
-    expect(normalizeNodeKey("---PI__Node---")).toBe("pi-node");
-    expect(normalizeNodeKey("工作站 01")).toBe("工作站-01");
-    expect(normalizeNodeKey("Cafe\u0301 01")).toBe("café-01");
-    expect(normalizeNodeKey("किताब")).toBe("किताब");
-    expect(normalizeNodeKey("Mac ❤️ Studio")).toBe("mac-studio");
-    expect(normalizeNodeKey("Node 1️⃣")).toBe("node-1");
-    expect(normalizeNodeKey("❤️")).toBe("");
-    expect(normalizeNodeKey("###")).toBe("");
+    for (const [displayName, query] of [
+      [" Mac Studio! ", "mac-studio"],
+      ["---PI__Node---", "pi node"],
+      ["工作站 01", "工作站-01"],
+      ["Cafe\u0301 01", "café-01"],
+      ["किताब", "किताब"],
+      ["Mac ❤️ Studio", "mac studio"],
+      ["Node 1️⃣", "node 1"],
+    ] as const) {
+      expect(resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], query)).toBe(
+        "node-1",
+      );
+    }
+    for (const displayName of ["❤️", "###"]) {
+      expect(() =>
+        resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], "named-node"),
+      ).toThrow(/unknown node/);
+    }
   });
 
   it("resolves unique matches and prefers a unique connected node", () => {

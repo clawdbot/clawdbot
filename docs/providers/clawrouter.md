@@ -54,8 +54,8 @@ you only need an issued ClawRouter credential.
     Use the returned model refs exactly as shown. They retain the upstream
     namespace, such as `clawrouter/openai/gpt-5.5`,
     `clawrouter/anthropic/claude-sonnet-4-6`, or
-    `clawrouter/google/gemini-3.5-flash`. If `agents.defaults.models` is an
-    allowlist in your configuration, add each selected ClawRouter ref to it.
+    `clawrouter/google/gemini-3.5-flash`. If `agents.defaults.modelPolicy.allow`
+    is configured, add each selected ClawRouter ref to it.
 
   </Step>
   <Step title="Select a model">
@@ -216,8 +216,11 @@ transport to use, so you never install every upstream company's auth plugin.
 | `llm.stream` + streaming `google.generate_content` route | `google-generative-ai` |
 
 The plugin also applies the matching replay and tool-schema policies for those
-families (OpenAI/DeepSeek/Gemini tool-schema compat; native Anthropic and
-Google Gemini replay policies). A catalog provider exposing only an
+families (OpenAI/DeepSeek/Gemini/Perplexity tool-schema compat; native
+Anthropic and Google Gemini replay policies). Perplexity models get a strict
+schema rewrite: `patternProperties` and `additionalProperties` are removed and
+every object schema declares `properties`, because Perplexity rejects tool
+schemas without them. A catalog provider exposing only an
 unsupported request format is intentionally not advertised as an OpenClaw
 text model. Normalize those providers to one of the supported contracts in
 ClawRouter rather than sending an incompatible payload.
@@ -249,7 +252,7 @@ the same ClawRouter policy can change the remaining percentage.
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | No ClawRouter models                     | Confirm the plugin is enabled and allowed by `plugins.allow`, then check that the credential is active and grants at least one ready provider. |
 | A configured ClawRouter model is missing | Inspect its `/v1/catalog` capability and route support. Unsupported transport contracts are intentionally filtered.                            |
-| `Unknown model: clawrouter/...`          | Add the exact catalog ref to `agents.defaults.models` when that configuration map is being used as an allowlist.                               |
+| Model override rejected by policy        | Add the exact catalog ref or `clawrouter/*` to `agents.defaults.modelPolicy.allow`.                                                            |
 | `401` or `403` from catalog or usage     | Reissue or re-scope the ClawRouter credential; OpenClaw does not fall back to upstream provider keys.                                          |
 | Model call fails after discovery         | Check the provider connection and upstream health in ClawRouter, then retry after its readiness state recovers.                                |
 | Usage has totals but no percentage       | The policy is unmetered; add a monthly budget in ClawRouter to expose a percentage window.                                                     |

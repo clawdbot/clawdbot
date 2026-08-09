@@ -10,8 +10,7 @@ import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
-import { resolveProfile } from "./config.js";
+import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
   BrowserProfileUnavailableError,
@@ -44,14 +43,12 @@ import type {
 export type {
   BrowserRouteContext,
   BrowserServerState,
-  BrowserTab,
   ProfileContext,
-  ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
 
 /** Lists configured and runtime-known Browser profile names without duplicates. */
-export function listKnownProfileNames(state: BrowserServerState): string[] {
+function listKnownProfileNames(state: BrowserServerState): string[] {
   const names = new Set(Object.keys(state.resolved.profiles));
   for (const name of state.profiles.keys()) {
     names.add(name);
@@ -172,14 +169,14 @@ function createProfileContext(
           await rawSelection.ensureTabAvailable(targetId, { ...options, signal }, true),
       );
     },
-    isHttpReachable: async (timeoutMs) =>
+    isHttpReachable: async (timeoutMs, callerSignal) =>
       await withLease(
-        undefined,
+        callerSignal,
         async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
       ),
-    isTransportAvailable: async (timeoutMs) =>
+    isTransportAvailable: async (timeoutMs, callerSignal) =>
       await withLease(
-        undefined,
+        callerSignal,
         async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal),
       ),
     isReachable: async (timeoutMs, options) =>
@@ -366,7 +363,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         tabCount,
         isDefault: name === current.resolved.defaultProfile,
         isRemote: !statusProfile.cdpIsLoopback,
-        missingFromConfig: !(name in current.resolved.profiles) || undefined,
+        missingFromConfig:
+          getOwnBrowserProfile(current.resolved.profiles, name) === undefined || undefined,
         reconcileReason: unavailableReason,
       });
     }

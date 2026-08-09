@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.restart-resume
+      - channels.resumed-final-reply
   objective: Verify channel delivery resumes after a Gateway restart without replaying completed delivery.
   successCriteria:
     - A reply is delivered before restart.
@@ -56,14 +56,9 @@ flow:
           value:
             expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - assert:
-            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
-            message: qa gateway child does not expose restartAfterStateMutation
-        - call: env.gateway.restartAfterStateMutation
-          args:
-            - lambda:
-                async: true
-                params: [ctx]
-                expr: "Promise.resolve()"
+            expr: "typeof env.gateway.restart === 'function'"
+            message: qa gateway child does not expose restart
+        - call: env.gateway.restart
         - call: waitForGatewayHealthy
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady

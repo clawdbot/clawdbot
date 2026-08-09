@@ -1,12 +1,14 @@
 // Signal plugin module implements approval reactions behavior.
 import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import {
   addApprovalReactionHintToText,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
+  extractApprovalReactionPromptBinding,
   hasApprovalReactionHintText,
   listApprovalReactionBindings,
-  resolveApprovalReactionTarget,
+  resolveTypedApprovalReactionTarget,
   type ApprovalReactionDecisionBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
@@ -15,7 +17,9 @@ import {
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -79,7 +83,17 @@ type SignalApprovalDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
+);
+
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalSignalRuntime,
+  "signal",
+  "approval-reaction-state",
+  "Signal persistent approval reaction state failed",
+);
 
 const signalApprovalReactionTargets =
   createApprovalReactionTargetStore<SignalApprovalReactionTarget>({
@@ -90,12 +104,6 @@ const signalApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
-
-const loadApprovalResolver = resolverRuntimeLoader;
-
-function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
-  return approvalId.startsWith("plugin:") ? "plugin" : "exec";
-}
 
 function resolveApprovalForwardingConfig(params: {
   cfg: OpenClawConfig;
@@ -293,16 +301,6 @@ function buildReactionTargetKey(params: {
   return `${accountId}:${conversationKey}:${messageId}`;
 }
 
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "approval-reaction-state" })
-      .warn("Signal persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break Signal reactions.
-  }
-}
-
 function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | null {
   const value = target as Partial<SignalApprovalReactionTarget> | null | undefined;
   if (
@@ -372,9 +370,10 @@ export function addSignalApprovalReactionHintToText(params: {
 }
 
 function resolveStandaloneApprovalPromptKind(text: string): ApprovalKind | null {
+  // Strip bold markers (**Exec approval required**) before matching the header.
   const firstLine = text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.replace(/\*\*/g, "").trim())
     .find(Boolean);
   if (/^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "")) {
     return "exec";
@@ -389,50 +388,15 @@ function isStandaloneApprovalPromptText(text: string): boolean {
   return resolveStandaloneApprovalPromptKind(text) !== null;
 }
 
-function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "always") {
-    return "allow-always";
-  }
-  if (normalized === "allow-once" || normalized === "allow-always" || normalized === "deny") {
-    return normalized;
-  }
-  return null;
-}
-
-const APPROVAL_ID_LINE_RE = /^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i;
-const APPROVE_REPLY_COMMAND_LINE_RE =
-  /^\s*Reply with:\s*\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
-
 function extractSignalApprovalPromptBinding(text: string): {
   approvalId: string;
   approvalKind: ApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
-  const lines = text.split(/\r?\n/);
-  const idHeaderMatch = lines
-    .map((line) => line.match(APPROVAL_ID_LINE_RE))
-    .find((match): match is RegExpMatchArray => Boolean(match));
-  if (!idHeaderMatch) {
-    return null;
-  }
-  const approvalId = idHeaderMatch[1];
-  const approvalKind =
-    resolveStandaloneApprovalPromptKind(text) ?? resolveApprovalKindFromId(approvalId);
-  const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  for (const line of lines) {
-    const match = line.match(APPROVE_REPLY_COMMAND_LINE_RE);
-    if (!match || match[1] !== approvalId) {
-      continue;
-    }
-    for (const decisionText of match[2].split(/[\s|,]+/)) {
-      const decision = normalizeApprovalDecision(decisionText);
-      if (decision && !allowedDecisions.includes(decision)) {
-        allowedDecisions.push(decision);
-      }
-    }
-  }
-  return allowedDecisions.length > 0 ? { approvalId, approvalKind, allowedDecisions } : null;
+  const approvalKind = resolveStandaloneApprovalPromptKind(text);
+  return approvalKind
+    ? extractApprovalReactionPromptBinding({ text, approvalKind, replyInstructionOnly: true })
+    : null;
 }
 
 function buildTargetRoute(params: {
@@ -440,7 +404,7 @@ function buildTargetRoute(params: {
   accountId?: string | null;
   to: string;
   approvalId: string;
-  approvalKind?: ApprovalKind;
+  approvalKind: ApprovalKind;
   agentId?: string | null;
   sessionKey?: string | null;
 }): Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }> | null {
@@ -468,7 +432,7 @@ function buildTargetRoute(params: {
   return isSignalApprovalReactionRouteStillEnabled({
     cfg: params.cfg,
     target: {
-      approvalKind: params.approvalKind ?? resolveApprovalKindFromId(params.approvalId),
+      approvalKind: params.approvalKind,
       route,
     },
   })
@@ -550,7 +514,7 @@ export function registerSignalApprovalReactionTarget(params: {
   conversationKey: string;
   messageId: string;
   approvalId: string;
-  approvalKind?: ApprovalKind;
+  approvalKind: ApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;
@@ -569,7 +533,13 @@ export function registerSignalApprovalReactionTarget(params: {
   const allowedDecisions = listSignalApprovalReactionBindings(params.allowedDecisions).map(
     (binding) => binding.decision,
   );
-  if (!params.routeAllowed || !key || !approvalId || allowedDecisions.length === 0) {
+  if (
+    !params.routeAllowed ||
+    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    !key ||
+    !approvalId ||
+    allowedDecisions.length === 0
+  ) {
     return null;
   }
   if (targetAuthorKeys.length === 0) {
@@ -601,13 +571,18 @@ export function registerSignalApprovalReactionTarget(params: {
         } satisfies SignalApprovalReactionRoute);
   const target: SignalApprovalReactionTarget = {
     approvalId,
-    approvalKind: params.approvalKind ?? resolveApprovalKindFromId(approvalId),
+    approvalKind: params.approvalKind,
     allowedDecisions,
     targetAuthorKeys,
     route,
   };
   signalApprovalReactionTargets.register(key, target, { ttlMs: params.ttlMs });
   return target;
+}
+
+function formatSignalApprovalTerminalTruth(approval: ApprovalResolveResult["approval"]): string {
+  const decision = "decision" in approval ? ` decision=${approval.decision}` : "";
+  return `status=${approval.status}${decision}`;
 }
 
 export function addSignalApprovalReactionHintToStructuredPayload(params: {
@@ -836,7 +811,7 @@ function resolveTarget(params: {
   ) {
     return null;
   }
-  const resolved = resolveApprovalReactionTarget<SignalApprovalReactionRoute>({
+  const resolved = resolveTypedApprovalReactionTarget<SignalApprovalReactionRoute>({
     target,
     reactionKey: params.reactionKey,
   });
@@ -934,17 +909,31 @@ export async function maybeResolveSignalApprovalReaction(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveSignalApproval } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
-    await resolveSignalApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
+      approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "signal",
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });
+    const terminalTruth = formatSignalApprovalTerminalTruth(result.approval);
+    unregisterSignalApprovalReactionTarget({
+      accountId: params.accountId,
+      conversationKey: params.conversationKey,
+      messageId: params.messageId,
+    });
+    if (!result.applied) {
+      params.logVerboseMessage?.(
+        `signal: approval reaction already resolved id=${target.approvalId} sender=${actorId} ${terminalTruth}`,
+      );
+      return true;
+    }
     params.logVerboseMessage?.(
-      `signal: approval reaction resolved id=${target.approvalId} sender=${actorId} decision=${target.decision}`,
+      `signal: approval reaction resolved id=${target.approvalId} sender=${actorId} ${terminalTruth}`,
     );
     return true;
   } catch (error) {
@@ -968,5 +957,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
 
 export function clearSignalApprovalReactionTargetsForTest(): void {
   signalApprovalReactionTargets.clearForTest();
-  resolverRuntimeLoader.clear();
+  loadResolveApprovalOverGateway.clear();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

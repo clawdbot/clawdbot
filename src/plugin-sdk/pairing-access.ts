@@ -28,6 +28,13 @@ export function createScopedPairingAccess(params: {
         channel: params.channel,
         accountId: resolvedAccountId,
       }),
+    /** Delete one approval after the owning channel durably consumes it. */
+    removeAllowFromStoreEntry: (entry: string | number) =>
+      params.core.channel.pairing.removeAllowFromStoreEntry({
+        channel: params.channel,
+        accountId: resolvedAccountId,
+        entry,
+      }),
     /** Read another channel/account allow-list for DM policy cross-checks. */
     readStoreForDmPolicy: (provider: ChannelId, accountId: string) =>
       params.core.channel.pairing.readAllowFromStore({

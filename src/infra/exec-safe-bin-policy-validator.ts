@@ -104,8 +104,7 @@ function consumeShortOptionClusterToken(params: {
   allowedBooleanFlags: ReadonlySet<string>;
   deniedFlags: ReadonlySet<string>;
 }): number {
-  for (let j = 0; j < params.flags.length; j += 1) {
-    const flag = params.flags[j];
+  for (const [j, flag] of params.flags.entries()) {
     if (params.deniedFlags.has(flag)) {
       return -1;
     }

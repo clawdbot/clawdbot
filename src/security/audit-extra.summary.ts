@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -18,7 +19,7 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -58,7 +59,7 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
 }
 
 function extractAgentIdFromSource(source: string): string | null {
-  const match = source.match(/^agents\.list\.([^.]*)\./);
+  const match = source.match(/^agents\.entries\.([^.]*)\./);
   return match?.[1] ?? null;
 }
 
@@ -149,7 +150,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway";
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
 
   return [
     {
@@ -197,10 +198,7 @@ export function collectSmallModelRiskFindings(params: {
       allowPluginNormalization: false,
     });
     const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
-    const agentTools =
-      agentId && params.cfg.agents?.list
-        ? params.cfg.agents.list.find((agent) => agent?.id === agentId)?.tools
-        : undefined;
+    const agentTools = agentId ? resolveAgentConfig(params.cfg, agentId)?.tools : undefined;
     const policies = resolveToolPolicies({
       cfg: params.cfg,
       agentTools,

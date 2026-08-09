@@ -65,7 +65,7 @@ describe("createQQWSClient", () => {
     }
   });
 
-  it("does not set a ws proxy agent when proxy env is absent", async () => {
+  it("sets a bounded handshake without a proxy agent", async () => {
     await createQQWSClient({
       gatewayUrl: "wss://qq.example.test/ws",
       userAgent: "openclaw-qqbot-test",
@@ -77,6 +77,7 @@ describe("createQQWSClient", () => {
       "wss://qq.example.test/ws",
       {
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        handshakeTimeout: 30_000,
       },
     ]);
   });
@@ -96,6 +97,7 @@ describe("createQQWSClient", () => {
       {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        handshakeTimeout: 30_000,
       },
     ]);
   });
@@ -115,6 +117,7 @@ describe("createQQWSClient", () => {
       {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        handshakeTimeout: 30_000,
       },
     ]);
   });
@@ -134,6 +137,7 @@ describe("createQQWSClient", () => {
       {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        handshakeTimeout: 30_000,
       },
     ]);
   });

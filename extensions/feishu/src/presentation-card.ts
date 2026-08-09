@@ -86,15 +86,21 @@ function resolveSafeFeishuButtonUrl(url: string | undefined): string | undefined
 }
 
 function resolveFeishuButtonUrl(button: MessagePresentationButton): string | undefined {
+  if (button.action?.type === "url" || button.action?.type === "web-app") {
+    return button.action.url;
+  }
+  if (button.action) {
+    return undefined;
+  }
   return button.url ?? button.webApp?.url ?? button.web_app?.url;
 }
 
 function resolveFeishuCommandButtonValue(button: MessagePresentationButton): string | undefined {
-  if (button.action?.type === "callback") {
-    return undefined;
-  }
   if (button.action?.type === "command") {
     return button.action.command;
+  }
+  if (button.action) {
+    return undefined;
   }
   return button.value;
 }

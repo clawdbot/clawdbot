@@ -1,10 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   emitTrustedMessageAuditEvent,
   hasTrustedMessageAuditListeners,
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
 } from "./message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "./message-audit-events.test-support.js";
 
 const event = {
   occurredAt: 1,
@@ -20,19 +19,17 @@ const event = {
 } as const;
 
 describe("trusted message audit events", () => {
-  afterEach(() => {
-    resetMessageAuditEventsForTest();
-  });
-
   it("isolates a throwing listener and continues notifying later listeners", () => {
     const laterListener = vi.fn();
-    onTrustedMessageAuditEvent(() => {
+    const unsubscribeThrowing = onTrustedMessageAuditEvent(() => {
       throw new Error("listener failed");
     });
-    onTrustedMessageAuditEvent(laterListener);
+    const unsubscribeLater = onTrustedMessageAuditEvent(laterListener);
 
     expect(() => emitTrustedMessageAuditEvent(event)).not.toThrow();
     expect(laterListener).toHaveBeenCalledOnce();
+    unsubscribeThrowing();
+    unsubscribeLater();
   });
 
   it("tracks listeners and forwards producer metadata without durable identity work", () => {
@@ -50,17 +47,5 @@ describe("trusted message audit events", () => {
 
     unsubscribe();
     expect(hasTrustedMessageAuditListeners()).toBe(false);
-  });
-
-  it("reset clears listeners", () => {
-    const listener = vi.fn();
-    onTrustedMessageAuditEvent(listener);
-    emitTrustedMessageAuditEvent(event);
-    resetMessageAuditEventsForTest();
-
-    expect(hasTrustedMessageAuditListeners()).toBe(false);
-    onTrustedMessageAuditEvent(listener);
-    emitTrustedMessageAuditEvent(event);
-    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

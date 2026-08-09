@@ -130,6 +130,16 @@ describe("getChildLogger minLevel inheritance", () => {
     expect(child.settings.minLevel).toBe(logging.levelToMinLevel("fatal"));
   });
 
+  it("child logger preserves a silent parent without triggering tslog validation", () => {
+    logging.setLoggerOverride({ level: "silent" });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const child = logging.getChildLogger({ component: "test" });
+
+    expect(child.settings.minLevel).toBe(logging.levelToMinLevel("silent"));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it("pino child logger propagates the parent minLevel", () => {
     logging.setLoggerOverride({ level: "error" });
     const base = logging.getLogger();
@@ -139,5 +149,17 @@ describe("getChildLogger minLevel inheritance", () => {
 
     expect(getSubLoggerSpy).toHaveBeenCalledOnce();
     expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("error"));
+  });
+
+  it("pino child logger preserves a silent parent without triggering tslog validation", () => {
+    logging.setLoggerOverride({ level: "silent" });
+    const base = logging.getLogger();
+    const getSubLoggerSpy = vi.spyOn(base, "getSubLogger");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    logging.toPinoLikeLogger(base, "info").child({ component: "test" });
+
+    expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("fatal"));
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

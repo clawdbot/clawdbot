@@ -39,7 +39,7 @@ extension OnboardingView {
         _ = view.welcomePage()
         _ = view.connectionPage()
         _ = view.aiSetupPage(contentHeight: contentHeight)
-        _ = view.permissionsPage(contentHeight: contentHeight)
+        _ = view.permissionsPage()
         _ = view.cliPage()
         _ = view.readyPage()
 

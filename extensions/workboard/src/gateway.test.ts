@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -68,6 +69,7 @@ describe("workboard gateway methods", () => {
       "workboard.cards.diagnostics",
       "workboard.cards.diagnostics.refresh",
       "workboard.cards.dispatch",
+      "workboard.cards.dispatchWithOptions",
       "workboard.boards.list",
       "workboard.boards.upsert",
       "workboard.boards.archive",
@@ -123,11 +125,15 @@ describe("workboard gateway methods", () => {
       respond: createRespond,
     } as never);
     expect(createRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(createRespond.mock.calls[0]?.[1]?.card).toMatchObject({
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
 
     const listRespond = vi.fn();
     await listHandler?.({ params: {}, respond: listRespond } as never);
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
+      boards: [expect.objectContaining({ id: "default", total: 1, active: 1 })],
     });
 
     const eventsRespond = vi.fn();
@@ -137,6 +143,125 @@ describe("workboard gateway methods", () => {
     } as never);
     expect(eventsRespond.mock.calls[0]?.[0]).toBe(false);
     expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
+  });
+
+  it("applies connected client workspace access when accepting card paths", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const store = new WorkboardStore(createMemoryStore());
+    const api = {
+      runtime: {
+        agent: {
+          listAgentIds: vi.fn(() => ["main"]),
+          resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    registerWorkboardGatewayMethods({ api, store });
+    const create = methods.get("workboard.cards.create")?.handler;
+    const context = {
+      getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+    };
+
+    const deniedRespond = vi.fn();
+    await create?.({
+      params: {
+        title: "Outside",
+        workspace: { kind: "worktree", sourcePath: "/outside/repo" },
+      },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: deniedRespond,
+    } as never);
+    expect(deniedRespond.mock.calls[0]?.[0]).toBe(false);
+    expect(deniedRespond.mock.calls[0]?.[2]?.message).toContain("outside the caller");
+
+    const insideRespond = vi.fn();
+    await create?.({
+      params: {
+        title: "Inside",
+        workspace: { kind: "worktree", sourcePath: "/workspace/repo" },
+        workspaceAccess: { unrestricted: true },
+        metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+      },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: insideRespond,
+    } as never);
+    expect(insideRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(insideRespond.mock.calls[0]?.[1]?.card).toMatchObject({
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        },
+      },
+    });
+    const insideId = insideRespond.mock.calls[0]?.[1]?.card.id as string;
+    const forgedUpdateRespond = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: { id: insideId, patch: { workspaceAccess: { unrestricted: true } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: forgedUpdateRespond,
+    } as never);
+    expect(forgedUpdateRespond.mock.calls[0]?.[0]).toBe(true);
+    const forgedBulkRespond = vi.fn();
+    await methods.get("workboard.cards.bulk")?.handler({
+      params: { ids: [insideId], patch: { workspaceAccess: { unrestricted: true } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: forgedBulkRespond,
+    } as never);
+    expect(forgedBulkRespond.mock.calls[0]?.[0]).toBe(true);
+    await expect(store.get(insideId)).resolves.toMatchObject({
+      metadata: {
+        automation: {
+          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        },
+      },
+    });
+
+    const adminRespond = vi.fn();
+    await create?.({
+      params: {
+        title: "Admin outside",
+        workspace: { kind: "worktree", sourcePath: "/outside/repo" },
+      },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: adminRespond,
+    } as never);
+    expect(adminRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(adminRespond.mock.calls[0]?.[1]?.card).toMatchObject({
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+
+    await methods.get("workboard.boards.upsert")?.handler({
+      params: {
+        id: "outside-default",
+        defaultWorkspace: { kind: "worktree", sourcePath: "/outside/repo" },
+      },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: vi.fn(),
+    } as never);
+    const inheritedRespond = vi.fn();
+    await create?.({
+      params: { title: "No implicit workspace", boardId: "outside-default" },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: inheritedRespond,
+    } as never);
+    expect(inheritedRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(
+      inheritedRespond.mock.calls[0]?.[1]?.card.metadata?.automation?.workspace,
+    ).toBeUndefined();
   });
 
   it("stores metadata updates through dedicated card methods", async () => {
@@ -243,6 +368,7 @@ describe("workboard gateway methods", () => {
       title: "Ready worker",
       status: "ready",
       priority: "urgent",
+      workspaceAccess: { unrestricted: true },
     });
 
     registerWorkboardGatewayMethods({ api, store });
@@ -261,7 +387,86 @@ describe("workboard gateway methods", () => {
     );
   });
 
-  it("requires admin scope for managed-worktree dispatch", async () => {
+  it("threads maxStarts while the legacy method keeps its default cap", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const run = vi.fn().mockResolvedValue({ runId: "run-card" });
+    const api = {
+      runtime: {
+        state: { openKeyedStore: vi.fn(() => createMemoryStore()) },
+        subagent: { run },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(createMemoryStore());
+    await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        store.create({
+          title: `Capped ${index}`,
+          status: "ready",
+          priority: "urgent",
+          agentId: `capped-${index}`,
+          boardId: "capped",
+          workspaceAccess: { unrestricted: true },
+        }),
+      ),
+    );
+    registerWorkboardGatewayMethods({ api, store });
+    const handler = methods.get("workboard.cards.dispatchWithOptions")?.handler;
+
+    const respond = vi.fn();
+    await handler?.({ params: { boardId: "capped", maxStarts: 4 }, respond } as never);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]?.started).toHaveLength(4);
+    expect(run).toHaveBeenCalledTimes(4);
+
+    await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        store.create({
+          title: `Legacy ${index}`,
+          status: "ready",
+          priority: "urgent",
+          agentId: `legacy-${index}`,
+          boardId: "legacy",
+          workspaceAccess: { unrestricted: true },
+        }),
+      ),
+    );
+    const defaultRespond = vi.fn();
+    await methods
+      .get("workboard.cards.dispatch")
+      ?.handler({ params: { boardId: "legacy" }, respond: defaultRespond } as never);
+    expect(defaultRespond.mock.calls[0]?.[1]?.started).toHaveLength(3);
+    expect(run).toHaveBeenCalledTimes(7);
+
+    const legacyRespond = vi.fn();
+    await methods
+      .get("workboard.cards.dispatch")
+      ?.handler({ params: { maxStarts: 1 }, respond: legacyRespond } as never);
+    expect(legacyRespond.mock.calls[0]?.[0]).toBe(false);
+    expect(legacyRespond.mock.calls[0]?.[2]?.message).toBe(
+      "maxStarts requires workboard.cards.dispatchWithOptions.",
+    );
+
+    for (const value of [0, -1, 1.5, "2"]) {
+      const invalidRespond = vi.fn();
+      await handler?.({ params: { maxStarts: value }, respond: invalidRespond } as never);
+      expect(invalidRespond.mock.calls[0]?.[0]).toBe(false);
+      expect(invalidRespond.mock.calls[0]?.[2]?.message).toBe(
+        "maxStarts must be a positive integer.",
+      );
+    }
+  });
+
+  it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
       opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
@@ -275,8 +480,24 @@ describe("workboard gateway methods", () => {
     });
     const api = {
       runtime: {
+        agent: {
+          listAgentIds: vi.fn(() => ["main"]),
+          resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+        },
+        sandbox: {
+          resolveWorkspaceAuthority: vi.fn(() => ({
+            sandboxed: true,
+            workspaceAccess: "rw",
+          })),
+          prepareWorkspaceAuthority: vi.fn(async () => ({
+            sandboxed: true,
+            workspaceAccess: "rw",
+          })),
+        },
         subagent: { run },
         worktrees: {
+          resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
+          hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(true),
           create: createWorktree,
           release: vi.fn(),
           removeIfLossless: vi.fn(),
@@ -300,6 +521,17 @@ describe("workboard gateway methods", () => {
     const deniedRespond = vi.fn();
     await handler?.({
       client: { connect: { scopes: ["operator.write"] } },
+      context: {
+        getRuntimeConfig: () => ({
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            defaults: {
+              workspace: "/workspace",
+              sandbox: { mode: "non-main", workspaceAccess: "rw" },
+            },
+          },
+        }),
+      },
       respond: deniedRespond,
     } as never);
 
@@ -308,7 +540,7 @@ describe("workboard gateway methods", () => {
       startFailures: [
         expect.objectContaining({
           cardId: denied.id,
-          error: "managed worktree dispatch requires operator.admin",
+          error: "workspace path is outside the caller's allowed workspaces.",
         }),
       ],
     });
@@ -318,17 +550,38 @@ describe("workboard gateway methods", () => {
     const allowed = await store.create({
       title: "Allowed checkout",
       status: "ready",
-      workspace: { kind: "worktree", path: "/repo-allowed" },
+      workspace: { kind: "worktree", path: "/workspace" },
     });
+    const allowedRespond = vi.fn();
     await handler?.({
-      client: { connect: { scopes: ["operator.admin"] } },
-      respond: vi.fn(),
+      client: { connect: { scopes: ["operator.write"] } },
+      context: {
+        getRuntimeConfig: () => ({
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            defaults: {
+              workspace: "/workspace",
+              sandbox: { mode: "non-main", workspaceAccess: "rw" },
+            },
+          },
+        }),
+      },
+      respond: allowedRespond,
     } as never);
 
-    expect(createWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({ repoRoot: "/repo-allowed", ownerId: allowed.id }),
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(allowedRespond.mock.calls[0]?.[1]).toMatchObject({ startFailures: [], started: [{}] });
+    expect(api.runtime.sandbox.prepareWorkspaceAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/workspace",
+        confinedToolNames: expect.arrayContaining(["workboard_complete"]),
+      }),
     );
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace" }));
     expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(allowed.id)).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "dir", path: "/workspace" } } },
+    });
   });
 
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {

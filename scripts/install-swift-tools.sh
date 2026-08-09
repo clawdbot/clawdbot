@@ -18,7 +18,12 @@ install_archive() {
   local archive="$temp_dir/$name.zip"
   local extract_dir="$temp_dir/$name"
 
-  curl --fail --location --silent --show-error --retry 3 --output "$archive" "$url"
+  # Bound individual transfers and the retry window. curl resets --max-time for
+  # each retry, while a started retry can outlive --retry-max-time.
+  curl --fail --location --silent --show-error \
+    --connect-timeout 10 --max-time 120 \
+    --retry 3 --retry-max-time 120 \
+    --output "$archive" "$url"
   if [[ "$(shasum -a 256 "$archive" | awk '{print $1}')" != "$checksum" ]]; then
     echo "$name archive checksum mismatch" >&2
     exit 1

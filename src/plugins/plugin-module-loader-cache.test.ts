@@ -1,6 +1,8 @@
 /** Tests plugin module loader cache keys and lifecycle reset behavior. */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
 
@@ -36,12 +38,7 @@ function asPluginModuleLoaderFactory(factory: unknown): PluginModuleLoaderFactor
   return factory as PluginModuleLoaderFactory;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -71,7 +68,7 @@ function expectNativeOptions(mock: unknown, target: string) {
   const options = requireRecord(callArg(mock, 0, 1, "native options"), "native options");
   expect(options.allowWindows).toBe(true);
   expect(options.fallbackOnMissingDependency).toBe(true);
-  expect(options.fallbackOnNativeError).toBe(true);
+  expect(options.fallbackOnNativeError).toBeUndefined();
 }
 
 function expectStats(value: unknown, fields: Record<string, unknown>) {
@@ -134,63 +131,6 @@ describe("getCachedPluginModuleLoader", () => {
     };
   });
 
-  it("resolves deterministic cache entries for equivalent alias maps", async () => {
-    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-alias-order");
-
-    const first = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/extensions/demo/index.ts",
-      importerUrl: "file:///repo/src/plugins/loader.ts",
-      loaderFilename: "/repo/src/plugins/loader.ts",
-      aliasMap: {
-        alpha: "/repo/alpha.js",
-        zeta: "/repo/zeta.js",
-      },
-      tryNative: false,
-    });
-    const second = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/extensions/demo/index.ts",
-      importerUrl: "file:///repo/src/plugins/loader.ts",
-      loaderFilename: "/repo/src/plugins/loader.ts",
-      aliasMap: {
-        zeta: "/repo/zeta.js",
-        alpha: "/repo/alpha.js",
-      },
-      tryNative: false,
-    });
-
-    expect(second.cacheKey).toBe(first.cacheKey);
-    expect(second.scopedCacheKey).toBe(first.scopedCacheKey);
-    expect(first.loaderFilename).toBe("/repo/src/plugins/loader.ts");
-  });
-
-  it("keeps explicit shared cache scope keys independent of loader options", async () => {
-    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-shared-scope");
-
-    const first = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/dist/extensions/demo-a/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
-      aliasMap: { demo: "/repo/demo-a.js" },
-      tryNative: true,
-      sharedCacheScopeKey: "bundled:native",
-    });
-    const second = resolvePluginModuleLoaderCacheEntry({
-      modulePath: "/repo/dist/extensions/demo-b/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
-      aliasMap: { demo: "/repo/demo-b.js" },
-      tryNative: false,
-      sharedCacheScopeKey: "bundled:native",
-    });
-
-    expect(first.cacheKey).not.toBe(second.cacheKey);
-    expect(first.scopedCacheKey).toBe(second.scopedCacheKey);
-  });
-
   it("reuses cached loaders for the same module config and filename", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("cached-loader");
@@ -211,6 +151,43 @@ describe("getCachedPluginModuleLoader", () => {
     first("/repo/extensions/demo/index.ts");
     expect(createJiti).toHaveBeenCalledTimes(1);
     expect(cache.size).toBe(1);
+  });
+
+  it("installs native internal aliases only on exact loader cache misses", async () => {
+    const nativeResolver = await import("./plugin-sdk-native-resolver.js");
+    const installNativeResolver = vi.spyOn(
+      nativeResolver,
+      "installOpenClawInternalCorePackageNativeResolver",
+    );
+    const { getCachedPluginModuleLoader } = await loadCachedPluginModuleLoader(
+      "native-resolver-cache-misses",
+    );
+    const cache = new Map();
+    const params = {
+      cache,
+      modulePath: "/repo/extensions/demo/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/extensions/demo/index.ts",
+      tryNative: false,
+    } as const;
+
+    const first = getCachedPluginModuleLoader(params);
+    expect(installNativeResolver).toHaveBeenCalledTimes(1);
+    expect(installNativeResolver).toHaveBeenCalledWith({ moduleUrl: params.importerUrl });
+
+    expect(getCachedPluginModuleLoader(params)).toBe(first);
+    expect(installNativeResolver).toHaveBeenCalledTimes(1);
+
+    const differentlyScoped = getCachedPluginModuleLoader({
+      ...params,
+      cacheScopeKey: "different-loader-scope",
+    });
+    expect(differentlyScoped).not.toBe(first);
+    expect(installNativeResolver).toHaveBeenCalledTimes(2);
+    expect(installNativeResolver).toHaveBeenNthCalledWith(2, {
+      moduleUrl: params.importerUrl,
+    });
+    expect(cache.size).toBe(2);
   });
 
   it("creates bounded loader caches", async () => {
@@ -298,7 +275,7 @@ describe("getCachedPluginModuleLoader", () => {
       tryNative: false,
     });
     expect(options.fsCache).toEqual(expect.any(String));
-    expect(String(options.fsCache)).toContain(`${path.sep}jiti${path.sep}openclaw${path.sep}`);
+    expect(String(options.fsCache)).toContain(`${path.sep}openclaw${path.sep}jiti${path.sep}`);
     expect(options.alias).toEqual({
       alpha: "/repo/alpha.js",
       zeta: "/repo/zeta.js",
@@ -509,7 +486,6 @@ describe("getCachedPluginModuleLoader", () => {
       importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
       loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
       aliasMap: {
-        "openclaw/plugin-sdk": "/repo/dist/plugin-sdk/root-alias.cjs",
         "openclaw/plugin-sdk/core": "/repo/dist/plugin-sdk/core.js",
       },
       createLoader: asPluginModuleLoaderFactory(createJiti),
@@ -569,6 +545,48 @@ describe("getCachedPluginModuleLoader", () => {
       sourceTransformFallbacks: 0,
       sourceTransformForced: 0,
     });
+  });
+
+  it("propagates native plugin evaluation errors without running the plugin twice", async () => {
+    vi.doUnmock("./native-module-require.js");
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-native-evaluation-"));
+    const modulePath = path.join(fixtureDir, "plugin.cjs");
+    const markerName = `openclaw.pluginModuleLoaderCache.nativeEvaluation:${fixtureDir}`;
+    const sideEffectMarker = Symbol.for(markerName);
+    const expectedError = "plugin exploded during native evaluation";
+    const fromSourceTransformer = vi.fn();
+    const createJiti = vi.fn(() => fromSourceTransformer);
+
+    try {
+      fs.writeFileSync(
+        modulePath,
+        [
+          `const marker = Symbol.for(${JSON.stringify(markerName)});`,
+          "globalThis[marker] = (globalThis[marker] ?? 0) + 1;",
+          `throw new Error(${JSON.stringify(expectedError)});`,
+        ].join("\n"),
+        "utf8",
+      );
+      const { getCachedPluginModuleLoader } = await importFreshModule<
+        typeof import("./plugin-module-loader-cache.js")
+      >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-evaluation-error");
+      const loader = getCachedPluginModuleLoader({
+        cache: new Map(),
+        modulePath,
+        importerUrl: import.meta.url,
+        loaderFilename: modulePath,
+        tryNative: true,
+        createLoader: asPluginModuleLoaderFactory(createJiti),
+      });
+
+      expect(() => loader(modulePath)).toThrow(expectedError);
+      expect(Reflect.get(globalThis, sideEffectMarker)).toBe(1);
+      expect(createJiti).not.toHaveBeenCalled();
+      expect(fromSourceTransformer).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(globalThis, sideEffectMarker);
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
   });
 
   it("does not source-transform fallback after native loading reaches a missing dependency", async () => {
@@ -633,9 +651,15 @@ describe("getCachedPluginModuleLoader", () => {
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
-    expectJitiOptions(createJiti, 0, "file:///repo/src/plugins/public-surface-loader.ts", {
-      tryNative: true,
-    });
+    const options = expectJitiOptions(
+      createJiti,
+      0,
+      "file:///repo/src/plugins/public-surface-loader.ts",
+      {
+        tryNative: false,
+      },
+    );
+    expect(options.nativeModules).toEqual([]);
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
     const stats = expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
@@ -647,6 +671,36 @@ describe("getCachedPluginModuleLoader", () => {
     expect(stats.topSourceTransformTargets).toEqual([
       { target: "/repo/dist/extensions/demo/api.js", count: 1 },
     ]);
+  });
+
+  it("can transform OpenClaw dependencies on a forced source fallback", async () => {
+    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginSourceModuleLoader } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=forced-source-native-fallback");
+
+    const loader = getCachedPluginSourceModuleLoader({
+      cache: new Map(),
+      modulePath: "/repo/dist/extensions/demo/api.js",
+      importerUrl: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
+      loaderFilename: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
+      transformOpenClawDependencies: true,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
+    });
+
+    expect(loader("/repo/dist/extensions/demo/api.js")).toEqual({
+      fromSourceTransform: true,
+    });
+    const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
+    expect(options.tryNative).toBe(false);
+    expect(options.nativeModules).toEqual([]);
+    expect(nativeStub).not.toHaveBeenCalled();
   });
 
   it("normalizes Windows absolute paths before creating and calling the source transformer", async () => {
@@ -673,12 +727,13 @@ describe("getCachedPluginModuleLoader", () => {
 
     loader("C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js");
 
-    expectJitiOptions(
+    const options = expectJitiOptions(
       createJiti,
       0,
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
-      { tryNative: true },
+      { tryNative: false },
     );
+    expect(options.nativeModules).toEqual([]);
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
     );
@@ -702,13 +757,16 @@ describe("getCachedPluginModuleLoader", () => {
       modulePath: "/repo/dist/extensions/demo/api.js",
       importerUrl: "file:///repo/src/plugins/bundled-capability-runtime.ts",
       loaderFilename: "file:///repo/src/plugins/bundled-capability-runtime.ts",
-      aliasMap: { "openclaw/plugin-sdk": "/repo/shim.js" },
+      aliasMap: { "openclaw/plugin-sdk/core": "/repo/core.js" },
       tryNative: false,
       createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
+    const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
+    expect(options.tryNative).toBe(false);
+    expect(options.nativeModules).toEqual(["openclaw"]);
     // With tryNative: false the wrapper must route every target through the source transformer
     // so its alias rewrites still apply; native require must not be consulted.
     expect(nativeStub).not.toHaveBeenCalled();
@@ -795,35 +853,6 @@ describe("getCachedPluginModuleLoader", () => {
     });
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/extensions/feishu/api.ts",
-    );
-  });
-
-  it("forwards extra loader arguments through to the source-transform fallback", async () => {
-    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
-    const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
-      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
-    }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-rest-args");
-
-    const cache = new Map();
-    const loader = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/dist/extensions/demo/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
-      createLoader: asPluginModuleLoaderFactory(createJiti),
-    });
-
-    const loose = loader as unknown as (t: string, ...a: unknown[]) => unknown;
-    loose("/repo/dist/extensions/demo/api.js", { hint: "x" }, 42);
-    expect(fromSourceTransformer).toHaveBeenCalledWith(
-      "/repo/dist/extensions/demo/api.js",
-      { hint: "x" },
-      42,
     );
   });
 });

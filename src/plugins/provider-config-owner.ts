@@ -2,7 +2,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const CORE_BUILT_IN_MODEL_APIS = new Set([
+/** Core built-in model API ids that do not imply plugin ownership of a provider config. */
+export const CORE_BUILT_IN_MODEL_APIS = new Set([
   "anthropic-messages",
   "azure-openai-responses",
   "google-generative-ai",

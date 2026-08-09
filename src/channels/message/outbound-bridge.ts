@@ -25,7 +25,7 @@ const defaultManualReceiveAdapter = {
 } as const satisfies ChannelMessageReceiveAdapterShape;
 
 /** Send result accepted from legacy outbound bridge methods before receipt normalization. */
-export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
+type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
   messageId?: string;
 };
@@ -35,7 +35,7 @@ type ChannelMessageOutboundBridgeContext<TContext> = Omit<TContext, "onDeliveryR
 };
 
 /** Legacy outbound adapter shape bridged into the channel message adapter contract. */
-export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
+type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
   };
@@ -54,7 +54,7 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
 };
 
 /** Options for building a message adapter from legacy outbound send functions. */
-export type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
+type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
   id?: string;
   outbound: ChannelMessageOutboundBridgeAdapter<TConfig>;
   capabilities?: DurableFinalDeliveryRequirementMap;
@@ -101,6 +101,16 @@ function toMessageSendResult(
         replyToId: params.replyToId ?? undefined,
       });
   return {
+    // Preserve sanctioned owner facts for delivery hooks without exposing private
+    // provider fields or trusting a provider-authored channel identity.
+    ...(result.chatId !== undefined ? { chatId: result.chatId } : {}),
+    ...(result.channelId !== undefined ? { channelId: result.channelId } : {}),
+    ...(result.roomId !== undefined ? { roomId: result.roomId } : {}),
+    ...(result.conversationId !== undefined ? { conversationId: result.conversationId } : {}),
+    ...(result.toJid !== undefined ? { toJid: result.toJid } : {}),
+    ...(result.pollId !== undefined ? { pollId: result.pollId } : {}),
+    ...(result.timestamp !== undefined ? { timestamp: result.timestamp } : {}),
+    ...(result.meta !== undefined ? { meta: result.meta } : {}),
     receipt,
     ...(resolveResultMessageId({ ...result, receipt })
       ? {
@@ -160,6 +170,9 @@ function resolvePayloadReceiptKind(
     return "card";
   }
   if (ctx.payload.interactive) {
+    return "card";
+  }
+  if (ctx.payload.location) {
     return "card";
   }
   if (ctx.payload.text?.trim() || ctx.text.trim()) {

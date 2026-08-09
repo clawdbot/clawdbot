@@ -75,4 +75,29 @@ describe("fingerprintPluginRuntimeArtifact", () => {
     fs.writeFileSync(canonicalSource, "export const revision = 'canonical-2';\n");
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
   });
+
+  it("hashes source when a bundled plugin opts out of core dist", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-artifact-"));
+    tempDirs.push(rootDir);
+    const source = path.join(rootDir, "index.ts");
+    const staleDistSource = path.join(rootDir, "dist", "index.js");
+    fs.mkdirSync(path.dirname(staleDistSource), { recursive: true });
+    fs.writeFileSync(source, "export const revision = 'source-1';\n");
+    fs.writeFileSync(staleDistSource, "export const revision = 'stale-1';\n");
+    const record = {
+      pluginId: "fixture",
+      origin: "bundled" as const,
+      rootDir,
+      source,
+      packageBuild: { bundledDist: false },
+    };
+    const first = fingerprintPluginRuntimeArtifact(record);
+
+    fs.writeFileSync(staleDistSource, "export const revision = 'stale-2';\n");
+    expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
+
+    const afterStaleChange = fingerprintPluginRuntimeArtifact(record);
+    fs.writeFileSync(source, "export const revision = 'source-2';\n");
+    expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(afterStaleChange);
+  });
 });

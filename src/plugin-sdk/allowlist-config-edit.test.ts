@@ -2,6 +2,7 @@
  * Tests allowlist config edit helpers for flat, nested, and account-scoped records.
  */
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDmGroupAccountAllowlistAdapter,
   buildLegacyDmAccountAllowlistAdapter,
@@ -206,6 +207,84 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
         kind: "account",
         scope: { channelId: "demo", accountId: "alt" },
       },
+    });
+  });
+
+  it("materializes inherited entries before adding a named-account override", async () => {
+    const parsedConfig: Record<string, unknown> = {
+      channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: {} } } },
+    };
+
+    await adapter.applyConfigEdit?.({
+      cfg: parsedConfig as OpenClawConfig,
+      parsedConfig,
+      accountId: "alt",
+      scope: "dm",
+      action: "add",
+      entry: "dm-admin",
+    });
+
+    expect(parsedConfig).toMatchObject({
+      channels: {
+        demo: { accounts: { alt: { allowFrom: ["dm-owner", "dm-admin"] } } },
+      },
+    });
+  });
+
+  it("writes an empty named-account override when removing the last inherited entry", async () => {
+    const parsedConfig: Record<string, unknown> = {
+      channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: {} } } },
+    };
+
+    await adapter.applyConfigEdit?.({
+      cfg: parsedConfig as OpenClawConfig,
+      parsedConfig,
+      accountId: "alt",
+      scope: "dm",
+      action: "remove",
+      entry: "dm-owner",
+    });
+
+    expect(parsedConfig).toMatchObject({
+      channels: { demo: { accounts: { alt: { allowFrom: [] } } } },
+    });
+  });
+
+  it("writes an empty channel override when removing the last effective entry", async () => {
+    const parsedConfig: Record<string, unknown> = {};
+
+    await adapter.applyConfigEdit?.({
+      cfg: {} as OpenClawConfig,
+      parsedConfig,
+      accountId: "default",
+      scope: "dm",
+      action: "remove",
+      entry: "dm-owner",
+    });
+
+    expect(parsedConfig).toMatchObject({
+      channels: { demo: { allowFrom: [] } },
+    });
+  });
+
+  it("keeps an empty channel override after clearing a materialized list", async () => {
+    const parsedConfig: Record<string, unknown> = {};
+    const edit = (action: "add" | "remove", entry: string) =>
+      adapter.applyConfigEdit?.({
+        cfg: parsedConfig as OpenClawConfig,
+        parsedConfig,
+        accountId: "default",
+        scope: "dm",
+        action,
+        entry,
+      });
+
+    await edit("add", "dm-admin");
+    await edit("remove", "dm-owner");
+    await edit("remove", "dm-admin");
+
+    expect(parsedConfig).toMatchObject({
+      channels: { demo: { allowFrom: [] } },
     });
   });
 });

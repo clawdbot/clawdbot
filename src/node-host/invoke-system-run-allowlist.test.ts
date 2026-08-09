@@ -3,13 +3,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import {
-  resolveExecApprovalsFromFile,
-  resolvePlannedSegmentArgv,
-  type ExecCommandSegment,
-} from "../infra/exec-approvals.js";
+import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   evaluateSystemRunAllowlist,
@@ -61,12 +59,16 @@ function runExecutable(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<{ exitCode: number | null; stdout: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(params.argv[0], params.argv.slice(1), {
-      cwd: params.cwd,
-      env: params.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    const child = spawn(
+      expectDefined(params.argv[0], "params.argv[0] test invariant"),
+      params.argv.slice(1),
+      {
+        cwd: params.cwd,
+        env: params.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
     const stdout: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.once("error", reject);
@@ -107,6 +109,52 @@ describe("resolveSystemRunExecArgv", () => {
     });
 
     expect(result).toEqual(["safe", "--version"]);
+  });
+
+  it("fails closed for Windows opaque shell transports before inner argv rewrite", async () => {
+    const trustedExecutable = "C:\\trusted-bin\\safe-tool.exe";
+    const result = await resolveSystemRunExecArgv({
+      plannedAllowlistArgv: undefined,
+      argv: ["nu.exe", "--commands", "safe-tool arg"],
+      security: "allowlist",
+      approvals: resolveAllowlistApprovals(),
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      trustedSafeBinDirs: new Set(),
+      skillBins: [],
+      autoAllowSkills: false,
+      isWindows: true,
+      policy: {
+        approvedByAsk: false,
+        analysisOk: true,
+        allowlistSatisfied: true,
+      },
+      shellCommand: "safe-tool arg",
+      segments: [
+        {
+          raw: "safe-tool arg",
+          argv: ["safe-tool", "arg"],
+          resolution: {
+            execution: {
+              rawExecutable: "safe-tool",
+              resolvedPath: trustedExecutable,
+              executableName: "safe-tool.exe",
+            },
+            policy: {
+              rawExecutable: "safe-tool",
+              resolvedPath: trustedExecutable,
+              executableName: "safe-tool.exe",
+            },
+          },
+        },
+      ],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan: undefined,
+      cwd: "C:\\workspace",
+      env: undefined,
+    });
+
+    expect(result).toBeNull();
   });
 
   it("fails closed when the Windows shell execution plan is blocked", async () => {
@@ -160,6 +208,7 @@ describe("resolveSystemRunExecArgv", () => {
         expect(bareResult.stdout).not.toContain("TRUSTED_EXECUTABLE");
 
         const approvals = resolveExecApprovalsFromFile({
+          agentId: "main",
           file: {
             version: 1,
             defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
@@ -265,10 +314,69 @@ describe("resolveSystemRunExecArgv", () => {
       const safeBinPolicy = resolveExecSafeBinRuntimePolicy({
         global: { safeBins: ["head"] },
       });
+      const segmentSatisfiedBy: ["safeBins"] = ["safeBins"];
+      const expectedCommand = buildAuthorizedShellCommandFromPlan({
+        plan: authorizationPlan,
+        mode: "safeBins",
+        segmentSatisfiedBy,
+      });
+      expect(expectedCommand.ok).toBe(true);
+      if (!expectedCommand.ok) {
+        throw new Error(expectedCommand.reason);
+      }
 
       const result = await resolveSystemRunExecArgv({
         plannedAllowlistArgv: undefined,
         argv: ["/bin/sh", "-lc", "head -c 16"],
+        security: "allowlist",
+        approvals: resolveAllowlistApprovals(),
+        safeBins: safeBinPolicy.safeBins,
+        safeBinProfiles: safeBinPolicy.safeBinProfiles,
+        trustedSafeBinDirs: safeBinPolicy.trustedSafeBinDirs,
+        skillBins: [],
+        autoAllowSkills: false,
+        isWindows: false,
+        policy: {
+          approvedByAsk: false,
+          analysisOk: true,
+          allowlistSatisfied: true,
+        },
+        shellCommand: "head -c 16",
+        segments: authorizationPlan.groups.flatMap((group) =>
+          group.candidates.map((candidate) => candidate.sourceSegment),
+        ),
+        segmentSatisfiedBy,
+        authorizationPlan,
+        cwd: undefined,
+        env,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.[0]).toBe("/bin/sh");
+      expect(result?.[2]).toBe(expectedCommand.command);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed instead of rewriting opaque shell transports",
+    async () => {
+      const env = { PATH: "/usr/bin:/bin" };
+      const authorizationPlan = await planShellAuthorization({
+        command: "head -c 16",
+        env,
+        platform: process.platform,
+      });
+      expect(authorizationPlan.ok).toBe(true);
+      if (!authorizationPlan.ok) {
+        throw new Error(authorizationPlan.reason);
+      }
+      const safeBinPolicy = resolveExecSafeBinRuntimePolicy({
+        global: { safeBins: ["head"] },
+      });
+
+      const result = await resolveSystemRunExecArgv({
+        plannedAllowlistArgv: undefined,
+        argv: ["nu", "--commands", "head -c 16"],
         security: "allowlist",
         approvals: resolveAllowlistApprovals(),
         safeBins: safeBinPolicy.safeBins,
@@ -292,18 +400,51 @@ describe("resolveSystemRunExecArgv", () => {
         env,
       });
 
-      const [candidate] = authorizationPlan.groups[0]?.candidates ?? [];
-      if (!candidate) {
-        throw new Error("expected a safe-bin authorization candidate");
-      }
-      const plannedArgv = resolvePlannedSegmentArgv(candidate.sourceSegment);
-      if (!plannedArgv) {
-        throw new Error("expected a safe-bin execution plan");
+      expect(result).toBeNull();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when opaque shell transports use inner allowlist authorization",
+    async () => {
+      const env = { PATH: "/usr/bin:/bin" };
+      const authorizationPlan = await planShellAuthorization({
+        command: "head -c 16",
+        env,
+        platform: process.platform,
+      });
+      expect(authorizationPlan.ok).toBe(true);
+      if (!authorizationPlan.ok) {
+        throw new Error(authorizationPlan.reason);
       }
 
-      expect(result).not.toBeNull();
-      expect(result?.[0]).toBe("/bin/sh");
-      expect(result?.[2]).toBe(plannedArgv.join(" "));
+      const result = await resolveSystemRunExecArgv({
+        plannedAllowlistArgv: undefined,
+        argv: ["nu", "--commands", "head -c 16"],
+        security: "allowlist",
+        approvals: resolveAllowlistApprovals(),
+        safeBins: new Set(),
+        safeBinProfiles: {},
+        trustedSafeBinDirs: new Set(),
+        skillBins: [],
+        autoAllowSkills: false,
+        isWindows: false,
+        policy: {
+          approvedByAsk: false,
+          analysisOk: true,
+          allowlistSatisfied: true,
+        },
+        shellCommand: "head -c 16",
+        segments: authorizationPlan.groups.flatMap((group) =>
+          group.candidates.map((candidate) => candidate.sourceSegment),
+        ),
+        segmentSatisfiedBy: ["allowlist"],
+        authorizationPlan,
+        cwd: undefined,
+        env,
+      });
+
+      expect(result).toBeNull();
     },
   );
 });

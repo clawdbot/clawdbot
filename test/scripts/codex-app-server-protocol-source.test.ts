@@ -1,16 +1,23 @@
 // Codex App Server Protocol Source tests cover codex app server protocol source script behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { stageCodexAppServerProtocolArtifacts } from "../../scripts/lib/codex-app-server-protocol-artifacts.js";
 import {
-  buildCodexProtocolExportArgs,
+  buildCodexProtocolFixtureCommand,
   canonicalizeCodexAppServerProtocolJson,
+  codexAppServerSharedDefinitionsSchema,
+  compactCodexAppServerProtocolJsonSchemas,
+  expandCodexAppServerProtocolJsonSchema,
   formatCodexAppServerProtocolJsonText,
+  materializeCodexProtocolPrecomputedExports,
   readCargoWorkspacePackageVersion,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
   resolveCodexProtocolPnpmCommand,
+  selectedCodexAppServerJsonSchemas,
   validateCodexProtocolSourceVersion,
   validateCodexProtocolGenerationHeadroom,
 } from "../../scripts/lib/codex-app-server-protocol-source.js";
@@ -25,6 +32,72 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_CODEX_REPO = originalOpenClawCodexRepo;
   }
+});
+
+describe("Codex app-server generated artifact staging", () => {
+  it("copies JSON bytes and normalizes nested TypeScript files in one pass", async () => {
+    const sourceRoot = createTempDir("openclaw-protocol-artifacts-source-");
+    const targetRoot = createTempDir("openclaw-protocol-artifacts-target-");
+    const typescriptRoot = path.join(targetRoot, "typescript");
+    const jsonRoot = path.join(targetRoot, "json");
+    const rootTypeScript = [
+      'import type { Root } from "./Root";',
+      "export type { Parent } from '../Parent.js';",
+      'export * as v2 from "./v2.js";',
+      "export type Nullable = string | null | null;",
+      "",
+    ].join("\n");
+    const nestedTypeScript = 'export type { Shared } from "../Shared";\n';
+    const json = '{\n  "z": 1,\n  "a": 2\n}\n';
+    fs.mkdirSync(path.join(sourceRoot, "v2"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, "index.ts"), rootTypeScript);
+    fs.writeFileSync(path.join(sourceRoot, "v2/Thing.ts"), nestedTypeScript);
+    fs.writeFileSync(path.join(sourceRoot, "v2/Thing.json"), json);
+    fs.writeFileSync(path.join(sourceRoot, "README.md"), "ignored\n");
+
+    await stageCodexAppServerProtocolArtifacts(sourceRoot, { jsonRoot, typescriptRoot });
+
+    expect(fs.readFileSync(path.join(typescriptRoot, "index.ts"), "utf8")).toBe(
+      [
+        'import type { Root } from "./Root.js";',
+        "export type { Parent } from '../Parent.js';",
+        'export * as v2 from "./v2/index.js";',
+        "export type Nullable = string | null;",
+        "",
+      ].join("\n"),
+    );
+    expect(fs.readFileSync(path.join(typescriptRoot, "v2/Thing.ts"), "utf8")).toBe(
+      'export type { Shared } from "../Shared.js";\n',
+    );
+    expect(fs.readFileSync(path.join(jsonRoot, "v2/Thing.json"), "utf8")).toBe(json);
+    expect(fs.existsSync(path.join(typescriptRoot, "README.md"))).toBe(false);
+    expect(fs.existsSync(path.join(jsonRoot, "README.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(sourceRoot, "index.ts"), "utf8")).toBe(rootTypeScript);
+  });
+
+  it("materializes the upstream experimental precomputed export tree", async () => {
+    const root = createTempDir("openclaw-protocol-precomputed-");
+    const archivePath = path.join(root, "precomputed/app-server-exports-experimental.json.zst");
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.writeFileSync(
+      archivePath,
+      zstdCompressSync(
+        JSON.stringify({
+          typescript: { "v2/Thing.ts": "export type Thing = string;\n" },
+          json_schema: { "v2/Thing.json": '{"type":"string"}\n' },
+          internal_json_schema: {},
+        }),
+      ),
+    );
+
+    await materializeCodexProtocolPrecomputedExports(root);
+
+    expect(fs.readFileSync(path.join(root, "v2/Thing.ts"), "utf8")).toBe(
+      "export type Thing = string;\n",
+    );
+    expect(fs.readFileSync(path.join(root, "v2/Thing.json"), "utf8")).toBe('{"type":"string"}\n');
+    expect(fs.existsSync(archivePath)).toBe(false);
+  });
 });
 
 describe("codex app-server protocol source resolver", () => {
@@ -66,20 +139,30 @@ version = "9.9.9"
     );
   });
 
-  it("uses the app-server protocol export binary instead of compiling the full codex cli", () => {
-    expect(buildCodexProtocolExportArgs("/codex/codex-rs/Cargo.toml", "/tmp/protocol")).toEqual([
-      "run",
-      "--manifest-path",
-      "/codex/codex-rs/Cargo.toml",
-      "-p",
-      "codex-app-server-protocol",
-      "--bin",
-      "export",
-      "--",
-      "--out",
-      "/tmp/protocol",
-      "--experimental",
-    ]);
+  it("uses the upstream ignored fixture test with explicit schema env", () => {
+    expect(
+      buildCodexProtocolFixtureCommand("/codex/codex-rs/Cargo.toml", "/tmp/protocol", {
+        CARGO_TARGET_DIR: "/cache/codex-target",
+      }),
+    ).toEqual({
+      args: [
+        "test",
+        "--manifest-path",
+        "/codex/codex-rs/Cargo.toml",
+        "-p",
+        "codex-app-server-protocol",
+        "--lib",
+        "schema_fixtures_tests::write_schema_fixtures_from_env",
+        "--",
+        "--exact",
+        "--ignored",
+      ],
+      env: {
+        CARGO_TARGET_DIR: "/cache/codex-target",
+        CODEX_APP_SERVER_SCHEMA_ROOT: "/tmp/protocol",
+        CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL: "1",
+      },
+    });
   });
 
   it("fails before cargo protocol generation when local disk headroom is too low", () => {
@@ -306,6 +389,87 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
         { type: "beta", z: 3 },
       ],
     });
+  });
+
+  it("factors repeated definitions and exactly reconstructs every source schema", () => {
+    const schemas = new Map<string, unknown>(
+      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
+        schemaPath,
+        { $schema: "http://json-schema.org/draft-07/schema#", title: schemaPath, type: "object" },
+      ]),
+    );
+    const shared = { properties: { value: { $ref: "#/definitions/Leaf" } }, type: "object" };
+    const leaf = { type: "string" };
+    schemas.set("DynamicToolCallParams.json", {
+      definitions: { Leaf: leaf },
+      properties: { arguments: { $ref: "#/definitions/Leaf" } },
+      title: "DynamicToolCallParams",
+      type: "object",
+    });
+    schemas.set("v2/ErrorNotification.json", {
+      definitions: { Leaf: leaf, Shared: shared },
+      properties: { error: { $ref: "#/definitions/Shared" } },
+      title: "ErrorNotification",
+      type: "object",
+    });
+    schemas.set("v2/GetAccountResponse.json", {
+      definitions: { Leaf: leaf, Shared: shared },
+      properties: { account: { $ref: "#/definitions/Shared" } },
+      title: "GetAccountResponse",
+      type: "object",
+    });
+
+    const compacted = compactCodexAppServerProtocolJsonSchemas(schemas);
+    const sharedSchema = compacted.get(codexAppServerSharedDefinitionsSchema);
+    expect(sharedSchema).toMatchObject({
+      definitions: { Leaf: leaf, Shared: shared },
+      title: "CodexAppServerProtocolDefinitions",
+    });
+    expect(compacted.get("v2/ErrorNotification.json")).toMatchObject({
+      properties: {
+        error: {
+          $ref: "./CodexAppServerProtocolDefinitions.json#/definitions/Shared",
+        },
+      },
+    });
+    expect(compacted.get("DynamicToolCallParams.json")).toMatchObject({
+      properties: {
+        arguments: {
+          $ref: "./v2/CodexAppServerProtocolDefinitions.json#/definitions/Leaf",
+        },
+      },
+    });
+
+    for (const schemaPath of selectedCodexAppServerJsonSchemas) {
+      expect(
+        expandCodexAppServerProtocolJsonSchema({
+          schema: compacted.get(schemaPath),
+          schemaPath,
+          sharedSchema,
+        }),
+      ).toEqual(canonicalizeCodexAppServerProtocolJson(schemas.get(schemaPath)));
+    }
+  });
+
+  it("rejects same-name definitions with different schema semantics", () => {
+    const schemas = new Map<string, unknown>(
+      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
+        schemaPath,
+        { title: schemaPath, type: "object" },
+      ]),
+    );
+    schemas.set("v2/ErrorNotification.json", {
+      definitions: { Shared: { type: "string" } },
+      $ref: "#/definitions/Shared",
+    });
+    schemas.set("v2/GetAccountResponse.json", {
+      definitions: { Shared: { type: "integer" } },
+      $ref: "#/definitions/Shared",
+    });
+
+    expect(() => compactCodexAppServerProtocolJsonSchemas(schemas)).toThrow(
+      /shared definition Shared differs across schemas/,
+    );
   });
 });
 

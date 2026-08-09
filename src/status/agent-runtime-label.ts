@@ -1,10 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Agent runtime label helpers format provider, model, and runtime labels.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { isCliProvider } from "../agents/model-selection.js";
+import { isCliProvider, type CliProviderClassifier } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -26,6 +27,7 @@ export function resolveAgentRuntimeLabel(args: {
   >;
   resolvedHarness?: string;
   fallbackProvider?: string;
+  classifyCliProvider?: CliProviderClassifier;
 }): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
@@ -48,12 +50,12 @@ export function resolveAgentRuntimeLabel(args: {
     normalizeOptionalString(args.sessionEntry?.providerOverride) ??
     normalizeOptionalString(args.fallbackProvider);
   const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && isCliProvider(provider, args.config)) {
+  if (provider && (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))) {
     return (
       AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
       `${provider} (cli)`
     );
   }
 
-  return AGENT_RUNTIME_LABELS.openclaw;
+  return expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
 }

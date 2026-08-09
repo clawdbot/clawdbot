@@ -6,6 +6,10 @@ import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream
 
 type CacheRetention = "none" | "short" | "long";
 
+export function parseCacheRetention(value: unknown): CacheRetention | undefined {
+  return value === "none" || value === "short" || value === "long" ? value : undefined;
+}
+
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
   modelId?: string;
@@ -46,8 +50,8 @@ export function resolveCacheRetention(
     return undefined;
   }
 
-  const newVal = extraParams?.cacheRetention;
-  if (newVal === "none" || newVal === "short" || newVal === "long") {
+  const newVal = parseCacheRetention(extraParams?.cacheRetention);
+  if (newVal) {
     return newVal;
   }
 

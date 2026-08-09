@@ -4,10 +4,7 @@ import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import {
-  maybeWrapCommandWithShellSnapshot,
-  resetShellSnapshotCacheForTests,
-} from "./shell-snapshot.js";
+import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 
 const { killProcessTreeMock, spawnMock } = vi.hoisted(() => ({
   killProcessTreeMock: vi.fn(),
@@ -37,7 +34,6 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
   });
 
   afterEach(() => {
-    resetShellSnapshotCacheForTests();
     envSnapshot.restore();
   });
 
@@ -66,6 +62,6 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
 
     const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
     expect(options?.stdio).toBe("ignore");
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { graceMs: 0 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { graceMs: 0, detached: true });
   });
 });

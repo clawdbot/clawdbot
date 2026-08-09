@@ -2,6 +2,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
@@ -32,6 +34,7 @@ import {
   tailFile,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const limits = {
@@ -43,14 +46,27 @@ const limits = {
 };
 const posixIt = process.platform === "win32" ? it.skip : it;
 const { createTempDir } = createScriptTestHarness();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+
+function writeFrozenScenarioContract(root: string, scenarios: string[]): string {
+  const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+  mkdirSync(path.dirname(assertionsFile), { recursive: true });
+  writeFileSync(
+    assertionsFile,
+    `process.stdout.write(${JSON.stringify(`${JSON.stringify(scenarios)}\n`)});\n`,
+  );
+  return assertionsFile;
+}
 
 function expectDeclaredDispatchInputs(command: string): void {
   const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW, "utf8")) as {
     on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
   };
   const declared = new Set(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {}));
-  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].map((match) => match[1]);
+  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].flatMap((match) =>
+    match[1] === undefined ? [] : [match[1]],
+  );
   expect(emitted.length).toBeGreaterThan(0);
   for (const input of emitted) {
     expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
@@ -88,7 +104,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -148,6 +164,61 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stderr).not.toContain("at ");
   });
 
+  it("plans from an isolated release harness without installed dependencies", () => {
+    const root = tempDirs.make("openclaw-docker-plan-isolated-harness-");
+    const scriptsDir = path.join(root, "scripts");
+    const libDir = path.join(scriptsDir, "lib");
+    const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
+    mkdirSync(libDir, { recursive: true });
+    mkdirSync(upgradeSurvivorDir, { recursive: true });
+    copyFileSync("package.json", path.join(root, "package.json"));
+    copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
+    copyFileSync(
+      "scripts/prepublish-plugin-registry-artifact.mjs",
+      path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),
+    );
+    copyFileSync(
+      "scripts/windows-cmd-helpers.mjs",
+      path.join(scriptsDir, "windows-cmd-helpers.mjs"),
+    );
+    for (const fileName of [
+      "docker-e2e-plan.mjs",
+      "docker-e2e-scenarios.mjs",
+      "official-external-channel-catalog.json",
+      "release-version.mjs",
+      "sleep.mjs",
+    ]) {
+      copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
+    }
+    copyFileSync(
+      "scripts/e2e/lib/upgrade-survivor/config-recipe.mjs",
+      path.join(upgradeSurvivorDir, "config-recipe.mjs"),
+    );
+    cpSync(
+      "scripts/e2e/lib/upgrade-survivor/config-recipe",
+      path.join(upgradeSurvivorDir, "config-recipe"),
+      { recursive: true },
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(scriptsDir, "test-docker-all.mjs"), "--plan-json"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
+          OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ profile: "release-path" });
+  });
+
   it("rejects loose numeric runner env vars without a stack trace", () => {
     const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--plan-json"], {
       cwd: process.cwd(),
@@ -162,6 +233,28 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("selects the CLI installer distribution lane through the scheduler catalog", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_BUILD: "0",
+        OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+        OPENCLAW_DOCKER_ALL_LANES: "cli-installer-distribution",
+        OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+        OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Selected lanes: cli-installer-distribution");
+    expect(result.stdout).toContain(
+      "cli-installer-distribution(w=3 r=docker,npm timeout=1800s image=bare state=empty)",
+    );
+    expect(result.stdout).toContain("Dry run complete");
   });
 
   it("reuses only registry-backed images in generated workflow reruns", () => {
@@ -296,6 +389,148 @@ describe("scripts/test-docker-all scheduler", () => {
       expect(result.stderr).not.toContain("at ");
     } finally {
       rmSync(logDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects candidate-controlled survivor omissions without trusted opt-in", () => {
+    const root = tempDirs.make("openclaw-docker-all-untrusted-filter-");
+    try {
+      const assertionsFile = writeFrozenScenarioContract(root, ["unrelated"]);
+      const executionMarker = path.join(root, "candidate-contract-executed");
+      writeFileSync(
+        assertionsFile,
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(executionMarker)}, "executed");`,
+          'process.stdout.write("[\\"unrelated\\"]\\n");',
+        ].join("\n"),
+      );
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: root,
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("require trusted workflow opt-in");
+      expect(result.stdout).not.toContain("Dry run complete");
+      expect(existsSync(executionMarker)).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails with truthful artifacts when a frozen target cannot run selected survivor lanes", () => {
+    const root = tempDirs.make("openclaw-docker-all-filtered-");
+    const logDir = path.join(root, "logs");
+    try {
+      writeFrozenScenarioContract(root, ["unrelated"]);
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "reported-issues",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: root,
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("Docker lanes omitted");
+      expect(result.stderr).toContain("resolved zero runnable Docker lanes");
+      expect(result.stderr).toContain("published-upgrade-survivor");
+      const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
+      expect(summary.status).toBe("failed");
+      expect(summary.lanes).toEqual([]);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(12);
+      expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-versioned-runtime-deps",
+      );
+      const failures = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
+      expect(failures.status).toBe("failed");
+      expect(failures.lanes).toEqual([]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { args: ["--plan-json"], dryRun: false, label: "JSON planning" },
+    { args: [], dryRun: true, label: "dry runs" },
+  ])("preserves $label when frozen survivor lanes are omitted", ({ args, dryRun }) => {
+    const root = tempDirs.make("openclaw-docker-all-filtered-plan-");
+    const logDir = path.join(root, "logs");
+    try {
+      writeFrozenScenarioContract(root, ["unrelated"]);
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", ...args], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: dryRun ? "1" : "0",
+          OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "reported-issues",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: root,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      if (dryRun) {
+        expect(result.stdout).toContain("Docker lanes omitted");
+        expect(result.stdout).toContain("Dry run complete");
+      } else {
+        const plan = JSON.parse(result.stdout);
+        expect(plan.lanes).toEqual([]);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+      }
+      expect(existsSync(path.join(logDir, "summary.json"))).toBe(false);
+      expect(existsSync(path.join(logDir, "failures.json"))).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("reports omitted frozen-target lanes when another selected lane remains runnable", () => {
+    const root = tempDirs.make("openclaw-docker-all-mixed-filtered-");
+    try {
+      writeFrozenScenarioContract(root, ["unrelated"]);
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_LANES: "published-upgrade-survivor,plugin-binding-command-escape",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "reported-issues",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: root,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Docker lanes omitted");
+      expect(result.stdout).toContain("published-upgrade-survivor");
+      expect(result.stdout).toContain("plugin-binding-command-escape");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
     }
   });
 

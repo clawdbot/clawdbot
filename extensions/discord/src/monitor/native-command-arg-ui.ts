@@ -34,7 +34,7 @@ function createCommandArgsWithValue(params: { argName: string; value: string }):
   return { values };
 }
 
-export function buildDiscordCommandArgCustomId(params: {
+function buildDiscordCommandArgCustomId(params: {
   command: string;
   arg: string;
   value: string;
@@ -71,7 +71,7 @@ function parseDiscordCommandArgData(
   };
 }
 
-export async function handleDiscordCommandArgInteraction(params: {
+async function handleDiscordCommandArgInteraction(params: {
   interaction: ButtonInteraction;
   data: ComponentData;
   ctx: DiscordCommandArgContext;

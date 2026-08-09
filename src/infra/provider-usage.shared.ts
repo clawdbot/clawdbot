@@ -6,7 +6,7 @@ import type { UsageProviderId } from "./provider-usage.types.js";
 /** Default timeout for provider usage collection. */
 export const DEFAULT_TIMEOUT_MS = 5000;
 
-export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
+export const PROVIDER_LABELS = {
   anthropic: "Claude",
   clawrouter: "ClawRouter",
   deepseek: "DeepSeek",
@@ -19,10 +19,16 @@ export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   xiaomi: "Xiaomi",
   "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
-};
+} as const satisfies Readonly<Record<string, string>>;
+
+/** Dynamic-key lookup view; closed-key reads should use PROVIDER_LABELS directly. */
+export function providerUsageLabel(provider: string): string | undefined {
+  const labels: Readonly<Record<string, string | undefined>> = PROVIDER_LABELS;
+  return labels[provider];
+}
 
 export function resolveProviderUsageDisplayName(provider: string): string {
-  return PROVIDER_LABELS[provider] ?? provider;
+  return providerUsageLabel(provider) ?? provider;
 }
 
 /** Returns true for providers whose usage endpoint is only meaningful with OAuth/token auth. */
