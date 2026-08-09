@@ -287,6 +287,7 @@ export async function executeCliProcess(params: {
       const replyBackendHandle = runParams.replyOperation
         ? {
             kind: "cli" as const,
+            runId: runParams.runId,
             cancel: () => managedRun.cancel("manual-cancel"),
           }
         : undefined;

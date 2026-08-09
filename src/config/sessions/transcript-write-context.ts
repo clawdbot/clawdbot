@@ -21,6 +21,8 @@ export type SessionTranscriptWriteLockTarget = {
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
 export type OwnedSessionTranscriptWriteOptions<T> = {
@@ -107,6 +109,25 @@ export async function withOwnedSessionTranscriptWrites<T>(
 /** Runs detached work without retaining an attempt-owned transcript lock. */
 export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
   return ownedTranscriptWriteContext.exit(run);
+}
+
+/** Returns the admitted run fence inherited by nested run-owned transcript writes. */
+export function getOwnedSessionTranscriptWriterFence():
+  | {
+      expectedLifecycleRevision?: string;
+      expectedWriterRunId: string;
+    }
+  | undefined {
+  const target = ownedTranscriptWriteContext.getStore()?.sessionTarget;
+  const expectedWriterRunId = target?.expectedWriterRunId?.trim();
+  if (!expectedWriterRunId) {
+    return undefined;
+  }
+  const expectedLifecycleRevision = target?.expectedLifecycleRevision;
+  return {
+    ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+    expectedWriterRunId,
+  };
 }
 
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(

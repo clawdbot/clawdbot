@@ -43,7 +43,7 @@ import {
   readRecentUserAssistantTextForSession,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
@@ -1959,6 +1959,63 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ok: false,
       code: "session-rebound",
     });
+  });
+
+  it("rejects a superseded writer claim and accepts the admitted writer", async () => {
+    await writeTranscriptStore({
+      activeWriterRunId: "run-a",
+      lifecycleRevision: "owned-revision",
+    } as InternalSessionEntry);
+    let releaseWriterChange = () => {};
+    const writerChangeGate = new Promise<void>((resolve) => {
+      releaseWriterChange = resolve;
+    });
+    let markWriterChangeStarted = () => {};
+    const writerChangeStarted = new Promise<void>((resolve) => {
+      markWriterChangeStarted = resolve;
+    });
+    const writerChange = updateSessionEntry(
+      {
+        agentId: "main",
+        storePath: fixture.storePath(),
+        sessionKey,
+      },
+      async () => {
+        markWriterChangeStarted();
+        await writerChangeGate;
+        return { activeWriterRunId: "run-b" } as Partial<InternalSessionEntry>;
+      },
+    );
+    await writerChangeStarted;
+
+    const staleAppend = appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedLifecycleRevision: "owned-revision",
+      expectedSessionId: sessionId,
+      expectedWriterRunId: "run-a",
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseWriterChange();
+
+    await writerChange;
+    await expect(staleAppend).resolves.toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
+    await expect(
+      appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        expectedLifecycleRevision: "owned-revision",
+        expectedSessionId: sessionId,
+        expectedWriterRunId: "run-b",
+        storePath: fixture.storePath(),
+        message: createExactAssistantMessage({ text: "current output" }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {

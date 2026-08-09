@@ -228,6 +228,7 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision: options.expectedLifecycleRevision,
+          expectedWriterRunId: options.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           atomicGroup: options.atomicGroup,

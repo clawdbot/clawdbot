@@ -41,6 +41,15 @@ export function shouldDeliverDespiteSourceReplySuppression(
   );
 }
 
+export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+    return undefined;
+  }
+  const questionId = (askUser as { questionId?: unknown }).questionId;
+  return typeof questionId === "string" ? questionId : undefined;
+}
+
 export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(payload);
   return JSON.stringify({

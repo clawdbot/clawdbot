@@ -118,6 +118,11 @@ describe("agent.wait gateway dedupe observations", () => {
       payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "rpc" },
       expected: { status: "error", endedAt: 150, stopReason: "rpc" },
     },
+    {
+      name: "earlier writer supersession",
+      payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "superseded" },
+      expected: { status: "error", endedAt: 150, stopReason: "superseded" },
+    },
   ])("merges $name across agent and chat observations", async ({ name, payload, expected }) => {
     for (const timeoutFirst of [true, false]) {
       const runId = `run-cross-source-${name.replaceAll(" ", "-")}-${timeoutFirst}`;

@@ -194,8 +194,15 @@ async function runEmbeddedAgentViaCliBackend(
     const result = await runCliAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+        : {}),
+      ...(params.sessionTarget?.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+        : {}),
       chatType: params.chatType,
       agentId: params.agentId,
+      ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,
