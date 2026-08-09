@@ -21,6 +21,7 @@ type SecretsAuditOptions = {
   check?: boolean;
   json?: boolean;
   allowExec?: boolean;
+  severityMin?: string;
 };
 type SecretsConfigureOptions = {
   apply?: boolean;
@@ -159,7 +160,12 @@ export function registerSecretsCli(program: Command): void {
   secrets
     .command("audit")
     .description("Audit plaintext secrets, unresolved refs, and precedence drift")
-    .option("--check", "Exit non-zero when findings are present", false)
+    .option("--check", "Exit non-zero when findings meet --severity-min", false)
+    .option(
+      "--severity-min <severity>",
+      "Minimum finding severity that causes --check to fail: info or warn/warning",
+      "info",
+    )
     .option(
       "--allow-exec",
       "Allow exec SecretRef resolution during audit (may execute provider commands)",
@@ -168,8 +174,12 @@ export function registerSecretsCli(program: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsAuditOptions) => {
       try {
-        const { resolveSecretsAuditExitCode, runSecretsAudit } =
+        const { parseSecretsAuditCheckSeverity, resolveSecretsAuditExitCode, runSecretsAudit } =
           await import("../secrets/audit.js");
+        const severityMin = parseSecretsAuditCheckSeverity(opts.severityMin ?? "info");
+        if (severityMin === null) {
+          throw new Error("Invalid --severity-min value. Expected one of: info, warn/warning");
+        }
         const report = await runSecretsAudit({
           allowExec: Boolean(opts.allowExec),
         });
@@ -182,7 +192,7 @@ export function registerSecretsCli(program: Command): void {
           if (report.findings.length > 0) {
             for (const finding of report.findings.slice(0, 20)) {
               defaultRuntime.log(
-                `- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+                `- [${finding.severity}:${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
               );
             }
             if (report.findings.length > 20) {
@@ -195,7 +205,7 @@ export function registerSecretsCli(program: Command): void {
             );
           }
         }
-        const exitCode = resolveSecretsAuditExitCode(report, Boolean(opts.check));
+        const exitCode = resolveSecretsAuditExitCode(report, Boolean(opts.check), severityMin);
         if (exitCode !== 0) {
           defaultRuntime.exit(exitCode);
         }

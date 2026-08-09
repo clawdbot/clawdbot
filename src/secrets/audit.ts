@@ -119,6 +119,7 @@ type AuditCollector = {
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+
 function addFinding(collector: AuditCollector, finding: SecretsAuditFinding): void {
   collector.findings.push(finding);
 }
@@ -729,13 +730,4 @@ export async function runSecretsAudit(
   };
 }
 
-/** Maps audit results to CLI exit codes. */
-export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
-  if (report.summary.unresolvedRefCount > 0) {
-    return 2;
-  }
-  if (check && report.findings.length > 0) {
-    return 1;
-  }
-  return 0;
-}
+export { parseSecretsAuditCheckSeverity, resolveSecretsAuditExitCode } from "./audit-exit-code.js";
