@@ -206,7 +206,6 @@ describe("sendGatewayHello update detail scope", () => {
       role: "operator",
       scopes: ["operator.pairing"],
       deviceToken: "paired-token",
-      deviceTokenScopes: ["operator.read", "operator.admin"],
       issuedAtMs: 1,
     });
     expect(listControlUiPluginTabsMock).toHaveBeenCalledWith(["operator.pairing"], {

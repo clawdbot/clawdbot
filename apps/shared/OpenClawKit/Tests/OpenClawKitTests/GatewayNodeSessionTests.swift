@@ -2941,11 +2941,44 @@ struct GatewayNodeSessionTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `non bootstrap hello stores primary device token but not additional bootstrap tokens`() async throws {
+    func `same primary device token preserves stored scopes`() async throws {
         let identity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "server-operator-token",
+            scopes: ["operator.admin", "operator.read"])
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "server-operator-token",
-            "deviceTokenScopes": ["operator.admin", "operator.read"],
+            "role": "operator",
+            "scopes": ["operator.read"],
+        ])
+        let gateway = GatewayNodeSession()
+        let options = operatorConnectOptions(includeDeviceIdentity: true)
+
+        try await gateway.connectForTest(
+            testURL("wss://example.invalid"),
+            credentials: .init(token: "shared-token"),
+            options: options,
+            session: session)
+
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
+        #expect(operatorEntry.token == "server-operator-token")
+        #expect(operatorEntry.scopes == ["operator.admin", "operator.read"])
+
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `rotated primary device token uses hello scopes and ignores additional handoff tokens`() async throws {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "old-operator-token",
+            scopes: ["operator.admin", "operator.read"])
+        let session = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "rotated-operator-token",
             "role": "operator",
             "scopes": ["operator.read"],
             "deviceTokens": [
@@ -2966,8 +2999,8 @@ struct GatewayNodeSessionTests {
             session: session)
 
         let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
-        #expect(operatorEntry.token == "server-operator-token")
-        #expect(operatorEntry.scopes == ["operator.admin", "operator.read"])
+        #expect(operatorEntry.token == "rotated-operator-token")
+        #expect(operatorEntry.scopes == ["operator.read"])
         #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node") == nil)
 
         await gateway.disconnect()

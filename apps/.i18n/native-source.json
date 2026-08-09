@@ -1963,7 +1963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1039,
+      "line": 1040,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Accept",
       "surface": "android",
@@ -1971,7 +1971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1855,
+      "line": 1856,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -1979,7 +1979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1855,
+      "line": 1856,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",

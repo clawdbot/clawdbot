@@ -117,7 +117,6 @@ export async function sendGatewayHello(
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,
-            deviceTokenScopes: deviceToken.scopes,
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
             ...(bootstrapDeviceTokens.length > 1
               ? { deviceTokens: bootstrapDeviceTokens.slice(1) }

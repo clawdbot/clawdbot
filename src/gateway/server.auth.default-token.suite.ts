@@ -322,7 +322,6 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
-      let pairedDeviceScopes: unknown;
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -334,9 +333,13 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(auth?.role).toBe("operator");
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
-        expect(Array.isArray(auth?.deviceTokenScopes)).toBe(true);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
+          "deviceToken",
+          "issuedAtMs",
+          "role",
+          "scopes",
+        ]);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
-        pairedDeviceScopes = auth?.deviceTokenScopes;
       } finally {
         wsInitial.close();
       }
@@ -353,7 +356,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(auth?.role).toBe("operator");
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
         expect(auth?.scopes).toEqual(["operator.read"]);
-        expect(auth?.deviceTokenScopes).toEqual(pairedDeviceScopes);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
+          "deviceToken",
+          "issuedAtMs",
+          "role",
+          "scopes",
+        ]);
         const admin = await rpcReq(wsReconnect, "config.schema");
         expect(admin.ok).toBe(false);
         expect(admin.error?.message).toBe("missing scope: operator.admin");
