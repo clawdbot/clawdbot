@@ -86,6 +86,30 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
     });
   });
 
+  it("reads external auth without republishing during prepared generation builds", () => {
+    const cfg = {} as OpenClawConfig;
+    const externalCli = externalCliDiscoveryForProviders({
+      cfg,
+      providers: ["openai"],
+    });
+
+    resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+      config: cfg,
+      env: {},
+      externalCli,
+      readOnly: true,
+      publishExternalAuthProfiles: false,
+    });
+
+    expect(storeMocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent", {
+      allowKeychainPrompt: false,
+      config: cfg,
+      externalCli,
+      readOnly: true,
+      publishExternalAuthProfiles: false,
+    });
+  });
+
   it("merges prepared ambient credentials without repeating ambient discovery", () => {
     credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({
       fireworks: { type: "api_key", key: "agent-key" },

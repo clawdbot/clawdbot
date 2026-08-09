@@ -148,8 +148,11 @@ function prepareAgentFacts(
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
     config: input.config,
     // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
-    // discovery only parses the credential generation captured here.
+    // discovery only parses the credential generation captured here. The generation owns any
+    // external overlay it discovers, so publishing that overlay mid-build would recursively stale
+    // the owner that is currently materializing it.
     readOnly: true,
+    publishExternalAuthProfiles: false,
     ambientCredentials,
     externalCli,
     ...(input.skipCredentials ? { skipCredentials: true } : {}),

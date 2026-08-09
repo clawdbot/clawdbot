@@ -22,6 +22,7 @@ export type DiscoverAuthStorageOptions = {
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
   readOnly?: boolean;
+  publishExternalAuthProfiles?: boolean;
   skipExternalAuthProfiles?: boolean;
   skipCredentials?: boolean;
   syntheticAuthProviderRefs?: Iterable<string>;
@@ -104,6 +105,9 @@ export function resolveAgentCredentialsForDiscovery(
       : ensureAuthProfileStore(agentDir, {
           ...storeOptions,
           ...(options?.readOnly === true ? { readOnly: true } : {}),
+          ...(options?.publishExternalAuthProfiles === false
+            ? { publishExternalAuthProfiles: false }
+            : {}),
         });
   const credentials = resolveAgentCredentialMapFromStore(store, {
     includeSecretRefPlaceholders: options?.readOnly === true,

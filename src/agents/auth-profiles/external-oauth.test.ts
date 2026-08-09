@@ -172,6 +172,40 @@ describe("auth external oauth helpers", () => {
     }
   });
 
+  it("preserves resolved runtime refs without republishing during owner builds", () => {
+    const agentDir = "/tmp/openclaw-external-oauth-prepared-owner";
+    const resolved = createStore({
+      "openai:configured": {
+        type: "api_key",
+        provider: "openai",
+        key: "resolved-runtime-key",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: resolved }]);
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const scoped = ensureAuthProfileStore(agentDir, {
+        externalCliProviderIds: ["openai"],
+        allowKeychainPrompt: false,
+        publishExternalAuthProfiles: false,
+        readOnly: true,
+        syncExternalCli: false,
+      });
+
+      expect(scoped.profiles["openai:configured"]).toEqual(resolved.profiles["openai:configured"]);
+      expect(scoped.profiles["openai:default"]?.type).toBe("oauth");
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toEqual(resolved);
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+    }
+  });
+
   it("keeps ambient Codex OAuth from outranking an env key under an api-key pin", () => {
     const cfg = {
       models: {

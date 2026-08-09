@@ -74,6 +74,7 @@ type LoadAuthProfileStoreOptions = {
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
   readOnly?: boolean;
+  publishExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
@@ -1152,6 +1153,7 @@ export function ensureAuthProfileStore(
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
     inheritedAuthDir?: string;
+    publishExternalAuthProfiles?: boolean;
     readOnly?: boolean;
     syncExternalCli?: boolean;
   },
@@ -1172,6 +1174,7 @@ export function ensureAuthProfileStore(
   );
   if (!runtimeStore) {
     if (
+      effectiveOptions?.publishExternalAuthProfiles !== false &&
       hasScopedExternalCliOverlay(externalCli) &&
       (store.runtimeExternalProfileIds?.length ?? 0) > 0
     ) {
@@ -1184,7 +1187,10 @@ export function ensureAuthProfileStore(
     // snapshot must retain unrelated external profiles. Publish the merged owner fact so prepared
     // model and chat metadata generations converge without reopening credential sources.
     const materialized = mergeRuntimeExternalProfileState({ next: store, existing: runtimeStore });
-    if (!isDeepStrictEqual(materialized, runtimeStore)) {
+    if (
+      effectiveOptions?.publishExternalAuthProfiles !== false &&
+      !isDeepStrictEqual(materialized, runtimeStore)
+    ) {
       setRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
     }
     return store;
