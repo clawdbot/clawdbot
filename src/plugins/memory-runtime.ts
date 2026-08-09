@@ -1,9 +1,11 @@
 // Runtime bridge for plugin-owned memory hooks and state.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
+import { observeMemoryAuthorizationShadowSurface } from "./memory-authorization-shadow.js";
 import {
   getMemoryRuntime,
   resolveSelectedMemoryCapabilityRegistration,
@@ -20,6 +22,7 @@ type MemorySearchAuthorization = Parameters<
   NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>
 >[0];
 type MemoryRuntimeOwner = { runtime: MemoryRuntime; registry?: PluginRegistry };
+const log = createSubsystemLogger("plugins/memory-authorization");
 let standaloneMemoryRegistrySlot:
   | { key: string; registry: PluginRegistry; retiredRuntimes: Map<MemoryRuntime, PluginRegistry> }
   | undefined;
@@ -54,7 +57,7 @@ function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
 }
 
 function listCurrentMemoryRuntimeOwners(): MemoryRuntimeOwner[] {
-  const current = getMemoryRuntime();
+  const current = getSelectedMemoryRuntime();
   const owners = new Map<MemoryRuntime, MemoryRuntimeOwner>();
   for (const [runtime, registry] of standaloneMemoryRegistrySlot?.retiredRuntimes ?? []) {
     owners.set(runtime, { runtime, registry });
@@ -78,11 +81,39 @@ function withMemoryRuntimeOwner<T>(
   return withPluginRuntimeRegistryScope(owner.registry, () => run(owner.runtime));
 }
 
+function inspectSelectedMemoryRuntime(runtime: MemoryRuntime): MemoryRuntime {
+  // The inspection has no result-path effect: it only emits bounded shadow metadata once per
+  // selected runtime object and deliberately tolerates malformed/plugin-hostile surfaces.
+  const metadata = observeMemoryAuthorizationShadowSurface(runtime);
+  if (metadata) {
+    try {
+      log.debug("memory authorization backend surface evaluated", metadata);
+    } catch {
+      // Shadow logging must not change selected runtime resolution or a legacy result path.
+    }
+  }
+  return runtime;
+}
+
+/** Reads the selected registered runtime through the canonical shadow-inspected seam. */
+export function getSelectedMemoryRuntime(): MemoryRuntime | undefined {
+  const runtime = getMemoryRuntime();
+  return runtime ? inspectSelectedMemoryRuntime(runtime) : undefined;
+}
+
+function toMemoryRuntimeOwner(
+  runtime: MemoryRuntime,
+  registry?: PluginRegistry,
+): MemoryRuntimeOwner {
+  inspectSelectedMemoryRuntime(runtime);
+  return registry ? { runtime, registry } : { runtime };
+}
+
 function ensureMemoryRuntime(params?: {
   cfg: OpenClawConfig;
   agentId: string;
 }): MemoryRuntimeOwner | undefined {
-  const current = getMemoryRuntime();
+  const current = getSelectedMemoryRuntime();
   if (current || !params) {
     return current ? { runtime: current } : undefined;
   }
@@ -100,7 +131,9 @@ function ensureMemoryRuntime(params?: {
   const key = resolvePluginRegistryLoadCacheKey(loadOptions);
   if (standaloneMemoryRegistrySlot?.key === key) {
     const runtime = resolveMemoryRuntimeFromRegistry(standaloneMemoryRegistrySlot.registry);
-    return runtime ? { runtime, registry: standaloneMemoryRegistrySlot.registry } : undefined;
+    return runtime
+      ? toMemoryRuntimeOwner(runtime, standaloneMemoryRegistrySlot.registry)
+      : undefined;
   }
   const registry = loadPluginRegistryHandle(loadOptions);
   if (!registry) {
@@ -116,7 +149,7 @@ function ensureMemoryRuntime(params?: {
     retiredRuntimes.set(previousRuntime, previousSlot.registry);
   }
   standaloneMemoryRegistrySlot = { key, registry, retiredRuntimes };
-  return runtime ? { runtime, registry } : undefined;
+  return runtime ? toMemoryRuntimeOwner(runtime, registry) : undefined;
 }
 
 /** Returns the active plugin-backed memory search manager for an agent. */

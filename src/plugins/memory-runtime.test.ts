@@ -10,6 +10,8 @@ type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
+  logDebug: vi.fn(),
+  observeMemoryAuthorizationShadowSurface: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveAgentWorkspaceDir: vi.fn(),
 }));
@@ -23,6 +25,14 @@ vi.mock("./loader.js", () => ({
   resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
 }));
 
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({ debug: mocks.logDebug })),
+}));
+
+vi.mock("./memory-authorization-shadow.js", () => ({
+  observeMemoryAuthorizationShadowSurface: mocks.observeMemoryAuthorizationShadowSurface,
+}));
+
 vi.mock("./memory-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./memory-state.js")>();
   return { ...actual, getMemoryRuntime: mocks.getMemoryRuntime };
@@ -33,6 +43,7 @@ import {
   closeActiveMemorySearchManagerCore,
   closeActiveMemorySearchManagersCore,
   getActiveMemorySearchManagerCore,
+  getSelectedMemoryRuntime,
   resolveActiveMemoryBackendConfig,
 } from "./memory-runtime.js";
 import { resetStandaloneMemoryRegistrySlot } from "./memory-runtime.test-support.js";
@@ -72,6 +83,8 @@ describe("memory runtime handles", () => {
     resetStandaloneMemoryRegistrySlot();
     mocks.getMemoryRuntime.mockReset().mockReturnValue(undefined);
     mocks.loadPluginRegistryHandle.mockReset();
+    mocks.logDebug.mockReset();
+    mocks.observeMemoryAuthorizationShadowSurface.mockReset();
     mocks.resolvePluginRegistryLoadCacheKey.mockClear();
     mocks.resolveAgentWorkspaceDir
       .mockReset()
@@ -225,6 +238,45 @@ describe("memory runtime handles", () => {
       backend: "builtin",
     });
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("inspects direct selected-runtime acquisition through the canonical seam", () => {
+    const runtime = createRuntime();
+    mocks.getMemoryRuntime.mockReturnValue(runtime);
+
+    expect(getSelectedMemoryRuntime()).toBe(runtime);
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledOnce();
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith(runtime);
+  });
+
+  it("wires each legacy resolution through shadow inspection without changing legacy resolution", () => {
+    const { registry, runtime } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
+      backend: "builtin",
+    });
+    expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
+      backend: "builtin",
+    });
+
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledTimes(2);
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith(runtime);
+    expect(runtime.resolveMemoryBackendConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps legacy resolution when shadow logging fails", () => {
+    const { registry, runtime } = createRegistry();
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    mocks.observeMemoryAuthorizationShadowSurface.mockReturnValue({ mode: "shadow" });
+    mocks.logDebug.mockImplementation(() => {
+      throw new Error("logger unavailable");
+    });
+
+    expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
+      backend: "builtin",
+    });
+    expect(runtime.resolveMemoryBackendConfig).toHaveBeenCalledTimes(1);
   });
 
   it("authorizes raw hits inside the selected plugin runtime scope", async () => {

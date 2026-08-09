@@ -6,7 +6,7 @@ import {
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import { getMemoryRuntime } from "../plugins/memory-state.js";
+import { getSelectedMemoryRuntime } from "../plugins/memory-runtime.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 
 const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
@@ -123,7 +123,7 @@ export async function prepareProjectMemoryBootstrap(params: {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
-  const runtime = getMemoryRuntime();
+  const runtime = getSelectedMemoryRuntime();
   if (!runtime) {
     return [];
   }
