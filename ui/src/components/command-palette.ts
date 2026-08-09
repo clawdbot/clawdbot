@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { RouteId } from "../app-route-paths.ts";
+import { isDesktopPanelAvailable } from "../app/app-shell-chrome.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -14,6 +15,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./modal-dialog.ts";
 
 type PaletteItem = {
@@ -31,7 +33,7 @@ const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
-function getPaletteBaseItems(): PaletteItem[] {
+function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
   return [
     {
       id: "nav-new-session",
@@ -97,11 +99,22 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "/verbose full",
       description: t("palette.descriptions.verboseMode"),
     },
+    ...(desktopAvailable
+      ? [
+          {
+            id: "panel-desktop",
+            label: t("palette.items.desktop"),
+            icon: "monitor" as const,
+            category: "navigation" as const,
+            action: "panel:desktop",
+          },
+        ]
+      : []),
   ];
 }
 
-function getPaletteItemsInternal(): PaletteItem[] {
-  return getPaletteBaseItems();
+function getPaletteItemsInternal(desktopAvailable: boolean): PaletteItem[] {
+  return getPaletteBaseItems(desktopAvailable);
 }
 
 type CommandPaletteProps = {
@@ -115,6 +128,7 @@ type CommandPaletteProps = {
   onNavigate: (routeId: RouteId) => void;
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  desktopAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
 };
 
@@ -122,8 +136,9 @@ function filteredItems(
   query: string,
   includeSlashCommands = true,
   sessionItems: readonly PaletteItem[] = [],
+  desktopAvailable = false,
 ): PaletteItem[] {
-  const items = getPaletteItemsInternal().filter(
+  const items = getPaletteItemsInternal(desktopAvailable).filter(
     (item) => includeSlashCommands || item.category !== "search",
   );
   if (!query) {
@@ -159,6 +174,8 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     props.onNavigate(item.action.slice(4) as RouteId);
   } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
+  } else if (item.action === "panel:desktop") {
+    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else {
     props.onSlashCommand?.(item.action);
   }
@@ -177,7 +194,12 @@ function scrollActiveIntoView() {
 }
 
 function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  const items = filteredItems(props.query, Boolean(props.onSlashCommand), props.sessionItems);
+  const items = filteredItems(
+    props.query,
+    Boolean(props.onSlashCommand),
+    props.sessionItems,
+    props.desktopAvailable,
+  );
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
   }
@@ -242,7 +264,12 @@ function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  const items = filteredItems(props.query, Boolean(props.onSlashCommand), props.sessionItems);
+  const items = filteredItems(
+    props.query,
+    Boolean(props.onSlashCommand),
+    props.sessionItems,
+    props.desktopAvailable,
+  );
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
   const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
@@ -543,6 +570,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeIndex: this.activeIndex,
       sessionItems: this.sessionItems,
+      desktopAvailable: this.context
+        ? isDesktopPanelAvailable(this.context.gateway.snapshot)
+        : false,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;
