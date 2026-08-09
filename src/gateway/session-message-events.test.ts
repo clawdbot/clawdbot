@@ -83,7 +83,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  for (const state of cleanupTestStates.splice(0).reverse()) {
+  for (const state of cleanupTestStates.splice(0).toReversed()) {
     await state.cleanup();
   }
   await Promise.all(
