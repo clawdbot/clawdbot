@@ -84,4 +84,71 @@ describe("formatContextJsonBlock", () => {
     expect(block).toContain("…[truncated: 4980 more entries]");
     expect(block.length).toBeLessThan(10_000);
   });
+
+  it("serializes a normal payload byte-identically to a plain JSON.stringify", () => {
+    const payload = {
+      label: "group",
+      members: ["alice", "bob"],
+      meta: { region: "us-west", tier: 2 },
+    };
+
+    expect(formatContextJsonBlock("Context:", payload)).toBe(
+      ["Context:", "```json", JSON.stringify(payload), "```"].join("\n"),
+    );
+  });
+
+  it("bounds the cumulative serialized size of a saturated nested payload", () => {
+    // Adversarial shape from review: every container passes the per-level caps
+    // (50 keys, 20 entries, 2,000-char strings), yet the block would serialize
+    // ~2 MB without a cumulative budget.
+    const payload = Object.fromEntries(
+      Array.from({ length: 50 }, (_k, keyIndex) => [
+        `key-${String(keyIndex).padStart(2, "0")}`,
+        Array.from(
+          { length: 20 },
+          (_e, entryIndex) => `value-${keyIndex}-${entryIndex}-${"x".repeat(2_000)}`,
+        ),
+      ]),
+    );
+    expect(JSON.stringify(payload).length).toBeGreaterThan(2_000_000);
+
+    const block = formatContextJsonBlock("Context:", payload);
+
+    expect(block.length).toBeLessThan(60_000);
+    expect(block).toContain("…[truncated: context budget exhausted]");
+    expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+
+  it("cuts many small entries that individually pass the per-container caps", () => {
+    const payload = Object.fromEntries(
+      Array.from({ length: 50 }, (_g, groupIndex) => [
+        `group-${groupIndex}`,
+        Object.fromEntries(
+          Array.from({ length: 50 }, (_i, itemIndex) => [
+            `item-${itemIndex}`,
+            `value-${groupIndex}-${itemIndex}`,
+          ]),
+        ),
+      ]),
+    );
+    expect(JSON.stringify(payload).length).toBeGreaterThan(50_000);
+
+    const block = formatContextJsonBlock("Context:", payload);
+
+    expect(block.length).toBeLessThan(60_000);
+    expect(block).toContain("…[truncated: context budget exhausted]");
+    expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+
+  it("bounds nesting depth and flags the cut", () => {
+    let payload: unknown = "leaf";
+    for (let level = 0; level < 12; level++) {
+      payload = { nested: payload };
+    }
+
+    const block = formatContextJsonBlock("Context:", payload);
+
+    expect(block).toContain("…[truncated: max depth reached]");
+    expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
 });

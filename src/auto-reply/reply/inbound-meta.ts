@@ -22,6 +22,13 @@ import {
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
+// Cumulative budget for the whole assembled user-role context prefix (labels +
+// every structured block). The largest measured first-party assembly — group
+// Conversation info, a 10-link reply chain at the per-string cap, forwarded /
+// thread-starter / location blocks, and a 20-entry chat history — totals ~43k
+// chars; 150k leaves ~3.5x headroom while bounding channel-supplied structured
+// entries, whose count is unbounded (one block per entry).
+const MAX_INBOUND_CONTEXT_TOTAL_CHARS = 150_000;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
@@ -616,6 +623,23 @@ export function buildInboundUserContextPrefix(
   sessionEntry?: SessionEntry,
 ): string {
   const blocks: string[] = [];
+  let contextBudgetRemaining = MAX_INBOUND_CONTEXT_TOTAL_CHARS;
+  let contextBudgetExhausted = false;
+  // One cumulative budget for the whole assembly: once it is spent, later
+  // blocks are dropped behind a single explicit marker (marked like any other
+  // injected header so strippers recognize it).
+  const pushContextBlock = (block: string) => {
+    if (contextBudgetExhausted) {
+      return;
+    }
+    if (block.length > contextBudgetRemaining) {
+      contextBudgetExhausted = true;
+      blocks.push(markInboundContextLabel("…[truncated: inbound context budget exhausted]"));
+      return;
+    }
+    contextBudgetRemaining -= block.length;
+    blocks.push(block);
+  };
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
@@ -690,14 +714,14 @@ export function buildInboundUserContextPrefix(
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
     );
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(markInboundContextLabel("Thread starter:"), {
         body: threadStarterBody,
       }),
@@ -707,14 +731,14 @@ export function buildInboundUserContextPrefix(
   const rawReplyToBody = sanitizePromptBody(ctx.ReplyToBody);
   const replyToBody = rawReplyToBody ? truncateBodyHeadTail(rawReplyToBody) : rawReplyToBody;
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(
         markInboundContextLabel("Reply chain of current user message (nearest first):"),
         replyChainPayload,
       ),
     );
   } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(markInboundContextLabel("Reply target of current user message:"), {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
@@ -734,7 +758,7 @@ export function buildInboundUserContextPrefix(
     date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
   };
   if (forwardedFrom) {
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(
         markInboundContextLabel("Forwarded message context:"),
         forwardedContext,
@@ -744,7 +768,7 @@ export function buildInboundUserContextPrefix(
 
   const locationContext = buildLocationContextPayload(ctx);
   if (locationContext) {
-    blocks.push(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
+    pushContextBlock(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
   }
 
   for (const entry of structuredContext) {
@@ -753,10 +777,10 @@ export function buildInboundUserContextPrefix(
     }
     const chatWindow = formatChatWindowStructuredContext(entry, envelope);
     if (chatWindow) {
-      blocks.push(chatWindow);
+      pushContextBlock(chatWindow);
       continue;
     }
-    blocks.push(
+    pushContextBlock(
       formatContextJsonBlock(
         markInboundContextLabel(formatChannelStructuredContextLabel(entry.label)),
         {
@@ -790,7 +814,7 @@ export function buildInboundUserContextPrefix(
       return line ? [line] : [];
     });
     if (historyLines.length > 0) {
-      blocks.push(
+      pushContextBlock(
         [markInboundContextLabel("Chat history since last reply:"), ...historyLines].join("\n"),
       );
     }
@@ -798,11 +822,11 @@ export function buildInboundUserContextPrefix(
 
   const activeGoalContext = formatActiveGoalContext(sessionEntry);
   if (activeGoalContext) {
-    blocks.push(activeGoalContext);
+    pushContextBlock(activeGoalContext);
   }
 
   if (currentMessageContext) {
-    blocks.push(currentMessageContext);
+    pushContextBlock(currentMessageContext);
   }
 
   return blocks.filter(Boolean).join("\n\n");

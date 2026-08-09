@@ -27,10 +27,22 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
 export const MAX_CONTEXT_JSON_STRING_CHARS = 2_000;
 // Same untrusted-entry budget as inbound-meta.ts (MAX_UNTRUSTED_HISTORY_ENTRIES):
 // repeated channel-supplied entries are capped at that count.
-export const MAX_CONTEXT_JSON_ARRAY_ENTRIES = 20;
+const MAX_CONTEXT_JSON_ARRAY_ENTRIES = 20;
 // The largest first-party payload (the Conversation info block) carries ~25 keys;
 // 50 leaves headroom while bounding channel-controlled key fan-out.
-export const MAX_CONTEXT_JSON_OBJECT_KEYS = 50;
+const MAX_CONTEXT_JSON_OBJECT_KEYS = 50;
+// The deepest first-party payload nests 2 levels (measured: Conversation info,
+// reply chain); 8 leaves 4x headroom while bounding channel-controlled nesting.
+const MAX_CONTEXT_JSON_DEPTH = 8;
+// The largest measured first-party block is a 10-link reply chain at ~19k
+// serialized chars (each body already capped at MAX_CONTEXT_JSON_STRING_CHARS);
+// 50k is ~2.6x that while bounding the cumulative fan-out the per-container caps
+// alone allow (50 keys x 20 entries x 2,000 chars would otherwise serialize ~2 MB
+// into a single block).
+const MAX_CONTEXT_JSON_BLOCK_CHARS = 50_000;
+
+const DEPTH_TRUNCATION_MARKER = "…[truncated: max depth reached]";
+const BUDGET_TRUNCATION_MARKER = "…[truncated: context budget exhausted]";
 
 export function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
@@ -43,36 +55,92 @@ function truncateContextJsonString(value: string): string {
   return `${truncateUtf16Safe(value, Math.max(0, MAX_CONTEXT_JSON_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
 }
 
-function sanitizeContextJsonValue(value: unknown): unknown {
+/** Serialized length as JSON.stringify would emit it (undefined-safe). */
+function serializedLength(value: unknown): number {
+  const serialized: string | undefined = JSON.stringify(value);
+  return serialized?.length ?? 0;
+}
+
+/**
+ * Cumulative serialized-character budget shared across one block's recursion.
+ * The per-container caps bound fan-out; this bounds the total, which they
+ * cannot (50 keys x 20 entries x 2,000 chars passes every per-level cap).
+ */
+type ContextJsonBudget = { remaining: number };
+
+function sanitizeContextJsonValue(
+  value: unknown,
+  budget: ContextJsonBudget,
+  depth: number,
+): unknown {
   if (typeof value === "string") {
     return neutralizeMarkdownFences(truncateContextJsonString(value));
   }
   if (Array.isArray(value)) {
+    if (depth >= MAX_CONTEXT_JSON_DEPTH) {
+      return DEPTH_TRUNCATION_MARKER;
+    }
     const kept = value.slice(0, MAX_CONTEXT_JSON_ARRAY_ENTRIES);
-    const omitted = value.length - kept.length;
-    return [
-      ...kept.map((entry) => sanitizeContextJsonValue(entry)),
-      // Keep the head like truncateContextJsonString does, and flag the drop.
-      ...(omitted > 0
-        ? [`…[truncated: ${omitted} more ${omitted === 1 ? "entry" : "entries"}]`]
-        : []),
-    ];
+    const result: unknown[] = [];
+    let omitted = value.length - kept.length;
+    let budgetExhausted = false;
+    for (const entry of kept) {
+      if (budget.remaining <= 0) {
+        omitted += 1;
+        budgetExhausted = true;
+        continue;
+      }
+      const sanitized = sanitizeContextJsonValue(entry, budget, depth + 1);
+      budget.remaining -= serializedLength(sanitized);
+      result.push(sanitized);
+    }
+    // Keep the head like truncateContextJsonString does, and flag the drop.
+    if (budgetExhausted) {
+      result.push(BUDGET_TRUNCATION_MARKER);
+    } else if (omitted > 0) {
+      result.push(`…[truncated: ${omitted} more ${omitted === 1 ? "entry" : "entries"}]`);
+    }
+    return result;
   }
   if (!value || typeof value !== "object") {
     return value;
   }
+  if (depth >= MAX_CONTEXT_JSON_DEPTH) {
+    return DEPTH_TRUNCATION_MARKER;
+  }
   const entries = Object.entries(value);
   const kept = entries.slice(0, MAX_CONTEXT_JSON_OBJECT_KEYS);
-  const omitted = entries.length - kept.length;
-  return Object.fromEntries([
-    ...kept.map(([key, entry]) => [key, sanitizeContextJsonValue(entry)] as const),
-    // Truncation flag mirrors the sibling `history_truncated: true` convention.
-    ...(omitted > 0
-      ? [[`…[truncated: ${omitted} more ${omitted === 1 ? "key" : "keys"}]`, true] as const]
-      : []),
-  ]);
+  const result: Array<readonly [string, unknown]> = [];
+  let omitted = entries.length - kept.length;
+  let budgetExhausted = false;
+  for (const [key, entry] of kept) {
+    if (budget.remaining <= 0) {
+      omitted += 1;
+      budgetExhausted = true;
+      continue;
+    }
+    // Keys are channel-controlled text too: cap them like string values and
+    // charge them to the budget so key fan-out cannot bypass the total.
+    const safeKey = neutralizeMarkdownFences(truncateContextJsonString(key));
+    const sanitized = sanitizeContextJsonValue(entry, budget, depth + 1);
+    budget.remaining -= safeKey.length + serializedLength(sanitized);
+    result.push([safeKey, sanitized] as const);
+  }
+  // Truncation flag mirrors the sibling `history_truncated: true` convention.
+  if (budgetExhausted) {
+    result.push([BUDGET_TRUNCATION_MARKER, true] as const);
+  } else if (omitted > 0) {
+    result.push([`…[truncated: ${omitted} more ${omitted === 1 ? "key" : "keys"}]`, true] as const);
+  }
+  return Object.fromEntries(result);
 }
 
 export function formatContextJsonBlock(label: string, payload: unknown): string {
-  return [label, "```json", JSON.stringify(sanitizeContextJsonValue(payload)), "```"].join("\n");
+  const budget: ContextJsonBudget = { remaining: MAX_CONTEXT_JSON_BLOCK_CHARS };
+  return [
+    label,
+    "```json",
+    JSON.stringify(sanitizeContextJsonValue(payload, budget, 0)),
+    "```",
+  ].join("\n");
 }

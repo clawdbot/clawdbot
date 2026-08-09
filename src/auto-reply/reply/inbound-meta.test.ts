@@ -1538,5 +1538,29 @@ describe("buildInboundUserContextPrefix", () => {
     );
     expect(text).not.toContain("Chat history since last reply: ⟦openclaw:ctx⟧\n```json");
   });
+
+  it("bounds the total assembled context across many structured entries", () => {
+    // Each entry individually passes the per-block sanitizer budget (~1.4k
+    // chars for a 20-contact directory page), but the entry count itself is
+    // unbounded, so the assembly must own a cumulative total budget.
+    const contacts = Array.from({ length: 20 }, (_, index) => ({
+      id: `contact-${index}`,
+      name: `Contact Name ${index}`,
+      phone: `+1555${String(index).padStart(7, "0")}`,
+    }));
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      ChannelStructuredContext: Array.from({ length: 500 }, (_, index) => ({
+        label: `Directory page ${index}`,
+        source: "whatsapp",
+        type: "directory",
+        payload: { contacts },
+      })),
+    } as TemplateContext);
+
+    expect(text.length).toBeLessThan(152_000);
+    expect(text).toContain("…[truncated: inbound context budget exhausted]");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
