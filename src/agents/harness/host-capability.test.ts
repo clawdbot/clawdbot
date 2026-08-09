@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
@@ -201,6 +202,52 @@ describe("agent harness host capability", () => {
       }),
     ).rejects.toThrow("must not exceed 4096 bytes");
     expect(mockRunBefore).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "lexical host closure",
+      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
+        host.close();
+      },
+    },
+    {
+      name: "exact authority release",
+      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
+        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+      },
+    },
+    {
+      name: "outer admission abort",
+      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
+        admission.close();
+      },
+    },
+    {
+      name: "replacement owner",
+      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
+        await admittedAttempt(attempt.runId);
+      },
+    },
+  ])("rejects an allowed policy result after $name during the hook", async ({ revoke }) => {
+    const { attempt, admission } = await admittedAttempt("run-policy-race");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const hookStarted = createDeferred();
+    const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
+    mockRunBefore.mockImplementationOnce(async () => {
+      hookStarted.resolve();
+      return await hookResult.promise;
+    });
+
+    const pending = host.capabilities.runBeforeToolCall({
+      toolName: "exec",
+      params: { command: "true" },
+    });
+    await hookStarted.promise;
+    await revoke({ admission, attempt, host });
+    hookResult.resolve({ blocked: false, params: { command: "true" } });
+
+    await expect(pending).rejects.toThrow("no longer active");
   });
 
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {

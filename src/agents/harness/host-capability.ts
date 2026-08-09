@@ -216,7 +216,7 @@ export function createAgentHarnessHostCapabilities(params: {
       const actionHookContext = actionCwd
         ? Object.freeze({ ...hookContext, cwd: actionCwd })
         : hookContext;
-      return await withCaller(
+      const result = await withCaller(
         async () =>
           await runBeforeToolCallHook({
             ...request,
@@ -224,6 +224,10 @@ export function createAgentHarnessHostCapabilities(params: {
             ctx: actionHookContext,
           }),
       );
+      // Policy hooks may yield while the run owner closes. Revalidate before
+      // their result crosses the native action boundary.
+      assertActive();
+      return result;
     },
     requestApproval: async (request) => {
       assertActive();
