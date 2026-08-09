@@ -4530,7 +4530,8 @@ describe("requester-scoped MCP connection resolution", () => {
         requesterScope: params.requesterScope,
       };
     };
-    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const now = vi.fn(() => Date.now());
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime, now });
     const cfg = {
       mcp: {
         servers: {
@@ -4540,23 +4541,38 @@ describe("requester-scoped MCP connection resolution", () => {
       },
     };
 
-    await expect(
-      manager.getOrCreateRequesterScoped({
-        sessionId: "session-scoped-only",
-        workspaceDir: "/workspace",
-        cfg: cfg as never,
-      }),
-    ).resolves.toBeUndefined();
+    for (const { sessionId, requesterSenderId } of [
+      { sessionId: "session-scoped-only", requesterSenderId: undefined },
+      { sessionId: "session-scoped-empty", requesterSenderId: "  " },
+      { sessionId: "session-scoped-null", requesterSenderId: null },
+    ]) {
+      const sessionKey = `agent:main:${sessionId}`;
+      await expect(
+        manager.getOrCreateRequesterScoped({
+          sessionId,
+          sessionKey,
+          requesterSenderId,
+          workspaceDir: "/workspace",
+          cfg: cfg as never,
+        }),
+      ).resolves.toBeUndefined();
+      expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
+    }
     expect(created).toEqual([]);
+    expect(now).not.toHaveBeenCalled();
+    expect(testing.getBookkeepingSizes(manager)).toMatchObject({ runtimes: 0, sessionKeys: 0 });
 
     const scoped = await manager.getOrCreateRequesterScoped({
       sessionId: "session-scoped-only",
+      sessionKey: "agent:main:session-scoped-only",
       workspaceDir: "/workspace",
       cfg: cfg as never,
       requesterSenderId: "sender-a",
       messageChannel: "telegram",
     });
     expect(scoped?.requesterScope?.requesterSenderId).toBe("sender-a");
+    expect(manager.resolveSessionId("agent:main:session-scoped-only")).toBe("session-scoped-only");
+    expect(now).toHaveBeenCalled();
     // Only the requester partition — no bare static runtime entry.
     expect(created).toEqual([
       {
