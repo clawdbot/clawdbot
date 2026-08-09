@@ -173,6 +173,7 @@ describe("handleControlUiHttpRequest", () => {
       localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
+      cliAgentsEnabled: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -1614,6 +1615,7 @@ describe("handleControlUiHttpRequest", () => {
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
               },
+              gateway: { cliAgents: { enabled: true } },
             },
           },
         );
@@ -1627,6 +1629,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.terminalEnabled).toBe(true);
+        expect(parsed.cliAgentsEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
