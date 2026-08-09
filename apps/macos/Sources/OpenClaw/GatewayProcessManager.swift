@@ -701,21 +701,37 @@ extension GatewayProcessManager {
         // A fresh install gets ten six-second probe windows for Local Network authorization.
         firstInstallReadinessGraceWindows: Int = 9) async
     {
-        var deadline = Date().addingTimeInterval(readinessWindow)
+        let startedAt = Date()
+        var deadline = startedAt.addingTimeInterval(readinessWindow)
+        let graceWindowCount = max(0, firstInstallReadinessGraceWindows)
+        let finalProbeDeadline = startedAt.addingTimeInterval(
+            readinessWindow * (Double(graceWindowCount) + 1))
         var latestRetryDisposition: GatewayProbeFailureDisposition?
         var readinessPID = context.readinessPID
-        var remainingGraceWindows = max(0, firstInstallReadinessGraceWindows)
-        while true {
+        var freshInstallGraceAuthorized = false
+        readinessLoop: while true {
             guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
-            if Date() >= deadline {
-                guard remainingGraceWindows > 0,
-                      let reusablePID = await self.currentInstallReusableLaunchdPID(
-                          context: context,
-                          startGeneration: startGeneration)
-                else { break }
-                readinessPID = reusablePID
-                remainingGraceWindows -= 1
-                deadline = Date().addingTimeInterval(readinessWindow)
+            while Date() >= deadline {
+                guard deadline < finalProbeDeadline else { break readinessLoop }
+                if freshInstallGraceAuthorized {
+                    // Repeating launchd status at every boundary would expand the wall-clock budget.
+                    // Generation/revision guard intermediate windows; success and final repair re-check ownership.
+                    guard self.isCurrentFreshInstallReadiness(
+                        context: context,
+                        startGeneration: startGeneration)
+                    else { return }
+                } else {
+                    guard let reusablePID = await self.currentInstallReusableLaunchdPID(
+                        context: context,
+                        startGeneration: startGeneration)
+                    else { break readinessLoop }
+                    readinessPID = reusablePID
+                    freshInstallGraceAuthorized = true
+                }
+                deadline = min(
+                    deadline.addingTimeInterval(readinessWindow),
+                    finalProbeDeadline)
+                guard Date() < finalProbeDeadline else { break readinessLoop }
             }
             do {
                 let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
@@ -772,15 +788,28 @@ extension GatewayProcessManager {
         context: LaunchAgentStartupContext,
         startGeneration: UInt64) async -> Int32?
     {
-        guard self.launchAgentFreshInstallGeneration == startGeneration else { return nil }
+        guard self.isCurrentFreshInstallReadiness(
+            context: context,
+            startGeneration: startGeneration)
+        else { return nil }
         guard let reusablePID = await self.reusableLaunchdPIDOwningPort(port: context.port) else {
             return nil
         }
-        guard !Task.isCancelled,
-              self.isCurrentGatewayStart(startGeneration),
-              self.launchAgentReadinessRevision == context.readinessRevision
+        guard self.isCurrentFreshInstallReadiness(
+            context: context,
+            startGeneration: startGeneration)
         else { return nil }
         return reusablePID
+    }
+
+    private func isCurrentFreshInstallReadiness(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64) -> Bool
+    {
+        !Task.isCancelled &&
+            self.launchAgentFreshInstallGeneration == startGeneration &&
+            self.isCurrentGatewayStart(startGeneration) &&
+            self.launchAgentReadinessRevision == context.readinessRevision
     }
 
     private func publishLaunchdGatewayReady(

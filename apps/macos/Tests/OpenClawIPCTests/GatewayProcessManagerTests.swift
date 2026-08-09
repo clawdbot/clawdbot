@@ -1068,13 +1068,11 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `new launchd gateway can cross a readiness deadline`() async throws {
+    @Test func `new launchd gateway can cross multiple readiness deadlines`() async throws {
         let port = 19116
         let url = try #require(URL(string: "ws://example.invalid"))
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(
-                healthSucceedsAfter: 0,
-                stallsFirstHealthResponse: true)
+            self.gatewayTask(healthSucceedsAfter: 2)
         }
         defer { manager.setTestingConnection(nil) }
 
@@ -1097,15 +1095,58 @@ struct GatewayProcessManagerTests {
                 port: port,
                 pid: 4242,
                 readinessWindow: 0.05,
-                firstInstallReadinessGraceWindows: 1)
+                firstInstallReadinessGraceWindows: 2)
             await manager.waitForStartupAttempt()
 
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .contains(where: { $0.first == "status" }))
+                .filter { $0.first == "status" }.count == 1)
             #expect(manager.status == .running(details: "pid 4243"))
             #expect(manager.lastFailureReason == nil)
             #expect(!manager._testHasLaunchAgentReadinessFailure())
             #expect(manager._testControlChannelRefreshForces().last == true)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `delayed fresh install authorization cannot restart readiness budget`() async throws {
+        let port = 19118
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(
+                healthSucceedsAfter: 0,
+                stallsFirstHealthResponse: true)
+        }
+        defer { manager.setTestingConnection(nil) }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandDelayNanoseconds: 100_000_000)
+        {
+            manager.setTestingLastFailureReason(nil)
+            manager._testClearLaunchAgentReadinessFailure()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.setTestingLastFailureReason(nil)
+                manager._testClearLaunchAgentReadinessFailure()
+            }
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.01,
+                firstInstallReadinessGraceWindows: 1)
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .failed("Gateway did not start in time"))
+            #expect(manager.lastFailureReason == "launchd start timeout")
+            #expect(manager._testHasLaunchAgentReadinessFailure())
+            #expect(session.latestTask()?.snapshotSendCount() == 2)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "status" }.count == 2)
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
