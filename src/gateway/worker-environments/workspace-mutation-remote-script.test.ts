@@ -357,7 +357,6 @@ process.kill = function(pid, signal) {
         await reset?.catch(() => undefined);
         if (receiverPid !== undefined) {
           await waitForDead(receiverPid, 1_000).catch(() => undefined);
-          await waitForDead(receiverPid, 1_000).catch(() => undefined);
         }
       }
     },
