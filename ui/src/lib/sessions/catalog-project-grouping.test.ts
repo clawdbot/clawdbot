@@ -86,17 +86,25 @@ describe("groupCatalogSessionsByProject", () => {
   });
 
   it.each([
-    ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw"],
-    ["/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src", "/Users/dev/openclaw"],
-    ["C:\\Users\\dev\\openclaw\\.claude\\worktrees\\fix-1", "C:\\Users\\dev\\openclaw"],
-  ])("folds worktree cwd %s into %s", (worktreeCwd, expectedProject) => {
+    ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw", "project:/Users/dev/openclaw"],
+    [
+      "/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src",
+      "/Users/dev/openclaw",
+      "project:/Users/dev/openclaw",
+    ],
+    [
+      "C:\\Users\\dev\\openclaw\\.claude\\worktrees\\fix-1",
+      "C:\\Users\\dev\\openclaw",
+      "project:windows:drive:c:/users/dev/openclaw",
+    ],
+  ])("folds worktree cwd %s into %s", (worktreeCwd, expectedProject, expectedKey) => {
     const result = groupCatalogSessionsByProject([
       session("direct", expectedProject),
       session("worktree", worktreeCwd),
     ]);
 
     expect(result.groups).toHaveLength(1);
-    expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
+    expect(result.groups[0]?.key).toBe(expectedKey);
     expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["direct", "worktree"]);
   });
 
@@ -128,18 +136,26 @@ describe("groupCatalogSessionsByProject", () => {
   });
 
   it.each([
-    [" /Users/dev/openclaw/// ", "/Users/dev/openclaw", "openclaw"],
-    ["C:\\Users\\dev\\openclaw\\", "C:\\Users\\dev\\openclaw", "openclaw"],
-  ])("normalizes %s to project %s with label %s", (cwd, expectedPath, expectedLabel) => {
+    [" /Users/dev/openclaw/// ", "/Users/dev/openclaw", "openclaw", "project:/Users/dev/openclaw"],
+    [
+      "C:\\Users\\dev\\openclaw\\",
+      "C:\\Users\\dev\\openclaw",
+      "openclaw",
+      "project:windows:drive:c:/users/dev/openclaw",
+    ],
+  ])(
+    "normalizes %s to project %s with label %s",
+    (cwd, expectedPath, expectedLabel, expectedKey) => {
     const result = groupCatalogSessionsByProject([session("one", cwd)]);
 
     expect(result.groups[0]).toMatchObject({
-      key: `project:${expectedPath}`,
+      key: expectedKey,
       legacySectionKey: expectedPath,
       label: expectedLabel,
       title: expectedPath,
-    });
-  });
+      });
+    },
+  );
 
   it("groups equivalent Windows cwd spellings under the first display path", () => {
     const result = groupCatalogSessionsByProject([
@@ -150,7 +166,7 @@ describe("groupCatalogSessionsByProject", () => {
 
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0]).toMatchObject({
-      key: "C:\\Work\\Notes",
+      key: "project:windows:drive:c:/work/notes",
       label: "Notes",
       title: "C:\\Work\\Notes",
     });
@@ -159,6 +175,26 @@ describe("groupCatalogSessionsByProject", () => {
       "second",
       "third",
     ]);
+  });
+
+  it("keeps the normalized Windows group key stable when recency order reverses", () => {
+    const firstOrder = groupCatalogSessionsByProject([
+      session("newer", "C:\\Work\\Notes"),
+      session("older", "c:/work/notes/"),
+    ]);
+    const reversedOrder = groupCatalogSessionsByProject([
+      session("older", "c:/work/notes/"),
+      session("newer", "C:\\Work\\Notes"),
+    ]);
+
+    expect(firstOrder.groups[0]).toMatchObject({
+      key: "project:windows:drive:c:/work/notes",
+      title: "C:\\Work\\Notes",
+    });
+    expect(reversedOrder.groups[0]).toMatchObject({
+      key: "project:windows:drive:c:/work/notes",
+      title: "c:/work/notes",
+    });
   });
 
   it("preserves Windows root kinds while grouping equivalent UNC paths", () => {

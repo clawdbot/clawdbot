@@ -132,7 +132,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
     if (!group) {
       group = {
         kind: "project",
-        key: `project:${projectPath}`,
+        key: `project:${pathIdentity}`,
         legacySectionKey: projectPath,
         label: checkoutDisplayName(projectPath),
         title: projectPath,
