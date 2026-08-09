@@ -170,6 +170,9 @@ export function buildThreadStartParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
+    ...(factoryAuthority
+      ? { runtimeWorkspaceRoots: [...factoryAuthority.filesystem.writableRoots] }
+      : {}),
     approvalPolicy: factoryAuthority ? "never" : options.appServer.approvalPolicy,
     approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer, factoryAuthority?.permissionProfile.id),
@@ -246,6 +249,9 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    ...(factoryAuthority
+      ? { runtimeWorkspaceRoots: [...factoryAuthority.filesystem.writableRoots] }
+      : {}),
     // Only the latest turn id/status is needed to preserve active-turn conflict
     // handling; avoid rebuilding and validating the full persisted history.
     excludeTurns: true,

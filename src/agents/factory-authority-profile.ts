@@ -627,6 +627,7 @@ export function assertFactoryNativeAuthorityProof(params: {
   const { proof } = params;
   const contractHash = hashFactoryNativeAuthorityValue(authority);
   const expectedRoots = [...authority.filesystem.writableRoots].toSorted();
+  const expectedSandboxWritableRoots = expectedRoots.filter((root) => root !== authority.cwd);
   if (
     proof.proofContractVersion !== 1 ||
     proof.contractHash !== contractHash ||
@@ -640,7 +641,7 @@ export function assertFactoryNativeAuthorityProof(params: {
     proof.runtime.activePermissionProfile.extends != null ||
     proof.runtime.sandbox.type !== "workspaceWrite" ||
     stableStringify([...proof.runtime.sandbox.writableRoots].toSorted()) !==
-      stableStringify(expectedRoots) ||
+      stableStringify(expectedSandboxWritableRoots) ||
     proof.runtime.sandbox.networkAccess !== false ||
     proof.runtime.sandbox.excludeTmpdirEnvVar !== true ||
     proof.runtime.sandbox.excludeSlashTmp !== true ||

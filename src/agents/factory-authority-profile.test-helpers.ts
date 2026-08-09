@@ -54,7 +54,9 @@ export function buildTestFactoryNativeAuthorityProof(params: {
     activePermissionProfile: { id: params.authority.permissionProfile.id },
     sandbox: {
       type: "workspaceWrite" as const,
-      writableRoots: [...params.authority.filesystem.writableRoots].toSorted(),
+      writableRoots: params.authority.filesystem.writableRoots
+        .filter((root) => root !== params.authority.cwd)
+        .toSorted(),
       networkAccess: false as const,
       excludeTmpdirEnvVar: true as const,
       excludeSlashTmp: true as const,

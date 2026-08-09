@@ -35,12 +35,15 @@ export function assertCodexFactoryNativeThreadAttestation(params: {
   const authority = assertFactoryNativeLaunchAuthority(params.binding.authority);
   const profile = params.response.activePermissionProfile;
   const expectedRoots = [...authority.filesystem.writableRoots].toSorted();
+  const expectedSandboxWritableRoots = expectedRoots.filter((root) => root !== authority.cwd);
+  const requestedRoots = [...(params.request.runtimeWorkspaceRoots ?? [])].toSorted();
   const actualRoots = [...(params.response.runtimeWorkspaceRoots ?? [])].toSorted();
   const sandbox = params.response.sandbox;
   const sandboxWritableRoots =
     sandbox.type === "workspaceWrite" ? [...sandbox.writableRoots].toSorted() : [];
   if (
     params.request.permissions !== authority.permissionProfile.id ||
+    JSON.stringify(requestedRoots) !== JSON.stringify(expectedRoots) ||
     Object.hasOwn(params.request, "sandbox") ||
     params.request.approvalPolicy !== "never" ||
     !profile ||
@@ -50,7 +53,7 @@ export function assertCodexFactoryNativeThreadAttestation(params: {
     params.response.cwd !== authority.cwd ||
     JSON.stringify(actualRoots) !== JSON.stringify(expectedRoots) ||
     sandbox.type !== "workspaceWrite" ||
-    JSON.stringify(sandboxWritableRoots) !== JSON.stringify(expectedRoots) ||
+    JSON.stringify(sandboxWritableRoots) !== JSON.stringify(expectedSandboxWritableRoots) ||
     sandbox.networkAccess !== false ||
     sandbox.excludeTmpdirEnvVar !== true ||
     sandbox.excludeSlashTmp !== true

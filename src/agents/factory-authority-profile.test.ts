@@ -3,6 +3,8 @@ import {
   assertFactoryNativeAuthorityProof,
   assertFactoryNativeLaunchAuthority,
   buildFactoryNativeLaunchAuthority,
+  buildFactoryNativeProofHash,
+  buildFactoryNativeRuntimePolicyHash,
   FACTORY_NATIVE_BASE_PATH_ENTRIES,
 } from "./factory-authority-profile.js";
 import {
@@ -121,6 +123,10 @@ describe("factory native authority profile", () => {
     };
 
     expect(assertFactoryNativeAuthorityProof({ binding, proof })).toEqual(proof);
+    expect(proof.runtime.runtimeWorkspaceRoots).toEqual(authority.filesystem.writableRoots);
+    expect(proof.runtime.sandbox.writableRoots).toEqual(
+      authority.filesystem.writableRoots.filter((root) => root !== authority.cwd),
+    );
     const drifted = structuredClone(proof);
     drifted.runtime.activePermissionProfile.extends = "default";
     expect(() => assertFactoryNativeAuthorityProof({ binding, proof: drifted })).toThrow(
@@ -136,6 +142,22 @@ describe("factory native authority profile", () => {
         binding,
         proof: sandboxDrifted as unknown as typeof proof,
       }),
+    ).toThrow("does not match the launch contract");
+
+    const legacyProjectionDrifted = structuredClone(proof);
+    legacyProjectionDrifted.runtime.sandbox.writableRoots = [...authority.filesystem.writableRoots];
+    legacyProjectionDrifted.runtime.policyHash = buildFactoryNativeRuntimePolicyHash(
+      legacyProjectionDrifted.runtime,
+    );
+    legacyProjectionDrifted.proofHash = buildFactoryNativeProofHash({
+      proofContractVersion: legacyProjectionDrifted.proofContractVersion,
+      contractHash: legacyProjectionDrifted.contractHash,
+      launchIdentityDigest: legacyProjectionDrifted.launchIdentityDigest,
+      runtime: legacyProjectionDrifted.runtime,
+      observedAt: legacyProjectionDrifted.observedAt,
+    });
+    expect(() =>
+      assertFactoryNativeAuthorityProof({ binding, proof: legacyProjectionDrifted }),
     ).toThrow("does not match the launch contract");
   });
 });

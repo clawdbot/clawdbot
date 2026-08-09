@@ -6,11 +6,16 @@ import { assertCodexFactoryNativeThreadAttestation } from "./factory-native-atte
 import type { CodexThreadStartParams, CodexThreadStartResponse } from "./protocol.js";
 import {
   buildCodexFactoryNativeThreadConfigPatch,
+  buildThreadResumeParams,
+  buildThreadStartParams,
   codexThreadSandboxOrPermissions,
 } from "./thread-requests.js";
 
 const LAUNCH_DIGEST = `sha256:${"a".repeat(64)}` as const;
 const authority = buildTestFactoryNativeAuthority("/tmp/codex-factory-native-test");
+const expectedSandboxWritableRoots = authority.filesystem.writableRoots
+  .filter((root) => root !== authority.cwd)
+  .toSorted();
 const binding = {
   runId: `swarm_${"b".repeat(32)}`,
   launchIdentityDigest: LAUNCH_DIGEST,
@@ -23,6 +28,7 @@ function request(): CodexThreadStartParams {
     model: "gpt-5.6-sol",
     approvalPolicy: "never",
     permissions: authority.permissionProfile.id,
+    runtimeWorkspaceRoots: [...authority.filesystem.writableRoots],
     config: buildCodexFactoryNativeThreadConfigPatch(authority, ["github", "linear"]),
   };
 }
@@ -36,7 +42,7 @@ function response(overrides: Partial<CodexThreadStartResponse> = {}): CodexThrea
     runtimeWorkspaceRoots: [...authority.filesystem.writableRoots],
     sandbox: {
       type: "workspaceWrite",
-      writableRoots: [...authority.filesystem.writableRoots],
+      writableRoots: expectedSandboxWritableRoots,
       networkAccess: false,
       excludeTmpdirEnvVar: true,
       excludeSlashTmp: true,
@@ -45,6 +51,16 @@ function response(overrides: Partial<CodexThreadStartResponse> = {}): CodexThrea
     model: "gpt-5.6-sol",
     ...overrides,
   } as CodexThreadStartResponse;
+}
+
+function attemptParams(): EmbeddedRunAttemptParams {
+  return {
+    provider: "openai",
+    modelId: "gpt-5.6-sol",
+    prompt: "factory native test",
+    authProfileStore: { version: 1, profiles: {} },
+    factoryNativeAuthority: binding,
+  } as EmbeddedRunAttemptParams;
 }
 
 describe("Codex native factory authority", () => {
@@ -84,6 +100,30 @@ describe("Codex native factory authority", () => {
     ).toEqual({ permissions: authority.permissionProfile.id });
   });
 
+  it("sends the complete authority root set on both thread start and resume", () => {
+    const params = attemptParams();
+    const appServer = {
+      approvalPolicy: "never",
+      approvalsReviewer: "auto_review",
+      sandbox: "read-only",
+    } as never;
+    const start = buildThreadStartParams(params, {
+      cwd: authority.cwd,
+      dynamicTools: [],
+      appServer,
+    });
+    const resume = buildThreadResumeParams(params, {
+      threadId: "factory-thread",
+      appServer,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.runtimeWorkspaceRoots).toEqual(authority.filesystem.writableRoots);
+      expect(request.permissions).toBe(authority.permissionProfile.id);
+      expect(request).not.toHaveProperty("sandbox");
+    }
+  });
+
   it("enables native code only for the host-attested factory collector", () => {
     const genericCollector = {
       disableTools: false,
@@ -114,7 +154,7 @@ describe("Codex native factory authority", () => {
       approvalPolicy: "never",
       sandbox: {
         type: "workspaceWrite",
-        writableRoots: [...authority.filesystem.writableRoots].toSorted(),
+        writableRoots: expectedSandboxWritableRoots,
         networkAccess: false,
         excludeTmpdirEnvVar: true,
         excludeSlashTmp: true,
@@ -125,6 +165,16 @@ describe("Codex native factory authority", () => {
   });
 
   it.each([
+    {
+      label: "missing requested runtime roots",
+      request: { ...request(), runtimeWorkspaceRoots: undefined },
+      response: response(),
+    },
+    {
+      label: "requested runtime root drift",
+      request: { ...request(), runtimeWorkspaceRoots: [authority.cwd] },
+      response: response(),
+    },
     {
       label: "wrong active profile",
       request: request(),
@@ -174,7 +224,7 @@ describe("Codex native factory authority", () => {
       response: response({
         sandbox: {
           type: "workspaceWrite",
-          writableRoots: [...authority.filesystem.writableRoots],
+          writableRoots: expectedSandboxWritableRoots,
           networkAccess: true,
           excludeTmpdirEnvVar: true,
           excludeSlashTmp: true,
@@ -187,7 +237,7 @@ describe("Codex native factory authority", () => {
       response: response({
         sandbox: {
           type: "workspaceWrite",
-          writableRoots: [...authority.filesystem.writableRoots],
+          writableRoots: expectedSandboxWritableRoots,
           networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: false,
