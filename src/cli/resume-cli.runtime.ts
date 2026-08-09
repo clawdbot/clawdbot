@@ -47,11 +47,16 @@ async function fetchResumeSessions(opts: ResumeCliOptions) {
       import("../tui/tui-formatters.js"),
       import("../tui/tui.js"),
     ]);
-    const state = resolveGatewayDisconnectState(formatTuiErrorMessage(error));
+    const details =
+      error && typeof error === "object" && "details" in error ? error.details : undefined;
+    const state = resolveGatewayDisconnectState({
+      reason: formatTuiErrorMessage(error),
+      details,
+    });
     throw new Error(
       [
         state.connectionStatus,
-        state.pairingHint ??
+        state.remediation ??
           "Ensure the Gateway is running and your --url/--token/--password are correct.",
       ].join("\n"),
       { cause: error },
