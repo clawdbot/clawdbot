@@ -32683,7 +32683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 913,
+      "line": 947,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovalsStore.swift",
       "source": "missing:\\(hash)",
       "surface": "apple",
