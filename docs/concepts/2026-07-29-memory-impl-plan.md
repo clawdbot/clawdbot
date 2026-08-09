@@ -264,12 +264,13 @@ Phase 3 and Phase 4 can proceed independently after Phase 2C. Phase 5 is
 required only for a process-adversarial claim, but its interfaces must be
 preserved from Phase 0.
 
-## 6. Phase 0: contracts and shadow decisions
+## 6. Phase 0: contracts and shadow surface inspection
 
 ### Goal
 
 Create the generic core/SDK/plugin contract, inventory all memory paths, and
-evaluate decisions in shadow mode without moving content or changing results.
+evaluate selected-runtime authorization-surface compatibility in shadow mode
+without moving content or changing results.
 
 ### Deliverables
 
@@ -305,14 +306,25 @@ Required invariants:
 Extend the selected memory runtime with a versioned authorized surface:
 
 ```ts
+type AuthorizedMemoryPlanForContext<Context extends MemoryAccessContext> =
+  Context extends MemoryAccessContext & { operation: infer Operation extends MemoryOperation }
+    ? Operation extends MemoryContentAccessOperation
+      ? AuthorizedMemoryContentPlan<Operation>
+      : AuthorizedMemoryPlan & { operation: Operation }
+    : never;
+
 interface AuthorizedMemoryRuntime {
   authorization: MemoryAuthorizationCapabilities;
-  authorize(context: MemoryAccessContext): Promise<AuthorizedMemoryPlan>;
-  searchAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemorySearchResult>>;
+  authorize<Context extends MemoryAccessContext>(
+    context: Context,
+  ): Promise<AuthorizedMemoryPlanForContext<Context>>;
+  searchAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<readonly AuthorizedMemorySearchResult[]>>;
   readAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemoryReadResult>>;
   writeAuthorized(...): Promise<MemoryWriteResult>;
+  importAuthorized(...): Promise<MemoryWriteResult>;
   syncAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemorySyncResult>>;
   exportAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemoryExportResult>>;
+  statusAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemoryProviderStatus>>;
 }
 ```
 
@@ -320,28 +332,26 @@ Legacy agents may continue to use the existing manager path. An enforced agent
 must reject a runtime without the new capability. Do not silently wrap a
 context-free backend and call it conforming.
 
-#### 6.3 Core context factory
+The declaration and the conformance suite describe plugin behavior only; they
+do not construct a trusted context or make an authorization decision. Phase 0
+does not enforce this surface. A later core-owned enforcement path must consume
+the trusted context and admitted capability at selected-runtime acquisition,
+rather than treating the current narrow search-hit filter as whole-runtime
+enforcement.
 
-Add a single core factory that receives only trusted runtime facts:
+#### 6.3 Trusted-context issuance boundary
 
-- request and run IDs;
-- agent, session key, and current session ID;
-- persisted session subject and revision;
-- actor evidence;
-- verified principals and memberships;
-- collaboration decision and revision;
-- delivery audiences, sink, and route revision;
-- delegation snapshot;
-- requested operation;
-- host-facts revision.
+Phase 0 deliberately does not expose a core context factory or an admission
+path. `MemoryAccessContext` is a serializable SDK DTO in this phase, not a
+trusted in-process object. A factory that accepts a caller-assembled bag of
+facts would manufacture authority before Phase 1A has durable principal,
+session-subject, and verified ingress evidence.
 
-The factory must:
-
-- reread the current session-key-to-session-ID mapping;
-- reject a stale mapping as `session-rebound`;
-- freeze and brand the in-process object;
-- exclude model-authored JSON and extensible message extras;
-- produce a stable context fingerprint.
+Phase 1A owns the core-only factory. It will receive trusted runtime facts,
+reread the current session-key-to-session-ID mapping, reject
+`session-rebound`, freeze and brand the in-process object, exclude
+model-authored JSON and extensible extras, and produce the stable context
+fingerprint consumed by a later enforced path.
 
 #### 6.4 Pure policy conformance harness
 
@@ -403,15 +413,15 @@ until the stable identifiers are decided.
 ### Suggested PR slices
 
 1. Serializable types, capability declaration, and SDK conformance harness.
-2. Core context factory with fake/persisted subject adapters.
-3. Shadow wiring at selected runtime acquisition and path-inventory tests.
+2. Shadow wiring at selected runtime acquisition and path-inventory tests.
+3. Phase 1A core context factory with durable subject and trusted-ingress
+   adapters.
 
 ### Tests
 
 - SDK export and API baseline checks.
 - `src/plugins/memory-state.test.ts`
 - `src/plugins/contracts/*`
-- new context branding/fingerprint tests;
 - new generated policy evaluator tests;
 - new "no context-free enforced backend" contract test.
 
@@ -422,15 +432,18 @@ current implementation head:
 
 - [ ] Every memory ingress and egress path has a recorded owner and one explicit
       disposition: authorized, blocked in enforced mode, or legacy-only.
-- [ ] Tool JSON, prompt text, plugin extras, and caller-assembled objects cannot
-      construct or modify a trusted access context or authorization plan.
+- [ ] Phase 0 exposes no trusted-context factory or enforcement admission path;
+      tool JSON, prompt text, plugin extras, and caller-assembled objects
+      therefore cannot opt into or modify an enforced authorization plan.
 - [ ] Every selected backend must declare authorization capabilities, and the
       conformance suite rejects a context-free backend in enforced mode.
-- [ ] Shadow evaluation emits only bounded decision metadata; it never logs
-      memory content, prompts, queries, snippets, or raw principal identifiers.
+- [ ] Shadow evaluation emits only bounded selected-runtime surface metadata;
+      it never logs memory content, prompts, queries, snippets, or raw
+      principal identifiers, and does not claim to evaluate context-free policy
+      decisions.
 - [ ] Existing single-user results, configured corpora, and measured hot-path
       latency remain unchanged.
-- [ ] SDK exports, API baselines, contract tests, focused context tests, and any
+- [ ] SDK exports, API baselines, contract and runtime-inspection tests, and any
       required build/lazy-import gates pass.
 - [ ] Product and security documentation still describes the feature as
       shadow-only, with no public isolation claim or public configuration.
@@ -515,6 +528,28 @@ Keep:
 
 Steering may change actor evidence but never the session subject.
 
+#### 7.6 Core trusted access-context factory
+
+Build the single core-owned factory deferred from Phase 0. It receives only
+trusted runtime facts:
+
+- request and run IDs;
+- agent, session key, and current session ID;
+- persisted session subject and revision;
+- actor evidence;
+- verified principals and memberships;
+- collaboration decision and revision;
+- delivery audiences, sink, and route revision;
+- delegation snapshot;
+- requested operation; and
+- host-facts revision.
+
+The factory rereads the current session-key-to-session-ID mapping, rejects a
+stale mapping as `session-rebound`, freezes and brands the in-process object,
+excludes model-authored JSON and extensible message extras, and produces the
+stable context fingerprint. It is not an SDK entrypoint and no plugin can mint
+or modify its output.
+
 ### Data changes
 
 Shared state:
@@ -551,6 +586,8 @@ Use additive lazy ensures. Fold into the next natural schema-version bump.
 - reset/fork/rewind copies provenance but rechecks current authority;
 - session-rebound race denies;
 - profile-less compatibility does not open private memory.
+- trusted-context branding, fingerprint, trusted-fact provenance, and
+  caller-assembled lookalike rejection.
 
 Reuse and extend:
 
@@ -576,6 +613,10 @@ Phase 1A is complete only when all of the following are demonstrated:
       that subject provenance is copied exactly while current authority is
       rechecked.
 - [ ] Session-rebound and revoke-between-check-and-use races fail closed.
+- [ ] The core-only trusted context factory rejects caller-assembled facts,
+      stale session mappings, model/plugin extras, and lookalikes; its branded,
+      frozen result binds the current subject, identity, delivery, delegation,
+      and host-fact revisions into a stable fingerprint.
 - [ ] Additive schema compatibility and identity/session lifecycle tests pass
       for existing and newly created agent databases.
 
@@ -1831,8 +1872,8 @@ Phase 6 is complete only when all of the following are demonstrated:
 Keep each PR independently safe and feature-gated.
 
 1. SDK authorization types and conformance harness.
-2. Core branded context factory and shadow decisions.
-3. Session subject/binding additive schema and lifecycle.
+2. Shadow selected-runtime inspection and complete path inventory.
+3. Session subject/binding additive schema, lifecycle, and core branded context factory.
 4. Builtin scoped store/resource/policy schema.
 5. Builtin authorized search/read contract.
 6. Doctor dry-run migration and backend admission.
