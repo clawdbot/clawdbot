@@ -25,11 +25,11 @@ import { isLoopbackAddress, resolveClientIp } from "./net.js";
 // ---------------------------------------------------------------------------
 
 export interface RateLimitConfig {
-  /** Maximum failed attempts before blocking.  @default 10 */
+  /** Maximum failed attempts before blocking; must be positive, otherwise the default applies.  @default 10 */
   maxAttempts?: number;
-  /** Sliding window duration in milliseconds.     @default 60_000 (1 min) */
+  /** Sliding window duration in milliseconds; must be positive, otherwise the default applies.  @default 60_000 (1 min) */
   windowMs?: number;
-  /** Lockout duration in milliseconds after the limit is exceeded.  @default 300_000 (5 min) */
+  /** Lockout duration in milliseconds after the limit is exceeded; must be positive, otherwise the default applies.  @default 300_000 (5 min) */
   lockoutMs?: number;
   /** Exempt loopback (localhost) addresses from rate limiting.  @default true */
   exemptLoopback?: boolean;
@@ -152,10 +152,30 @@ function resolvePruneIntervalMs(value: number | undefined): number {
   return resolveTimerTimeoutMs(value, PRUNE_INTERVAL_MS);
 }
 
+/**
+ * Non-positive configured values fall back to the default. They are config
+ * mistakes, not "off" switches: maxAttempts: 0 would deny every IP with any
+ * failure history (remaining is always 0), while windowMs/lockoutMs: 0 would
+ * silently turn the limiter into a no-op.
+ */
+function resolvePositiveConfigValue(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
-  const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
-  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
+  const maxAttempts = Math.floor(
+    resolvePositiveConfigValue(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS),
+  );
+  const windowMs = resolveTimerTimeoutMs(
+    resolvePositiveConfigValue(config?.windowMs, DEFAULT_WINDOW_MS),
+    DEFAULT_WINDOW_MS,
+    0,
+  );
+  const lockoutMs = resolveTimerTimeoutMs(
+    resolvePositiveConfigValue(config?.lockoutMs, DEFAULT_LOCKOUT_MS),
+    DEFAULT_LOCKOUT_MS,
+    0,
+  );
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });

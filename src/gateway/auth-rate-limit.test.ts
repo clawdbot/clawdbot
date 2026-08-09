@@ -512,6 +512,44 @@ describe("auth rate limiter", () => {
     expect(limiter.check("").allowed).toBe(false);
   });
 
+  // ---------- non-positive config values ----------
+
+  it("falls back to the default maxAttempts when configured with 0", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 0, windowMs: 60_000, lockoutMs: 300_000 });
+    limiter.recordFailure("10.0.0.50");
+    // Honoring maxAttempts: 0 would leave remaining at 0 forever and deny this
+    // IP on its first failure; the fallback keeps the default budget.
+    const result = limiter.check("10.0.0.50");
+    expect(result.allowed).toBe(true);
+    expect(result.remaining).toBe(9);
+  });
+
+  it("falls back to the default maxAttempts when configured with a negative value", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: -3, windowMs: 60_000, lockoutMs: 300_000 });
+    limiter.recordFailure("10.0.0.53");
+    expect(limiter.check("10.0.0.53").remaining).toBe(9);
+  });
+
+  it("falls back to the default window when windowMs is 0", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
+    limiter.recordFailure("10.0.0.51");
+    limiter.recordFailure("10.0.0.51");
+    // windowMs: 0 would expire every failure instantly, so the limiter could
+    // never lock; the fallback keeps failures inside the default window.
+    const result = limiter.check("10.0.0.51");
+    expect(result.allowed).toBe(false);
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it("falls back to the default lockout when lockoutMs is 0", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 0 });
+    limiter.recordFailure("10.0.0.52");
+    // lockoutMs: 0 would expire the lockout in the same tick it is set.
+    const result = limiter.check("10.0.0.52");
+    expect(result.allowed).toBe(false);
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+  });
+
   // ---------- dispose ----------
 
   it("dispose clears all entries", () => {
