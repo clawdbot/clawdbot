@@ -4,7 +4,7 @@ import {
   readCloudSessionRecovery,
   writeCloudSessionRecovery,
   writeCloudSessionRecoveryIfAvailable,
-} from "./cloud-recovery.ts";
+} from "../../lib/sessions/cloud-recovery.ts";
 
 const recovery = {
   sessionKey: "agent:cloud:one",

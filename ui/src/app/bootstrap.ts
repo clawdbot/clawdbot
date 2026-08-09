@@ -27,6 +27,7 @@ import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserAnnotationHandoff } from "./browser-annotation-handoff.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
+import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -352,6 +353,7 @@ export function bootstrapApplication(
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
+  const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
   const browserAnnotationHandoff = createBrowserAnnotationHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
@@ -439,6 +441,7 @@ export function bootstrapApplication(
     config,
     runtimeConfig,
     sessions,
+    cloudStartup,
     workboard,
     overlays,
     navigation,
@@ -554,6 +557,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
+      cloudStartup.dispose();
       sessions.dispose();
       workboard.dispose();
       stopConfigWriteSuspension();

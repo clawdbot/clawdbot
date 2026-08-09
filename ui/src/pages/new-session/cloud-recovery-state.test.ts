@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  readCloudSessionRecovery,
+  writeCloudSessionRecovery,
+} from "../../lib/sessions/cloud-recovery.ts";
+import {
   PendingCloudRecoveryState,
   resolveSubmissionOutcomeReason,
 } from "./cloud-recovery-state.ts";
-import { readCloudSessionRecovery, writeCloudSessionRecovery } from "./cloud-recovery.ts";
 
 describe("pending cloud recovery state", () => {
   beforeEach(() => sessionStorage.clear());

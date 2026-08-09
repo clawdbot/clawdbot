@@ -1,5 +1,6 @@
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { cloudSessionRecoveryStorageKey } from "./cloud-recovery-storage-key.ts";
+import type { SessionCreateParams } from "./create.ts";
 
 export type CloudSessionCreateParams = SessionCreateParams & {
   key?: string;
@@ -23,12 +24,6 @@ export type CloudSessionRecovery = {
 
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
-const STORAGE_PREFIX = "openclaw.new-session.cloud-recovery.v1:";
-
-function storageKey(gatewayUrl: string, recoveryScope: string): string {
-  return `${STORAGE_PREFIX}${gatewayUrl}:${recoveryScope}`;
-}
-
 const CLOUD_CREATE_STRING_FIELDS = [
   "model",
   "thinkingLevel",
@@ -80,13 +75,14 @@ export function readCloudSessionRecovery(
     return null;
   }
   try {
-    const raw = globalThis.sessionStorage?.getItem(storageKey(gatewayUrl, recoveryScope));
+    const key = cloudSessionRecoveryStorageKey(gatewayUrl, recoveryScope);
+    const raw = globalThis.sessionStorage?.getItem(key);
     if (!raw) {
       return null;
     }
     const value = JSON.parse(raw) as Partial<CloudSessionRecovery>;
     if (value.createParams?.incognito === true) {
-      globalThis.sessionStorage?.removeItem(storageKey(gatewayUrl, recoveryScope));
+      globalThis.sessionStorage?.removeItem(key);
       return null;
     }
     if (
@@ -103,7 +99,7 @@ export function readCloudSessionRecovery(
       (value.phase === "creating" &&
         !parseCloudSessionCreateParams(value.createParams, value.sessionKey, value.agentId))
     ) {
-      globalThis.sessionStorage?.removeItem(storageKey(gatewayUrl, recoveryScope));
+      globalThis.sessionStorage?.removeItem(key);
       return null;
     }
     return value as CloudSessionRecovery;
@@ -122,10 +118,14 @@ export function writeCloudSessionRecovery(recovery: CloudSessionRecovery): boole
       return false;
     }
     storage.setItem(
-      storageKey(recovery.gatewayUrl, recovery.recoveryScope),
+      cloudSessionRecoveryStorageKey(recovery.gatewayUrl, recovery.recoveryScope),
       JSON.stringify(recovery),
     );
-    return storage.getItem(storageKey(recovery.gatewayUrl, recovery.recoveryScope)) !== null;
+    return (
+      storage.getItem(
+        cloudSessionRecoveryStorageKey(recovery.gatewayUrl, recovery.recoveryScope),
+      ) !== null
+    );
   } catch {
     return false;
   }
@@ -149,7 +149,7 @@ export function clearCloudSessionRecovery(
   }
   try {
     const storage = globalThis.sessionStorage;
-    const key = storageKey(gatewayUrl, recoveryScope);
+    const key = cloudSessionRecoveryStorageKey(gatewayUrl, recoveryScope);
     if (expectedSessionKey) {
       const raw = storage?.getItem(key);
       if (!raw) {

@@ -14,6 +14,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ApplicationCloudStartupStatus } from "../../app/cloud-session-startup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
@@ -66,6 +67,7 @@ import {
   renderChatThread,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
+import { renderCloudStartupStatus } from "./components/chat-working-indicator.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
@@ -96,6 +98,8 @@ export type ChatProps = ChatTaskSuggestionTrayProps & {
   persistCommentary?: boolean;
   loading: boolean;
   sending: boolean;
+  cloudStartup?: ApplicationCloudStartupStatus | null;
+  onRetryCloudStartup?: () => void;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
   startupStatus?: ChatRunStartupStatus | null;
@@ -573,7 +577,9 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${renderChatViewNotices(props)} ${renderChatSearchBar(props.paneId, requestUpdate)}
+      ${renderChatViewNotices(props)}
+      ${renderCloudStartupStatus(props.cloudStartup, props.onRetryCloudStartup)}
+      ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
           paneId: props.paneId,

@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
+import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -301,12 +303,15 @@ describe("sessions.dispatch", () => {
       }),
     );
 
-    expect(dispatch).toHaveBeenCalledWith({
-      sessionId,
-      sessionKey,
-      agentId: "main",
-      profileId: "test",
-    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        profileId: "test",
+      }),
+      expect.any(Function),
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -473,7 +478,7 @@ describe("sessions.dispatch", () => {
       ownerKind: "session",
       ownerId: sessionKey,
     });
-    const dispatch = vi.fn().mockResolvedValue({
+    const dispatchedPlacement: WorkerSessionPlacementRecord = {
       sessionId,
       agentId: "main",
       sessionKey,
@@ -491,20 +496,42 @@ describe("sessions.dispatch", () => {
       createdAtMs: 1,
       updatedAtMs: 2,
       stateChangedAtMs: 2,
-    });
-    const respond = await invoke(
-      makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
+    };
+    const dispatch = vi.fn(
+      async (
+        _request: WorkerPlacementDispatchRequest,
+        onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+      ) => {
+        for (const state of [
+          "requested",
+          "provisioning",
+          "syncing",
+          "starting",
+          "active",
+        ] as const) {
+          onTransition?.({ ...dispatchedPlacement, state } as WorkerSessionPlacementRecord);
+        }
+        return dispatchedPlacement;
+      },
     );
-
-    expect(dispatch).toHaveBeenCalledWith({
-      sessionId,
-      sessionKey,
-      agentId: "main",
-      profileId: "test",
+    const context = makeContext({
+      getSessionEventSubscriberConnIds: () => new Set(),
+      workerPlacementDispatchService: { dispatch },
+      workerSessionPlacementService: { getMany: () => new Map() },
     });
+    const priorMutationVersion = readSessionsMutationVersion(context);
+    const respond = await invoke(context);
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        profileId: "test",
+      }),
+      expect.any(Function),
+    );
+    expect(readSessionsMutationVersion(context)).toBe(priorMutationVersion + 5);
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

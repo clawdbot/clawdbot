@@ -9,6 +9,7 @@ import type { RuntimeConfigCapability } from "../lib/config/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationCloudStartup } from "./cloud-session-startup.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
@@ -89,6 +90,7 @@ export type ApplicationInitialUserMessageHandoff = {
   prepare: (handoff: InitialUserMessageHandoff) => void;
   read: (sessionKey: string, owner: object | null) => ApplicationInitialUserMessage | null;
   clear: (sessionKey?: string) => void;
+  subscribe: (listener: () => void) => () => void;
 };
 
 type BrowserAnnotationHandoffKey = {
@@ -114,6 +116,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly config: ApplicationConfigCapability;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
+  readonly cloudStartup: ApplicationCloudStartup;
   readonly workboard: WorkboardCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

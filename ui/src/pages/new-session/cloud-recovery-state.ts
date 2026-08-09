@@ -1,5 +1,3 @@
-import type { SessionCreateParams } from "../../lib/sessions/create.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import {
   clearCloudSessionRecovery,
   parseCloudSessionCreateParams,
@@ -7,7 +5,9 @@ import {
   type CloudSessionCreateParams,
   type CloudSessionRecovery,
   writeCloudSessionRecovery,
-} from "./cloud-recovery.ts";
+} from "../../lib/sessions/cloud-recovery.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 
 export type SubmissionOutcomeReason = "gateway-changed" | "cloud-interrupted";
 

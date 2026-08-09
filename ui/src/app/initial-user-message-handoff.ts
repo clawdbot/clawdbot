@@ -9,6 +9,12 @@ export function createInitialUserMessageHandoff(): ApplicationInitialUserMessage
     string,
     Pick<Parameters<ApplicationInitialUserMessageHandoff["prepare"]>[0], "message" | "owner">
   >();
+  const listeners = new Set<() => void>();
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
   const findKey = (sessionKey: string) => {
     for (const candidate of pending.keys()) {
       if (areUiSessionKeysEquivalent(candidate, sessionKey)) {
@@ -20,6 +26,10 @@ export function createInitialUserMessageHandoff(): ApplicationInitialUserMessage
   return {
     prepare: (handoff) => {
       const existingKey = findKey(handoff.sessionKey);
+      const existing = existingKey ? pending.get(existingKey) : undefined;
+      if (existing?.message === handoff.message && existing.owner === handoff.owner) {
+        return;
+      }
       if (existingKey) {
         pending.delete(existingKey);
       }
@@ -31,6 +41,7 @@ export function createInitialUserMessageHandoff(): ApplicationInitialUserMessage
         }
         pending.delete(oldestKey);
       }
+      publish();
     },
     read: (sessionKey, owner) => {
       const handoff = pending.get(findKey(sessionKey) ?? "");
@@ -38,13 +49,22 @@ export function createInitialUserMessageHandoff(): ApplicationInitialUserMessage
     },
     clear: (sessionKey) => {
       if (sessionKey === undefined) {
+        if (pending.size === 0) {
+          return;
+        }
         pending.clear();
+        publish();
         return;
       }
       const key = findKey(sessionKey);
       if (key) {
         pending.delete(key);
+        publish();
       }
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
   };
 }

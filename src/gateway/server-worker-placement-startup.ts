@@ -125,7 +125,8 @@ export function coordinateWorkerPlacementDispatch(
     }
   };
   return {
-    dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
+    dispatch: async (request, onTransition) =>
+      await runPlacementOperation(() => service.dispatch(request, onTransition)),
     forceDestroyEnvironment: (environmentId, onCleanupError) =>
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
