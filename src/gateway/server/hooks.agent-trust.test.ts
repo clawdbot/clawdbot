@@ -993,7 +993,7 @@ describe("dispatchAgentHook trust handling", () => {
     expect(failureWake.sessionKey).toBeUndefined();
   });
 
-  it("carries the explicit agent on the recovered global failure wake when the initial key is absent", async () => {
+  it("carries the config-resolved agent on a recovered global failure wake", async () => {
     // Early config resolution fails before the event key resolves, so
     // hookEventSessionKey is absent; recovery still yields the unscoped
     // "global" sentinel. The failure wake must reuse the recovered key and
@@ -1003,7 +1003,10 @@ describe("dispatchAgentHook trust handling", () => {
     });
     resolveMainSessionKeyMock.mockReturnValueOnce("global").mockReturnValueOnce("global");
 
-    const result = await dispatchAgentHook(buildAgentPayload("Config", "hooks"));
+    const result = await dispatchAgentHook({
+      ...buildAgentPayload("Config"),
+      effectiveAgentId: "hooks",
+    });
 
     expect(result).toMatchObject({
       ok: false,

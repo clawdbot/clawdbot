@@ -10,7 +10,6 @@ import { listAgentIds } from "../../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
@@ -355,9 +354,7 @@ export function createGatewayHooksRequestHandler(params: {
           hookEventTarget?.heartbeatTarget ??
           (isGlobalEvent
             ? {
-                agentId:
-                  normalizeOptionalString(value.agentId) ??
-                  tryResolveLegacyCompatibilityAgentId(getRuntimeConfig()),
+                agentId: value.effectiveAgentId,
               }
             : { sessionKey: eventSessionKey });
       }
