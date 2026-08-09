@@ -27,12 +27,13 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
   profile: { id: string; updatedAt: number },
-): void {
+): ReturnType<typeof getUserProfileDisplay> {
   const display = getUserProfileDisplay(profile.id);
   context.refreshConnectedUserProfile?.({
     ...display,
     updatedAt: profile.updatedAt,
   });
+  return display;
 }
 
 function decodeBase64(value: string): Uint8Array | undefined {
@@ -214,8 +215,8 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
         return;
       }
-      refreshConnectedProfile(context, result.value);
-      respond(true, { profile: result.value });
+      const display = refreshConnectedProfile(context, result.value);
+      respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
