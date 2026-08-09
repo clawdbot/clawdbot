@@ -73,9 +73,22 @@ type TerminalToolGatewayContext = Pick<
 type TerminalToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
+  resolveTaskOwnerId?: (agentSessionKey: string) => Promise<string | undefined>;
   callGateway?: InProcessGatewayCaller;
   getGatewayContext?: () => TerminalToolGatewayContext | undefined;
 };
+
+async function resolveTaskOwnerId(agentSessionKey: string): Promise<string | undefined> {
+  const { listTasksForSessionKeyForStatus } = await import("../../tasks/task-status-access.js");
+  const tasks = listTasksForSessionKeyForStatus(agentSessionKey).filter(
+    (task) =>
+      (task.status === "queued" || task.status === "running") &&
+      task.childSessionKey?.trim() === agentSessionKey,
+  );
+  // Shared persistent sessions can host more than one task. Without a unique
+  // owner, keep the terminal conversation-scoped instead of guessing.
+  return tasks.length === 1 ? tasks[0]?.taskId : undefined;
+}
 
 function readDimension(
   params: Record<string, unknown>,
@@ -142,6 +155,7 @@ function launchBlockMessage(
 export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const getContext = opts.getGatewayContext ?? getInProcessGatewayToolContext;
+  const resolveOwnerTaskId = opts.resolveTaskOwnerId ?? resolveTaskOwnerId;
   return {
     label: "Terminal",
     name: "terminal",
@@ -184,6 +198,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           ...launch.plan,
           ...(cwd ? { cwdOverride: cwd } : {}),
         });
+        const taskId = await resolveOwnerTaskId(agentSessionKey);
+        const owner = { kind: "agent", agentSessionKey, ...(taskId ? { taskId } : {}) } as const;
         const deadline = createTerminalOpenDeadline();
         const cancelOpen = () => {
           if (!deadline.controller.signal.aborted) {
@@ -200,7 +216,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         try {
           outcome = await waitForTerminalOpenDeadline(() => {
             openingTerminal = manager.open({
-              owner: { kind: "agent", agentSessionKey },
+              owner,
               agentId: spawnPlan.agentId,
               cwd: spawnPlan.cwd,
               shell: spawnPlan.shell,

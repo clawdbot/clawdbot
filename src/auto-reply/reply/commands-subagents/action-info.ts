@@ -6,9 +6,9 @@ import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registr
 import { resolveSubagentDisplayStatus } from "../../../agents/subagent-session-metrics.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";

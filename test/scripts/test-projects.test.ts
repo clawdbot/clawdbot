@@ -683,23 +683,19 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/system-agent/audit.test.ts",
       ],
       "scripts/e2e/commitments-safety-docker-client.ts": [
-        "test/scripts/docker-e2e-clients.test.ts",
         "src/commitments/runtime.test.ts",
         "src/commitments/store.test.ts",
       ],
       "scripts/e2e/commitments-safety-docker.sh": [
-        "test/scripts/docker-e2e-clients.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "src/commitments/runtime.test.ts",
         "src/commitments/store.test.ts",
       ],
       "scripts/e2e/session-runtime-context-docker-client.ts": [
-        "test/scripts/docker-e2e-clients.test.ts",
         "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
       ],
       "scripts/e2e/session-runtime-context-docker.sh": [
-        "test/scripts/docker-e2e-clients.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -724,10 +720,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/cron/active-jobs-manual-run.test.ts",
       ],
       "scripts/e2e/cron-mcp-cleanup-seed.ts": ["test/scripts/docker-e2e-seeds.test.ts"],
-      "scripts/e2e/lib/onboard/scenario.sh": [
-        "test/scripts/e2e-shell-tempfiles.test.ts",
-        "test/scripts/openclaw-test-state.test.ts",
-      ],
+      "scripts/e2e/lib/onboard/scenario.sh": ["test/scripts/e2e-shell-tempfiles.test.ts"],
       "scripts/e2e/lib/onboard/assert-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
       "scripts/e2e/lib/onboard/write-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
       "scripts/e2e/lib/package-compat.mjs": [

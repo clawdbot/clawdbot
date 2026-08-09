@@ -32,6 +32,7 @@ import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
+import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -410,7 +411,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
-          const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+          const createSession = createTarget.ok
+            ? {
+                model: createTarget.target.model,
+                ...(provider.startTerminalSession ? { startTerminal: true as const } : {}),
+              }
+            : undefined;
           const onHost = (host: SessionCatalog["hosts"][number]) => {
             const catalog = catalogResult(
               provider,
@@ -587,6 +593,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       );
     }
   },
+
+  "sessions.catalog.startTerminal": catalogStartHandler(
+    resolveSessionCatalogProvider,
+    resolveSessionCatalogCreateTarget,
+  ),
 
   "sessions.catalog.archive": async ({ params, respond }) => {
     if (

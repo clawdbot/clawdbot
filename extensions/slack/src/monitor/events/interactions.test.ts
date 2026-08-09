@@ -1204,6 +1204,7 @@ describe("registerSlackInteractionEvents", () => {
         type: "button",
         action_id: "openclaw:reply_button",
         block_id: "reply_actions",
+        action_ts: "100.201",
         value: "codex",
         text: { type: "plain_text", text: "codex" },
       },
@@ -1219,7 +1220,7 @@ describe("registerSlackInteractionEvents", () => {
         "event options",
       ),
       {
-        contextKey: "slack:interaction:C1:100.200:openclaw:reply_button",
+        contextKey: "slack:interaction:C1:100.200:openclaw:reply_button:100.201",
         deliveryContext: {
           accountId: "default",
           channel: "slack",

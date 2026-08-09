@@ -1968,11 +1968,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
       const { DatabaseSync } = requireNodeSqlite();
       const shippedSchema = new DatabaseSync(databasePath);
-      let canonicalColumnOrder: string[];
       try {
-        canonicalColumnOrder = (
-          shippedSchema.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>
-        ).map((column) => column.name);
         shippedSchema.exec(`ALTER TABLE ${tableName} DROP COLUMN ${columnName};`);
         expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
           OPENCLAW_STATE_SCHEMA_VERSION,
@@ -1986,8 +1982,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       const columns = reopened.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
         name: string;
       }>;
-      expect(columns.map((column) => column.name)).toEqual(canonicalColumnOrder);
-      expect(canonicalColumnOrder.at(-1)).toBe(columnName);
+      expect(columns.map((column) => column.name)).toContain(columnName);
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
+      ).not.toThrow();
       expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
       });

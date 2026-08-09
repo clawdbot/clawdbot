@@ -216,7 +216,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
-  it("normalizes duplicated Windows node.exe argv before respawning", () => {
+  it("normalizes a duplicated Windows node.exe launcher prefix before respawning", () => {
     const scriptPath =
       "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
     const plan = buildCliRespawnPlan({
@@ -224,7 +224,6 @@ describe("buildCliRespawnPlan", () => {
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Program Files\\nodejs\\node.exe",
         scriptPath,
-        "node.exe",
         "dashboard",
         "--no-open",
       ],
@@ -236,6 +235,27 @@ describe("buildCliRespawnPlan", () => {
 
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
+  });
+
+  it("preserves post-script node.exe arguments after normalizing the launcher prefix", () => {
+    const scriptPath =
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath,
+        "node.exe",
+        "status",
+      ],
+      env: {},
+      execArgv: [],
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "node.exe", "status"]);
   });
 
   it("does not respawn on Windows when stack size is already configured", () => {

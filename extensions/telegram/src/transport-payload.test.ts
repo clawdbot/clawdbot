@@ -1,5 +1,4 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import { buffer } from "node:stream/consumers";
 import { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -8,8 +7,9 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.runtime.js";
+import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
@@ -68,48 +68,47 @@ function hasMultipartField(request: CapturedRequest, name: string, value?: strin
 }
 
 describe("Telegram topic transport payloads", () => {
-  const liveSockets = new Set<Socket>();
   const requests: CapturedRequest[] = [];
-  let server: Server;
-  let bot: Bot;
   let nextMessageId = 100;
+  const fetch = asTelegramClientFetch(
+    async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1],
+    ) => {
+      const rawBody = init?.body;
+      const body =
+        typeof rawBody === "string"
+          ? Buffer.from(rawBody)
+          : rawBody
+            ? await buffer(rawBody as unknown as NodeJS.ReadableStream)
+            : Buffer.alloc(0);
+      const method = new URL(input instanceof Request ? input.url : String(input)).pathname
+        .split("/")
+        .at(-1);
+      const captured = {
+        body,
+        contentType: new Headers(init?.headers).get("content-type") ?? "",
+        method: method ?? "unknown",
+      };
+      requests.push(captured);
 
-  beforeAll(async () => {
-    server = createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => chunks.push(chunk));
-      request.on("end", () => {
-        const body = Buffer.concat(chunks);
-        const method = request.url?.split("/").at(-1) ?? "unknown";
-        const captured = {
-          body,
-          contentType: request.headers["content-type"] ?? "",
-          method,
-        };
-        requests.push(captured);
-
-        let result: true | Record<string, unknown> = true;
-        if (method.startsWith("send")) {
-          const raw = body.toString("utf8");
-          const payload = captured.contentType.startsWith("application/json")
-            ? parseJsonBody(captured)
-            : undefined;
-          const directTopic =
-            payload?.direct_messages_topic_id ??
-            (hasMultipartField(captured, "direct_messages_topic_id", String(DIRECT_TOPIC_ID))
-              ? DIRECT_TOPIC_ID
-              : undefined);
-          const messageThread = payload?.message_thread_id;
-          result = {
+      const payload = captured.contentType.startsWith("application/json")
+        ? parseJsonBody(captured)
+        : undefined;
+      const directTopic =
+        payload?.direct_messages_topic_id ??
+        (hasMultipartField(captured, "direct_messages_topic_id", String(DIRECT_TOPIC_ID))
+          ? DIRECT_TOPIC_ID
+          : undefined);
+      const result = method?.startsWith("send")
+        ? {
             message_id: nextMessageId++,
             date: 1_700_000_000,
-            chat:
-              directTopic !== undefined
-                ? { id: DIRECT_CHAT_ID, type: "supergroup", is_direct_messages: true }
-                : {
-                    id: raw.includes('"chat_id":1234') ? 1234 : DIRECT_CHAT_ID,
-                    type: "supergroup",
-                  },
+            chat: {
+              id: DIRECT_CHAT_ID,
+              type: "supergroup",
+              ...(directTopic !== undefined ? { is_direct_messages: true } : {}),
+            },
             ...(directTopic !== undefined
               ? {
                   direct_messages_topic: {
@@ -117,26 +116,16 @@ describe("Telegram topic transport payloads", () => {
                     user: { id: 700, is_bot: false, first_name: "Subscriber" },
                   },
                 }
-              : typeof messageThread === "number"
-                ? { message_thread_id: messageThread }
-                : {}),
+              : {}),
             text: "accepted",
-          };
-        }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ ok: true, result }));
+          }
+        : true;
+      return new Response(JSON.stringify({ ok: true, result }), {
+        headers: { "content-type": "application/json" },
       });
-    });
-    server.on("connection", (socket) => {
-      liveSockets.add(socket);
-      socket.once("close", () => liveSockets.delete(socket));
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    bot = new Bot(TOKEN, { client: { apiRoot } });
-  });
+    },
+  );
+  const bot = new Bot(TOKEN, { client: { fetch } });
 
   beforeEach(() => {
     requests.length = 0;
@@ -149,15 +138,6 @@ describe("Telegram topic transport payloads", () => {
     clearTelegramRuntime();
     resetTelegramMessageCacheForTest();
     resetPluginStateStoreForTests();
-  });
-
-  afterAll(async () => {
-    for (const socket of liveSockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
   });
 
   it("serializes direct draft destinations while keeping edits topic-free", async () => {
@@ -258,7 +238,6 @@ describe("Telegram topic transport payloads", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isGroup: true,
       isForum: false,
     });
 
