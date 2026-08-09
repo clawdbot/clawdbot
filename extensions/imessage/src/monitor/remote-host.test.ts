@@ -6,11 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
-import {
-  clearIMessageRemoteHostCacheForTest,
-  getCachedIMessageRemoteHost,
-  resolveIMessageRemoteHost,
-} from "../remote-host.js";
+import { getCachedIMessageRemoteHost, resolveIMessageRemoteHost } from "../remote-host.js";
 
 const execFileAsync = promisify(execFile);
 const cliPathModuleUrl = new URL("../cli-path.ts", import.meta.url).href;
@@ -60,7 +56,6 @@ describe("detectRemoteHostFromCliPath", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
-    clearIMessageRemoteHostCacheForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await Promise.all(

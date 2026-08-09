@@ -7,7 +7,7 @@ export type IMessageActionTransportOptions = {
   timeoutMs?: number;
 };
 
-export class IMessageRemoteUnsupportedError extends Error {
+class IMessageRemoteUnsupportedError extends Error {
   readonly code = "IMESSAGE_REMOTE_UNSUPPORTED";
 
   constructor(message: string) {

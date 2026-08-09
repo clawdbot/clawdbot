@@ -145,8 +145,3 @@ export async function resolveIMessageRemoteHost(params: {
   remoteHostLookups.set(key, lookup);
   return await lookup;
 }
-
-export function clearIMessageRemoteHostCacheForTest(): void {
-  detectedRemoteHosts.clear();
-  remoteHostLookups.clear();
-}

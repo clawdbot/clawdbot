@@ -8,7 +8,7 @@ import {
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
-import { clearIMessageRemoteHostCacheForTest, resolveIMessageRemoteHost } from "./remote-host.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 
 function expireCachedPrivateApiStatus(): void {
   setCachedIMessagePrivateApiStatus(
@@ -27,7 +27,6 @@ describe("iMessage message-tool artifact", () => {
   });
 
   afterEach(async () => {
-    clearIMessageRemoteHostCacheForTest();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
     );
