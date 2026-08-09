@@ -681,7 +681,7 @@ type RegisterTelegramNativeCommandsParams = {
   telegramDeps?: TelegramNativeCommandDeps;
   opts: Pick<
     TelegramBotOptions,
-    "token" | "allowFrom" | "groupAllowFrom" | "replyToMode" | "accountAbortSignal"
+    "token" | "botInfo" | "allowFrom" | "groupAllowFrom" | "replyToMode" | "accountAbortSignal"
   >;
 };
 
@@ -1085,7 +1085,8 @@ export const registerTelegramNativeCommands = ({
     runtime,
     commandsToRegister,
     accountId,
-    botIdentity: opts.token,
+    botId: opts.botInfo?.id,
+    botToken: opts.token,
   });
 
   const resolveCommandRuntimeContext = async (params: {

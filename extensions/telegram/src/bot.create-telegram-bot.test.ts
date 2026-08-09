@@ -75,6 +75,7 @@ const {
   setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
+  syncTelegramMenuCommands,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -4199,7 +4200,11 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
 
-    expect(setMyCommandsSpy).toHaveBeenCalledTimes(1);
+    expect(syncTelegramMenuCommands).toHaveBeenCalledOnce();
+    expect(syncTelegramMenuCommands).toHaveBeenCalledWith(
+      expect.objectContaining({ commandsToRegister: [] }),
+    );
+    expect(setMyCommandsSpy).toHaveBeenCalledOnce();
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
   });
   it("handles requireMention when mentions do and do not resolve", async () => {

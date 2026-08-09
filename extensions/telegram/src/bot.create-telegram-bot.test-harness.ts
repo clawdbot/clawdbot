@@ -222,7 +222,7 @@ const menuSyncHoisted = vi.hoisted(() => ({
     await bot.api.setMyCommands(commandsToRegister);
   }),
 }));
-const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
+export const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
 
 function parseModelRef(raw: string): { provider?: string; model: string } {
   const trimmed = raw.trim();
