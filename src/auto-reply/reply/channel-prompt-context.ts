@@ -25,6 +25,12 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
 }
 
 export const MAX_CONTEXT_JSON_STRING_CHARS = 2_000;
+// Same untrusted-entry budget as inbound-meta.ts (MAX_UNTRUSTED_HISTORY_ENTRIES):
+// repeated channel-supplied entries are capped at that count.
+export const MAX_CONTEXT_JSON_ARRAY_ENTRIES = 20;
+// The largest first-party payload (the Conversation info block) carries ~25 keys;
+// 50 leaves headroom while bounding channel-controlled key fan-out.
+export const MAX_CONTEXT_JSON_OBJECT_KEYS = 50;
 
 export function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
@@ -42,14 +48,29 @@ function sanitizeContextJsonValue(value: unknown): unknown {
     return neutralizeMarkdownFences(truncateContextJsonString(value));
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeContextJsonValue(entry));
+    const kept = value.slice(0, MAX_CONTEXT_JSON_ARRAY_ENTRIES);
+    const omitted = value.length - kept.length;
+    return [
+      ...kept.map((entry) => sanitizeContextJsonValue(entry)),
+      // Keep the head like truncateContextJsonString does, and flag the drop.
+      ...(omitted > 0
+        ? [`…[truncated: ${omitted} more ${omitted === 1 ? "entry" : "entries"}]`]
+        : []),
+    ];
   }
   if (!value || typeof value !== "object") {
     return value;
   }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, sanitizeContextJsonValue(entry)]),
-  );
+  const entries = Object.entries(value);
+  const kept = entries.slice(0, MAX_CONTEXT_JSON_OBJECT_KEYS);
+  const omitted = entries.length - kept.length;
+  return Object.fromEntries([
+    ...kept.map(([key, entry]) => [key, sanitizeContextJsonValue(entry)] as const),
+    // Truncation flag mirrors the sibling `history_truncated: true` convention.
+    ...(omitted > 0
+      ? [[`…[truncated: ${omitted} more ${omitted === 1 ? "key" : "keys"}]`, true] as const]
+      : []),
+  ]);
 }
 
 export function formatContextJsonBlock(label: string, payload: unknown): string {
