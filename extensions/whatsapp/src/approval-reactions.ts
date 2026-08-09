@@ -17,7 +17,7 @@ import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-re
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
@@ -56,8 +56,9 @@ type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution
   remoteJid: string;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
   () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
 );
 
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
@@ -76,8 +77,6 @@ const whatsappApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
-
-const loadApprovalResolver = resolverRuntimeLoader;
 
 function buildReactionTargetKey(params: {
   accountId: string;
@@ -511,7 +510,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     return true;
   }
 
-  const { resolveApprovalOverGateway } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
@@ -556,5 +555,5 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
 
 export function clearWhatsAppApprovalReactionTargetsForTest(): void {
   whatsappApprovalReactionTargets.clearForTest();
-  resolverRuntimeLoader.clear();
+  loadResolveApprovalOverGateway.clear();
 }
