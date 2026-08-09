@@ -4,7 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
-  loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
@@ -66,7 +66,7 @@ export async function removeCronJobBaseSession(params: {
     agentId: params.agentId,
     sessionKey: `cron:${params.jobId}`,
   });
-  const existing = loadExactSessionEntry({
+  const existing = loadExactSessionEntryReadOnly({
     storePath: params.sessionStorePath,
     sessionKey,
   })?.entry;

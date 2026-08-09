@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -5,7 +6,10 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  listOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
@@ -19,6 +23,45 @@ afterEach(() => {
 });
 
 describe("CronService.remove session cleanup", () => {
+  it("does not materialize a session database when the deleted job never ran", async () => {
+    const { storePath } = await makeStorePath();
+    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "main",
+      resolveSessionStorePath: () => sessionStorePath,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job = await cron.add({
+      id: "never-ran",
+      name: "never ran",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "work" },
+    });
+    const sessionKey = `agent:main:cron:${job.id}`;
+    const databasePath = resolveSqliteScope({
+      agentId: "main",
+      sessionKey,
+      storePath: sessionStorePath,
+    }).path!;
+
+    expect(fs.existsSync(databasePath)).toBe(false);
+
+    await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
+
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(
+      listOpenClawAgentDatabasesForTest().some((database) => database.path === databasePath),
+    ).toBe(false);
+  });
+
   it("removes only the deleted isolated job's base session", async () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
