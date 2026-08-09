@@ -114,7 +114,12 @@ class UsageStatusRuntimeTest {
 
     assertEquals(2, calls.get())
     assertFalse(runtime.usageSummary.value.refreshing)
-    assertEquals("Claude", runtime.usageSummary.value.providers.single().displayName)
+    assertEquals(
+      "Claude",
+      runtime.usageSummary.value.providers
+        .single()
+        .displayName,
+    )
 
     runtime.refreshUsage()
     waitUntil { calls.get() == 3 && runtime.usageErrorText.value == null }
@@ -145,7 +150,10 @@ class UsageStatusRuntimeTest {
     runtime.refreshUsage()
     runBlocking { withTimeout(2_000) { firstStarted.await() } }
     runtime.refreshUsage()
-    waitUntil { runtime.usageSummary.value.providers.isNotEmpty() }
+    waitUntil {
+      runtime.usageSummary.value.providers
+        .isNotEmpty()
+    }
     releaseFirst.complete(Unit)
     runBlocking { withTimeout(2_000) { stalePublishAttempted.await() } }
 
