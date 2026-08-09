@@ -3,7 +3,7 @@ import { inspectMemoryAuthorizationRuntime } from "./memory-authorization-runtim
 
 const inspectedRuntimes = new WeakSet<object>();
 
-export type MemoryAuthorizationShadowMetadata = Readonly<{
+type MemoryAuthorizationShadowMetadata = Readonly<{
   event: "memory-authorization-backend-surface";
   mode: "shadow";
   contractVersion: 1;
