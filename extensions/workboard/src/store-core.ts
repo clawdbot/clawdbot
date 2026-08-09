@@ -20,6 +20,7 @@ import {
   cardBoardId,
   cardParentIds,
   compareCards,
+  dependencyOverrideMatchesCard,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
   lifecycleStatusSourceUpdatedAtFromPatch,
@@ -606,6 +607,12 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
+    if (next.metadata?.dependencyOverride && !dependencyOverrideMatchesCard(next)) {
+      next.metadata = trimMetadataToBudget(
+        { ...next.metadata, dependencyOverride: undefined },
+        options,
+      );
+    }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
@@ -803,22 +810,25 @@ export class WorkboardCoreStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
-  private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
+  protected async dependencyTargetStatus(
+    card: WorkboardCard,
+    now: number,
+  ): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
     if (card.status === "scheduled" && !scheduledAt) {
       return "scheduled";
+    }
+    // Force promotion authorizes only the exact dependency/schedule snapshot recorded by the
+    // operator. Any later link or schedule mutation invalidates the authorization fail-closed.
+    if (dependencyOverrideMatchesCard(card)) {
+      return "ready";
     }
     if (parents.length === 0) {
       if (scheduledAt && scheduledAt > now && isDependencyPromotableStatus(card.status)) {
         return "scheduled";
       }
       return card.status === "scheduled" ? "ready" : card.status;
-    }
-    // A force promotion is an explicit operator recovery action. Keep the recorded ready
-    // state stable across claim/dispatch preflights until a normal promotion clears it.
-    if (card.status === "ready" && card.metadata?.dependencyOverride) {
-      return "ready";
     }
     const parentCards = await Promise.all(parents.map((parentId) => this.get(parentId)));
     const parentsDone = parentCards.every((parent) => parent?.status === "done");
@@ -918,20 +928,30 @@ export class WorkboardCoreStore {
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
-    const card = await this.get(id);
+    let card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
     }
     if (card.metadata?.archivedAt) {
       return card;
     }
+    if (card.metadata?.dependencyOverride && !dependencyOverrideMatchesCard(card)) {
+      card = await this.updateCard(card.id, {
+        metadata: { ...card.metadata, dependencyOverride: undefined },
+      });
+    }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {
-      if (card.metadata?.dependencyOverride && cardParentIds(card).length > 0) {
+      if (card.metadata?.dependencyOverride) {
         const parentCards = await Promise.all(
           cardParentIds(card).map((parentId) => this.get(parentId)),
         );
-        if (parentCards.every((parent) => parent?.status === "done")) {
+        const scheduledAt = card.metadata.automation?.scheduledAt;
+        if (
+          parentCards.every((parent) => parent?.status === "done") &&
+          !card.metadata.dependencyOverride.scheduledWithoutDate &&
+          !(scheduledAt && scheduledAt > now)
+        ) {
           return await this.updateCard(card.id, {
             metadata: { ...card.metadata, dependencyOverride: undefined },
           });

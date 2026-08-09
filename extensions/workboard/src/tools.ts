@@ -914,7 +914,9 @@ export function createWorkboardTools(params: {
           id: cardIdField(),
           token: ScopedClaimTokenField,
           force: Type.Optional(
-            Type.Boolean({ description: "Bypass dependency or schedule holds." }),
+            Type.Boolean({
+              description: "Authorize one claim past the current dependency and schedule snapshot.",
+            }),
           ),
           reason: OptionalOperatorNoteField,
         },

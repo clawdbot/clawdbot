@@ -188,7 +188,8 @@ const WORKBOARD_SCHEMA_SQL = `
       archived_at INTEGER,
       stale_json TEXT,
       lifecycle_status_source_updated_at INTEGER,
-      failure_count INTEGER
+      failure_count INTEGER,
+      dependency_override_json TEXT
     ) STRICT;
     CREATE INDEX IF NOT EXISTS workboard_cards_board_status_idx
       ON workboard_cards(board_id, status, position);
@@ -359,6 +360,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
   );
+  ensureColumn(db, "workboard_cards", "dependency_override_json", "dependency_override_json TEXT");
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
@@ -785,6 +787,9 @@ function readMetadata(
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
+  const dependencyOverride = parseJson(row.dependency_override_json) as
+    | WorkboardMetadata["dependencyOverride"]
+    | undefined;
   const lifecycleStatusSourceUpdatedAt = numberValue(row, "lifecycle_status_source_updated_at");
   return optional({
     ...(attempts.length > 0 ? { attempts } : {}),
@@ -820,6 +825,7 @@ function readMetadata(
     ...(numberValue(row, "failure_count") !== undefined
       ? { failureCount: numberValue(row, "failure_count") }
       : {}),
+    ...(dependencyOverride ? { dependencyOverride } : {}),
   });
 }
 
@@ -896,14 +902,15 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         execution_id, execution_kind, execution_engine, execution_mode, execution_status,
         execution_model, execution_session_key, execution_run_id, execution_started_at,
         execution_updated_at, automation_json, claim_json, template_id, archived_at, stale_json,
-        lifecycle_status_source_updated_at, failure_count
+        lifecycle_status_source_updated_at, failure_count, dependency_override_json
       ) VALUES (
         @id, @board_id, @title, @notes, @status, @priority, @agent_id, @session_key, @run_id,
         @task_id, @source_url, @position, @created_at, @updated_at, @started_at, @completed_at,
         @execution_id, @execution_kind, @execution_engine, @execution_mode, @execution_status,
         @execution_model, @execution_session_key, @execution_run_id, @execution_started_at,
         @execution_updated_at, @automation_json, @claim_json, @template_id, @archived_at,
-        @stale_json, @lifecycle_status_source_updated_at, @failure_count
+        @stale_json, @lifecycle_status_source_updated_at, @failure_count,
+        @dependency_override_json
       )
       ON CONFLICT(id) DO UPDATE SET
         board_id = excluded.board_id,
@@ -937,7 +944,8 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         archived_at = excluded.archived_at,
         stale_json = excluded.stale_json,
         lifecycle_status_source_updated_at = excluded.lifecycle_status_source_updated_at,
-        failure_count = excluded.failure_count
+        failure_count = excluded.failure_count,
+        dependency_override_json = excluded.dependency_override_json
     `,
   ).run({
     id: card.id,
@@ -973,6 +981,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     stale_json: jsonValue(metadata?.stale),
     lifecycle_status_source_updated_at: bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
     failure_count: bindNull(metadata?.failureCount),
+    dependency_override_json: jsonValue(metadata?.dependencyOverride),
   });
 
   insertChildren(db, "workboard_card_labels", card.id, card.labels, (label, ordinal) => {

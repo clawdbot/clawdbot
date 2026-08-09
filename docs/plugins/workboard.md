@@ -182,6 +182,13 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
+A forced `workboard_promote` records a one-claim recovery authorization for
+the card's exact parent-link and schedule snapshot. Adding or removing a
+parent, changing the schedule, or moving the card out of `ready` revokes that
+authorization. A successful claim consumes it. Calling `workboard_promote`
+without `force` also clears it and reconciles the card to its normal dependency
+state.
+
 ## Dispatch
 
 Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal

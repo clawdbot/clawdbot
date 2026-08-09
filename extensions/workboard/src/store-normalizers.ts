@@ -967,17 +967,38 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   };
 }
 
-function normalizeDependencyOverride(
-  value: unknown,
-  fallback: WorkboardMetadata["dependencyOverride"],
-): WorkboardMetadata["dependencyOverride"] {
+function normalizeDependencyOverride(value: unknown): WorkboardMetadata["dependencyOverride"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return fallback;
+    return undefined;
   }
   const record = value as Record<string, unknown>;
   const grantedAt = normalizeTimestamp(record.grantedAt, 0);
-  if (!grantedAt) {
-    return fallback;
+  if (!grantedAt || !Array.isArray(record.parentIds)) {
+    return undefined;
+  }
+  const parentIds: string[] = [];
+  for (const entry of record.parentIds) {
+    if (typeof entry !== "string") {
+      return undefined;
+    }
+    const parentId = normalizeBoundedString(entry, undefined, 120, "dependency parent id");
+    if (!parentId || parentIds.includes(parentId)) {
+      return undefined;
+    }
+    parentIds.push(parentId);
+    if (parentIds.length > MAX_CARD_LINKS) {
+      throw new Error(`dependency override supports at most ${MAX_CARD_LINKS} parent ids.`);
+    }
+  }
+  parentIds.sort();
+  const hasScheduledAt = Object.hasOwn(record, "scheduledAt");
+  const scheduledAt = hasScheduledAt ? normalizeTimestamp(record.scheduledAt, 0) : undefined;
+  if (hasScheduledAt && !scheduledAt) {
+    return undefined;
+  }
+  const scheduledWithoutDate = record.scheduledWithoutDate === true;
+  if (Object.hasOwn(record, "scheduledWithoutDate") && !scheduledWithoutDate) {
+    return undefined;
   }
   const reason = normalizeBoundedString(
     record.reason,
@@ -985,7 +1006,13 @@ function normalizeDependencyOverride(
     1000,
     "dependency override reason",
   );
-  return { grantedAt, ...(reason ? { reason } : {}) };
+  return {
+    grantedAt,
+    parentIds,
+    ...(scheduledAt ? { scheduledAt } : {}),
+    ...(scheduledWithoutDate ? { scheduledWithoutDate: true as const } : {}),
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
@@ -1171,7 +1198,7 @@ export function normalizeMetadata(
         : fallback.failureCount,
     dependencyOverride: Object.hasOwn(record, "dependencyOverride")
       ? record.dependencyOverride
-        ? normalizeDependencyOverride(record.dependencyOverride, fallback.dependencyOverride)
+        ? normalizeDependencyOverride(record.dependencyOverride)
         : undefined
       : fallback.dependencyOverride,
   };

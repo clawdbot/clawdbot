@@ -689,6 +689,74 @@ export function cardParentIds(card: WorkboardCard): string[] {
     .filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
+export function dependencyOverrideMatchesCard(card: WorkboardCard): boolean {
+  const override = card.metadata?.dependencyOverride;
+  if (!override || card.status !== "ready") {
+    return false;
+  }
+  const overrideRecord = override as unknown as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "grantedAt",
+    "parentIds",
+    "scheduledAt",
+    "scheduledWithoutDate",
+    "reason",
+  ]);
+  if (
+    Object.keys(overrideRecord).some((key) => !allowedKeys.has(key)) ||
+    typeof overrideRecord.grantedAt !== "number" ||
+    !Number.isFinite(overrideRecord.grantedAt) ||
+    overrideRecord.grantedAt <= 0 ||
+    (Object.hasOwn(overrideRecord, "reason") &&
+      (typeof overrideRecord.reason !== "string" ||
+        overrideRecord.reason.length === 0 ||
+        overrideRecord.reason.length > 1000))
+  ) {
+    return false;
+  }
+  const approvedParentIds = override.parentIds;
+  if (
+    !Array.isArray(approvedParentIds) ||
+    approvedParentIds.some(
+      (id) => typeof id !== "string" || id.length === 0 || id.length > 120 || id !== id.trim(),
+    )
+  ) {
+    return false;
+  }
+  const canonicalApprovedParentIds = approvedParentIds.toSorted();
+  if (
+    new Set(approvedParentIds).size !== approvedParentIds.length ||
+    canonicalApprovedParentIds.some((id, index) => id !== approvedParentIds[index])
+  ) {
+    return false;
+  }
+  const currentParentIds = cardParentIds(card).toSorted();
+  if (
+    currentParentIds.length !== approvedParentIds.length ||
+    currentParentIds.some((id, index) => id !== approvedParentIds[index])
+  ) {
+    return false;
+  }
+  const hasScheduledAt = Object.hasOwn(overrideRecord, "scheduledAt");
+  if (
+    hasScheduledAt &&
+    (typeof overrideRecord.scheduledAt !== "number" ||
+      !Number.isFinite(overrideRecord.scheduledAt) ||
+      overrideRecord.scheduledAt <= 0)
+  ) {
+    return false;
+  }
+  const hasScheduledWithoutDate = Object.hasOwn(overrideRecord, "scheduledWithoutDate");
+  if (
+    (hasScheduledWithoutDate && overrideRecord.scheduledWithoutDate !== true) ||
+    (hasScheduledAt && hasScheduledWithoutDate)
+  ) {
+    return false;
+  }
+  const approvedScheduledAt = hasScheduledAt ? overrideRecord.scheduledAt : undefined;
+  return approvedScheduledAt === card.metadata?.automation?.scheduledAt;
+}
+
 export function cardChildIds(card: WorkboardCard): string[] {
   return (card.metadata?.links ?? [])
     .filter((link) => link.type === "child" && link.targetCardId)
