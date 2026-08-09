@@ -1,6 +1,6 @@
 // Mattermost plugin module implements draft stream behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -224,20 +224,71 @@ export function createMattermostDraftStream(params: {
     update: updateLifecycle,
     stop: stopLifecycle,
     stopForClear,
-    clearWithStop,
-    clearStrictWithStop,
     seal: sealLifecycle,
-  } = createFinalizableDraftLifecycle({
+  } = createFinalizableDraftStreamControlsForState({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
-    readMessageId: () => currentGeneration.postId,
-    clearMessageId,
-    isValidMessageId,
-    deleteMessage,
-    warn: params.warn,
-    warnPrefix: "mattermost stream preview cleanup failed",
   });
+  let pendingDeletePostIds: string[] = [];
+  let clearTail = Promise.resolve();
+  const clearOnce = async (prepareForClear: () => Promise<void>): Promise<Error[]> => {
+    await prepareForClear();
+    const currentPostId = currentGeneration.postId;
+    const deletePostIds = pendingDeletePostIds;
+    pendingDeletePostIds = [];
+    if (!isValidMessageId(currentPostId)) {
+      clearMessageId();
+    } else if (!deletePostIds.includes(currentPostId)) {
+      deletePostIds.push(currentPostId);
+    }
+
+    const failures: Error[] = [];
+    for (const postId of deletePostIds) {
+      try {
+        await deleteMessage(postId);
+      } catch (err) {
+        const error = toErrorObject(err, "Mattermost stream preview cleanup failed");
+        params.warn?.(`mattermost stream preview cleanup failed: ${error.message}`);
+        if (!pendingDeletePostIds.includes(postId)) {
+          pendingDeletePostIds.push(postId);
+        }
+        failures.push(error);
+        continue;
+      }
+      // A replacement preview may become current while deletion is in flight.
+      if (currentGeneration.postId === postId) {
+        clearMessageId();
+      }
+    }
+    return failures;
+  };
+  const enqueueClear = <T>(run: () => Promise<T>): Promise<T> => {
+    const clearRun = clearTail.catch(() => {}).then(run);
+    clearTail = clearRun.then(
+      () => undefined,
+      () => undefined,
+    );
+    return clearRun;
+  };
+  const clearWithStop = (prepareForClear: () => Promise<void>): Promise<void> =>
+    enqueueClear(async () => {
+      await clearOnce(prepareForClear);
+    });
+  const clearStrictWithStop = (
+    prepareForClear: () => Promise<void>,
+    attempts: number,
+  ): Promise<void> =>
+    enqueueClear(async () => {
+      let failures: Error[] = [];
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        failures = await clearOnce(prepareForClear);
+        if (failures.length === 0) {
+          return;
+        }
+      }
+      throw failures.at(-1) ?? new Error("Mattermost stream preview cleanup failed");
+    });
 
   const forceNewMessage = () => {
     if (terminalAcceptedDeliveryError !== undefined) {
@@ -399,7 +450,7 @@ export function createMattermostDraftStream(params: {
   const clear = async () => {
     assertNoAcceptedDeliveryFailure();
     if (params.cleanupMode === "strict") {
-      await clearStrictWithStop(discardPending, { attempts: 2 });
+      await clearStrictWithStop(discardPending, 2);
     } else {
       await clearWithStop(discardPending);
     }

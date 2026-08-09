@@ -309,7 +309,7 @@ describe("resolveMattermostReplyToMode", () => {
     expect(defaultAccount.progressFinalDelivery).toBe("in-place");
   });
 
-  it("inherits root progress mode and options when an account overrides final delivery", () => {
+  it("preserves account streaming replacement while resolving final delivery separately", () => {
     const account = resolveMattermostAccount({
       cfg: {
         channels: {
@@ -349,19 +349,39 @@ describe("resolveMattermostReplyToMode", () => {
 
     expect(account.streamingMode).toBe("progress");
     expect(account.progressFinalDelivery).toBe("separate");
-    expect(account.config.streaming?.preview).toEqual({
-      toolProgress: false,
-      commandText: "status",
-    });
+    expect(account.config.streaming?.preview).toEqual({ commandText: "status" });
     expect(account.config.streaming?.progress).toEqual({
-      label: "Root progress",
-      toolProgress: false,
       commandText: "status",
       finalDelivery: "separate",
     });
     expect(account.config.streaming?.block).toEqual({
       enabled: true,
-      coalesce: { minChars: 100, maxChars: 1000, idleMs: 250 },
+      coalesce: { idleMs: 250 },
     });
+  });
+
+  it("keeps legacy replacement semantics when the account has no final delivery override", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: false },
+            },
+            accounts: {
+              work: {
+                streaming: { progress: { commandText: "status" } },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("partial");
+    expect(account.progressFinalDelivery).toBe("in-place");
+    expect(account.config.streaming).toEqual({ progress: { commandText: "status" } });
   });
 });

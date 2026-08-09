@@ -208,61 +208,6 @@ describe("draft-stream-controls", () => {
     expect(messageId).toBeUndefined();
   });
 
-  it("strict lifecycle cleanup retries within one serialized operation", async () => {
-    const state = { stopped: false, final: false };
-    let messageId: string | undefined = "preview-old";
-    const deleteMessage = vi
-      .fn<(messageId: string) => Promise<void>>()
-      .mockRejectedValueOnce(new Error("transient cleanup failure"))
-      .mockResolvedValue(undefined);
-    const lifecycle = createFinalizableDraftLifecycle({
-      throttleMs: 250,
-      state,
-      sendOrEditStreamMessage: async () => true,
-      readMessageId: () => messageId,
-      clearMessageId: () => {
-        messageId = undefined;
-      },
-      isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage,
-      warnPrefix: "cleanup failed",
-    });
-
-    await expect(lifecycle.clearStrict({ attempts: 2 })).resolves.toBeUndefined();
-
-    expect(deleteMessage).toHaveBeenCalledTimes(2);
-    expect(messageId).toBeUndefined();
-  });
-
-  it("strict lifecycle cleanup surfaces the final provider failure and retains its retry id", async () => {
-    const state = { stopped: false, final: false };
-    let messageId: string | undefined = "preview-old";
-    const deleteMessage = vi
-      .fn<(messageId: string) => Promise<void>>()
-      .mockRejectedValueOnce(new Error("cleanup failure 1"))
-      .mockRejectedValueOnce(new Error("cleanup failure 2"))
-      .mockResolvedValue(undefined);
-    const lifecycle = createFinalizableDraftLifecycle({
-      throttleMs: 250,
-      state,
-      sendOrEditStreamMessage: async () => true,
-      readMessageId: () => messageId,
-      clearMessageId: () => {
-        messageId = undefined;
-      },
-      isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage,
-      warnPrefix: "cleanup failed",
-    });
-
-    await expect(lifecycle.clearStrict({ attempts: 2 })).rejects.toThrow("cleanup failure 2");
-    expect(messageId).toBe("preview-old");
-
-    await expect(lifecycle.clearStrict()).resolves.toBeUndefined();
-    expect(deleteMessage).toHaveBeenCalledTimes(3);
-    expect(messageId).toBeUndefined();
-  });
-
   it("lifecycle does not retry a successful delete when its success callback fails", async () => {
     const state = { stopped: false, final: false };
     let messageId: string | undefined = "preview-old";

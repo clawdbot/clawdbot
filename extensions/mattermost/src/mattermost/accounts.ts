@@ -20,6 +20,7 @@ import type {
   MattermostAccountConfig,
   MattermostChatMode,
   MattermostChatTypeKey,
+  MattermostConfig,
   MattermostProgressFinalDelivery,
   MattermostReplyToMode,
 } from "../types.js";
@@ -68,54 +69,6 @@ const {
 });
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
-type MattermostStreamingConfig = NonNullable<MattermostAccountConfig["streaming"]>;
-
-function mergeMattermostStreamingConfig(
-  root: MattermostStreamingConfig | undefined,
-  account: MattermostStreamingConfig | undefined,
-): MattermostStreamingConfig | undefined {
-  if (!root || !account) {
-    return account ?? root;
-  }
-  return {
-    ...root,
-    ...account,
-    ...(root.preview || account.preview
-      ? { preview: { ...root.preview, ...account.preview } }
-      : {}),
-    ...(root.progress || account.progress
-      ? { progress: { ...root.progress, ...account.progress } }
-      : {}),
-    ...(root.block || account.block
-      ? {
-          block: {
-            ...root.block,
-            ...account.block,
-            ...(root.block?.coalesce || account.block?.coalesce
-              ? {
-                  coalesce: {
-                    ...root.block?.coalesce,
-                    ...account.block?.coalesce,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function resolveMergedMattermostAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): MattermostAccountConfig {
-  const rootConfig = cfg.channels?.mattermost;
-  const accountConfig = resolveAccountEntry(rootConfig?.accounts, accountId);
-  const merged = mergeMattermostAccountConfig(cfg, accountId);
-  const streaming = mergeMattermostStreamingConfig(rootConfig?.streaming, accountConfig?.streaming);
-  return streaming ? { ...merged, streaming } : merged;
-}
-
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
   if (config.chatmode === "oncall") {
     return true;
@@ -138,7 +91,24 @@ function resolveMattermostAccountWithMode(params: {
     params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
   );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
-  const merged = resolveMergedMattermostAccountConfig(params.cfg, accountId);
+  const rootConfig = params.cfg.channels?.mattermost as MattermostConfig | undefined;
+  const accountConfig = resolveAccountEntry(rootConfig?.accounts, accountId);
+  const merged = mergeMattermostAccountConfig(params.cfg, accountId);
+  const accountFinalDelivery = accountConfig?.streaming?.progress?.finalDelivery;
+  const progressFinalDelivery =
+    accountFinalDelivery ?? rootConfig?.streaming?.progress?.finalDelivery ?? "in-place";
+  // Preserve Mattermost's existing account-streaming replacement contract. A new
+  // finalDelivery-only override may still select the inherited root mode without
+  // pulling unrelated root preview/progress/block options into the account.
+  const streamingModeConfig =
+    accountFinalDelivery !== undefined &&
+    accountConfig?.streaming?.mode === undefined &&
+    rootConfig?.streaming?.mode !== undefined
+      ? {
+          ...merged,
+          streaming: { ...merged.streaming, mode: rootConfig.streaming.mode },
+        }
+      : merged;
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
@@ -181,8 +151,8 @@ function resolveMattermostAccountWithMode(params: {
     requireMention,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: resolveChannelStreamingChunkMode(merged),
-    streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
-    progressFinalDelivery: merged.streaming?.progress?.finalDelivery ?? "in-place",
+    streamingMode: resolveChannelPreviewStreamMode(streamingModeConfig, "partial"),
+    progressFinalDelivery,
     blockStreaming: resolveChannelStreamingBlockEnabled(merged),
     blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
