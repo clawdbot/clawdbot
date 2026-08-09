@@ -1113,6 +1113,53 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("defers repeated-request recovery until the provider request allowance expires", () => {
+    const recoverStuckSession = vi.fn();
+    // Retry loop above the built-in 90s recovery threshold but inside the 600s
+    // provider allowance: the repeated-request gate must not abort a call the
+    // provider contract still considers in flight.
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+      },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main", runId: "run-1" });
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      if (attempt > 1) {
+        vi.advanceTimersByTime(30_000);
+        logSessionStateChange({
+          sessionId: "s1",
+          sessionKey: "main",
+          state: "processing",
+          reason: "run_started",
+        });
+      }
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+        requestTimeoutMs: 600_000,
+      });
+    }
+
+    // 150s of repeated silent attempts: past the 90s built-in threshold, but
+    // the current attempt's 600s allowance has not expired.
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(450_000);
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
   it("does not recover repeated requests after semantic output resets the clock", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

@@ -549,6 +549,17 @@ function isBlockedToolCallRecoveryEligible(params: {
   );
 }
 
+// A configured provider request allowance (models.providers.<id>.timeoutSeconds,
+// recorded from model.call.started) is the authoritative deadline for a silent
+// in-flight call: every model-call recovery gate must outlast it so recovery
+// cannot kill a turn the provider contract still considers in flight.
+function resolveModelCallRecoveryAbortMs(
+  activity: DiagnosticSessionActivitySnapshot | undefined,
+  stuckSessionAbortMs: number,
+): number {
+  return Math.max(stuckSessionAbortMs, activity?.activeModelCallRequestTimeoutMs ?? 0);
+}
+
 function isStalledModelCallRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
@@ -558,14 +569,7 @@ function isStalledModelCallRecoveryEligible(params: {
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
-  // A configured provider request allowance (models.providers.<id>.timeoutSeconds,
-  // recorded from model.call.started) is the authoritative deadline for a silent
-  // call: defer the abort until it expires so recovery cannot kill a turn the
-  // provider contract still considers in flight.
-  const abortMs = Math.max(
-    params.stuckSessionAbortMs,
-    params.activity?.activeModelCallRequestTimeoutMs ?? 0,
-  );
+  const abortMs = resolveModelCallRecoveryAbortMs(params.activity, params.stuckSessionAbortMs);
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
@@ -580,11 +584,17 @@ function isActiveAbortRecoveryEligible(params: {
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
+  // The repeated-request branch is also a model-call gate: a retry loop keeps a
+  // silent call in flight, so it must honor the same provider allowance.
+  const modelCallAbortMs = resolveModelCallRecoveryAbortMs(
+    params.activity,
+    params.stuckSessionAbortMs,
+  );
   return (
     (params.classification?.eventType === "session.stalled" &&
       params.classification.classification === "stalled_agent_run" &&
       params.activity?.hasActiveEmbeddedRun === true &&
-      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs) ||
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= modelCallAbortMs) ||
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
     isStalledModelCallRecoveryEligible(params)
