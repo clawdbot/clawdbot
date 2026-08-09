@@ -388,18 +388,36 @@ it("aborts a stalled local avatar body after the request deadline", async () => 
   }
 });
 
-it("renders a local avatar image when token auth is not active", async () => {
+it("fetches a local avatar image without a header when token auth is not active", async () => {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:unauthenticated-avatar");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    blob: async () => new Blob(["avatar"]),
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const element = await createAgentSelect({
     authToken: null,
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
   try {
-    expect(element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
-      "/avatar/alpha",
-    );
+    expect(fetchMock).toHaveBeenCalledWith("/avatar/alpha", {
+      signal: expect.any(AbortSignal),
+    });
+    await waitForFast(() => {
+      expect(
+        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+      ).toBe("blob:unauthenticated-avatar");
+    });
   } finally {
     element.remove();
+    vi.unstubAllGlobals();
   }
 });
 
