@@ -5,10 +5,14 @@ import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatc
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
+import {
+  readSlackMiddlewareTeamId,
+  resolveSlackDeferredActionTarget,
+} from "../deferred-action-routing.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 type SlackModalBody = {
-  user?: { id?: string };
+  user?: { id?: string; team_id?: string };
   team?: { id?: string };
   trigger_id?: string;
   view?: {
@@ -19,6 +23,7 @@ type SlackModalBody = {
     previous_view_id?: string;
     external_id?: string;
     hash?: string;
+    app_installed_team_id?: string;
     state?: { values?: unknown };
   };
   is_cleared?: boolean;
@@ -124,6 +129,7 @@ function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
   userId?: string;
+  teamId?: string;
 }): { sessionKey: string; channelId?: string; channelType?: string } {
   const metadata = params.metadata;
   if (metadata.sessionKey) {
@@ -139,13 +145,18 @@ function resolveModalSessionRouting(params: {
         channelId: metadata.channelId,
         channelType: metadata.channelType,
         senderId: params.userId,
+        teamId: params.teamId,
       }),
       channelId: metadata.channelId,
       channelType: metadata.channelType,
     };
   }
   return {
-    sessionKey: params.ctx.resolveSlackSystemEventSessionKey({}),
+    sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+      channelType: "im",
+      senderId: params.userId,
+      teamId: params.teamId,
+    }),
   };
 }
 
@@ -177,6 +188,7 @@ function summarizeSlackViewLifecycleContext(view: {
 function resolveSlackModalEventBase(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
+  teamId?: string;
   summarizeViewState: (values: unknown) => ModalInputSummary[];
 }): SlackModalEventBase {
   const metadata = parseSlackModalPrivateMetadata(params.body.view?.private_metadata);
@@ -188,6 +200,7 @@ function resolveSlackModalEventBase(params: {
     ctx: params.ctx,
     metadata,
     userId,
+    teamId: params.teamId,
   });
   return {
     callbackId,
@@ -201,7 +214,7 @@ function resolveSlackModalEventBase(params: {
       callbackId,
       viewId,
       userId,
-      teamId: params.body.team?.id,
+      teamId: params.teamId,
       ...summarizeSlackViewLifecycleContext({
         root_view_id: params.body.view?.root_view_id,
         previous_view_id: params.body.view?.previous_view_id,
@@ -219,6 +232,7 @@ function resolveSlackModalEventBase(params: {
 async function dispatchSlackModalPluginInteractiveHandler(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
+  teamId?: string;
   interactionType: SlackModalInteractionKind;
   data: string | undefined;
   auth: { isAuthorizedSender: boolean };
@@ -299,6 +313,7 @@ async function emitSlackModalLifecycleEvent(params: {
     resolveSlackModalEventBase({
       ctx: params.ctx,
       body: params.body,
+      teamId: params.teamId,
       summarizeViewState: params.summarizeViewState,
     });
   const metadata = parseSlackModalPrivateMetadata(params.body.view?.private_metadata);
@@ -400,6 +415,17 @@ async function emitSlackModalLifecycleEvent(params: {
         }
       : {};
 
+  const targetKind = auth.channelType === "im" ? "user" : "channel";
+  const targetId = targetKind === "user" ? userId : sessionRouting.channelId;
+  const deferredTarget = targetId
+    ? resolveSlackDeferredActionTarget({
+        installationIdentity: params.ctx.installationIdentity,
+        teamId: params.teamId,
+        kind: targetKind,
+        id: targetId,
+      })
+    : undefined;
+
   const queued = enqueueSystemEvent(
     params.formatSystemEvent({ ...eventPayload, ...pluginEventFields }),
     {
@@ -407,11 +433,7 @@ async function emitSlackModalLifecycleEvent(params: {
       contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
       deliveryContext: {
         channel: "slack",
-        ...(auth.channelType === "im"
-          ? { to: `user:${userId}` }
-          : sessionRouting.channelId
-            ? { to: `channel:${sessionRouting.channelId}` }
-            : {}),
+        ...(deferredTarget ? { to: deferredTarget.target } : {}),
         accountId: params.ctx.accountId,
       },
     },
@@ -437,7 +459,8 @@ export function registerModalLifecycleHandler(params: {
   summarizeViewState: (values: unknown) => ModalInputSummary[];
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }) {
-  params.register(params.matcher, async ({ ack, body }: SlackModalEventHandlerArgs) => {
+  params.register(params.matcher, async (args: SlackModalEventHandlerArgs) => {
+    const { ack, body } = args;
     if (!shouldHandleSlackModalLifecycleBody(body)) {
       return;
     }
@@ -449,9 +472,15 @@ export function registerModalLifecycleHandler(params: {
       return;
     }
     params.trackEvent?.();
+    const typedBody = body as SlackModalBody;
     await emitSlackModalLifecycleEvent({
       ctx: params.ctx,
-      body: body as SlackModalBody,
+      body: typedBody,
+      teamId:
+        readSlackMiddlewareTeamId(args) ??
+        typedBody.view?.app_installed_team_id ??
+        typedBody.team?.id ??
+        typedBody.user?.team_id,
       interactionType: params.interactionType,
       contextPrefix: params.contextPrefix,
       summarizeViewState: params.summarizeViewState,

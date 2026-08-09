@@ -41,6 +41,10 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
+import {
+  readSlackMiddlewareTeamId,
+  resolveSlackDeferredActionTarget,
+} from "../deferred-action-routing.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -100,7 +104,7 @@ type InteractionSummary = InteractionSelectionFields & {
 type SlackActionSummary = Omit<InteractionSummary, "actionId" | "blockId">;
 
 type SlackBlockActionBody = {
-  user?: { id?: string };
+  user?: { id?: string; team_id?: string };
   team?: { id?: string };
   trigger_id?: string;
   response_url?: string;
@@ -920,15 +924,26 @@ function enqueueSlackBlockActionEvent(params: {
   ctx: SlackMonitorContext;
   parsed: ParsedSlackBlockAction;
   auth: { channelType?: "im" | "mpim" | "channel" | "group" };
+  teamId?: string;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): void {
+  const targetKind = params.auth.channelType === "im" ? "user" : "channel";
+  const targetId = targetKind === "user" ? params.parsed.userId : params.parsed.channelId;
+  const deferredTarget = targetId
+    ? resolveSlackDeferredActionTarget({
+        installationIdentity: params.ctx.installationIdentity,
+        teamId: params.teamId,
+        kind: targetKind,
+        id: targetId,
+      })
+    : undefined;
   const eventPayload: InteractionSummary = {
     interactionType: "block_action",
     actionId: params.parsed.actionId,
     blockId: params.parsed.blockId,
     ...params.parsed.actionSummary,
     userId: params.parsed.userId,
-    teamId: params.parsed.typedBody.team?.id,
+    teamId: params.teamId,
     triggerId: params.parsed.typedBody.trigger_id,
     responseUrl: params.parsed.typedBody.response_url,
     channelId: params.parsed.channelId,
@@ -943,6 +958,7 @@ function enqueueSlackBlockActionEvent(params: {
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
     threadTs: params.parsed.threadTs,
+    teamId: params.teamId,
   });
   const contextParts = [
     "slack:interaction",
@@ -957,12 +973,7 @@ function enqueueSlackBlockActionEvent(params: {
     contextKey: contextParts.join(":"),
     deliveryContext: {
       channel: "slack",
-      to:
-        params.auth.channelType === "im"
-          ? `user:${params.parsed.userId}`
-          : params.parsed.channelId
-            ? `channel:${params.parsed.channelId}`
-            : undefined,
+      to: deferredTarget?.target,
       accountId: params.ctx.accountId,
       threadId: params.parsed.threadTs,
     },
@@ -1155,6 +1166,10 @@ async function handleSlackBlockAction(params: {
     ctx: params.ctx,
     parsed,
     auth,
+    teamId:
+      readSlackMiddlewareTeamId(params.args) ??
+      parsed.typedBody.team?.id ??
+      parsed.typedBody.user?.team_id,
     formatSystemEvent: params.formatSystemEvent,
   });
   await updateSlackLegacyBlockAction({

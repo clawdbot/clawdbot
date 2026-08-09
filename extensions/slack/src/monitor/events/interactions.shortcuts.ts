@@ -4,6 +4,10 @@ import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
+import {
+  readSlackMiddlewareTeamId,
+  resolveSlackDeferredActionTarget,
+} from "../deferred-action-routing.js";
 
 type SlackShortcutBody = GlobalShortcut | MessageShortcut;
 
@@ -60,12 +64,19 @@ async function handleSlackShortcut(params: {
 
   const interactionType = isMessageShortcut ? "message_shortcut" : "global_shortcut";
   const messageTs = messageBody?.message.ts || messageBody?.message_ts;
+  const teamId = readSlackMiddlewareTeamId(params.args) ?? body.team?.id ?? body.user.team_id;
+  const deferredTarget = resolveSlackDeferredActionTarget({
+    installationIdentity: params.ctx.installationIdentity,
+    teamId,
+    kind: auth.channelType === "im" ? "user" : "channel",
+    id: auth.channelType === "im" ? userId : (channelId ?? ""),
+  });
   const eventPayload = {
     interactionType,
     actionId: `shortcut:${callbackId}`,
     callbackId,
     userId,
-    teamId: body.team?.id ?? body.user.team_id,
+    teamId,
     triggerId: body.trigger_id,
     actionTs: body.action_ts,
     channelId,
@@ -81,6 +92,7 @@ async function handleSlackShortcut(params: {
     channelType: auth.channelType,
     senderId: userId,
     threadTs,
+    teamId,
   });
   const contextKey = [
     "slack:interaction:shortcut",
@@ -101,7 +113,7 @@ async function handleSlackShortcut(params: {
     contextKey,
     deliveryContext: {
       channel: "slack",
-      to: auth.channelType === "im" ? `user:${userId}` : `channel:${channelId}`,
+      to: deferredTarget.target,
       accountId: params.ctx.accountId,
       threadId: threadTs,
     },
