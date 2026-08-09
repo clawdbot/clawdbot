@@ -2585,10 +2585,11 @@ NODE
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
+    const hostedRetryJobs = new Set(["checks-ui-e2e", "checks-ui-e2e-real-gateway"]);
     for (const { jobName, stepWith } of stickyConsumers) {
       const stickyCondition = stepWith["sticky-disk"];
       const cacheCondition = stepWith["use-actions-cache"];
-      if (jobName === "checks-ui-e2e") {
+      if (hostedRetryJobs.has(jobName)) {
         continue;
       }
       expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
@@ -5152,9 +5153,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.if).toBe(
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
-    expect(uiE2e["runs-on"]).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
-    );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     // Each Chromium worker keeps serial file ownership while all four shards
     // together remain required by the aggregate CI gate.
@@ -5171,9 +5169,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
     expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
     expect(uiE2eRealGateway.if).toBe(uiE2e.if);
-    expect(uiE2eRealGateway["runs-on"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
-    );
     expect(uiE2eRealGateway["timeout-minutes"]).toBe(20);
     expect(uiE2eRealGateway.env).toBeUndefined();
 
@@ -5182,14 +5177,35 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Control UI E2E Node setup",
     );
     expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
-    expect(uiE2eSetup.with).toEqual({
+    const expectedUiE2eSetup = {
       "node-version": "24.x",
       "install-bun": "false",
       "sticky-disk":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
       "use-actions-cache":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
-    });
+    } as const;
+    expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
+    const realGatewaySetup = expectDefined(
+      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "real-Gateway Control UI E2E Node setup",
+    );
+    expect(realGatewaySetup).toEqual(uiE2eSetup);
+
+    const routedUiE2eJobs = [
+      {
+        job: uiE2e,
+        name: "checks-ui-e2e",
+        setup: uiE2eSetup,
+        blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
+      },
+      {
+        job: uiE2eRealGateway,
+        name: "checks-ui-e2e-real-gateway",
+        setup: realGatewaySetup,
+        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+      },
+    ] as const;
     const routingScenarios = [
       {
         name: "same-repo pull request first attempt",
@@ -5199,11 +5215,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          stickyDisk: "true",
-          useActionsCache: "false",
-        },
+        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
       },
       {
         name: "same-repo pull request retry",
@@ -5213,11 +5225,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "fork pull request",
@@ -5227,11 +5235,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "workflow dispatch",
@@ -5240,11 +5244,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "canonical push retry",
@@ -5253,33 +5253,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: {
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          stickyDisk: "true",
-          useActionsCache: "false",
-        },
+        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
       },
     ] as const;
-    for (const { context, expected, name } of routingScenarios) {
-      expect(evaluateWorkflowExpression(uiE2e["runs-on"], context), name).toBe(expected.runner);
-      expect(evaluateWorkflowExpression(uiE2eSetup.with?.["sticky-disk"], context), name).toBe(
-        expected.stickyDisk,
+    for (const { blacksmithRunner, job, name: jobName, setup } of routedUiE2eJobs) {
+      expect(job["runs-on"]).toBe(
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && '" +
+          blacksmithRunner +
+          "' || 'ubuntu-24.04') }}",
       );
-      expect(
-        evaluateWorkflowExpression(uiE2eSetup.with?.["use-actions-cache"], context),
-        name,
-      ).toBe(expected.useActionsCache);
+      for (const { context, expected, name: scenarioName } of routingScenarios) {
+        const assertionName = `${jobName}: ${scenarioName}`;
+        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
+        expect(evaluateWorkflowExpression(job["runs-on"], context), assertionName).toBe(
+          expectedRunner,
+        );
+        expect(
+          evaluateWorkflowExpression(setup.with?.["sticky-disk"], context),
+          assertionName,
+        ).toBe(expected.stickyDisk);
+        expect(
+          evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context),
+          assertionName,
+        ).toBe(expected.useActionsCache);
+      }
     }
-
-    const uiSetup = expectDefined(
-      ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "Control UI Node setup",
-    );
-    const realGatewaySetup = expectDefined(
-      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "real-Gateway Control UI E2E Node setup",
-    );
-    expect(realGatewaySetup).toEqual(uiSetup);
 
     const chromiumInstall = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
@@ -5307,7 +5305,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(browserCopilot.if).toBe("matrix.shard == 1");
     expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
-    expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+    for (const { job } of routedUiE2eJobs) {
+      const jobContract = JSON.stringify(job);
+      expect(jobContract).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+      expect(jobContract).not.toContain("OPENCLAW_VITEST_NO_OUTPUT_RETRY");
+    }
 
     const realGatewayRuns = uiE2eRealGateway.steps
       .filter((step: WorkflowStep) => step.name?.includes("with a real Gateway"))
@@ -5320,7 +5322,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRunContract).not.toContain("--retry");
     expect(realGatewayRunContract).not.toContain("--hookTimeout");
     expect(realGatewayRunContract).not.toContain("--testTimeout");
-    expect(JSON.stringify(uiE2eRealGateway)).not.toContain("OPENCLAW_VITEST_NO_OUTPUT_RETRY");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {

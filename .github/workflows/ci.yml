@@ -1548,9 +1548,9 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # Each suite owns a complete Gateway. Give the two isolated Vitest processes
-    # enough CPU to keep Chromium, Vite, and Gateway startup responsive.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # First-attempt same-repo runs use Blacksmith; manual dispatches, forks, and
+    # same-repo PR retries use GitHub-hosted capacity as an independent fallback.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -1559,9 +1559,9 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Fork PRs must never read or write repository-global sticky snapshots.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
+          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - name: Install Playwright Chromium
         run: node --import tsx scripts/ensure-playwright-chromium.mts
