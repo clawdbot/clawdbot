@@ -22,7 +22,7 @@ const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
 describe("pairing setup code", () => {
   it("round-trips bare and wrapped setup codes without normalizing payload case", () => {
     const payload = {
-      url: "wss://gateway.example:8443",
+      url: "wss://gateway.example:8443/openclaw-gw",
       bootstrapToken: "Bootstrap-AbC123",
       tlsFingerprint: "sha256:AA:BB",
       expiresAtMs: 20_000,
@@ -311,6 +311,20 @@ describe("pairing setup code", () => {
       expected: {
         authLabel: "token",
         url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+      },
+    });
+  });
+
+  it("preserves context paths in fully qualified setup urls", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        publicUrl: "wss://gateway.example.test:18789/openclaw-gw",
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789/openclaw-gw",
         urlSource: "plugins.entries.device-pair.config.publicUrl",
       },
     });

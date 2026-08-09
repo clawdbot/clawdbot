@@ -245,7 +245,8 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
       return null;
     }
     const port = parsed.port ? `:${parsed.port}` : "";
-    return `${resolvedScheme}://${host}${port}`;
+    const contextPath = parsed.pathname === "/" ? "" : parsed.pathname;
+    return `${resolvedScheme}://${host}${port}${contextPath}`;
   } catch {
     return null;
   }

@@ -109,7 +109,7 @@ describe("registerNodeCli", () => {
 
   it("derives the node endpoint, TLS pin, and bootstrap credential from --pair", async () => {
     const setupCode = encodePairingSetupCode({
-      url: "wss://gateway.example:8443",
+      url: "wss://gateway.example:8443/openclaw-gw",
       bootstrapToken: "bootstrap-123",
       tlsFingerprint: "sha256:pair-leaf",
     });
@@ -122,12 +122,14 @@ describe("registerNodeCli", () => {
       expect.objectContaining({
         gatewayHost: "gateway.example",
         gatewayPort: 8443,
+        gatewayContextPath: "/openclaw-gw",
         gatewayTls: true,
         gatewayTlsFingerprint: "sha256:pair-leaf",
         gatewayCandidates: [
           {
             host: "gateway.example",
             port: 8443,
+            contextPath: "/openclaw-gw",
             tls: true,
             tlsFingerprint: "sha256:pair-leaf",
           },

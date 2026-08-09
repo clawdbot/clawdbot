@@ -27,7 +27,7 @@ vi.mock("../gateway/client.js", () => ({
 }));
 
 const candidates = [
-  { host: "192.168.1.20", port: 18789, tls: false },
+  { host: "192.168.1.20", port: 18789, contextPath: "/openclaw-gw", tls: false },
   { host: "gateway.tailnet.example", port: 443, tls: true },
 ];
 
@@ -61,7 +61,7 @@ describe("gateway candidate connection", () => {
     const { callbacks, connection } = createConnection();
     connection.start();
 
-    expect(mocks.options[0]?.url).toBe("ws://192.168.1.20:18789");
+    expect(mocks.options[0]?.url).toBe("ws://192.168.1.20:18789/openclaw-gw");
     expect(mocks.clients[0]?.start).toHaveBeenCalledOnce();
     mocks.options[0]?.onClose?.(1006, "transport unavailable", {
       phase: "pre-hello",

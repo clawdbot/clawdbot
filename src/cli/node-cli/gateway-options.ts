@@ -14,6 +14,7 @@ type NodeGatewayOptions = {
 type NodePairGatewayOptions = {
   host: string;
   port: number;
+  contextPath?: string;
   tls: boolean;
   tlsFingerprint?: string;
   bootstrapToken: string;
@@ -26,6 +27,7 @@ function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGat
   return {
     host: parsed.hostname,
     port: parsed.port ? Number.parseInt(parsed.port, 10) : tls ? 443 : 80,
+    ...(parsed.pathname !== "/" ? { contextPath: parsed.pathname } : {}),
     tls,
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
   };
@@ -40,6 +42,7 @@ export function resolveNodePairGatewayOptions(input: string): NodePairGatewayOpt
   return {
     host: primary.host ?? "127.0.0.1",
     port: primary.port ?? 18789,
+    ...(primary.contextPath ? { contextPath: primary.contextPath } : {}),
     tls: primary.tls ?? false,
     ...(primary.tlsFingerprint ? { tlsFingerprint: primary.tlsFingerprint } : {}),
     bootstrapToken: payload.bootstrapToken,
@@ -72,7 +75,7 @@ export function resolveNodeGatewayOptions(
     normalizeOptionalString(options.contextPath) ??
     (options.contextPath !== undefined || endpointChanged
       ? undefined
-      : config?.gateway?.contextPath);
+      : (pair?.contextPath ?? config?.gateway?.contextPath));
   const hasExplicitEndpoint =
     options.host !== undefined ||
     options.port !== undefined ||
