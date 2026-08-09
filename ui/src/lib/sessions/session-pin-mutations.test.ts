@@ -37,9 +37,8 @@ function pinHarness(options: {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  const client = { request } as unknown as GatewayBrowserClient;
-  const harness = createGatewayHarness(client);
-  return { ...harness, client, key, request };
+  const harness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  return { ...harness, key };
 }
 
 describe("session pin mutations", () => {
