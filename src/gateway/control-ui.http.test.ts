@@ -2026,43 +2026,52 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("rejects a rate-limited Control UI read before shared-secret auth", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const rateLimiter = createAuthRateLimiterSpy();
-        rateLimiter.check.mockReturnValue({ allowed: false, remaining: 0, retryAfterMs: 2_500 });
-        const readSharedToken = vi.fn(() => "shared-token");
-        const auth: ResolvedGatewayAuth = {
-          mode: "token",
-          get token() {
-            return readSharedToken();
-          },
-          allowTailscale: false,
-        };
-        const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
-          rootPath: tmp,
-          auth,
-          headers: { authorization: "Bearer shared-token" },
-          rateLimiter,
-        });
+  it("rejects a rate-limited Control UI read when no valid device token is presented", async () => {
+    const tempHome = testTempDirs.make("openclaw-ui-rate-limited-token-");
+    await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const rateLimiter = createAuthRateLimiterSpy();
+          rateLimiter.check.mockImplementation((_ip, scope) =>
+            scope === AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET
+              ? { allowed: false, remaining: 0, retryAfterMs: 2_500 }
+              : { allowed: true, remaining: 10, retryAfterMs: 0 },
+          );
+          const auth: ResolvedGatewayAuth = {
+            mode: "token",
+            token: "shared-token",
+            allowTailscale: false,
+          };
+          const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
+            rootPath: tmp,
+            auth,
+            headers: { authorization: "Bearer shared-token" },
+            rateLimiter,
+          });
 
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(429);
-        expect(responseJson(end)).toEqual({
-          error: {
-            message: "Too many failed authentication attempts. Please try again later.",
-            type: "rate_limited",
-          },
-        });
-        expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
-        expect(rateLimiter.check).toHaveBeenCalledWith(
-          "127.0.0.1",
-          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-        );
-        expect(readSharedToken).not.toHaveBeenCalled();
-        expect(rateLimiter.reset).not.toHaveBeenCalled();
-        expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
-      },
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(429);
+          expect(responseJson(end)).toEqual({
+            error: {
+              message: "Too many failed authentication attempts. Please try again later.",
+              type: "rate_limited",
+            },
+          });
+          expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
+          expect(rateLimiter.check).toHaveBeenNthCalledWith(
+            1,
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          );
+          expect(rateLimiter.check).toHaveBeenNthCalledWith(
+            2,
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+          );
+          expect(rateLimiter.reset).not.toHaveBeenCalled();
+          expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
+        },
+      });
     });
   });
 
@@ -2265,6 +2274,52 @@ describe("handleControlUiHttpRequest", () => {
             expect(res.statusCode).toBe(200);
             const parsed = parseBootstrapPayload(end);
             expect(parsed.assistantAgentId).toBeUndefined();
+            expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
+            expect(rateLimiter.reset).toHaveBeenCalledWith(
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+            );
+            expect(rateLimiter.reset).toHaveBeenCalledWith(
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
+          },
+        });
+      },
+    });
+  });
+
+  it("serves paired device-token bootstrap while the shared-secret scope is locked", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const rateLimiter = createAuthRateLimiterSpy();
+            rateLimiter.check.mockImplementation((_ip, scope) =>
+              scope === AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET
+                ? { allowed: false, remaining: 0, retryAfterMs: 2_500 }
+                : { allowed: true, remaining: 10, retryAfterMs: 0 },
+            );
+            const { res, handled, end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+              rateLimiter,
+            });
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(parseBootstrapPayload(end).assistantAgentId).toBeUndefined();
+            expect(rateLimiter.check).toHaveBeenNthCalledWith(
+              1,
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
+            expect(rateLimiter.check).toHaveBeenNthCalledWith(
+              2,
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+            );
             expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
             expect(rateLimiter.reset).toHaveBeenCalledWith(
               "127.0.0.1",
