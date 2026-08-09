@@ -77,10 +77,10 @@ export function resolveSpawnCommand(
  */
 export function resolveForceKillDelayMs(env = process.env) {
   const raw = env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS;
-  if (raw === undefined || raw === "") {
+  const text = raw?.trim();
+  if (!text) {
     return 5_000;
   }
-  const text = raw.trim();
   if (!/^\d+$/u.test(text)) {
     throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
   }

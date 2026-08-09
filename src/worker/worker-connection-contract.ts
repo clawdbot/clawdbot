@@ -6,11 +6,14 @@ import type {
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import { toErrorObject } from "../infra/errors.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "credential-replaced",
   "owner-epoch-mismatch",
 ]);
+const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
+const PROTOTYPE_MUTATING_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
@@ -95,5 +98,36 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
 }
 
 export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  if (error instanceof Error) {
+    return error;
+  }
+  const message = String(error);
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return toErrorObject(error, message);
+  }
+  const normalized = toErrorObject({}, message);
+  normalized.cause = error;
+  try {
+    const detailKeys = Reflect.ownKeys(error).filter(
+      (key) =>
+        (typeof key !== "string" ||
+          (!ERROR_OWNED_FIELDS.has(key) && !PROTOTYPE_MUTATING_FIELDS.has(key))) &&
+        Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
+    );
+    for (const key of detailKeys) {
+      try {
+        Object.defineProperty(normalized, key, {
+          value: Reflect.get(error, key),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      } catch {
+        // Skip fields whose getters or property definitions reject access.
+      }
+    }
+  } catch {
+    // Opaque proxies may reject enumeration; preserve the original failure as the cause.
+  }
+  return normalized;
 }

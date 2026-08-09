@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
@@ -112,10 +112,6 @@ describe("memory-core plugin runtime registration", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("registers the dreaming runtime slash command", () => {
     let command: OpenClawPluginCommandDefinition | undefined;
     plugin.register(
@@ -199,228 +195,14 @@ describe("memory-core plugin runtime registration", () => {
     expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
   });
 
-  it("warms each configured memory manager at gateway start and logs failures at debug", async () => {
-    vi.useFakeTimers();
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const syncMain = vi.fn(async () => {});
-    const syncWork = vi.fn(async () => {
-      throw new Error("warmup failed");
-    });
-    const debug = vi.fn();
-    getMemorySearchManagerMock
-      .mockResolvedValueOnce({ manager: { sync: syncMain } } as never)
-      .mockResolvedValueOnce({ manager: { sync: syncWork } } as never);
-    const config = {
-      agents: { entries: { main: { default: true }, work: {} } },
-    } as OpenClawConfig;
-    const testApi = createTestPluginApi({
-      config,
-      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      runtime: hostRuntime,
-      on(hookName, handler) {
-        if (hookName === "gateway_start") {
-          gatewayStartHandlers.push(
-            handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-          );
-        }
-      },
-    });
-
-    plugin.register(testApi);
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-    warmup({}, { config });
-
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-    await vi.runOnlyPendingTimersAsync();
-    await vi.waitFor(() => {
-      expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-      expect(syncMain).toHaveBeenCalledWith({ reason: "startup-warmup" });
-      expect(syncWork).toHaveBeenCalledWith({ reason: "startup-warmup" });
-      expect(debug).toHaveBeenCalledWith(
-        "memory-core: startup index warmup failed for work: warmup failed",
-      );
-    });
-  });
-
-  it("defers memory manager initialization until after the gateway start turn", async () => {
-    vi.useFakeTimers();
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    getMemorySearchManagerMock.mockResolvedValue({ manager: null } as never);
-    const config = {} as OpenClawConfig;
+  it("keeps memory manager initialization demand-driven", () => {
     plugin.register(
       createTestPluginApi({
-        config,
         runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
       }),
     );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
 
-    warmup({}, { config });
-
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-    await vi.runOnlyPendingTimersAsync();
-    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
-  });
-
-  it("cancels deferred memory warmup when the gateway stops", async () => {
-    vi.useFakeTimers();
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const gatewayStopHandlers: Array<() => void> = [];
-    const config = {} as OpenClawConfig;
-    plugin.register(
-      createTestPluginApi({
-        config,
-        runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-          if (hookName === "gateway_stop") {
-            gatewayStopHandlers.push(handler as unknown as () => void);
-          }
-        },
-      }),
-    );
-    const warmup = gatewayStartHandlers.at(-1);
-    const stop = gatewayStopHandlers.at(-1);
-    if (!warmup || !stop) {
-      throw new Error("expected memory warmup lifecycle hooks");
-    }
-
-    warmup({}, { config });
-    stop();
-    await vi.runOnlyPendingTimersAsync();
-
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-  });
-
-  it("prevents a restarted gateway generation from syncing a stale manager", async () => {
-    vi.useFakeTimers();
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    let resolveStaleManager:
-      | ((value: { manager: { sync: () => Promise<void> } }) => void)
-      | undefined;
-    const staleManagerResult = new Promise<{ manager: { sync: () => Promise<void> } }>(
-      (resolve) => {
-        resolveStaleManager = resolve;
-      },
-    );
-    const staleSync = vi.fn(async () => {});
-    const currentSync = vi.fn(async () => {});
-    getMemorySearchManagerMock
-      .mockReturnValueOnce(staleManagerResult as never)
-      .mockResolvedValueOnce({ manager: { sync: currentSync } } as never);
-    const config = {} as OpenClawConfig;
-    plugin.register(
-      createTestPluginApi({
-        config,
-        runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
-      }),
-    );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-
-    warmup({}, { config });
-    await vi.runOnlyPendingTimersAsync();
-    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
-
-    warmup({}, { config });
-    await vi.runOnlyPendingTimersAsync();
-    await vi.waitFor(() => expect(currentSync).toHaveBeenCalledWith({ reason: "startup-warmup" }));
-
-    resolveStaleManager?.({ manager: { sync: staleSync } });
-    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2));
-    expect(staleSync).not.toHaveBeenCalled();
-  });
-
-  it("leaves QMD startup synchronization to the backend boot policy", async () => {
-    vi.useFakeTimers();
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const sync = vi.fn(async () => {});
-    getMemorySearchManagerMock.mockResolvedValueOnce({ manager: { sync } } as never);
-    const config = {
-      memory: { backend: "qmd", qmd: { update: { onBoot: false } } },
-    } as OpenClawConfig;
-    plugin.register(
-      createTestPluginApi({
-        config,
-        runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
-      }),
-    );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-
-    warmup({}, { config });
-
-    await vi.runOnlyPendingTimersAsync();
-    await vi.waitFor(() => expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1));
-    expect(sync).not.toHaveBeenCalled();
-  });
-
-  it("does not warm memory-core when another plugin owns the memory slot", async () => {
-    const gatewayStartHandlers: Array<(event: unknown, ctx: { config: OpenClawConfig }) => void> =
-      [];
-    const config = {
-      plugins: { slots: { memory: "memory-lancedb" } },
-    } as OpenClawConfig;
-    plugin.register(
-      createTestPluginApi({
-        config,
-        runtime: hostRuntime,
-        on(hookName, handler) {
-          if (hookName === "gateway_start") {
-            gatewayStartHandlers.push(
-              handler as unknown as (event: unknown, ctx: { config: OpenClawConfig }) => void,
-            );
-          }
-        },
-      }),
-    );
-    const warmup = gatewayStartHandlers.at(-1);
-    if (!warmup) {
-      throw new Error("expected memory warmup gateway_start hook");
-    }
-
-    warmup({}, { config });
-
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
@@ -440,10 +222,67 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.getMemorySearchManager({ cfg, agentId: "main" });
 
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      acquireLocalService: expect.any(Function),
       openKeyedStore: expect.any(Function),
       withLease: expect.any(Function),
     });
+  });
+
+  it("defers nested host runtime access until the injected operation runs", async () => {
+    const acquireLocalService = vi.fn(async () => undefined);
+    const openKeyedStore = vi.fn(() => ({}));
+    const withLease = vi.fn(async (_options, run) => await run({}));
+    const llmGetter = vi.fn(() => ({ acquireLocalService }));
+    const stateGetter = vi.fn(() => ({ openKeyedStore, withLease }));
+    const host = Object.defineProperties(
+      {},
+      {
+        llm: { configurable: true, enumerable: true, get: llmGetter },
+        state: { configurable: true, enumerable: true, get: stateGetter },
+      },
+    ) as OpenClawPluginApi["runtime"];
+    let runtime: MemoryPluginRuntime | undefined;
+
+    plugin.register(
+      createTestPluginApi({
+        runtime: host,
+        registerMemoryCapability(capability) {
+          runtime = capability.runtime;
+        },
+      }),
+    );
+
+    expect(llmGetter).not.toHaveBeenCalled();
+    expect(stateGetter).not.toHaveBeenCalled();
+    await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
+    const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    if (
+      !injectedHost?.acquireLocalService ||
+      !injectedHost.openKeyedStore ||
+      !injectedHost.withLease
+    ) {
+      throw new Error("expected memory-core host operations");
+    }
+
+    const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
+    await injectedHost.acquireLocalService(target);
+    const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
+    injectedHost.openKeyedStore(storeOptions);
+    const run = vi.fn(async () => "leased");
+    const leaseOptions = {
+      namespace: "lazy-host",
+      key: "manager",
+      database: { scope: "shared" as const },
+      leaseMs: 1_000,
+      waitMs: 1_000,
+    };
+    await injectedHost.withLease(leaseOptions, run as never);
+
+    expect(llmGetter).toHaveBeenCalledOnce();
+    expect(acquireLocalService).toHaveBeenCalledWith(target);
+    expect(stateGetter).toHaveBeenCalledTimes(2);
+    expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
+    expect(withLease).toHaveBeenCalledWith(leaseOptions, run);
   });
 
   it("forwards search-hit authorization through the registered memory runtime", async () => {
@@ -477,7 +316,7 @@ describe("memory-core plugin runtime registration", () => {
       hits,
     });
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: hostRuntime.llm.acquireLocalService,
+      acquireLocalService: expect.any(Function),
       openKeyedStore: expect.any(Function),
       withLease: expect.any(Function),
     });

@@ -4,11 +4,11 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  checkOllamaCloudAuth,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
 } from "./setup.js";
+import { checkOllamaCloudAuth } from "./setup.runtime.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 const fetchWithSsrFGuardMock = vi.hoisted(() =>

@@ -166,7 +166,48 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       requesterYieldBatch: true,
       afterRequesterYield: true,
     });
-    expect(schedule).not.toHaveBeenCalled();
+    expect(entry.delivery?.disposition).toBe("intentional_non_delivery");
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
+  });
+
+  it("persists a mixed delivered and in-progress yielded batch before scheduling", () => {
+    const alpha = makeRun("run-alpha");
+    const beta = makeRun("run-beta");
+    beta.delivery = { status: "in_progress" };
+    const calls: string[] = [];
+    const persistOrThrow = vi.fn(() => calls.push("persist"));
+    const schedule = vi.fn(() => calls.push("schedule"));
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(alpha), accepted(beta)],
+        runs: new Map([
+          [alpha.runId, alpha],
+          [beta.runId, beta],
+        ]),
+        persistOrThrow,
+        schedule,
+      }),
+    ).toBe(true);
+
+    const frozenState = {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: ["run-alpha", "run-beta"],
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+      rearmGeneration: 1,
+    } as const;
+    expect(alpha.requesterSettleWake).toEqual(frozenState);
+    expect(beta.requesterSettleWake).toEqual(frozenState);
+    expect(alpha.requesterTurnRunId).toBeUndefined();
+    expect(beta.requesterTurnRunId).toBeUndefined();
+    expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
+    expect(calls).toEqual(["persist", "schedule"]);
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha);
   });
 
   it.each([true, false])(

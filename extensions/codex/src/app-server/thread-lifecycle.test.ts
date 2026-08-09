@@ -549,7 +549,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.146.0",
+      cliVersion: "0.147.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -612,6 +612,63 @@ function expectSingleLogMessage(
 }
 
 describe("Codex app-server native code mode config", () => {
+  it("keeps credential collection out of transcript-bearing developer instructions", () => {
+    const instructions = buildDeveloperInstructions({
+      provider: "codex",
+      modelId: "gpt-5.6-luna",
+      disableTools: true,
+      disableMessageTool: true,
+    } as EmbeddedRunAttemptParams);
+    const credentialGuidance = instructions
+      .split("\n")
+      .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
+
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:ask for|request)/iu.test(line) &&
+          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:echo|repeat)/iu.test(line) &&
+          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:place|put|include)/iu.test(line) &&
+          /(?:recommend|suggest)/iu.test(line) &&
+          /(?:command(?:-line)?|arguments?)/iu.test(line) &&
+          /urls?/iu.test(line) &&
+          /shell/iu.test(line) &&
+          /(?:variable|interpolat)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:ask|request)/iu.test(line) &&
+          /(?:report|share|provide)/iu.test(line) &&
+          /(?:authentication|pairing)/iu.test(line) &&
+          /codes?/iu.test(line) &&
+          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
@@ -1264,6 +1321,22 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("preserves omitted native tiers until a previously owned sticky tier must be cleared", () => {
+    const options = {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    };
+    const inherited = buildTurnStartParams(createAttemptParams({ provider: "openai" }), options);
+    const cleared = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      ...options,
+      clearInheritedServiceTier: true,
+    });
+
+    expect(inherited).not.toHaveProperty("serviceTier");
+    expect(cleared.serviceTier).toBeNull();
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {

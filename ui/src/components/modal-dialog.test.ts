@@ -114,6 +114,23 @@ describe("openclaw-modal-dialog", () => {
     );
   });
 
+  it("keeps responsive width and maximum-width limits owned by the same variant", () => {
+    const styles = OpenClawModalDialog.styles.cssText;
+
+    expect(styles).toMatch(
+      /:host\(\.fullscreen\)\s+wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*calc\(100vw\s*-\s*20px\);/u,
+    );
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?wa-dialog\s*\{[^}]*--width:\s*min\(var\(--openclaw-modal-width,\s*540px\),\s*calc\(100vw\s*-\s*24px\)\);[\s\S]*?wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*var\(--openclaw-modal-max-width,\s*calc\(100vw\s*-\s*24px\)\);/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--width:\s*min\(var\(--openclaw-modal-width,\s*100vw\),\s*100vw\);/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*100vw;/u,
+    );
+  });
+
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
     const onCancel = vi.fn();

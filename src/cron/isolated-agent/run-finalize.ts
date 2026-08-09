@@ -5,6 +5,7 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -84,6 +85,7 @@ export async function finalizeCronRun(params: {
     });
   }
   const usage = finalRunResult.meta?.agentMeta?.usage;
+  const diagnosticUsage = finalRunResult.meta?.agentMeta?.diagnosticUsage ?? usage;
   const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
   const modelUsed =
@@ -129,11 +131,6 @@ export async function finalizeCronRun(params: {
     const output = usage.output ?? 0;
     const cacheRead = usage.cacheRead ?? 0;
     const cacheWrite = usage.cacheWrite ?? 0;
-    const hasBillableUsageBuckets =
-      usage.input !== undefined ||
-      usage.output !== undefined ||
-      usage.cacheRead !== undefined ||
-      usage.cacheWrite !== undefined;
     const lastCallTotalTokens = deriveSessionTotalTokens({
       usage: lastCallUsage,
       contextTokens,
@@ -143,15 +140,13 @@ export async function finalizeCronRun(params: {
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
         : undefined;
+    const costConfig = resolveModelCostConfig({
+      provider: providerUsed,
+      model: modelUsed,
+      config: prepared.cfgWithAgentDefaults,
+    });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
-      estimateUsageCost({
-        usage,
-        cost: resolveModelCostConfig({
-          provider: providerUsed,
-          model: modelUsed,
-          config: prepared.cfgWithAgentDefaults,
-        }),
-      }),
+      estimateUsageCost({ usage, cost: costConfig }),
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
     prepared.cronSession.sessionEntry.outputTokens = output;
@@ -172,9 +167,11 @@ export async function finalizeCronRun(params: {
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
+      prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     } else {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
+      prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
     }
     prepared.cronSession.sessionEntry.cacheRead = cacheRead;
     prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
@@ -190,7 +187,24 @@ export async function finalizeCronRun(params: {
       usage: telemetryUsage,
     };
     if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults)) {
-      const usagePromptTokens = input + cacheRead + cacheWrite;
+      const diagnosticInput = diagnosticUsage?.input ?? 0;
+      const diagnosticOutput = diagnosticUsage?.output ?? 0;
+      const diagnosticCacheRead = diagnosticUsage?.cacheRead ?? 0;
+      const diagnosticCacheWrite = diagnosticUsage?.cacheWrite ?? 0;
+      const usagePromptTokens = diagnosticInput + diagnosticCacheRead + diagnosticCacheWrite;
+      const diagnosticBucketTotalTokens = usagePromptTokens + diagnosticOutput;
+      const diagnosticTotalTokens =
+        typeof diagnosticUsage?.total === "number" && Number.isFinite(diagnosticUsage.total)
+          ? Math.max(diagnosticBucketTotalTokens, diagnosticUsage.total)
+          : diagnosticBucketTotalTokens;
+      const hasDiagnosticBillableUsageBuckets =
+        diagnosticUsage?.input !== undefined ||
+        diagnosticUsage?.output !== undefined ||
+        diagnosticUsage?.cacheRead !== undefined ||
+        diagnosticUsage?.cacheWrite !== undefined;
+      const diagnosticEstimatedCostUsd = resolveNonNegativeNumber(
+        estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
+      );
       const contextUsedTokens = deriveContextPromptTokens({
         lastCallUsage,
         promptTokens,
@@ -212,20 +226,20 @@ export async function finalizeCronRun(params: {
         provider: providerUsed,
         model: modelUsed,
         usage: {
-          input,
-          output,
-          cacheRead,
-          cacheWrite,
+          input: diagnosticInput,
+          output: diagnosticOutput,
+          cacheRead: diagnosticCacheRead,
+          cacheWrite: diagnosticCacheWrite,
           promptTokens: usagePromptTokens,
-          total: aggregateTotalTokens,
+          total: diagnosticTotalTokens,
         },
         lastCallUsage,
         context: {
           limit: contextTokens,
           ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
-        ...(hasBillableUsageBuckets && runEstimatedCostUsd !== undefined
-          ? { costUsd: runEstimatedCostUsd }
+        ...(hasDiagnosticBillableUsageBuckets && diagnosticEstimatedCostUsd !== undefined
+          ? { costUsd: diagnosticEstimatedCostUsd }
           : {}),
         durationMs: execution.runEndedAt - execution.runStartedAt,
       });

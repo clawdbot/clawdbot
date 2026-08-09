@@ -76,7 +76,7 @@ suite.define(() => {
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
       expect(capped.overflowY).toBe("auto");
       await captureUiProof(page, "new-session-composer-capped-scrollbar.png");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect(start.isVisible()).resolves.toBe(true);
       await expect(start.isEnabled()).resolves.toBe(true);
       await start.focus();
@@ -103,7 +103,7 @@ suite.define(() => {
       await pastePng(message);
 
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -161,7 +161,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
@@ -197,7 +197,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
@@ -285,7 +285,7 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
@@ -329,7 +329,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
-      const submit = page.getByRole("button", { name: "Start thread" });
+      const submit = page.getByRole("button", { name: "Start session" });
       await composer.fill("include the image that is still loading");
       await pastePng(composer);
 
@@ -511,7 +511,7 @@ suite.define(() => {
       await composer.waitFor();
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
@@ -566,7 +566,7 @@ suite.define(() => {
       await message.fill(submittedMessage);
       await placeSummary.click();
       expect(await placeSelect.getAttribute("open")).not.toBeNull();
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ message: submittedMessage });
@@ -595,7 +595,7 @@ suite.define(() => {
       expect(await message.inputValue()).toBe(submittedMessage);
       expect(await placeSummary.isDisabled()).toBe(false);
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       const retry = (await gateway.getRequests("sessions.create")).at(-1);
       expect(retry?.params).toMatchObject({ message: submittedMessage });
@@ -663,7 +663,7 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         message,
@@ -734,7 +734,7 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,

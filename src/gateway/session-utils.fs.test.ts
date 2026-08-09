@@ -1,9 +1,10 @@
-// Session filesystem utility tests cover transcript reading, usage extraction,
-// preview rows, message counts, title fields, and archive candidate resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+// Session filesystem utility tests cover transcript reading, usage extraction,
+// preview rows, message counts, title fields, and archive candidate resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
@@ -221,12 +222,7 @@ function appendBlockedUserMessage(
   return messageId;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectMessageContents(messages: unknown[], expected: unknown[]) {
   expect(messages.map((message) => requireRecord(message, "message").content)).toEqual(expected);
@@ -1439,6 +1435,64 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
+    const sessionId = "usage-unavailable-upgrade-sequence";
+    const oldCumulative = {
+      message: {
+        role: "assistant",
+        api: "cli",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    };
+    const unavailable = {
+      message: {
+        role: "assistant",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    };
+    writeTranscript(tmpDir, sessionId, [oldCumulative]);
+    const legacySnapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+    expect(legacySnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(legacySnapshot?.totalTokens).toBeUndefined();
+    writeTranscript(tmpDir, sessionId, [oldCumulative, unavailable]);
+
+    const unavailableSnapshot = await readLatestSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+    );
+    expect(unavailableSnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(unavailableSnapshot?.totalTokens).toBeUndefined();
+    expect(unavailableSnapshot?.totalTokensFresh).toBeUndefined();
+
+    writeTranscript(tmpDir, sessionId, [
+      oldCumulative,
+      unavailable,
+      {
+        message: {
+          role: "assistant",
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          usage: { input: 67_932, output: 2_000, cacheRead: 18_944, totalTokens: 88_876 },
+        },
+      },
+    ]);
+    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+      totalTokens: 86_876,
+      totalTokensFresh: true,
+    });
   });
 
   test("estimates transcript context when local model telemetry is missing", async () => {

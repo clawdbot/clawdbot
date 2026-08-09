@@ -16,6 +16,7 @@ import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-fi
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
@@ -207,7 +208,6 @@ function respondControlUiAssetsUnavailable(
   options?: {
     configuredRootPath?: string;
     failed?: boolean;
-    head?: boolean;
     preparing?: boolean;
   },
 ) {
@@ -221,12 +221,6 @@ function respondControlUiAssetsUnavailable(
   if (options?.preparing) {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Retry-After", "1");
-  }
-  if (options?.head) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end();
-    return;
   }
   respondPlainText(res, 503, message);
 }
@@ -577,7 +571,7 @@ async function resolveAssistantMediaAvailability(
         const sniffLength = Math.min(sizeBytes, 8192);
         const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
         const bytesRead = sniffBuffer
-          ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+          ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
           : 0;
         mimeType =
           (await detectMime({
@@ -694,9 +688,7 @@ export async function handleControlUiAssistantMediaRequest(
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
-      sniffBuffer && sniffLength > 0
-        ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
-        : 0;
+      sniffBuffer && sniffLength > 0 ? await readFileWindowFully(opened.handle, sniffBuffer, 0) : 0;
     const mime = await detectMime({
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
@@ -1103,13 +1095,11 @@ export async function handleControlUiHttpRequest(
   if (rootState?.kind === "invalid") {
     respondControlUiAssetsUnavailable(res, {
       configuredRootPath: rootState.path,
-      head: req.method === "HEAD",
     });
     return true;
   }
   if (rootState?.kind === "preparing") {
     respondControlUiAssetsUnavailable(res, {
-      head: req.method === "HEAD",
       preparing: true,
     });
     return true;
@@ -1117,12 +1107,11 @@ export async function handleControlUiHttpRequest(
   if (rootState?.kind === "failed") {
     respondControlUiAssetsUnavailable(res, {
       failed: true,
-      head: req.method === "HEAD",
     });
     return true;
   }
   if (!rootState || rootState.kind === "missing") {
-    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -1141,7 +1130,7 @@ export async function handleControlUiHttpRequest(
     }
   })();
   if (!rootReal) {
-    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 

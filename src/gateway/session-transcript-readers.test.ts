@@ -94,6 +94,17 @@ describe("session transcript reader facade", () => {
     return scope;
   }
 
+  function markProjectionNeedsRebuild(sessionId: string): void {
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      )
+      .run(sessionId);
+  }
+
   function extractReferenceText(message: unknown): string | null {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return null;
@@ -447,6 +458,188 @@ describe("session transcript reader facade", () => {
     ]);
   });
 
+  test("degrades single title reads while the projection rebuilds", async () => {
+    const scope = await writeSqliteMessages("reader-title-single-rebuilding", [
+      { role: "user", content: "single prompt" },
+      { role: "assistant", content: "single reply" },
+    ]);
+    markProjectionNeedsRebuild(scope.sessionId);
+
+    let fields: ReturnType<typeof readSessionTitleFieldsFromTranscript> | undefined;
+    try {
+      fields = readSessionTitleFieldsFromTranscript(scope);
+    } finally {
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      });
+    }
+    expect(fields).toEqual({
+      firstUserMessage: null,
+      lastMessagePreview: null,
+    });
+  });
+
+  test("isolates a rebuilding projection to one title row and heals on refresh", async () => {
+    const scopes: SessionTranscriptReadScope[] = [];
+    for (const label of ["first", "rebuilding", "last"]) {
+      scopes.push(
+        await writeSqliteMessages(`reader-title-${label}`, [
+          { role: "user", content: `${label} prompt` },
+          { role: "assistant", content: `${label} reply` },
+        ]),
+      );
+    }
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+    markProjectionNeedsRebuild("reader-title-rebuilding");
+
+    expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
+      { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
+      { firstUserMessage: null, lastMessagePreview: null },
+      { firstUserMessage: "last prompt", lastMessagePreview: "last reply" },
+    ]);
+
+    await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
+    expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
+      { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
+      { firstUserMessage: "rebuilding prompt", lastMessagePreview: "rebuilding reply" },
+      { firstUserMessage: "last prompt", lastMessagePreview: "last reply" },
+    ]);
+  });
+
+  test.each(["watermarkBatch", "titleProbeBatch", "watermark", "messageEventPage"] as const)(
+    "degrades only the unavailable scope when %s throws",
+    async (faultSource) => {
+      const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
+        "../config/sessions/session-accessor.js",
+      );
+      const brokenSessionId = `reader-title-${faultSource}-broken`;
+      const scopes: SessionTranscriptReadScope[] = [];
+      for (const label of ["first", "broken", "last"]) {
+        scopes.push(
+          await writeSqliteMessages(`reader-title-${faultSource}-${label}`, [
+            { role: "user", content: `${label} prompt` },
+            { role: "assistant", content: `${label} reply` },
+          ]),
+        );
+      }
+      if (faultSource === "watermarkBatch") {
+        readSessionTitleFieldsFromTranscriptBatch(scopes);
+      }
+
+      const watermarkBatch = vi.mocked(sessionAccessor.readSessionTranscriptWatermarkBatch);
+      const titleProbeBatch = vi.mocked(sessionAccessor.readSessionTranscriptTitleProbeBatch);
+      const watermark = vi.mocked(sessionAccessor.readSessionTranscriptWatermark);
+      const messageEventPage = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
+      const unavailable = () =>
+        new sessionAccessor.SessionTranscriptProjectionUnavailableError(brokenSessionId);
+      try {
+        if (faultSource === "watermarkBatch") {
+          watermarkBatch.mockImplementation((readScopes) => {
+            if (readScopes.some((scope) => scope.sessionId === brokenSessionId)) {
+              throw unavailable();
+            }
+            return actual.readSessionTranscriptWatermarkBatch(readScopes);
+          });
+          watermark.mockImplementation((scope) => {
+            if (scope.sessionId === brokenSessionId) {
+              throw unavailable();
+            }
+            return actual.readSessionTranscriptWatermark(scope);
+          });
+        } else if (faultSource === "titleProbeBatch") {
+          titleProbeBatch.mockImplementation((readScopes) => {
+            if (readScopes.some((scope) => scope.sessionId === brokenSessionId)) {
+              throw unavailable();
+            }
+            return actual.readSessionTranscriptTitleProbeBatch(readScopes);
+          });
+          messageEventPage.mockImplementation((scope, options) => {
+            if (scope.sessionId === brokenSessionId) {
+              throw unavailable();
+            }
+            return actual.readSessionTranscriptMessageEventPage(scope, options);
+          });
+        } else {
+          titleProbeBatch.mockImplementation((readScopes) =>
+            actual
+              .readSessionTranscriptTitleProbeBatch(readScopes)
+              .map((probe, index) =>
+                readScopes[index]?.sessionId === brokenSessionId ? undefined : probe,
+              ),
+          );
+          if (faultSource === "watermark") {
+            watermark.mockImplementation((scope) => {
+              if (scope.sessionId === brokenSessionId) {
+                throw unavailable();
+              }
+              return actual.readSessionTranscriptWatermark(scope);
+            });
+          } else {
+            messageEventPage.mockImplementation((scope, options) => {
+              if (scope.sessionId === brokenSessionId) {
+                throw unavailable();
+              }
+              return actual.readSessionTranscriptMessageEventPage(scope, options);
+            });
+          }
+        }
+
+        expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
+          { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
+          { firstUserMessage: null, lastMessagePreview: null },
+          { firstUserMessage: "last prompt", lastMessagePreview: "last reply" },
+        ]);
+      } finally {
+        watermarkBatch.mockImplementation(actual.readSessionTranscriptWatermarkBatch);
+        titleProbeBatch.mockImplementation(actual.readSessionTranscriptTitleProbeBatch);
+        watermark.mockImplementation(actual.readSessionTranscriptWatermark);
+        messageEventPage.mockImplementation(actual.readSessionTranscriptMessageEventPage);
+      }
+    },
+  );
+
+  test("isolates a batch failure when separate scopes share a session id", async () => {
+    const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
+      "../config/sessions/session-accessor.js",
+    );
+    const sessionId = "reader-title-duplicate-session-id";
+    const scopes = [
+      { agentId: "main", sessionId, sessionKey: "agent:main:duplicate-title" },
+      { agentId: "work", sessionId, sessionKey: "agent:work:duplicate-title" },
+    ];
+    for (const [index, scope] of scopes.entries()) {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          { message: { role: "user", content: `prompt ${index}` } },
+          { message: { role: "assistant", content: `reply ${index}` } },
+        ],
+        touchSessionEntry: false,
+      });
+    }
+    const titleProbeBatch = vi.mocked(sessionAccessor.readSessionTranscriptTitleProbeBatch);
+    const messageEventPage = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
+    try {
+      titleProbeBatch.mockImplementation(() => {
+        throw new sessionAccessor.SessionTranscriptProjectionUnavailableError(sessionId);
+      });
+      messageEventPage.mockImplementation((scope, options) => {
+        if (scope.agentId === "work") {
+          throw new sessionAccessor.SessionTranscriptProjectionUnavailableError(sessionId);
+        }
+        return actual.readSessionTranscriptMessageEventPage(scope, options);
+      });
+
+      expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
+        { firstUserMessage: "prompt 0", lastMessagePreview: "reply 0" },
+        { firstUserMessage: null, lastMessagePreview: null },
+      ]);
+    } finally {
+      titleProbeBatch.mockImplementation(actual.readSessionTranscriptTitleProbeBatch);
+      messageEventPage.mockImplementation(actual.readSessionTranscriptMessageEventPage);
+    }
+  });
+
   test("bounds title probe reads independently of transcript length", async () => {
     const probeReadCount = async (sessionId: string, messageCount: number) => {
       const scope = await writeSqliteMessages(
@@ -721,13 +914,7 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-    database.db
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(sessionId);
+    markProjectionNeedsRebuild(sessionId);
 
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });

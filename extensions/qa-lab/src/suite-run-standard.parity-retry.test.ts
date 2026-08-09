@@ -7,6 +7,7 @@ import type {
   QaSuiteScenarioResult,
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
+import type { runQaFlowSuiteCleanupPlan } from "./suite.js";
 
 const mocks = vi.hoisted(() => ({
   captureRuntimeParityCell: vi.fn(async (params: { runtime: "codex"; wallClockMs: number }) => ({
@@ -44,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   })),
   waitForGatewayHealthy: vi.fn(async () => {}),
   waitForTransportReady: vi.fn(async () => {}),
+  runQaFlowSuiteCleanupPlan: vi.fn<typeof runQaFlowSuiteCleanupPlan>(async () => []),
+  writeQaSuiteProgress: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -65,7 +68,8 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   waitForGatewayHealthy: mocks.waitForGatewayHealthy,
   waitForTransportReady: mocks.waitForTransportReady,
 }));
-vi.mock("./suite.js", () => ({
+vi.mock("./suite.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite.js")>()),
   buildQaSuiteRuntimeMetrics: vi.fn(() => ({ wallMs: 1 })),
   captureGatewayHeapSnapshotCheckpoint: vi.fn(async () => undefined),
   createQaSuiteTransportAdapter: vi.fn(async () => ({
@@ -75,10 +79,9 @@ vi.mock("./suite.js", () => ({
   })),
   requireQaSuiteStartLab: vi.fn(),
   resolveQaSuiteTransportReadyTimeoutMs: vi.fn(() => 1_000),
-  runQaFlowSuiteCleanupPlan: vi.fn(async () => []),
-  throwQaSuiteCleanupErrors: vi.fn(),
+  runQaFlowSuiteCleanupPlan: mocks.runQaFlowSuiteCleanupPlan,
   waitForQaLabReadyOrStopOwned: vi.fn(async () => {}),
-  writeQaSuiteProgress: vi.fn(),
+  writeQaSuiteProgress: mocks.writeQaSuiteProgress,
 }));
 vi.mock("./web-runtime.js", () => ({
   closeQaWebSessions: vi.fn(async () => {}),
@@ -128,6 +131,7 @@ function makeRetryTestResult(status: "pass" | "fail"): QaSuiteScenarioResult {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.runQaFlowSuiteCleanupPlan.mockResolvedValue([]);
 });
 
 describe("QA suite Control UI ownership", () => {
@@ -196,6 +200,45 @@ describe("QA suite Control UI ownership", () => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
+  it("does not report terminal success when cleanup fails after writing artifacts", async () => {
+    const lab = makeRetryTestLab();
+    const cleanupError = Object.assign(new Error("gateway shutdown socket reset"), {
+      code: "ECONNRESET",
+    });
+    mocks.runQaFlowSuiteCleanupPlan.mockResolvedValueOnce([
+      { phase: "gateway stop", error: cleanupError },
+    ]);
+
+    const thrown = await runQaFlowSuiteStandard(
+      { lab },
+      makeRetryTestContext(),
+      vi.fn<QaSuiteScenarioRunner>().mockResolvedValue(makeRetryTestResult("pass")),
+    ).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as Error).message.split("\n")[0]).toBe(
+      "QA scenarios passed, but cleanup failed",
+    );
+    expect((thrown as Error).message).toContain(
+      "scenario counts: passed=1 failed=0 skipped=0 total=1",
+    );
+    expect((thrown as Error).message).toContain(
+      "failed cleanup phases: gateway stop: gateway shutdown socket reset",
+    );
+    expect((thrown as Error).message).toContain(
+      "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
+    );
+    expect((thrown as Error).cause).toBe(cleanupError);
+    expect(lab.setLatestReport).toHaveBeenCalledWith(
+      expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
+    );
+    expect(
+      mocks.writeQaSuiteProgress.mock.calls.filter(([, message]) =>
+        String(message).startsWith("run complete"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it.each([
     { forcedRuntime: undefined, expectedRuntime: "openclaw" },
     { forcedRuntime: "codex" as const, expectedRuntime: "codex" },

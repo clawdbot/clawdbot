@@ -18,17 +18,18 @@ export type BoardChatDockSize = {
 };
 
 export type WorkboardCardChipProps = {
+  active: boolean;
   basePath: string;
   client: GatewayBrowserClient;
   sessionKey: string;
 };
 
 type BoardSessionSurfaceProps = {
+  active: boolean;
   snapshot: BoardViewSnapshot;
   observer?: BoardObserverContext;
   activeTabId: string;
   dock: BoardTab["chatDock"];
-  reopenDock: BoardVisibleChatDock;
   dockSize: BoardChatDockSize;
   chat: TemplateResult;
   divider: TemplateResult;
@@ -37,7 +38,6 @@ type BoardSessionSurfaceProps = {
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
   workboardCardChip?: WorkboardCardChipProps | null;
-  onDockChange: (dock: BoardTab["chatDock"]) => void;
 };
 
 let boardViewLoad: Promise<unknown> | null = null;
@@ -60,93 +60,94 @@ export async function ensureBoardViewElement(): Promise<boolean> {
   return true;
 }
 
-export function renderBoardFaceToggle(
-  hasBoard: boolean,
-  face: BoardFace,
-  onChange: (face: BoardFace) => void,
-) {
-  if (!hasBoard) {
-    return nothing;
-  }
-  return html`
-    <div class="chat-pane__face-switch">
-      ${renderSettingsSegmented<BoardFace>({
-        value: face,
-        ariaLabel: t("chat.board.faceLabel"),
-        options: [
-          { value: "chat", label: t("chat.board.chatFace") },
-          { value: "dashboard", label: t("chat.board.dashboardFace") },
-        ],
-        onChange: (value) => onChange(value),
-      })}
-    </div>
-  `;
-}
+type BoardViewMode = "chat" | "split" | "dashboard";
 
-function dockIcon(dock: BoardTab["chatDock"]) {
-  if (dock === "left") {
-    return icons.panelLeftOpen;
-  }
-  if (dock === "bottom") {
-    return icons.panelBottomOpen;
-  }
-  if (dock === "hidden") {
-    return icons.eyeOff;
-  }
-  return icons.panelRightOpen;
-}
-
-function dockLabel(dock: BoardTab["chatDock"]): string {
+function dockLabel(dock: BoardVisibleChatDock): string {
   if (dock === "left") {
     return t("chat.board.dockLeft");
   }
   if (dock === "bottom") {
     return t("chat.board.dockBottom");
   }
-  if (dock === "hidden") {
-    return t("chat.board.dockHidden");
-  }
   return t("chat.board.dockRight");
 }
 
-export function renderBoardDockMenu(
-  hasBoard: boolean,
-  face: BoardFace,
-  dock: BoardTab["chatDock"],
-  onChange: (dock: BoardTab["chatDock"]) => void,
-) {
-  if (!hasBoard || face !== "dashboard") {
+export function renderBoardViewSwitch(props: {
+  hasBoard: boolean;
+  face: BoardFace;
+  dock: BoardTab["chatDock"];
+  canChangeDock: boolean;
+  onSelectMode: (mode: BoardViewMode) => void;
+  onDockSideChange: (dock: BoardVisibleChatDock) => void;
+}) {
+  if (!props.hasBoard) {
     return nothing;
   }
+
+  const mode: BoardViewMode =
+    props.face === "chat" ? "chat" : props.dock === "hidden" ? "dashboard" : "split";
+  const segmented = props.canChangeDock
+    ? renderSettingsSegmented<BoardViewMode>({
+        value: mode,
+        ariaLabel: t("chat.board.faceLabel"),
+        options: [
+          { value: "chat", label: t("chat.board.chatFace") },
+          { value: "split", label: t("chat.board.splitFace") },
+          { value: "dashboard", label: t("chat.board.dashboardFace") },
+        ],
+        onChange: (value) => props.onSelectMode(value),
+      })
+    : renderSettingsSegmented<BoardFace>({
+        value: props.face,
+        ariaLabel: t("chat.board.faceLabel"),
+        options: [
+          { value: "chat", label: t("chat.board.chatFace") },
+          { value: "dashboard", label: t("chat.board.dashboardFace") },
+        ],
+        onChange: (value) => props.onSelectMode(value),
+      });
+  const visibleDock = props.dock === "hidden" ? null : props.dock;
+  const showDockCaret = mode === "split" && props.canChangeDock && visibleDock !== null;
+
   return html`
-    <wa-dropdown
-      class="chat-pane__board-dock-menu"
-      placement="bottom-end"
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        const value = event.detail.item.value;
-        if (value === "left" || value === "right" || value === "bottom" || value === "hidden") {
-          onChange(value);
-        }
-      }}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="btn btn--ghost btn--icon chat-icon-btn"
-        data-board-dock-menu
-        title=${dockLabel(dock)}
-        aria-label=${t("chat.board.dockMenu", { dock: dockLabel(dock) })}
-      >
-        ${dockIcon(dock)}
-      </button>
-      ${(["left", "right", "bottom", "hidden"] as const).map(
-        (candidate) => html`
-          <wa-dropdown-item value=${candidate} type="checkbox" ?checked=${candidate === dock}>
-            ${dockLabel(candidate)}
-          </wa-dropdown-item>
-        `,
-      )}
-    </wa-dropdown>
+    <div class="chat-pane__face-switch ${showDockCaret ? "chat-pane__face-switch--split" : ""}">
+      ${segmented}
+      ${showDockCaret && visibleDock
+        ? html`
+            <wa-dropdown
+              class="chat-pane__dock-caret"
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                const value = event.detail.item.value;
+                if (value === "left" || value === "right" || value === "bottom") {
+                  props.onDockSideChange(value);
+                }
+              }}
+            >
+              <button
+                slot="trigger"
+                type="button"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__dock-caret-trigger"
+                title=${dockLabel(visibleDock)}
+                aria-label=${t("chat.board.dockMenu", { dock: dockLabel(visibleDock) })}
+              >
+                ${icons.chevronDown}
+              </button>
+              ${(["left", "right", "bottom"] as const).map(
+                (candidate) => html`
+                  <wa-dropdown-item
+                    value=${candidate}
+                    type="checkbox"
+                    ?checked=${candidate === visibleDock}
+                  >
+                    ${dockLabel(candidate)}
+                  </wa-dropdown-item>
+                `,
+              )}
+            </wa-dropdown>
+          `
+        : nothing}
+    </div>
   `;
 }
 
@@ -156,6 +157,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
       ${props.workboardCardChip
         ? html`
             <openclaw-workboard-card-chip
+              .active=${props.workboardCardChip.active}
               .basePath=${props.workboardCardChip.basePath}
               .client=${props.workboardCardChip.client}
               .sessionKey=${props.workboardCardChip.sessionKey}
@@ -163,6 +165,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
           `
         : nothing}
       <openclaw-board-view
+        .active=${props.active}
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}
@@ -183,20 +186,15 @@ function renderChatDock(props: BoardSessionSurfaceProps) {
 
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
   return html`
-    <div class="board-session-surface board-session-surface--dock-${props.dock}">
+    <div
+      class="board-session-surface board-session-surface--dock-${props.dock}"
+      ?hidden=${!props.active}
+      ?inert=${!props.active}
+    >
       ${renderBoardView(props)}
-      ${props.dock === "bottom" ? html`${props.divider}${renderChatDock(props)}` : nothing}
-      <button
-        type="button"
-        class="board-session-surface__reopen board-session-surface__reopen--${props.reopenDock}"
-        aria-label=${t("chat.board.reopenChat")}
-        title=${t("chat.board.reopenChat")}
-        ?hidden=${props.dock !== "hidden"}
-        ?disabled=${!props.canMutate}
-        @click=${() => props.onDockChange(props.reopenDock)}
-      >
-        ${icons.messageSquare}<span>${t("chat.board.chatFace")}</span>
-      </button>
+      ${props.active && props.dock === "bottom"
+        ? html`${props.divider}${renderChatDock(props)}`
+        : nothing}
     </div>
   `;
 }

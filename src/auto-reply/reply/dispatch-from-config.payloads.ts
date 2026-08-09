@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
@@ -20,6 +21,25 @@ export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
 
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
+
+type SourceReplySuppressionState = {
+  ctx: { InboundEventKind?: InboundEventKind };
+  explicitCommandTurnCtx: boolean;
+  suppressAutomaticSourceDelivery: boolean;
+  sendPolicyDenied: boolean;
+};
+
+export function shouldDeliverDespiteSourceReplySuppression(
+  payload: ReplyPayload,
+  state: SourceReplySuppressionState,
+): boolean {
+  return (
+    state.suppressAutomaticSourceDelivery &&
+    !state.sendPolicyDenied &&
+    getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true &&
+    (state.ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx)
+  );
+}
 
 export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(payload);

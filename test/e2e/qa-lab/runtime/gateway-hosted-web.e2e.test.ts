@@ -15,6 +15,7 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import {
   registerPluginHttpRoute,
   withPluginHttpRouteRegistry,
@@ -139,6 +140,7 @@ describe("Gateway hosted web surfaces", () => {
 
       await withEnvAsync(
         {
+          ...snapshotGatewayStartupEnv(),
           HOME: root,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",

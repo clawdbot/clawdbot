@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDraftStreamLoop } from "../../channels/draft-stream-loop.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -39,6 +45,7 @@ const state = setupAgentRunnerExecutionTestState();
 
 beforeEach(() => {
   sanitizerState.sanitizeUserFacingText.mockClear();
+  resetDiagnosticRunActivityForTest();
 });
 
 async function executeTestTurn(
@@ -50,6 +57,49 @@ async function executeTestTurn(
 }
 
 describe("executeAgentTurn: lifecycle progress", () => {
+  it("keeps operational agent events from resetting repeated request evidence", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const sessionId = params.sessionId ?? "session";
+      const sessionKey = params.sessionKey ?? "main";
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: params.runId });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        markDiagnosticModelStartedForTest({
+          sessionId,
+          sessionKey,
+          runId: params.runId,
+          provider: "mock",
+          model: "request-model",
+          observationUnit: "request",
+        });
+      }
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .repeatedRequestNoProgressAgeMs,
+      ).toBe(0);
+
+      for (const event of [
+        { stream: "assistant", data: { phase: "commentary", text: "Working" } },
+        { stream: "tool", data: { phase: "start", name: "read", toolCallId: "call-1" } },
+        {
+          stream: "tool",
+          data: { phase: "result", name: "read", toolCallId: "call-1", isError: false },
+        },
+        { stream: "item", data: { phase: "end", status: "completed", itemId: "item-1" } },
+        { stream: "thinking", data: { delta: "internal" } },
+        { stream: "custom.runtime", data: { status: "ready" } },
+      ]) {
+        await params.onAgentEvent?.(event);
+      }
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .repeatedRequestNoProgressAgeMs,
+      ).toBeGreaterThanOrEqual(0);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    await executeTestTurn();
+  });
+
   it("forwards item lifecycle events to reply options", async () => {
     const onItemEvent = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

@@ -65,12 +65,14 @@ function callbacks(overrides: Partial<BoardWidgetCellCallbacks> = {}): BoardWidg
 async function mount(
   currentWidget: BoardViewWidget,
   currentCallbacks: BoardWidgetCellCallbacks,
+  active = true,
 ): Promise<BoardWidgetCell> {
   const cell = document.createElement("openclaw-board-widget-cell");
   cell.widget = currentWidget;
   cell.rect = { name: currentWidget.name, x: 0, y: 0, w: 6, h: currentWidget.sizeH };
   cell.sessionKey = "agent:main:test";
   cell.callbacks = currentCallbacks;
+  cell.active = active;
   document.body.append(cell);
   await settle(cell);
   return cell;
@@ -128,6 +130,25 @@ afterEach(() => {
 });
 
 describe("board MCP App cell lifecycle", () => {
+  it("waits to materialize an inactive cell until its board becomes active", async () => {
+    const visibility = stubVisibility(() => true);
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "activated-view",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const cell = await mount(widget(), callbacks({ widgetAppView }), false);
+
+    expect(visibility.observed()).toBe(0);
+    expect(widgetAppView).not.toHaveBeenCalled();
+    expect(cell.querySelector("mcp-app-view")).toBeNull();
+
+    cell.active = true;
+    await settle(cell);
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
+    expect(cell.querySelector("mcp-app-view")).not.toBeNull();
+  });
+
   it("uses the board height as fixed AppBridge host context", async () => {
     const cell = await mount(
       widget({ grantState: "pending" }),
@@ -155,6 +176,102 @@ describe("board MCP App cell lifecycle", () => {
       expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.height).toBe(222),
     );
     expect(cell.querySelector('[data-test-id="board-pending"]')).toBeNull();
+  });
+
+  it("preserves a mounted app while its board is inactive", async () => {
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "retained-view",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const cell = await mount(widget(), callbacks({ widgetAppView }));
+    await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
+    const appView = cell.querySelector("mcp-app-view");
+
+    cell.active = false;
+    await settle(cell);
+    expect(cell.querySelector("mcp-app-view")).toBe(appView);
+
+    cell.active = true;
+    await settle(cell);
+    expect(cell.querySelector("mcp-app-view")).toBe(appView);
+    expect(widgetAppView).toHaveBeenCalledOnce();
+  });
+
+  it("keeps active offscreen behavior while retaining inactive ready views", async () => {
+    let visible = true;
+    let emitVisibility: () => void = () => undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: IntersectionObserverCallback) {}
+        observe(target: Element) {
+          vi.spyOn(target, "getBoundingClientRect").mockImplementation(
+            () => ({ bottom: visible ? 200 : 5_200, top: visible ? 0 : 5_000 }) as DOMRect,
+          );
+          emitVisibility = () =>
+            this.callback(
+              [{ isIntersecting: visible, target } as IntersectionObserverEntry],
+              this as never,
+            );
+          emitVisibility();
+        }
+        disconnect() {}
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    const widgetAppView = vi.fn(async () => ({
+      status: "ready" as const,
+      viewId: "viewport-view",
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const cell = await mount(widget(), callbacks({ widgetAppView }));
+    await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
+    const initialView = cell.querySelector("mcp-app-view");
+
+    visible = false;
+    emitVisibility();
+    await settle(cell);
+    expect(cell.querySelector("mcp-app-view")).toBeNull();
+
+    visible = true;
+    emitVisibility();
+    await settle(cell);
+    const remountedView = cell.querySelector("mcp-app-view");
+    expect(remountedView).not.toBeNull();
+    expect(remountedView).not.toBe(initialView);
+    expect(widgetAppView).toHaveBeenCalledOnce();
+
+    cell.active = false;
+    await settle(cell);
+    expect(cell.querySelector("mcp-app-view")).toBe(remountedView);
+  });
+
+  it("lets an in-flight materialization finish while inactive without duplicating it", async () => {
+    stubVisibility(() => true);
+    const appView = deferred<BoardWidgetAppViewState>();
+    const widgetAppView = vi.fn(() => appView.promise);
+    const cell = await mount(widget(), callbacks({ widgetAppView }));
+    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
+
+    cell.active = false;
+    await settle(cell);
+    appView.resolve({
+      status: "ready",
+      viewId: "finished-hidden",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    await settle(cell);
+    expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.viewId).toBe(
+      "finished-hidden",
+    );
+
+    cell.active = true;
+    await settle(cell);
+    expect(widgetAppView).toHaveBeenCalledOnce();
   });
 
   it("treats the bridge expiry event as authoritative", async () => {

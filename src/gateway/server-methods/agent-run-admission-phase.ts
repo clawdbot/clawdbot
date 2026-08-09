@@ -40,11 +40,16 @@ import {
   resolveGatewayAgentTaskTrackingMode,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
+import {
+  resolveGatewayCronCreatorAuthorityAdmission,
+  type GatewayCronCreatorAuthorityAdmission,
+} from "./cron-creator-authority-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type PreparedAgentRunDispatch = {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
+  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   effectiveProviderOverride?: string;
   effectiveModelOverride?: string;
   effectiveThinking?: string;
@@ -431,9 +436,21 @@ export async function prepareAgentRunDispatch(params: {
     },
   });
   params.respond(true, accepted, undefined, { runId: params.runId });
+  const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
+    runId: params.runId,
+    resolvedSessionKey: params.resolvedSessionKey,
+    spawnedBy: params.sessionEntry?.spawnedBy,
+    client: params.client,
+    request: params.request,
+    inputProvenance: params.inputProvenance,
+    hasRestoredCronContinuation: params.restoredCronContinuation !== undefined,
+    isOneShotModelRun: params.isOneShotModelRun,
+    isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
+  });
   return {
     activeGatewayWorkAdmission,
     activeRunAbort,
+    ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,

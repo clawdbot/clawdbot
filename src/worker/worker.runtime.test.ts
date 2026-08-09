@@ -65,6 +65,7 @@ type InferencePlan =
   | "fence"
   | "error"
   | "cancelled"
+  | "length"
   | "burst-text"
   | "oversized-text"
   | "oversized-error"
@@ -94,7 +95,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assistantMessage(
   content: WorkerDoneMessage["content"],
-  stopReason: "stop" | "toolUse",
+  stopReason: WorkerDoneMessage["stopReason"],
 ): WorkerDoneMessage {
   return {
     role: "assistant",
@@ -441,7 +442,7 @@ class FakeWorkerGateway {
       this.sendEmptyTerminalTurn(socket, frame.params);
       return;
     }
-    this.sendTextTurn(socket, frame.params);
+    this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
   }
 
   private sendBurstTextTurn(
@@ -536,7 +537,11 @@ class FakeWorkerGateway {
     this.sendTerminal(socket, identity, 4, assistantMessage([], "stop"));
   }
 
-  private sendTextTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
+  private sendTextTurn(
+    socket: WebSocket,
+    identity: WorkerInferenceStartParams,
+    stopReason: "stop" | "length" = "stop",
+  ): void {
     const events: WorkerInferenceEventFrame[] = [
       {
         type: "event",
@@ -586,7 +591,7 @@ class FakeWorkerGateway {
       socket,
       identity,
       5,
-      assistantMessage([{ type: "text", text: "worker reply" }], "stop"),
+      assistantMessage([{ type: "text", text: "worker reply" }], stopReason),
     );
   }
 
@@ -795,6 +800,10 @@ describe("worker runtime", () => {
     );
     expect(lifecycleEvents).toContain("start");
     expect(lifecycleEvents).toContain("end");
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "end", stopReason: "stop" },
+    });
     expect(gateway.transcriptRequests.length).toBeGreaterThan(0);
     expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual(
       gateway.transcriptRequests.map((_request, index) => index + 3),
@@ -979,17 +988,15 @@ describe("worker runtime", () => {
   });
 
   it.each([
-    ["error", "error", "error"],
-    ["cancelled", "aborted", "end"],
+    ["error", "error", "error", { status: "failed", reason: "turn-failed" }],
+    ["cancelled", "aborted", "end", { status: "failed", reason: "turn-failed" }],
+    ["length", "length", "end", { status: "completed" }],
   ] as const)(
-    "reports remote inference %s terminals as failed turns",
-    async (plan, stopReason, lifecyclePhase) => {
+    "reports remote inference %s terminal reasons",
+    async (plan, stopReason, lifecyclePhase, expectedResult) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
-        status: "failed",
-        reason: "turn-failed",
-      });
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject(expectedResult);
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
         .toReversed()
@@ -999,7 +1006,9 @@ describe("worker runtime", () => {
         .map((request) => request.event)
         .toReversed()
         .find((event) => event.kind === "lifecycle");
-      expect(lifecycle).toMatchObject({ payload: { phase: lifecyclePhase } });
+      expect(lifecycle).toMatchObject({
+        payload: { phase: lifecyclePhase, stopReason },
+      });
     },
   );
 
@@ -1176,6 +1185,29 @@ describe("worker runtime", () => {
 });
 
 describe("worker reconnect clients", () => {
+  it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
+    const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
+    const connection = createWorkerConnection({
+      socketPath: gateway.socketPath,
+      connectParams: buildWorkerConnectParams(launch),
+    });
+    let healthyReadyCalls = 0;
+    connection.onReady(() => {
+      throw new Error("induced ready observer failure");
+    });
+    connection.onReady(() => {
+      healthyReadyCalls += 1;
+    });
+
+    try {
+      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
+      expect(healthyReadyCalls).toBe(1);
+      await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
+    } finally {
+      await connection.stop();
+    }
+  });
+
   it("fails closed when the overall admission deadline expires", async () => {
     const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
     const connection = createWorkerConnection({

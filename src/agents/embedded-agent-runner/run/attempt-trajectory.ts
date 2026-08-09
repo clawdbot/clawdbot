@@ -69,6 +69,9 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     buildTrajectoryRunMetadata({
       env: process.env,
       config: attempt.config,
+      ...(attempt.preparedModelRuntime?.metadataSnapshot
+        ? { pluginMetadataSnapshot: attempt.preparedModelRuntime.metadataSnapshot }
+        : {}),
       workspaceDir: input.effectiveWorkspace,
       sessionFile: attempt.sessionFile,
       sessionKey: attempt.sessionKey,

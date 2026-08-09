@@ -1,12 +1,12 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
-import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 
@@ -159,7 +159,7 @@ type ExecApprovalsState = NodesRequestState & {
   chatError?: string | null;
 };
 
-export type NodesPageDataState = NodesState & DevicesState & ExecApprovalsState;
+export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
 
 type StoredIdentity = {
   version: 1;
@@ -179,9 +179,9 @@ const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
-export function createInitialNodesState(
+export function createInitialDevicesState(
   snapshot: Partial<NodesGatewaySnapshot> = {},
-): NodesPageDataState {
+): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
@@ -652,7 +652,7 @@ export function removeExecApprovalsFormValue(
 }
 
 function deviceAuthStorageKey(gatewayUrl: string): string {
-  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
+  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function removeLegacyDeviceAuthStore(storage: Storage | null) {

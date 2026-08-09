@@ -43,6 +43,10 @@ import {
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import {
+  runWithCronCreatorAuthority,
+  runWithCronCreatorAuthorityResolver,
+} from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -291,6 +295,59 @@ describe("createOpenClawCodingTools", () => {
         },
       }),
     );
+  });
+
+  it("binds configured MCP cron authority only to the exact admitted run", async () => {
+    const resolve = vi.fn().mockResolvedValue({
+      tools: ["read", { name: "mcp_todoist_add_task", pluginId: "todoist" }],
+      provenance: { version: 1, source: "final-executable-surface" },
+    });
+    let releaseRun: (() => void) | undefined;
+    const holdRun = new Promise<void>((resolveHold) => {
+      releaseRun = resolveHold;
+    });
+    let retainedResolver: (() => Promise<unknown>) | undefined;
+
+    vi.mocked(createOpenClawTools).mockClear();
+    runWithCronCreatorAuthorityResolver({
+      runId: "forged-run",
+      resolve,
+      run: () => createOpenClawCodingTools({ runId: "forged-run" }),
+    });
+    expect(
+      vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority,
+    ).toBeUndefined();
+
+    const activeRun = runWithCronCreatorAuthority("admitted-run", async () => {
+      runWithCronCreatorAuthorityResolver({
+        runId: "other-run",
+        resolve,
+        run: () => createOpenClawCodingTools({ runId: "admitted-run" }),
+      });
+      expect(
+        vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority,
+      ).toBeUndefined();
+
+      runWithCronCreatorAuthorityResolver({
+        runId: "admitted-run",
+        resolve,
+        run: () => createOpenClawCodingTools({ runId: "admitted-run" }),
+      });
+      retainedResolver =
+        vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority;
+      expect(retainedResolver).toEqual(expect.any(Function));
+      await expect(retainedResolver!()).resolves.toMatchObject({
+        provenance: { source: "final-executable-surface" },
+      });
+      await holdRun;
+    });
+
+    releaseRun?.();
+    await activeRun;
+    await expect(retainedResolver!()).rejects.toThrow(
+      "Configured MCP cron authority is no longer active for this run",
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {
@@ -1339,6 +1396,41 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
+  });
+
+  it("removes message from persisted visible child sessions on every turn", async () => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-visible-subagent-message-"));
+    const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
+    const agentId = "visible-subagent-message";
+    const childSessionKey = `agent:${agentId}:dashboard:child`;
+    const rootSessionKey = `agent:${agentId}:dashboard:root`;
+    try {
+      await writeSessionStore(storeTemplate, agentId, {
+        [childSessionKey]: {
+          sessionId: "visible-child",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          spawnedBy: `agent:${agentId}:main`,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+        [rootSessionKey]: {
+          sessionId: "root-dashboard",
+          updatedAt: Date.now(),
+          spawnDepth: 0,
+        },
+      });
+
+      const firstChildTurn = createToolsForStoredSession(storeTemplate, childSessionKey);
+      const resumedChildTurn = createToolsForStoredSession(storeTemplate, childSessionKey);
+      const rootTurn = createToolsForStoredSession(storeTemplate, rootSessionKey);
+
+      expect(toolNameList(firstChildTurn)).not.toContain("message");
+      expect(toolNameList(resumedChildTurn)).not.toContain("message");
+      expect(toolNameList(rootTurn)).toContain("message");
+    } finally {
+      await fs.rm(storeDir, { recursive: true, force: true });
+    }
   });
 
   it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {

@@ -20,6 +20,7 @@ import {
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
+  peekSessionMcpRuntime,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
@@ -27,20 +28,28 @@ import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
-vi.mock("./embedded-agent-mcp.js", () => ({
-  loadEmbeddedAgentMcpConfig: (params: {
-    cfg?: { mcp?: { servers?: Record<string, unknown> } };
-    toolOverrides?: { mcpServers?: Record<string, boolean> };
-  }) => ({
-    diagnostics: [],
-    mcpServers: Object.fromEntries(
-      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
-        const overrides = params.toolOverrides?.mcpServers;
-        return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
-      }),
-    ),
-  }),
-}));
+vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
+  return {
+    loadEmbeddedAgentMcpConfig: (
+      params: Parameters<typeof actual.loadEmbeddedAgentMcpConfig>[0],
+    ) => {
+      if (params.cfg?.plugins?.entries?.["agent-bundle-probe"]?.enabled === true) {
+        return actual.loadEmbeddedAgentMcpConfig(params);
+      }
+      return {
+        diagnostics: [],
+        prepareDataDirsByServer: {},
+        mcpServers: Object.fromEntries(
+          Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
+            const overrides = params.toolOverrides?.mcpServers;
+            return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
+          }),
+        ),
+      };
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
@@ -2763,6 +2772,27 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-retire");
 
     await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("keeps an ordinary session-key mapping when an unbound mutation probe retires", async () => {
+    const ordinary = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-ordinary",
+      sessionKey: "agent:test:ordinary",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "cron-authority:probe",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+
+    await retireSessionMcpRuntime({
+      sessionId: "cron-authority:probe",
+      reason: "scheduled-authority-snapshot-complete",
+    });
+
+    expect(peekSessionMcpRuntime({ sessionKey: "agent:test:ordinary" })).toBe(ordinary);
   });
 
   it("preserves a runtime while a bounded app view lease is active", async () => {

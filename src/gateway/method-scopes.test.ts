@@ -61,6 +61,7 @@ describe("method scope resolution", () => {
     ["sessions.reclaim", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["sessions.patchMany", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
     ["tasks.retry", ["operator.write"]],
     ["tasks.dismiss", ["operator.write"]],
@@ -109,6 +110,7 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.hold", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -499,6 +501,39 @@ describe("method scope resolution", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+  });
+
+  it("scopes sessions.patchMany only from patch mutation fields", () => {
+    const targets = [
+      {
+        key: "agent:main:ios-1",
+        agentId: "main",
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
+      },
+    ];
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patchMany", {
+        targets,
+        patch: { label: "Trip planning", unread: false },
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patchMany", {
+        targets,
+        patch: { statusNote: "Working" },
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patchMany", {
+        targets,
+        patch: { futureField: true },
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(authorizeOperatorScopesForMethod("sessions.patchMany", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(isGatewayMethodClassified("sessions.patchMany")).toBe(true);
   });
 
   it("lets malformed sessions.patch params through to handler validation at write scope", () => {

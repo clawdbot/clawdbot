@@ -130,6 +130,7 @@ describe("main session recovery state", () => {
 
   it("marks without charging and replaces an older lifecycle owner for the same run", () => {
     const entry = interruptedEntry({
+      lifecycleRunId: "dead-run",
       restartRecoveryRuns: [
         { runId: "older-run", lifecycleGeneration: "generation-old" },
         { runId: "shared-run", lifecycleGeneration: "generation-1" },
@@ -161,6 +162,7 @@ describe("main session recovery state", () => {
       { runId: "older-run", lifecycleGeneration: "generation-old" },
       { runId: "shared-run", lifecycleGeneration: "generation-2" },
     ]);
+    expect(entry.lifecycleRunId).toBeUndefined();
   });
 
   it("rejects foreground work after the automatic recovery budget is exhausted", () => {
@@ -343,6 +345,7 @@ describe("main session recovery state", () => {
       },
     });
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(entry.lifecycleRunId).toBe("recovery-1");
 
     expect(
       transitionMainSessionRecovery(entry, {
@@ -358,6 +361,7 @@ describe("main session recovery state", () => {
     expect(entry.abortedLastRun).toBe(true);
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(entry.restartRecoveryDeliverySourceRunId).toBe("source-1");
+    expect(entry.lifecycleRunId).toBeUndefined();
   });
 
   it("rejects a reservation created by an older lifecycle generation", () => {
@@ -565,6 +569,7 @@ describe("main session recovery state", () => {
 
   it("tombstones an exhausted cycle and exposes only the Doctor repair action", () => {
     const entry = interruptedEntry({
+      lifecycleRunId: "exhausted-run",
       mainRestartRecovery: recoveryState({
         chargedAttempts: 3,
       }),
@@ -584,6 +589,7 @@ describe("main session recovery state", () => {
       }),
     ).toEqual({ kind: "tombstoned" });
     expect(entry.mainRestartRecovery?.tombstone?.reason).toBe(view.reason);
+    expect(entry.lifecycleRunId).toBeUndefined();
     expect(observe(entry, "generation-1")).toEqual({ status: "tombstoned" });
 
     entry.abortedLastRun = true;

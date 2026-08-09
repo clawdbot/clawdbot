@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  captureNodePairingGeneration,
+  captureNodePairingState,
+} from "../../infra/device-pairing-node-state.js";
+import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
+import {
   approveDevicePairing,
   listDevicePairing,
   requestDevicePairing,
@@ -13,11 +18,6 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
-import {
-  captureNodePairingGeneration,
-  captureNodePairingState,
-} from "../../infra/node-pairing-state.js";
-import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -43,8 +43,8 @@ const pairingGenerationHooks = vi.hoisted(() => ({
   beforeCapture: vi.fn<(nodeId: string) => Promise<void> | void>(),
 }));
 
-vi.mock("../../infra/node-pairing-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/node-pairing-state.js")>();
+vi.mock("../../infra/device-pairing-node-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/device-pairing-node-state.js")>();
   return {
     ...actual,
     captureNodePairingState: async (nodeId: string) => {

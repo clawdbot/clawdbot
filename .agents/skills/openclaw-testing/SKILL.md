@@ -118,12 +118,12 @@ sync the current checkout on every run, and stop it before handoff.
   static checks with ready dependencies. Untrusted repository tooling never
   runs locally. Full suites and computationally intensive commands run remotely.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
-- Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
+- Use standard Git commands when committing; stage only your files.
 - If dependencies are missing on the selected remote box, run `pnpm install` there, retry
   once, then report the first actionable error. Do not reconcile or reinstall a
   local Codex worktree merely to run validation.
 - In a Codex worktree or linked/sparse checkout, do not run direct local
-  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer`. Use
+  `pnpm test*`, `pnpm check*`, or `pnpm crabbox:run`. Use
   `node scripts/crabbox-wrapper.mjs` for remote proof and
   `node scripts/check-changed.mjs` for classify-first changed checks. Use
   `node scripts/run-vitest.mjs` for bounded focused local proof when the

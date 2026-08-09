@@ -49,11 +49,16 @@ import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
 import type { ChatMetadataReadParams, ChatMetadataResult } from "./chat-metadata-contract.js";
+import type {
+  ChatStartupProjectionReadParams,
+  ChatStartupProjectionResult,
+} from "./chat-startup-projection-contract.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
@@ -86,6 +91,8 @@ export type GatewayClient = {
   /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
   isControlUiDeviceAuthMigration?: boolean;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
@@ -221,6 +228,9 @@ export type GatewayRequestContext = {
     workspaceDir?: string;
   }) => Promise<ModelCatalogEntry[] | undefined>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readChatStartupProjection?: (
+    params: ChatStartupProjectionReadParams,
+  ) => Promise<ChatStartupProjectionResult>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
@@ -268,7 +278,8 @@ export type GatewayRequestContext = {
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
   /** Durable per-session worker placement; absent when cloud workers are disabled. */
-  workerSessionPlacementService?: WorkerSessionPlacementReader;
+  workerSessionPlacementService?: WorkerSessionPlacementReader &
+    Partial<WorkerSessionPlacementRetirementService>;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   // Operator terminal session store. Absent in local/in-process contexts where

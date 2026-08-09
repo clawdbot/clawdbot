@@ -346,15 +346,17 @@ Docker notes:
   `OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS` (1-8) and
   `OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES` (100000-800000).
 - Full direct-API context: `OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT=1` applies
-  the `922000` context and `700000` total compaction limits, sends dense bounded
-  user turns, runs two explicit native compaction checkpoints per wave, and
-  continues with later turns after each checkpoint. It requires
+  the `922000` context and `700000` total automatic-compaction limits, sends
+  dense bounded user turns without `/compact` or another manual checkpoint,
+  and requires a later small turn to trigger native automatic compaction. It
+  requires
   `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key` plus an absolute
   `OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG` path. The catalog must expose the
-  selected model with `max_context_window: 922000` so Codex does not clamp the
-  override back to its normal catalog window. The ordinary reduced-threshold
-  stress above keeps the stricter automatic-compaction and hidden-marker
-  retention assertions.
+  exact selected model with `context_window: 922000`,
+  `max_context_window: 922000`, and `auto_compact_token_limit: 700000` so Codex
+  does not clamp the override back to its normal catalog window. The ordinary
+  reduced-threshold stress above keeps the stricter automatic-compaction and
+  hidden-marker retention assertions.
 - Optional loop-relay opt-out probe:
   `OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY=1`
 - The requested thinking preference may map to the nearest effort advertised
@@ -409,11 +411,12 @@ OPENCLAW_LIVE_CODEX_HARNESS=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
   OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG=/absolute/path/to/models-api-1m.json \
-  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-terra \
-  OPENCLAW_LIVE_CODEX_HARNESS_THINKING=medium \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-sol \
+  OPENCLAW_LIVE_CODEX_HARNESS_THINKING=low \
   OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS=8 \
   OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES=800000 \
-  pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
+  OPENCLAW_LIVE_CODEX_HARNESS_DEBUG=1 \
+  node scripts/test-live.mjs --quiet src/gateway/gateway-codex-harness.live.test.ts
 ```
 
 GPT-5.6 native Codex matrix:
@@ -424,41 +427,76 @@ OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
   pnpm test:docker:live-codex-harness
 ```
 
-## Live: OpenAI repeated compaction
+## Live: OpenAI long context
 
-- Goal: exercise the embedded OpenClaw `openai-responses` agent loop through at
-  least two real automatic compactions, then verify a durable marker survives.
-- Test: `src/agents/sessions/agent-session.openai-compaction.live.test.ts`
-- Enable: `OPENCLAW_LIVE_OPENAI_COMPACTION=1`
-- Default model: `gpt-5.6-luna`
-- Model override: `OPENCLAW_LIVE_OPENAI_COMPACTION_MODEL=<model>`
-- The normal stress mode uses a reduced client context budget to reach the same
-  real compaction path with bounded API spend.
-- Full-context mode sets the client budget to `922000` and compaction reserve to
-  `222000`, so automatic compaction starts at `700000`. It also requires an
-  observed provider input count above the `272000` long-context pricing boundary.
-
-Bounded live recipe:
-
-```bash
-OPENCLAW_LIVE_TEST=1 \
-  OPENCLAW_LIVE_OPENAI_COMPACTION=1 \
-  pnpm test:live -- src/agents/sessions/agent-session.openai-compaction.live.test.ts
-```
+- Goal: validate exact-model embedded OpenClaw execution through a
+  process-owned isolated Gateway, cross the long-context pricing boundary,
+  observe a first-class OpenAI Responses compaction item, and prove opaque
+  replay plus prefix pruning on the next request.
+- Test: `src/gateway/gateway-openai-long-context.live.test.ts`
+- Enable: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1`
+- Profiles: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=full` selects exact
+  `openai/gpt-5.6-sol` with a `1050000` total window, `922000` safe active
+  input, `128000` maximum output, and `700000` compaction threshold. `reduced`
+  reaches the same transport and persistence path with a smaller budget.
+- Metrics: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1` emits phase timing and
+  token observations. These measurements are informational, not pass/fail
+  latency targets.
+- Long output: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1` requires a
+  deterministic response between 4000 and 8000 output tokens.
+- Optional raw read-tool stress:
+  `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT=1`. It is not part of the
+  default recipe because the effective tool surface may use Code Mode instead
+  of exposing the raw read tool.
 
 Full `922000` input-budget recipe:
 
 ```bash
-OPENCLAW_LIVE_TEST=1 \
-  OPENCLAW_LIVE_OPENAI_COMPACTION=1 \
-  OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=1 \
-  OPENCLAW_LIVE_OPENAI_COMPACTION_MODEL=gpt-5.6-terra \
-  pnpm test:live -- src/agents/sessions/agent-session.openai-compaction.live.test.ts
+OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=full \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1 \
+  node scripts/test-live.mjs --quiet src/gateway/gateway-openai-long-context.live.test.ts
 ```
 
+Reduced-budget recipe:
+
+```bash
+OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=reduced \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1 \
+  node scripts/test-live.mjs --quiet src/gateway/gateway-openai-long-context.live.test.ts
+```
+
+### Long-context hard oracles
+
+The full embedded and native recipes are proof runs, not throughput
+benchmarks. They fail unless the following runtime contracts hold:
+
+- Runtime and model identity are exact: embedded OpenClaw or native Codex as
+  requested, both on `openai/gpt-5.6-sol`.
+- At least one provider request crosses `272000` input tokens and every call
+  reports priority service.
+- Embedded OpenClaw receives and persists a first-class encrypted Responses
+  `compaction` item, replays the exact opaque item on the next request, and
+  prunes the earlier input prefix. The encrypted content must never appear in
+  display or diagnostics.
+- Native Codex reports an effective window of `875900`, grows beyond the
+  `700000` total-scope threshold without a manual compact, and automatically
+  compacts on the next turn.
+- Each runtime produces a deterministic long response between 4000 and 8000
+  output tokens and preserves a durable marker through compaction and a
+  Gateway restart.
+
+Compaction duration, restart latency, turn latency, and total suite duration
+are emitted as informational metrics only.
+
 <Warning>
-The full mode deliberately crosses OpenAI's long-context pricing boundary and
-can make several large API calls. Use it only with explicit spend approval.
+The full modes deliberately cross OpenAI's long-context pricing boundary and
+make several large API calls. Above `272000` input tokens, the whole request is
+2× input/cache and 1.5× output; Fast/Priority doubles that tier again. Use full
+mode only with explicit spend approval.
 </Warning>
 
 Fresh OpenAI API-key default:

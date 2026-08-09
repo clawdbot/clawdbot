@@ -1,3 +1,4 @@
+import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
@@ -33,10 +34,6 @@ type ProviderCostStats = {
   provider: string | null;
   model: string | null;
 };
-
-function readCostRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
 
 function readCostValue(
   cost: Record<string, unknown> | null,

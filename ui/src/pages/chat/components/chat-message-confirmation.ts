@@ -3,19 +3,18 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 
-const SKIP_DELETE_CONFIRM_PREFERENCE = "openclaw:skipDeleteConfirm";
+// Persisted preference key: renaming it would reset users' "Don't ask again" choice.
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
-const DELETE_CONFIRM_VIEWPORT_MARGIN_PX = 8;
-const DELETE_CONFIRM_TRIGGER_GAP_PX = 6;
+const CONFIRMED_ACTION_VIEWPORT_MARGIN_PX = 8;
+const CONFIRMED_ACTION_TRIGGER_GAP_PX = 6;
 
-type DeleteConfirmSide = "left" | "right";
-type DeleteConfirmDismissOptions = { restoreFocus?: boolean };
-type DeleteConfirmDismisser = (options?: DeleteConfirmDismissOptions) => void;
+type ConfirmedActionDismissOptions = { restoreFocus?: boolean };
+type ConfirmedActionDismisser = (options?: ConfirmedActionDismissOptions) => void;
 
-const deleteConfirmDismissers = new WeakMap<Element, DeleteConfirmDismisser>();
-const deleteConfirmOwners = new WeakMap<Element, Element>();
-const deleteConfirmPopovers = new Set<HTMLElement>();
-const deleteConfirmPopoversByOwner = new WeakMap<Element, HTMLElement>();
+const confirmedActionDismissers = new WeakMap<Element, ConfirmedActionDismisser>();
+const confirmedActionOwners = new WeakMap<Element, Element>();
+const confirmedActionPopovers = new Set<HTMLElement>();
+const confirmedActionPopoversByOwner = new WeakMap<Element, HTMLElement>();
 
 function shouldSkipActionConfirm(preferenceName: string): boolean {
   try {
@@ -25,8 +24,8 @@ function shouldSkipActionConfirm(preferenceName: string): boolean {
   }
 }
 
-function dismissDeleteConfirm(element: Element, options?: DeleteConfirmDismissOptions) {
-  const dismiss = deleteConfirmDismissers.get(element);
+function dismissConfirmedAction(element: Element, options?: ConfirmedActionDismissOptions) {
+  const dismiss = confirmedActionDismissers.get(element);
   if (dismiss) {
     dismiss(options);
     return;
@@ -35,10 +34,10 @@ function dismissDeleteConfirm(element: Element, options?: DeleteConfirmDismissOp
 }
 
 export function dismissConfirmedActionPopovers(owner: ParentNode): void {
-  for (const popover of deleteConfirmPopovers) {
-    const popoverOwner = deleteConfirmOwners.get(popover);
+  for (const popover of confirmedActionPopovers) {
+    const popoverOwner = confirmedActionOwners.get(popover);
     if (popoverOwner && owner instanceof Node && owner.contains(popoverOwner)) {
-      dismissDeleteConfirm(popover);
+      dismissConfirmedAction(popover);
     }
   }
 }
@@ -58,23 +57,19 @@ function resolveViewportBounds() {
   };
 }
 
-function clampDeleteConfirmPosition(value: number, min: number, max: number) {
+function clampConfirmedActionPosition(value: number, min: number, max: number) {
   if (max < min) {
     return min;
   }
   return Math.min(Math.max(value, min), max);
 }
 
-function placeDeleteConfirmPopover(
-  trigger: HTMLElement,
-  popover: HTMLElement,
-  side: DeleteConfirmSide,
-) {
+function placeConfirmedActionPopover(trigger: HTMLElement, popover: HTMLElement) {
   const triggerRect = trigger.getBoundingClientRect();
   const popoverRect = popover.getBoundingClientRect();
   const viewport = resolveViewportBounds();
-  const margin = DELETE_CONFIRM_VIEWPORT_MARGIN_PX;
-  const gap = DELETE_CONFIRM_TRIGGER_GAP_PX;
+  const margin = CONFIRMED_ACTION_VIEWPORT_MARGIN_PX;
+  const gap = CONFIRMED_ACTION_TRIGGER_GAP_PX;
   const viewportWidth = viewport.right - viewport.left;
   const viewportHeight = viewport.bottom - viewport.top;
   const popoverWidth = Math.min(popoverRect.width, viewportWidth - margin * 2);
@@ -82,14 +77,14 @@ function placeDeleteConfirmPopover(
   const spaceAbove = triggerRect.top - viewport.top - margin - gap;
   const spaceBelow = viewport.bottom - triggerRect.bottom - margin - gap;
   const placeBelow = spaceAbove < popoverHeight && spaceBelow >= spaceAbove;
-  const desiredLeft = side === "left" ? triggerRect.right - popoverWidth : triggerRect.left;
-  const left = clampDeleteConfirmPosition(
+  const desiredLeft = triggerRect.right - popoverWidth;
+  const left = clampConfirmedActionPosition(
     desiredLeft,
     viewport.left + margin,
     viewport.right - margin - popoverWidth,
   );
   const desiredTop = placeBelow ? triggerRect.bottom + gap : triggerRect.top - gap - popoverHeight;
-  const top = clampDeleteConfirmPosition(
+  const top = clampConfirmedActionPosition(
     desiredTop,
     viewport.top + margin,
     viewport.bottom - margin - popoverHeight,
@@ -100,55 +95,37 @@ function placeDeleteConfirmPopover(
   popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
-export function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
-  // "Hide" is honest copy: this action only hides the bubble in this browser's
-  // localStorage; the message stays in the transcript and in agent context.
-  return renderConfirmedActionButton({
-    action: onDelete,
-    ariaLabel: t("chat.messages.hideMessage"),
-    buttonClass: "chat-group-delete",
-    confirmLabel: t("chat.messages.hide"),
-    confirmText: t("chat.messages.hideConfirm"),
-    icon: icons.eyeOff ?? icons.x,
-    preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
-    side,
-    tooltip: t("chat.messages.hideTooltip"),
-  });
-}
-
-export function renderRewindButton(
-  onRewind: () => void,
-  disabled: boolean,
-  side: DeleteConfirmSide,
-) {
-  return renderConfirmedActionButton({
-    action: onRewind,
-    ariaLabel: t("chat.messages.rewind"),
-    buttonClass: "chat-group-rewind",
-    confirmLabel: t("chat.messages.rewind"),
-    confirmText: t("chat.messages.rewindConfirm"),
-    disabled,
-    icon: icons.refresh,
-    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
-    side,
-    tooltip: disabled ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewind"),
-    wrapClass: "chat-rewind-wrap",
-  });
-}
-
 type ConfirmedActionParams = {
   action: () => void;
-  ariaLabel: string;
-  buttonClass?: string;
   confirmLabel: string;
   confirmText: string;
-  disabled?: boolean;
-  icon: unknown;
   preferenceName: string;
-  side: DeleteConfirmSide;
-  tooltip: string;
-  wrapClass?: string;
 };
+
+export function renderRewindButton(onRewind: () => void, disabled: boolean) {
+  const label = t("chat.messages.rewind");
+  const params: ConfirmedActionParams = {
+    action: onRewind,
+    confirmLabel: label,
+    confirmText: t("chat.messages.rewindConfirm"),
+    preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
+  };
+  return html`
+    <span class="chat-confirm-wrap chat-rewind-wrap">
+      <openclaw-tooltip .content=${disabled ? t("chat.messages.rewindUnavailable") : label}>
+        <button
+          class="chat-group-rewind"
+          aria-label=${label}
+          ?disabled=${disabled}
+          @click=${(event: Event) =>
+            openConfirmedActionPopover(event.currentTarget as HTMLElement, params)}
+        >
+          ${icons.refresh}
+        </button>
+      </openclaw-tooltip>
+    </span>
+  `;
+}
 
 export function openChatRewindConfirmation(trigger: HTMLElement, action: () => void): void {
   openConfirmedActionPopover(trigger, {
@@ -156,80 +133,71 @@ export function openChatRewindConfirmation(trigger: HTMLElement, action: () => v
     confirmLabel: t("chat.messages.rewind"),
     confirmText: t("chat.messages.rewindConfirm"),
     preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
-    side: "left",
   });
 }
 
-export function openChatHideConfirmation(trigger: HTMLElement, action: () => void): void {
-  openConfirmedActionPopover(trigger, {
-    action,
-    confirmLabel: t("chat.messages.hide"),
-    confirmText: t("chat.messages.hideConfirm"),
-    preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
-    side: "right",
-  });
-}
-
-function openConfirmedActionPopover(
-  btn: HTMLElement,
-  params: Pick<
-    ConfirmedActionParams,
-    "action" | "confirmLabel" | "confirmText" | "preferenceName" | "side"
-  >,
-): void {
+function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionParams): void {
   if (shouldSkipActionConfirm(params.preferenceName)) {
     params.action();
     return;
   }
-  const wrap = btn.closest(".chat-delete-wrap") as HTMLElement | null;
+  const wrap = btn.closest(".chat-confirm-wrap") as HTMLElement | null;
   if (!wrap) {
     return;
   }
   const owner = wrap;
-  const existing = deleteConfirmPopoversByOwner.get(owner);
+  const existing = confirmedActionPopoversByOwner.get(owner);
   if (existing) {
-    dismissDeleteConfirm(existing, { restoreFocus: true });
+    dismissConfirmedAction(existing, { restoreFocus: true });
     return;
   }
   const popover = document.createElement("div");
-  popover.className = `chat-delete-confirm chat-delete-confirm--${params.side}`;
+  popover.className = "chat-confirm-popover";
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-modal", "true");
   popover.setAttribute("aria-label", params.confirmText);
   popover.innerHTML = `
-    <p class="chat-delete-confirm__text"></p>
-    <label class="chat-delete-confirm__remember">
-      <input type="checkbox" class="chat-delete-confirm__check" />
-      <span>Don't ask again</span>
+    <p class="chat-confirm-popover__text"></p>
+    <label class="chat-confirm-popover__remember">
+      <input type="checkbox" class="chat-confirm-popover__check" />
+      <span></span>
     </label>
-    <div class="chat-delete-confirm__actions">
-      <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
-      <button class="chat-delete-confirm__yes" type="button"></button>
+    <div class="chat-confirm-popover__actions">
+      <button class="chat-confirm-popover__cancel" type="button"></button>
+      <button class="chat-confirm-popover__yes" type="button"></button>
     </div>
   `;
-  const confirmText = popover.querySelector(".chat-delete-confirm__text");
-  const confirmButton = popover.querySelector(".chat-delete-confirm__yes");
+  const confirmText = popover.querySelector(".chat-confirm-popover__text");
+  const rememberText = popover.querySelector(".chat-confirm-popover__remember span");
+  const cancelButton = popover.querySelector(".chat-confirm-popover__cancel");
+  const confirmButton = popover.querySelector(".chat-confirm-popover__yes");
   if (confirmText) {
     confirmText.textContent = params.confirmText;
   }
   if (confirmButton) {
     confirmButton.textContent = params.confirmLabel;
   }
+  if (rememberText) {
+    rememberText.textContent = t("chat.messages.dontAskAgain");
+  }
+  if (cancelButton) {
+    cancelButton.textContent = t("common.cancel");
+  }
   // Virtual transcript rows use transforms for positioning, which makes fixed
   // descendants relative to the row instead of the viewport. Portal the dialog
   // so the viewport-clamped coordinates stay correct in web and native hosts.
   owner.ownerDocument.body.appendChild(popover);
-  deleteConfirmOwners.set(popover, owner);
-  deleteConfirmPopovers.add(popover);
-  deleteConfirmPopoversByOwner.set(owner, popover);
-  placeDeleteConfirmPopover(btn, popover, params.side);
+  confirmedActionOwners.set(popover, owner);
+  confirmedActionPopovers.add(popover);
+  confirmedActionPopoversByOwner.set(owner, popover);
+  placeConfirmedActionPopover(btn, popover);
 
-  const cancel = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")!;
-  const yes = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!;
-  const check = popover.querySelector<HTMLInputElement>(".chat-delete-confirm__check")!;
+  const cancel = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel")!;
+  const yes = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!;
+  const check = popover.querySelector<HTMLInputElement>(".chat-confirm-popover__check")!;
   let dismissed = false;
   let ownerObserver: MutationObserver | null = null;
-  function dismissPopover(options?: DeleteConfirmDismissOptions) {
+  function dismissPopover(options?: ConfirmedActionDismissOptions) {
     if (dismissed) {
       return;
     }
@@ -238,10 +206,10 @@ function openConfirmedActionPopover(
     document.removeEventListener("click", closeOnOutside, true);
     document.removeEventListener("contextmenu", closeOnContextMenu, true);
     window.removeEventListener("keydown", closeOnEscape, true);
-    deleteConfirmDismissers.delete(popover);
-    deleteConfirmOwners.delete(popover);
-    deleteConfirmPopovers.delete(popover);
-    deleteConfirmPopoversByOwner.delete(owner);
+    confirmedActionDismissers.delete(popover);
+    confirmedActionOwners.delete(popover);
+    confirmedActionPopovers.delete(popover);
+    confirmedActionPopoversByOwner.delete(owner);
     popover.remove();
     if (options?.restoreFocus && btn.isConnected) {
       btn.focus({ preventScroll: true });
@@ -281,7 +249,7 @@ function openConfirmedActionPopover(
       first.focus();
     }
   }
-  deleteConfirmDismissers.set(popover, dismissPopover);
+  confirmedActionDismissers.set(popover, dismissPopover);
   cancel.addEventListener("click", () => dismissPopover({ restoreFocus: true }));
   yes.addEventListener("click", () => {
     if (check.checked) {
@@ -304,26 +272,8 @@ function openConfirmedActionPopover(
   cancel.focus({ preventScroll: true });
   requestAnimationFrame(() => {
     if (!dismissed && popover.isConnected) {
-      placeDeleteConfirmPopover(btn, popover, params.side);
+      placeConfirmedActionPopover(btn, popover);
       document.addEventListener("click", closeOnOutside, true);
     }
   });
-}
-
-function renderConfirmedActionButton(params: ConfirmedActionParams) {
-  return html`
-    <span class="chat-delete-wrap ${params.wrapClass ?? ""}">
-      <openclaw-tooltip .content=${params.tooltip}>
-        <button
-          class=${params.buttonClass ?? ""}
-          aria-label=${params.ariaLabel}
-          ?disabled=${params.disabled}
-          @click=${(event: Event) =>
-            openConfirmedActionPopover(event.currentTarget as HTMLElement, params)}
-        >
-          ${params.icon}
-        </button>
-      </openclaw-tooltip>
-    </span>
-  `;
 }

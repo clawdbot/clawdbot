@@ -9,6 +9,7 @@ import {
   type ScopeNode,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
+import { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 
@@ -17,6 +18,24 @@ type SlackChannelPolicyEntry = {
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
+
+export function buildSlackChannelIdCandidates(channelId: string | null | undefined): string[] {
+  const trimmedId = channelId?.trim();
+  if (!trimmedId) {
+    return [];
+  }
+  const lowercaseId = trimmedId.toLowerCase();
+  const uppercaseId = trimmedId.toUpperCase();
+  // Inbound Slack IDs are uppercase, but persisted session group IDs are lowercase.
+  return buildChannelKeyCandidates(
+    trimmedId,
+    lowercaseId,
+    uppercaseId,
+    `channel:${trimmedId}`,
+    `channel:${lowercaseId}`,
+    `channel:${uppercaseId}`,
+  );
+}
 
 export function buildSlackChannelPolicyScope<T extends ScopeNode>(params: {
   channels?: Record<string, T>;
@@ -49,14 +68,13 @@ function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
   const channels = mergeSlackAccountConfig(params.cfg, accountId).channels as
     | Record<string, SlackChannelPolicyEntry>
     | undefined;
-  const channelId = params.groupId?.trim();
   const channelName = params.groupChannel?.replace(/^#/, "");
-  const candidates = [
-    channelId,
+  const candidates = buildChannelKeyCandidates(
+    ...buildSlackChannelIdCandidates(params.groupId),
     channelName ? `#${channelName}` : undefined,
     channelName,
     normalizeHyphenSlug(channelName),
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  );
   return buildSlackChannelPolicyScope({ channels, candidates });
 }
 

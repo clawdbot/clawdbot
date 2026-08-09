@@ -3134,6 +3134,7 @@ describe("ClawHub origin provenance readback", () => {
         slug: "agentreceipt",
         installedVersion: "1.0.0",
         installedAt: 123,
+        ownerHandle: "acme",
         sourceUrl,
         artifact,
         skillFile,
@@ -3146,6 +3147,7 @@ describe("ClawHub origin provenance readback", () => {
           version: "1.0.0",
           installedAt: 123,
           registry: "https://clawhub.ai",
+          ownerHandle: "acme",
           sourceUrl,
           artifact,
           skillFile,
@@ -3163,6 +3165,7 @@ describe("ClawHub origin provenance readback", () => {
       if (link?.status !== "linked") {
         throw new Error(`expected linked status, got ${link?.status}`);
       }
+      expect(link.ownerHandle).toBe("acme");
       expect(link.artifact).toEqual(artifact);
       expect(link.skillFile).toEqual(skillFile);
       expect(link.sourceUrl).toBe(sourceUrl);

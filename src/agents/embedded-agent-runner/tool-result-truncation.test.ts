@@ -1438,6 +1438,18 @@ describe("truncateOversizedToolResultsInSession", () => {
     await appendTranscriptMessage(scope, {
       message: makeUserMessage("run tools"),
     });
+    const staleCheckpointReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      data: "stale-checkpoint",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.2",
+      baseUrlHash: "ozhevd1smnk8s",
+    } satisfies NonNullable<AssistantMessage["providerReplay"]>;
+    const preBoundaryCheckpointOwner = makeAssistantMessage("pre-boundary checkpoint owner");
+    preBoundaryCheckpointOwner.providerReplay = staleCheckpointReplay;
+    await appendTranscriptMessage(scope, { message: preBoundaryCheckpointOwner });
     const medium = "alpha beta gamma delta epsilon ".repeat(600);
     const firstToolResult = await appendTranscriptMessage(scope, {
       message: makeToolResult(medium, "call_1"),
@@ -1448,6 +1460,17 @@ describe("truncateOversizedToolResultsInSession", () => {
     const thirdToolResult = await appendTranscriptMessage(scope, {
       message: makeToolResult(medium, "call_3"),
     });
+    const staleCheckpointOwner = makeAssistantMessage("stale checkpoint owner");
+    staleCheckpointOwner.providerReplay = staleCheckpointReplay;
+    await appendTranscriptMessage(scope, { message: staleCheckpointOwner });
+    const suppressionReplay = {
+      ...staleCheckpointReplay,
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+    } satisfies NonNullable<AssistantMessage["providerReplay"]>;
+    const suppressionOwner = makeAssistantMessage("suppression owner");
+    suppressionOwner.providerReplay = suppressionReplay;
+    await appendTranscriptMessage(scope, { message: suppressionOwner });
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
@@ -1489,16 +1512,26 @@ describe("truncateOversizedToolResultsInSession", () => {
       .map(getFirstToolResultText);
     expect(originalToolResultTexts).toEqual([medium, medium, medium]);
 
-    const toolResultTexts = SessionManager.open(scope)
+    const activeMessages = SessionManager.open(scope)
       .getBranch()
-      .flatMap((entry) =>
-        entry.type === "message" && entry.message.role === "toolResult"
-          ? [getFirstToolResultText(entry.message as ToolResultMessage)]
-          : [],
+      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+    const toolResultTexts = activeMessages.flatMap((message) =>
+      message.role === "toolResult" ? [getFirstToolResultText(message as ToolResultMessage)] : [],
+    );
+    const findAssistant = (text: string) =>
+      activeMessages.find(
+        (message): message is AssistantMessage =>
+          message.role === "assistant" &&
+          message.content.some((block) => block.type === "text" && block.text === text),
       );
 
     expect(toolResultTexts.some((text) => text.includes("truncated"))).toBe(true);
     expect(toolResultTexts.join("").length).toBeLessThan(medium.length * 3);
+    expect(findAssistant("pre-boundary checkpoint owner")?.providerReplay).toEqual(
+      staleCheckpointReplay,
+    );
+    expect(findAssistant("stale checkpoint owner")?.providerReplay).toBeUndefined();
+    expect(findAssistant("suppression owner")?.providerReplay).toEqual(suppressionReplay);
   });
 
   it("reuses frozen provider projection bytes on the recovery branch", async () => {

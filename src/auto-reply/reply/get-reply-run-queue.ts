@@ -8,7 +8,6 @@ import type { QueueSettings } from "./queue.js";
 type ReplyRunQueueBusyState = {
   activeSessionId: string | undefined;
   isActive: boolean;
-  isStreaming: boolean;
 };
 
 export const REPLY_RUN_STILL_SHUTTING_DOWN_TEXT =

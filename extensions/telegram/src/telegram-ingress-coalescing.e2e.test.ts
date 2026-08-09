@@ -114,6 +114,25 @@ function photoUpdate(params: { updateId: number; messageId: number; caption?: st
   };
 }
 
+function singletonPhotoUpdate(params: { updateId: number; messageId: number }) {
+  const update = photoUpdate(params);
+  const { media_group_id: _mediaGroupId, ...message } = update.message;
+  return { ...update, message };
+}
+
+function textUpdate(params: { updateId: number; messageId: number; text: string }) {
+  return {
+    update_id: params.updateId,
+    message: {
+      message_id: params.messageId,
+      date: 1_736_380_800 + params.messageId,
+      chat: { id: 111, type: "private" as const, first_name: "Ada" },
+      from: { id: 111, is_bot: false, first_name: "Ada" },
+      text: params.text,
+    },
+  };
+}
+
 function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
   return {
     update_id: params.updateId,
@@ -133,12 +152,15 @@ function forwardedTextUpdate(params: { updateId: number; messageId: number; text
   };
 }
 
-function createBotApiTransport(): TelegramTransport {
+function createBotApiTransport(params: { onGetFile?: (call: number) => Response } = {}) {
   let getFileCall = 0;
   const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
     if (url.includes("/getFile")) {
       getFileCall += 1;
+      if (params.onGetFile) {
+        return params.onGetFile(getFileCall);
+      }
       return new Response(
         JSON.stringify({
           ok: true,
@@ -224,6 +246,7 @@ describe("Telegram durable ingress coalescing", () => {
   let activeResources: Array<{
     monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
     telegramTransport: TelegramTransport;
+    abortController: AbortController;
   }>;
 
   beforeEach(async () => {
@@ -247,7 +270,8 @@ describe("Telegram durable ingress coalescing", () => {
 
   afterEach(async () => {
     await Promise.all(
-      activeResources.map(async ({ monitor, telegramTransport }) => {
+      activeResources.map(async ({ monitor, telegramTransport, abortController }) => {
+        abortController.abort(new Error("test cleanup"));
         await monitor.stop();
         await telegramTransport.close();
       }),
@@ -262,20 +286,31 @@ describe("Telegram durable ingress coalescing", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  async function createMonitor() {
-    const telegramTransport = createBotApiTransport();
+  async function createMonitor(
+    options: {
+      telegramTransport?: TelegramTransport;
+      adoptionStallTimeoutMs?: number;
+      onRuntimeError?: (error: unknown) => void;
+    } = {},
+  ) {
+    const telegramTransport = options.telegramTransport ?? createBotApiTransport();
+    const abortController = new AbortController();
     const bot = createTelegramBot({
       token: "tok",
       botInfo: telegramBotInfoForTest,
       config: cfg,
       telegramDeps: createTelegramDeps(stateDir),
       telegramTransport,
+      fetchAbortSignal: abortController.signal,
+      mediaAbortSignal: abortController.signal,
       testTimings: { mediaGroupFlushMs: 40, textFragmentGapMs: 20 },
       runtime: {
         log: () => {},
-        error: (error) => {
-          throw error instanceof Error ? error : new Error(String(error));
-        },
+        error:
+          options.onRuntimeError ??
+          ((error) => {
+            throw error instanceof Error ? error : new Error(String(error));
+          }),
         getRuntimeConfig: () => cfg,
         exit: () => {
           throw new Error("unexpected runtime exit");
@@ -288,12 +323,93 @@ describe("Telegram durable ingress coalescing", () => {
       cfg,
       accountId: "default",
       botInfo: telegramBotInfoForTest,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       pollIntervalMs: 10,
     });
-    const resources = { monitor, telegramTransport };
+    const resources = { monitor, telegramTransport, abortController };
     activeResources.push(resources);
     return resources;
   }
+
+  it.each([
+    {
+      label: "current-message",
+      update: singletonPhotoUpdate({ updateId: 601, messageId: 1 }),
+      expectBufferedFailure: false,
+    },
+    {
+      label: "buffered media-group",
+      update: photoUpdate({ updateId: 602, messageId: 2 }),
+      expectBufferedFailure: true,
+    },
+  ])(
+    "cancels $label hydration at the claim watchdog and releases the same-chat lane",
+    async ({ update, expectBufferedFailure }) => {
+      const getFile = vi.fn(
+        () =>
+          new Response(
+            JSON.stringify({
+              ok: false,
+              error_code: 429,
+              description: "Too Many Requests: retry after 60",
+              parameters: { retry_after: 60 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      );
+      const runtimeError = vi.fn();
+      const telegramTransport = createBotApiTransport({ onGetFile: getFile });
+      const { monitor } = await createMonitor({
+        telegramTransport,
+        adoptionStallTimeoutMs: 120,
+        onRuntimeError: runtimeError,
+      });
+      const nextUpdateId = update.update_id + 10;
+      const next = textUpdate({
+        updateId: nextUpdateId,
+        messageId: update.message.message_id + 10,
+        text: "next message after stalled media",
+      });
+      monitor.start();
+
+      await monitor.admit(update);
+      await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce(), {
+        timeout: 1_000,
+        interval: 5,
+      });
+      const nextAdmittedAt = Date.now();
+      await monitor.admit(next);
+      const turn = await awaitSingleDownstreamTurn();
+
+      expect(Date.now() - nextAdmittedAt).toBeLessThan(1_000);
+      expect(turn.Body).toContain("next message after stalled media");
+      expect(turn.Body).not.toContain("<media:image>");
+      const queue = openTelegramIngressQueue(spoolDir);
+      await vi.waitFor(async () => {
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+          expect.objectContaining({
+            id: telegramQueueEventId(update.update_id),
+            reason: "handler-timeout",
+          }),
+        ]);
+      });
+      await expect(
+        queue.enqueue(telegramQueueEventId(nextUpdateId), {} as never),
+      ).resolves.toMatchObject({ kind: "completed" });
+      if (expectBufferedFailure) {
+        await vi.waitFor(() => expect(runtimeError).toHaveBeenCalledOnce());
+      } else {
+        expect(runtimeError).not.toHaveBeenCalled();
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(getFile).toHaveBeenCalledOnce();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+    },
+  );
 
   it("coalesces album members admitted a few milliseconds apart", async () => {
     const { monitor, telegramTransport } = await createMonitor();

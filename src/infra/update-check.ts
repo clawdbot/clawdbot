@@ -24,6 +24,8 @@ type GitUpdateStatus = {
   tag: string | null;
   branch: string | null;
   upstream: string | null;
+  upstreamSha?: string | null;
+  commitAtMs?: number | null;
   dirty: boolean | null;
   ahead: number | null;
   behind: number | null;
@@ -236,17 +238,22 @@ async function checkGitUpdateStatus(params: {
     tag: null,
     branch: null,
     upstream: null,
+    upstreamSha: null,
+    commitAtMs: null,
     dirty: null,
     ahead: null,
     behind: null,
     fetchOk: null,
   };
 
-  const [branchRes, shaRes, tagRes, upstreamRes, dirtyRes] = await Promise.all([
+  const [branchRes, shaRes, commitAtRes, tagRes, upstreamRes, dirtyRes] = await Promise.all([
     runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
       timeoutMs,
     }).catch(() => null),
     runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "show", "-s", "--format=%ct", "HEAD"], {
       timeoutMs,
     }).catch(() => null),
     runCommandWithTimeout(["git", "-C", root, "describe", "--tags", "--exact-match"], {
@@ -268,6 +275,9 @@ async function checkGitUpdateStatus(params: {
   const branch = branchRes.stdout.trim() || null;
 
   const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
+  const commitAtSeconds =
+    commitAtRes?.code === 0 ? Number.parseInt(commitAtRes.stdout.trim(), 10) : Number.NaN;
+  const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
 
   const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
@@ -281,11 +291,13 @@ async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
+  const canCompareUpstream = !params.fetch || fetchOk === true;
+
   // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
   // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
   // still counts disconnected or truncated histories, so require a visible common ancestor.
   const upstreamCommitRes =
-    upstream && sha
+    canCompareUpstream && upstream && sha
       ? await runCommandWithTimeout(
           ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
           { timeoutMs },
@@ -327,6 +339,8 @@ async function checkGitUpdateStatus(params: {
     tag,
     branch,
     upstream,
+    upstreamSha: upstreamCommit,
+    commitAtMs,
     dirty,
     ahead: parsed?.ahead ?? null,
     behind: parsed?.behind ?? null,

@@ -1,5 +1,6 @@
-// Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+// Discord tests cover send.sends basic channel messages plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./internal/discord.js";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
@@ -113,16 +114,7 @@ beforeEach(() => {
   clearDiscordDirectoryCacheForTest();
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -1053,12 +1045,15 @@ describe("removeOwnReactionsDiscord", () => {
     vi.clearAllMocks();
   });
 
-  it("removes all own reactions on a message", async () => {
+  it("removes only owned unicode and custom reactions without repeating emoji", async () => {
     const { rest, getMock, deleteMock } = makeDiscordRest();
     getMock.mockResolvedValue({
       reactions: [
-        { emoji: { name: "✅", id: null } },
-        { emoji: { name: "party_blob", id: "123" } },
+        { me: false, emoji: { name: "👀", id: null } },
+        { me: true, emoji: { name: "✅", id: null } },
+        { me: true, emoji: { name: "✅", id: null } },
+        { me: true, emoji: { name: "party_blob", id: "123" } },
+        { me: false, emoji: { name: "other_blob", id: "456" } },
       ],
     });
     const res = await removeOwnReactionsDiscord("chan1", "msg1", {
@@ -1073,13 +1068,29 @@ describe("removeOwnReactionsDiscord", () => {
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send removal requests when all reactions belong to other users", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      reactions: [
+        { me: false, emoji: { name: "👀", id: null } },
+        { me: false, emoji: { name: "other_blob", id: "456" } },
+      ],
+    });
+
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+    ).resolves.toEqual({ ok: true, removed: [] });
+    expect(deleteMock).not.toHaveBeenCalled();
   });
 
   it("retries transient failures while listing and clearing owned reactions", async () => {
     const { rest, getMock, deleteMock } = makeDiscordRest();
     getMock
       .mockRejectedValueOnce(Object.assign(new Error("service unavailable"), { status: 503 }))
-      .mockResolvedValueOnce({ reactions: [{ emoji: { name: "✅", id: null } }] });
+      .mockResolvedValueOnce({ reactions: [{ me: true, emoji: { name: "✅", id: null } }] });
     deleteMock
       .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
       .mockResolvedValueOnce(undefined);
@@ -1100,8 +1111,8 @@ describe("removeOwnReactionsDiscord", () => {
     const { rest, getMock, deleteMock } = makeDiscordRest();
     getMock.mockResolvedValue({
       reactions: [
-        { emoji: { name: "✅", id: null } },
-        { emoji: { name: "party_blob", id: "123" } },
+        { me: true, emoji: { name: "✅", id: null } },
+        { me: true, emoji: { name: "party_blob", id: "123" } },
       ],
     });
     const apiError = new Error("Discord API 500");

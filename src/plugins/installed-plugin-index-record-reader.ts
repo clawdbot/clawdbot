@@ -1,6 +1,7 @@
 /** Reads installed-index records back into manifest registry records. */
 import fs from "node:fs";
 import path from "node:path";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -432,11 +433,7 @@ type InstalledPluginIndexRecordRow = {
 };
 
 function parseJsonColumn(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(value);
 }
 
 function readPersistedInstalledPluginIndexForRecords(

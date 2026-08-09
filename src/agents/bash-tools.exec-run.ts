@@ -634,6 +634,8 @@ export function createExecTool(
                 outcome: settledOutcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
               }),
             );
             return;
@@ -672,6 +674,8 @@ export function createExecTool(
                 outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
               }),
             );
           })
