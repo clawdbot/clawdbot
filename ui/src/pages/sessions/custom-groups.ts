@@ -13,21 +13,28 @@ export function sessionCategoryNames(
 
 type GroupMutationSessions = Pick<SessionCapability, "groupsPut" | "state">;
 
+type SessionGroupWriteResult = "completed" | "failed" | "stale";
+
 export async function rememberSessionCustomGroup(options: {
   name: string;
   knownCategories: readonly string[];
   sessions: GroupMutationSessions | undefined;
   isCurrent: () => boolean;
   onError: (message: string) => void;
-}): Promise<void> {
+}): Promise<SessionGroupWriteResult> {
   if (!options.sessions || options.knownCategories.includes(options.name)) {
-    return;
+    return "completed";
   }
   try {
     await options.sessions.groupsPut([...(options.sessions.state.groups ?? []), options.name]);
+    // A replaced connection owns neither this catalog entry nor anything a
+    // caller would key off it, so the write is reported as stale, not done.
+    return options.isCurrent() ? "completed" : "stale";
   } catch (error) {
-    if (options.isCurrent()) {
-      options.onError(String(error));
+    if (!options.isCurrent()) {
+      return "stale";
     }
+    options.onError(String(error));
+    return "failed";
   }
 }

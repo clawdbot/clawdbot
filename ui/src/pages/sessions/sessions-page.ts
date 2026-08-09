@@ -984,22 +984,26 @@ class SessionsPage extends OpenClawLightDomElement {
     saveStoredGroupBy(mode);
   }
 
-  private async rememberCustomGroup(name: string) {
-    const scope = this.captureRequestScope();
+  private async rememberCustomGroup(
+    name: string,
+    scope: SessionsPageRequestScope | null = this.captureRequestScope(),
+  ): Promise<SessionsPageMutationResult> {
+    if (!scope) {
+      return "stale";
+    }
     if (
-      scope &&
       !this.requireMutationAccess(scope, {
         method: "sessions.groups.put",
         requiredScope: "operator.write",
       })
     ) {
-      return;
+      return "failed";
     }
-    await rememberSessionCustomGroup({
+    return rememberSessionCustomGroup({
       name,
       knownCategories: this.knownCategories(),
-      sessions: scope?.sessions,
-      isCurrent: () => Boolean(scope && this.isRequestScopeCurrent(scope)),
+      sessions: scope.sessions,
+      isCurrent: () => this.isRequestScopeCurrent(scope),
       onError: (message) => {
         this.error = message;
       },
@@ -1033,14 +1037,25 @@ class SessionsPage extends OpenClawLightDomElement {
     });
   }
 
-  /** The catalog write lands before the assignment so the group exists when the row moves. */
+  /**
+   * One captured scope covers both writes: the catalog entry lands before the
+   * row moves, and a catalog write that outlived its connection must not be
+   * followed by an assignment issued on the replacement one.
+   */
   private async writeNewCategory(name: string, sessionKey?: string): Promise<string | null> {
     this.error = null;
-    await this.rememberCustomGroup(name);
-    if (this.error) {
-      return this.error;
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return t("sessionsView.newGroupFailed");
     }
-    if (sessionKey && (await this.patchSession(sessionKey, { category: name })) === "failed") {
+    const remembered = await this.rememberCustomGroup(name, scope);
+    if (remembered !== "completed") {
+      return remembered === "failed" ? (this.error ?? t("sessionsView.newGroupFailed")) : null;
+    }
+    if (
+      sessionKey &&
+      (await this.patchSession(sessionKey, { category: name }, scope)) === "failed"
+    ) {
       return this.error ?? t("sessionsView.newGroupFailed");
     }
     return null;
