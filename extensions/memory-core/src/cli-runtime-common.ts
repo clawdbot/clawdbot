@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import type { MemoryExtraPath } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   defaultRuntime,
@@ -150,7 +152,7 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   }
   return listAgentIds(cfg);
 }
-export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
+export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
 }
 async function withMemoryManagerForAgent(params: {
@@ -258,7 +260,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
 }
 async function scanMemoryFiles(
   workspaceDir: string,
-  extraPaths: string[] = [],
+  extraPaths: MemoryExtraPath[] = [],
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -308,7 +310,7 @@ async function scanMemoryFiles(
   let listed: string[] = [];
   let listedOk = false;
   try {
-    listed = await listMemoryFiles(workspaceDir, resolvedExtraPaths);
+    listed = await listMemoryFiles(workspaceDir, extraPaths);
     listedOk = true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -340,7 +342,7 @@ export async function scanMemorySources(params: {
   workspaceDir: string;
   agentId: string;
   sources: MemorySourceName[];
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
 }): Promise<MemorySourceScan> {
   const scans: SourceScan[] = [];
   const extraPaths = params.extraPaths ?? [];

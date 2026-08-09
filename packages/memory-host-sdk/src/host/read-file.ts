@@ -23,6 +23,7 @@ import {
   type MemoryReadResult,
 } from "./read-file-shared.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import type { MemoryExtraPath } from "./types.js";
 
 // Secure markdown memory-file reader for workspace and configured extra paths.
 
@@ -66,7 +67,7 @@ function isFileDisappearedDuringReadError(err: unknown): boolean {
 /** Read a validated memory markdown file from workspace or configured extra paths. */
 export async function readMemoryFile(params: {
   workspaceDir: string;
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   relPath: string;
   from?: number;
   lines?: number;
