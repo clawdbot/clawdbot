@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { NodeHostConfig } from "../../node-host/config.js";
+import type { NodeHostConfig, NodeHostGatewayConfig } from "../../node-host/config.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 import { parsePort } from "../daemon-cli/shared.js";
 
@@ -17,19 +17,33 @@ type NodePairGatewayOptions = {
   tls: boolean;
   tlsFingerprint?: string;
   bootstrapToken: string;
+  candidates: NodeHostGatewayConfig[];
 };
+
+function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGatewayConfig {
+  const parsed = new URL(url);
+  const tls = parsed.protocol === "wss:";
+  return {
+    host: parsed.hostname,
+    port: parsed.port ? Number.parseInt(parsed.port, 10) : tls ? 443 : 80,
+    tls,
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+  };
+}
 
 export function resolveNodePairGatewayOptions(input: string): NodePairGatewayOptions {
   const payload = decodePairingSetupCode(input);
-  const url = new URL(payload.url);
-  const tls = url.protocol === "wss:";
-  const port = url.port ? Number.parseInt(url.port, 10) : tls ? 443 : 80;
+  const candidates = (payload.urls ?? [payload.url]).map((url) =>
+    gatewayConfigFromUrl(url, url === payload.url ? payload.tlsFingerprint : undefined),
+  );
+  const primary = candidates[0]!;
   return {
-    host: url.hostname,
-    port,
-    tls,
-    ...(payload.tlsFingerprint ? { tlsFingerprint: payload.tlsFingerprint } : {}),
+    host: primary.host ?? "127.0.0.1",
+    port: primary.port ?? 18789,
+    tls: primary.tls ?? false,
+    ...(primary.tlsFingerprint ? { tlsFingerprint: primary.tlsFingerprint } : {}),
     bootstrapToken: payload.bootstrapToken,
+    candidates,
   };
 }
 
@@ -59,6 +73,19 @@ export function resolveNodeGatewayOptions(
     (options.contextPath !== undefined || endpointChanged
       ? undefined
       : config?.gateway?.contextPath);
+  const hasExplicitEndpoint =
+    options.host !== undefined ||
+    options.port !== undefined ||
+    options.contextPath !== undefined ||
+    options.tls !== undefined ||
+    options.tlsFingerprint !== undefined;
 
-  return { host, port, contextPath, tls, tlsFingerprint };
+  return {
+    host,
+    port,
+    contextPath,
+    tls,
+    tlsFingerprint,
+    gatewayCandidates: pair && !hasExplicitEndpoint ? pair.candidates : undefined,
+  };
 }

@@ -124,6 +124,14 @@ describe("registerNodeCli", () => {
         gatewayPort: 8443,
         gatewayTls: true,
         gatewayTlsFingerprint: "sha256:pair-leaf",
+        gatewayCandidates: [
+          {
+            host: "gateway.example",
+            port: 8443,
+            tls: true,
+            tlsFingerprint: "sha256:pair-leaf",
+          },
+        ],
         gatewayBootstrapToken: "bootstrap-123",
         preferGatewayBootstrapToken: true,
       }),
@@ -159,6 +167,7 @@ describe("registerNodeCli", () => {
         gatewayPort: 19000,
         gatewayTls: true,
         gatewayTlsFingerprint: "sha256:explicit-leaf",
+        gatewayCandidates: undefined,
         gatewayBootstrapToken: "bootstrap-123",
       }),
     );

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
   capturedGatewayClients: [] as Array<{
     request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
+    start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
@@ -30,6 +31,9 @@ const mocks = vi.hoisted(() => ({
   availabilityChanged: undefined as (() => void) | undefined,
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
+  runtimeClient: undefined as
+    | { request: (method: string, params?: unknown) => Promise<unknown> }
+    | undefined,
   closeMcpManager: vi.fn(async () => undefined),
   runStartupMigrations: vi.fn(async () => undefined),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
@@ -76,6 +80,7 @@ vi.mock("../gateway/client.js", async (importOriginal) => {
     GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
       const client = {
         request: vi.fn(async () => ({})),
+        start: vi.fn(),
         stop: vi.fn(),
         updateNodeManifest: vi.fn(),
       };
@@ -171,7 +176,10 @@ vi.mock("./runtime.js", async (importOriginal) => {
       return {
         manifest: { caps: [], commands: [], pathEnv: process.env.PATH ?? "" },
         initialInventory: { skills: [], pluginTools: [] },
-        start: () => mocks.activeRuntime,
+        start: (params) => {
+          mocks.runtimeClient = params.client;
+          return mocks.activeRuntime;
+        },
       };
     },
   };
@@ -207,6 +215,7 @@ describe("runNodeHost", () => {
     mocks.availabilityChanged = undefined;
     mocks.normalizedPath = null;
     mocks.resolvedExecutables.clear();
+    mocks.runtimeClient = undefined;
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
@@ -263,6 +272,65 @@ describe("runNodeHost", () => {
     });
     expect(lastCapturedOptions()?.token).toBeUndefined();
     expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+  });
+
+  it("persists the pairing candidate that completes the handshake", async () => {
+    mocks.useFakeRuntime = true;
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    const processOnceSpy = vi.spyOn(process, "once");
+    const previousExitCode = process.exitCode;
+    try {
+      const running = runNodeHost({
+        gatewayHost: "192.168.1.20",
+        gatewayPort: 18789,
+        gatewayBootstrapToken: "bootstrap-123",
+        preferGatewayBootstrapToken: true,
+        gatewayCandidates: [
+          { host: "192.168.1.20", port: 18789, tls: false },
+          { host: "gateway.tailnet.example", port: 443, tls: true },
+        ],
+      });
+      await vi.waitFor(() => expect(mocks.capturedGatewayClients).toHaveLength(1));
+
+      const firstOptions = mocks.capturedGatewayClientOptions[0];
+      firstOptions?.onClose?.(1006, "transport unavailable", {
+        phase: "pre-hello",
+        socketOpened: false,
+        transportValidated: false,
+        connectRequestSent: false,
+        transientPreHelloCleanClose: false,
+      });
+      await vi.waitFor(() => expect(mocks.capturedGatewayClients).toHaveLength(2));
+
+      expect(mocks.capturedGatewayClientOptions[1]?.url).toBe("wss://gateway.tailnet.example:443");
+
+      mocks.capturedGatewayClientOptions[1]?.onHelloOk?.({} as never);
+      await vi.waitFor(() => expect(mocks.configureNodeHost).toHaveBeenCalledTimes(2));
+      expect(mocks.capturedConfiguredGatewayConfigs[1]).toEqual({
+        host: "gateway.tailnet.example",
+        port: 443,
+        tls: true,
+      });
+
+      await vi.waitFor(() =>
+        expect(processOnceSpy.mock.calls.some(([event]) => event === "SIGTERM")).toBe(true),
+      );
+      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      onSigterm?.("SIGTERM");
+      await running;
+    } finally {
+      for (const [event, listener] of processOnceSpy.mock.calls) {
+        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
+          process.off(event, listener);
+        }
+      }
+      process.exitCode = previousExitCode;
+      processOnceSpy.mockRestore();
+    }
   });
 
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {

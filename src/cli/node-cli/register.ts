@@ -72,11 +72,8 @@ export function registerNodeCli(program: Command) {
         return;
       }
       const existing = await loadNodeHostConfig();
-      const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(
-        opts,
-        existing,
-        pair,
-      );
+      const { host, port, contextPath, tls, tlsFingerprint, gatewayCandidates } =
+        resolveNodeGatewayOptions(opts, existing, pair);
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);
@@ -93,6 +90,7 @@ export function registerNodeCli(program: Command) {
         gatewayTls: tls,
         gatewayTlsFingerprint: tlsFingerprint,
         gatewayContextPath: contextPath,
+        gatewayCandidates,
         gatewayBootstrapToken: pair?.bootstrapToken,
         preferGatewayBootstrapToken: pair !== undefined,
         nodeId: opts.nodeId,

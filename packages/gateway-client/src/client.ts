@@ -285,6 +285,7 @@ export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
   socketOpened: boolean;
   transportValidated: boolean;
+  connectRequestSent?: boolean;
   transientPreHelloCleanClose: boolean;
   connectError?: Error;
 };
@@ -1226,6 +1227,7 @@ export class GatewayClient {
       phase: context.helloReceived ? "post-hello" : "pre-hello",
       socketOpened: context.socketOpened,
       transportValidated: this.transportValidated,
+      connectRequestSent: context.connectRequestSent,
       transientPreHelloCleanClose:
         !context.helloReceived && context.code === 1000 && context.reason === "",
       ...(context.connectFailure?.error ? { connectError: context.connectFailure.error } : {}),

@@ -120,14 +120,16 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
   });
 
   it("never persists bootstrap or shared-secret credentials", async () => {
+    const sign = vi.fn(async () => "signature");
     const store = vi.fn();
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: async () => ({
         deviceId: "device",
         publicKey: "public",
-        sign: async () => "signature",
+        sign,
       }),
       tokenStore: { load: () => null, store, clear: vi.fn() },
+      nowMs: () => 123,
     });
     const plan = await lifecycle.buildPlan({
       client,
@@ -142,6 +144,10 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
 
     expect(plan.auth?.bootstrapToken).toBe("test-bootstrap-token");
     expect(plan.auth?.password).toBe("test-password");
+    expect(plan.selectedAuth.signatureToken).toBe("test-bootstrap-token");
+    expect(sign).toHaveBeenCalledWith(
+      "v3|device|openclaw-browser-copilot|ui|operator|operator.read,operator.write|123|test-bootstrap-token|nonce|chrome|extension",
+    );
     await lifecycle.acceptHello({ auth: { role: "operator", scopes: [] } }, plan);
     expect(store).not.toHaveBeenCalled();
   });

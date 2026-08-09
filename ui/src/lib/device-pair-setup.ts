@@ -46,6 +46,7 @@ export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) 
     devicePairSetupError: state.devicePairSetupError,
     devicePairSetup: state.devicePairSetup,
     devicePairSetupAccess: state.devicePairSetupAccess,
+    devicePairSetupNowMs: state.devicePairSetupNowMs,
     devicePairPendingCount: state.pendingCount,
   };
 }
@@ -113,6 +114,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       state.devicePairSetupAccess = result.access;
     }
     state.devicePairSetup = result;
+    state.devicePairSetupNowMs = Date.now();
   } catch (err) {
     if (
       devicePairSetupRequests.get(state) === requestToken &&

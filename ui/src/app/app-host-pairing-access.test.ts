@@ -23,6 +23,9 @@ function createPairingShell(params: {
   auth: PairingAuth | null;
   connected?: boolean;
   setupCode?: string;
+  expiresAtMs?: number;
+  approvalNowMs?: number;
+  devicePairSetupNowMs?: number;
 }) {
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
@@ -36,6 +39,31 @@ function createPairingShell(params: {
     lastErrorCode: null,
   };
   const openDevicePairSetup = vi.fn(async () => undefined);
+  const overlaySnapshot = {
+    approvalQueue: [],
+    approvalErrors: new Map(),
+    approvalNowMs: params.approvalNowMs ?? 0,
+    approvalBusy: false,
+    devicePairSetupOpen: Boolean(params.setupCode),
+    devicePairSetupLoading: false,
+    devicePairSetupError: null,
+    devicePairSetup: params.setupCode
+      ? {
+          setupCode: params.setupCode,
+          gatewayUrl: "wss://gateway.example.test",
+          auth: "token",
+          urlSource: "test",
+          ...(params.expiresAtMs === undefined ? {} : { expiresAtMs: params.expiresAtMs }),
+        }
+      : null,
+    devicePairSetupAccess: "full",
+    devicePairSetupNowMs: params.devicePairSetupNowMs ?? 0,
+    devicePairPendingCount: 0,
+    updateAvailable: null,
+    updateRunning: false,
+    updateStatusBanner: null,
+    controlUiRefreshRequired: false,
+  };
   const context = {
     basePath: "",
     gateway: {
@@ -46,29 +74,7 @@ function createPairingShell(params: {
       snapshot: { navCollapsed: false, navWidth: 258, sidebarEntries: [], pinnedAgentIds: [] },
     },
     overlays: {
-      snapshot: {
-        approvalQueue: [],
-        approvalErrors: new Map(),
-        approvalNowMs: 0,
-        approvalBusy: false,
-        devicePairSetupOpen: Boolean(params.setupCode),
-        devicePairSetupLoading: false,
-        devicePairSetupError: null,
-        devicePairSetup: params.setupCode
-          ? {
-              setupCode: params.setupCode,
-              gatewayUrl: "wss://gateway.example.test",
-              auth: "token",
-              urlSource: "test",
-            }
-          : null,
-        devicePairSetupAccess: "full",
-        devicePairPendingCount: 0,
-        updateAvailable: null,
-        updateRunning: false,
-        updateStatusBanner: null,
-        controlUiRefreshRequired: false,
-      },
+      snapshot: overlaySnapshot,
       openDevicePairSetup,
     },
     config: { current: {} },
@@ -93,7 +99,7 @@ function createPairingShell(params: {
     return sidebar;
   };
 
-  return { snapshot, openDevicePairSetup, renderSidebar, container };
+  return { snapshot, overlaySnapshot, openDevicePairSetup, renderSidebar, container };
 }
 
 afterEach(() => {
@@ -185,5 +191,33 @@ describe("application shell pairing access", () => {
 
     expect(button?.textContent?.trim()).toBe("Copy setup code");
     expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
+  });
+
+  it("expires a node setup link from the pairing clock, independently of approvals", () => {
+    const { overlaySnapshot, container, renderSidebar } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      setupCode: "pair-node-secret",
+      expiresAtMs: 5_000,
+      approvalNowMs: 50_000,
+      devicePairSetupNowMs: 4_000,
+    });
+    overlaySnapshot.devicePairSetupAccess = "node";
+
+    renderSidebar();
+    const copyButton = container.querySelector<HTMLButtonElement>(
+      ".device-pair-setup__actions button",
+    );
+    expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");
+    expect(copyButton?.disabled).toBe(false);
+
+    overlaySnapshot.devicePairSetupNowMs = 5_000;
+    renderSidebar();
+
+    expect(container.querySelector('[role="timer"]')?.textContent?.toLowerCase()).toContain(
+      "expired",
+    );
+    expect(
+      container.querySelector<HTMLButtonElement>(".device-pair-setup__actions button")?.disabled,
+    ).toBe(true);
   });
 });

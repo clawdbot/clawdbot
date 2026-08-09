@@ -550,7 +550,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         error: overlaySnapshot.devicePairSetupError,
         setup: overlaySnapshot.devicePairSetup,
         access: overlaySnapshot.devicePairSetupAccess,
-        nowMs: overlaySnapshot.approvalNowMs,
+        nowMs: overlaySnapshot.devicePairSetupNowMs,
         pendingCount: overlaySnapshot.devicePairPendingCount,
         onRefresh: () => void context.overlays.refreshDevicePairSetup(),
         onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
