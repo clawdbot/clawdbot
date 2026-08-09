@@ -449,13 +449,13 @@ export const en = {
         "If you're not comfortable managing access controls and security hardening, don't run OpenClaw without help.",
       learnMore: "Learn more",
       notMultitenant:
-        "Do not use one tool-enabled agent to give different people different levels of access.",
+        "Do not rely on one tool-enabled agent to keep people with different access levels separate.",
       personalAgent: "OpenClaw is designed strictly for personal use by one operator.",
       promptRisk: "A malicious or misleading prompt can cause unsafe actions.",
       recommendedBaseline: "Safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:
-        "Everyone who can message it can influence its use of the same files, accounts, and tools.",
+        "Per-sender tool policies can limit what someone can do, but they do not provide complete isolation: people can still influence one agent's use of shared files, accounts, and tools.",
       title: "Security disclaimer",
       toolAccess:
         "With tools enabled, it can read files and act through your accounts or connected services.",
