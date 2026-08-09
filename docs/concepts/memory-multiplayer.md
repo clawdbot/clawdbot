@@ -719,9 +719,9 @@ any path-key migration. This avoids leaking provider IDs through paths, path
 instability after an account rename, and path injection from external
 identifiers.
 
-For builtin memory and QMD, Markdown remains the content source of truth and
-stays inspectable through operator UI, CLI export, backups, and an authorized
-virtual filesystem view. A conforming external backend may instead use an
+For builtin memory, Markdown remains the content source of truth and stays
+inspectable through operator UI, CLI export, backups, and an authorized virtual
+filesystem view. A future conforming external backend may use Markdown or an
 isolated namespace or collection, but must provide equivalent inspection,
 export, backup, deletion, revision, and recovery behavior. SQLite stores the
 builtin plugin's identity references, policy, lifecycle, lineage, index, and
@@ -1023,12 +1023,12 @@ Core supplies verified principal facts; the selected plugin may turn those
 facts or server-issued mention/message references into subject handles. Free-
 form model text cannot create them.
 
-Builtin memory should implement the contract first. QMD and other selected
-memory plugins need conformance adapters that use separate authorized
-collections or an equivalent native scope. A backend returning already
-rendered snippets can be supported only when its process is inside the trusted
-broker boundary and its native filter has passed conformance tests. Enforced
-mode rejects a legacy backend instead of falling back to broad search.
+Builtin memory should implement the contract first. Any future selected memory
+plugin needs a conformance adapter that uses separate authorized collections or
+an equivalent native scope. A backend returning already rendered snippets can
+be supported only when its process is inside the trusted broker boundary and
+its native filter has passed conformance tests. Enforced mode rejects a legacy
+backend instead of falling back to broad search.
 
 ### Every read lane uses the same view
 
@@ -1053,8 +1053,9 @@ mode rejects a legacy backend instead of falling back to broad search.
 - **Supplements and preparations:** `MemoryPromptSupplement`,
   `MemoryPromptPreparation`, and `MemoryCorpusSupplement` registrations must
   declare an authorized store or route through the selected capability. This
-  includes memory wiki Gateway/CLI paths, public artifacts, QMD extra
-  collections and session artifacts, and project bootstrap supplements.
+  includes memory wiki Gateway/CLI paths, public artifacts, future
+  alternate-backend collections and session artifacts, and project bootstrap
+  supplements.
 - **Import and export:** Codex, Claude, Hermes, and other import targets enter
   the scoped write lifecycle; exports require an authorized plan and preserve
   or explicitly warn about audience metadata.
@@ -1609,8 +1610,8 @@ only when all listed read and write surfaces use the new invariant.
   injection, active recall, project bootstrap, Talk fast context, transcript
   recall, supplements, status, and CLI.
 - Convert or block LanceDB raw tools and prompt hooks, memory prompt/corpus
-  registries, QMD extra collections and session artifacts, memory wiki, and
-  every other context-free prompt or public-artifact read.
+  registries, alternate-backend collections and session artifacts, memory wiki,
+  and every other context-free prompt or public-artifact read.
 - Extend filesystem policy and sandbox mounts so model-facing tools see only
   the virtual view. Hide or deny `exec` and file tools that cannot honor it.
 - Merge every exposure receipt into the run exposure set and recheck it for
@@ -1728,8 +1729,8 @@ with direct access to its private source.
   policy instead of a parallel `channel_member` authority.
 - Add audit query, retention, export, access explanation, policy drift alerts,
   revocation impact, and periodic access review.
-- Load-test hundreds of principals, stores, roles, and channels; benchmark QMD
-  or other backend collection fan-out.
+- Load-test hundreds of principals, stores, roles, and channels; benchmark
+  alternate-backend collection fan-out.
 
 **Exit gates**
 
@@ -1930,16 +1931,16 @@ policy; logical denial does not wait for deletion.
 
 No existing OpenClaw feature provides this entire boundary:
 
-| Existing option                          | What it already solves                                                          | Why it is not the complete design                                                                                                                                                                                                         |
-| ---------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Separate agents or Gateway cells         | Strongest current separation of sessions, files, tools, credentials, and memory | Operationally heavier, but remains the correct option for mutually untrusted people and hostile tenants                                                                                                                                   |
-| `session.dmScope`                        | Separates DM conversation routing                                               | All sessions of an agent can still use the same memory files and index                                                                                                                                                                    |
-| Session sharing policy                   | Human session visibility and mutation roles                                     | Does not label or authorize memory resources; should be reused as one input                                                                                                                                                               |
-| Ingress access groups                    | Static and provider-backed admission checks                                     | They are allowlist expansion, not durable identity, audience, lineage, or memory policy                                                                                                                                                   |
-| `memory-core` and QMD                    | Markdown memory, indexing, provenance, and transcript visibility filters        | They need the versioned scoped backend contract and complete read/write lifecycle                                                                                                                                                         |
-| Honcho, LanceDB, and memory wiki plugins | Alternative recall or supplemental knowledge                                    | A selected or supplemental plugin cannot define the Gateway-wide identity and filesystem boundary                                                                                                                                         |
-| PostgreSQL RLS or vector namespaces      | Mature data-layer row or collection isolation                                   | Useful backend techniques, but they do not solve OpenClaw session identity, bootstrap files, tool mounts, compaction, dreaming, or delegation by themselves                                                                               |
-| Cedar or Zanzibar-style policy engines   | General policy evaluation models                                                | They do not provide identity proof, physical storage authority, lineage, or sandboxing. A small typed evaluator inside the selected builtin plugin fits the first local SQLite implementation; keep its inputs and traces engine-neutral. |
+| Existing option                             | What it already solves                                                          | Why it is not the complete design                                                                                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Separate agents or Gateway cells            | Strongest current separation of sessions, files, tools, credentials, and memory | Operationally heavier, but remains the correct option for mutually untrusted people and hostile tenants                                                                                                                                   |
+| `session.dmScope`                           | Separates DM conversation routing                                               | All sessions of an agent can still use the same memory files and index                                                                                                                                                                    |
+| Session sharing policy                      | Human session visibility and mutation roles                                     | Does not label or authorize memory resources; should be reused as one input                                                                                                                                                               |
+| Ingress access groups                       | Static and provider-backed admission checks                                     | They are allowlist expansion, not durable identity, audience, lineage, or memory policy                                                                                                                                                   |
+| `memory-core` and future alternate backends | Markdown memory, indexing, provenance, and transcript visibility filters        | They need the versioned scoped backend contract and complete read/write lifecycle                                                                                                                                                         |
+| Honcho, LanceDB, and memory wiki plugins    | Alternative recall or supplemental knowledge                                    | A selected or supplemental plugin cannot define the Gateway-wide identity and filesystem boundary                                                                                                                                         |
+| PostgreSQL RLS or vector namespaces         | Mature data-layer row or collection isolation                                   | Useful backend techniques, but they do not solve OpenClaw session identity, bootstrap files, tool mounts, compaction, dreaming, or delegation by themselves                                                                               |
+| Cedar or Zanzibar-style policy engines      | General policy evaluation models                                                | They do not provide identity proof, physical storage authority, lineage, or sandboxing. A small typed evaluator inside the selected builtin plugin fits the first local SQLite implementation; keep its inputs and traces engine-neutral. |
 
 The custom work is justified by the integration boundary, not by a need to
 invent another vector store or IAM language. Reuse current storage, session,
@@ -1963,7 +1964,8 @@ These choices require owner agreement before their implementation stage:
 6. **Postbox posture:** whether any non-enterprise deployment should support
    labeled automatic use without explicit review.
 7. **Backend scaling:** collection and mount fan-out at hundreds or thousands
-   of stores, especially for QMD and remote memory plugins.
+   of stores, especially for future alternate backends and remote memory
+   plugins.
 8. **Artifact location and backup:** the exact controlled state path, ownership
    permissions, cross-platform virtual mount, and consistent backup boundary.
 9. **Audit retention:** defaults, export permissions, and compliance deletion
