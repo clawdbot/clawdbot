@@ -118,6 +118,7 @@ export const EVIDENCE_SURFACES = Object.freeze({
 });
 
 const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
+const TRUSTED_REPOSITORY_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const FINDING_KIND_PATTERNS = [
   { kind: "p0", regex: /\bP0\b/i, severity: "P0", blocking: true },
@@ -184,6 +185,13 @@ function isTrustedClawSweeperActor(item = {}) {
   return CLAWSWEEPER_BOT_LOGINS.has(login) && userType === "Bot";
 }
 
+function isTrustedRepositoryActor(item = {}) {
+  const association = String(
+    item?.author_association ?? item?.authorAssociation ?? "",
+  ).toUpperCase();
+  return TRUSTED_REPOSITORY_ASSOCIATIONS.has(association);
+}
+
 function extractMarkerField(marker, name) {
   const match = marker.match(new RegExp(`\\b${name}=([^\\s>]+)`, "i"));
   return match?.[1] ?? "";
@@ -245,6 +253,12 @@ function normalizeInlineReviewComment(comment, repo, pr) {
 
 export function normalizeIssueComment(comment, repo, pr) {
   const id = String(comment?.id ?? "");
+  // Marker SHA fields are authoritative only when the trusted bot/app emitted them.
+  // Otherwise an ordinary commenter could pin their prose to the live head.
+  const reviewedSha =
+    isTrustedClawSweeperActor(comment) || isTrustedRepositoryActor(comment)
+      ? extractClawSweeperMarkerSha(comment?.body)
+      : null;
   return {
     id,
     surface: EVIDENCE_SURFACES.ISSUE_COMMENT,
@@ -255,7 +269,7 @@ export function normalizeIssueComment(comment, repo, pr) {
     createdAt: String(comment?.created_at ?? ""),
     body: String(comment?.body ?? ""),
     reviewState: null,
-    reviewedSha: extractClawSweeperMarkerSha(comment?.body),
+    reviewedSha,
     commitId: null,
   };
 }
@@ -275,12 +289,9 @@ function normalizeCheckRun(check) {
 }
 
 function resolveReviewedSha(item) {
-  return item.reviewedSha ?? item.commitId ?? extractClawSweeperMarkerSha(item.body) ?? null;
-}
-
-function isCurrentHeadFinding(item, headSha) {
-  const reviewedSha = resolveReviewedSha(item);
-  return reviewedSha !== null && reviewedSha === headSha;
+  // Normalization owns marker authentication. Re-parsing raw prose here would let an
+  // untrusted issue comment restore the forged SHA that normalization rejected.
+  return item.reviewedSha ?? item.commitId ?? null;
 }
 
 function bodyLooksLikeReviewEvidence(body = "") {
@@ -301,7 +312,16 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
   const currentHead = reviewedSha !== null && reviewedSha === headSha;
   const trustedClawSweeper =
     item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedClawSweeperActor(item);
-  const markerKinds = extractClawSweeperMarkerKinds(body);
+  const trustedRepositoryActor =
+    item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedRepositoryActor(item);
+  if (
+    item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT &&
+    !trustedClawSweeper &&
+    !trustedRepositoryActor
+  ) {
+    return findings;
+  }
+  const markerKinds = trustedClawSweeper ? extractClawSweeperMarkerKinds(body) : [];
 
   for (const markerKind of markerKinds) {
     if (markerKind === "pass") {
@@ -372,6 +392,7 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
 
 function withActorFields(normalized, raw) {
   return Object.assign({}, normalized, {
+    author_association: raw?.author_association ?? null,
     performed_via_github_app: raw?.performed_via_github_app ?? null,
     user: raw?.user ?? null,
   });
@@ -391,7 +412,8 @@ function requiredChecksSatisfied(checkRuns, headSha, requiredCheckPolicy) {
     return {
       ok: false,
       unknown: true,
-      reason: "Required checks were not resolved from the target branch protection or ruleset policy.",
+      reason:
+        "Required checks were not resolved from the target branch protection or ruleset policy.",
     };
   }
   const exactHeadChecks = checkRuns.filter((check) => check.headSha === headSha);
@@ -404,7 +426,10 @@ function requiredChecksSatisfied(checkRuns, headSha, requiredCheckPolicy) {
   }
   const required = exactHeadChecks.filter((check) => check.required === true);
   if (required.length === 0) {
-    return { ok: true, reason: "The target branch policy resolved no required checks for the exact head." };
+    return {
+      ok: true,
+      reason: "The target branch policy resolved no required checks for the exact head.",
+    };
   }
   const pending = required.filter((check) => check.status !== "completed");
   if (pending.length > 0) {
@@ -423,16 +448,6 @@ function requiredChecksSatisfied(checkRuns, headSha, requiredCheckPolicy) {
     };
   }
   return { ok: true, reason: "All required checks succeeded for the exact head." };
-}
-
-function hasFormalReviewOnlyReadySignal(formalReviews, findings, headSha) {
-  const hasApprovedFormalReview = formalReviews.some(
-    (review) => review.reviewState === "APPROVED" && isCurrentHeadFinding(review, headSha),
-  );
-  const hasNonFormalEvidence =
-    findings.some((finding) => finding.sourceSurface !== EVIDENCE_SURFACES.FORMAL_REVIEW) ||
-    formalReviews.length === 0;
-  return hasApprovedFormalReview && !hasNonFormalEvidence;
 }
 
 /**
@@ -551,11 +566,7 @@ export function decidePrConvergence({
     };
   }
 
-  const checks = requiredChecksSatisfied(
-    evidence.checkRuns,
-    headSha,
-    evidence.requiredCheckPolicy,
-  );
+  const checks = requiredChecksSatisfied(evidence.checkRuns, headSha, evidence.requiredCheckPolicy);
   if (!checks.ok) {
     if (checks.unknown) {
       return {
@@ -580,24 +591,11 @@ export function decidePrConvergence({
     };
   }
 
-  if (hasFormalReviewOnlyReadySignal(evidence.formalReviews, findings, headSha)) {
+  if (!hasExactHeadClawSweeperPass) {
     return {
       decision: CONVERGENCE_DECISIONS.UNKNOWN,
-      reason: "Formal review state alone is not sufficient for READY.",
-      nextAction:
-        "Collect issue/PR comment, inline review, and check-run evidence for the exact head.",
-    };
-  }
-
-  if (
-    evidence.formalReviews.length === 0 &&
-    !hasExactHeadClawSweeperPass &&
-    findings.length === 0
-  ) {
-    return {
-      decision: CONVERGENCE_DECISIONS.UNKNOWN,
-      reason: "No formal reviews or exact-head ClawSweeper pass were found.",
-      nextAction: "Request ClawSweeper review or maintainer review before merge.",
+      reason: "No trusted exact-head ClawSweeper pass was found.",
+      nextAction: "Request or refresh ClawSweeper review for the exact head before merge.",
     };
   }
 
@@ -758,7 +756,8 @@ export async function auditPrConvergence({ repo, pr, provider }) {
     .map((item) => normalizeIssueComment(item, repo, pr))
     .toSorted((left, right) => compareStrings(left.createdAt, right.createdAt));
   const requestedReviewers = [...(requestedReviewersResult.logins ?? [])].toSorted(compareStrings);
-  const requiredCheckPolicy = checkRunsResult.requiredPolicy === "resolved" ? "resolved" : "unknown";
+  const requiredCheckPolicy =
+    checkRunsResult.requiredPolicy === "resolved" ? "resolved" : "unknown";
   const checkRuns = (checkRunsResult.items ?? [])
     .map((item) => normalizeCheckRun(item))
     .toSorted((left, right) => compareStrings(left.name, right.name));

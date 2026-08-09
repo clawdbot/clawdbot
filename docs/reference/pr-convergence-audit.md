@@ -56,6 +56,12 @@ The audit scans all evidence surfaces for review signals, including:
 
 Findings stay tied to the evidence item that produced them.
 
+Issue-comment verdict markers are authoritative only from the trusted
+ClawSweeper app/bot. Review-shaped issue-comment prose is evaluated only for
+ClawSweeper or GitHub actors associated as repository owners, members, or
+collaborators; other comments remain visible in the evidence bundle but cannot
+create merge blockers.
+
 ## Decision semantics
 
 The audit returns exactly one structured decision.
@@ -96,6 +102,7 @@ Use `READY` only when all of the following are true:
 - the PR head is stable across the audit
 - required checks for the exact head are satisfied
 - there are zero unresolved current-head blockers
+- a trusted ClawSweeper pass is stamped to the exact current head
 - the decision does not rely on formal `reviews[]` alone
 
 An empty formal `reviews[]` result is never enough for `READY` by itself.

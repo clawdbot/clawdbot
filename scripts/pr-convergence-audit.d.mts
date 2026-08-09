@@ -120,6 +120,7 @@ export function normalizeIssueComment(
 
 export function extractFindingsFromEvidenceItem(
   item: NormalizedEvidenceItem & {
+    author_association?: string | null;
     performed_via_github_app?: { slug?: string } | null;
     user?: { login?: string; type?: string } | null;
   },
