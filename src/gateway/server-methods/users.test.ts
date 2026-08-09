@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  type UsersSetAvatarResult,
   validateUsersLinkEmailResult,
   validateUsersSelfResult,
   validateUsersSetAvatarResult,
@@ -219,57 +218,6 @@ describe("users gateway methods", () => {
   });
 
   it("returns protocol-complete avatar mutations", async () => {
-    const updatedProfile = {
-      ...profile,
-      avatarMime: "image/png",
-      hasAvatar: true,
-      updatedAt: 2,
-    };
-    setAvatar.mockReturnValue({
-      ok: true,
-      value: updatedProfile,
-    });
-    getUserProfileDisplay.mockReturnValue({
-      id: profile.id,
-      displayName: profile.displayName,
-      avatarRevision: "avatar-sha256-png",
-      hasAvatar: true,
-    });
-    const refreshConnectedUserProfile = vi.fn();
-
-    const respond = await runUsersHandler(
-      "users.setAvatar",
-      {
-        profileId: "profile-1",
-        mime: "image/png",
-        avatarBase64: "AQ==",
-      },
-      adminClient,
-      { refreshConnectedUserProfile },
-    );
-
-    expect(validateUsersSetAvatarResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
-      id: updatedProfile.id,
-      displayName: updatedProfile.displayName,
-      avatarRevision: "avatar-sha256-png",
-      hasAvatar: true,
-      updatedAt: updatedProfile.updatedAt,
-    });
-    expect(respond).toHaveBeenCalledWith(true, {
-      profile: updatedProfile,
-      avatarRevision: "avatar-sha256-png",
-    });
-    const payload = respond.mock.calls[0]?.[1] as UsersSetAvatarResult;
-    const readLegacyProfile = ({ profile: resultProfile }: Pick<UsersSetAvatarResult, "profile">) =>
-      resultProfile;
-    expect(readLegacyProfile(payload)).toEqual(updatedProfile);
-    expect(refreshConnectedUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
-      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("returns distinct canonical revisions for rapid avatar writes sharing updatedAt", async () => {
     const firstProfile = {
       ...profile,
       avatarMime: "image/png" as const,
@@ -295,17 +243,17 @@ describe("users gateway methods", () => {
       });
     const refreshConnectedUserProfile = vi.fn();
 
-    const first = await runUsersHandler(
+    const firstRespond = await runUsersHandler(
       "users.setAvatar",
       {
-        profileId: profile.id,
+        profileId: "profile-1",
         mime: "image/png",
         avatarBase64: "AQ==",
       },
       adminClient,
       { refreshConnectedUserProfile },
     );
-    const second = await runUsersHandler(
+    const secondRespond = await runUsersHandler(
       "users.setAvatar",
       {
         profileId: profile.id,
@@ -316,19 +264,37 @@ describe("users gateway methods", () => {
       { refreshConnectedUserProfile },
     );
 
-    expect(first.mock.calls[0]?.[1]).toEqual({
+    expect(validateUsersSetAvatarResult(firstRespond.mock.calls[0]?.[1])).toBe(true);
+    expect(validateUsersSetAvatarResult(secondRespond.mock.calls[0]?.[1])).toBe(true);
+    expect(firstRespond).toHaveBeenCalledWith(true, {
       profile: firstProfile,
       avatarRevision: "first-content-hash-png",
     });
-    expect(second.mock.calls[0]?.[1]).toEqual({
+    expect(secondRespond).toHaveBeenCalledWith(true, {
       profile: secondProfile,
       avatarRevision: "second-content-hash-png",
     });
     expect(firstProfile.updatedAt).toBe(secondProfile.updatedAt);
-    expect(refreshConnectedUserProfile.mock.calls.map(([value]) => value.avatarRevision)).toEqual([
-      "first-content-hash-png",
-      "second-content-hash-png",
-    ]);
+    expect(refreshConnectedUserProfile).toHaveBeenNthCalledWith(1, {
+      id: firstProfile.id,
+      displayName: firstProfile.displayName,
+      avatarRevision: "first-content-hash-png",
+      hasAvatar: true,
+      updatedAt: firstProfile.updatedAt,
+    });
+    expect(refreshConnectedUserProfile).toHaveBeenNthCalledWith(2, {
+      id: secondProfile.id,
+      displayName: secondProfile.displayName,
+      avatarRevision: "second-content-hash-png",
+      hasAvatar: true,
+      updatedAt: secondProfile.updatedAt,
+    });
+    expect(refreshConnectedUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
+      firstRespond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(refreshConnectedUserProfile.mock.invocationCallOrder[1]).toBeLessThan(
+      secondRespond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("rejects blank email aliases as invalid requests", async () => {
