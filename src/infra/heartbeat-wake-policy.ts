@@ -57,7 +57,7 @@ type TargetedImmediateWakeParams = {
   sessionKey?: string;
 };
 
-export function isTargetedImmediateSystemEventWake(params: TargetedImmediateWakeParams): boolean {
+function isTargetedImmediateSystemEventWake(params: TargetedImmediateWakeParams): boolean {
   return (
     params.source === "notifications-event" &&
     params.intent === "immediate" &&
@@ -72,7 +72,7 @@ export function isTargetedImmediateSystemEventWake(params: TargetedImmediateWake
  * queued hook event sits unread. This is the hook counterpart of
  * `isTargetedImmediateSystemEventWake` — narrowly gated to targeted hook sources.
  */
-export function isTargetedImmediateHookWake(params: TargetedImmediateWakeParams): boolean {
+function isTargetedImmediateHookWake(params: TargetedImmediateWakeParams): boolean {
   return (
     params.source === "hook" &&
     params.intent === "immediate" &&
