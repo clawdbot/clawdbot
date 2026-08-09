@@ -966,7 +966,9 @@ export class GatewayClient {
 
   private handleConnectHello(helloOk: HelloOk, assembled: AssembledConnect): void {
     const reconnectWithCurrentNodeProtocol =
-      this.useLegacyNodeProtocolEnvelope && helloOk.protocol > MIN_NODE_PROTOCOL_VERSION;
+      this.useLegacyNodeProtocolEnvelope &&
+      this.shouldNegotiateLegacyNodeProtocol() &&
+      helloOk.protocol > MIN_NODE_PROTOCOL_VERSION;
     if (reconnectWithCurrentNodeProtocol) {
       this.useLegacyNodeProtocolEnvelope = false;
     }

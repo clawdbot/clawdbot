@@ -1509,6 +1509,31 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("keeps explicitly v3-only node hosts connected when a v4 Gateway accepts them", async () => {
+    const onHelloOk = vi.fn();
+    const client = createClientWithIdentity("device-v3-only", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+      onHelloOk,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expect(connect.params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+
+    emitHelloOk(ws, connect.id, PROTOCOL_VERSION);
+
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
+    expect(ws.closeCalls).toBe(0);
+    expect(wsInstances).toHaveLength(1);
+    client.stop();
+  });
+
   it("keeps canonical platform metadata for non-node-host node clients", () => {
     const client = createClientWithIdentity("device-third-party-node", vi.fn(), {
       role: "node",

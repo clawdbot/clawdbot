@@ -399,6 +399,44 @@ describe("runNodeHost optional publications", () => {
     });
   });
 
+  it("does not publish stale inventory after the desired value returns to the in-flight value", async () => {
+    const initialPluginTools = [...mocks.nodePluginTools];
+    let resolveInitialPublication: (() => void) | undefined;
+    await withReadyNodeHost(async ({ client, options }) => {
+      client.request.mockImplementation((method: string) => {
+        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD && !resolveInitialPublication) {
+          return new Promise((resolve) => {
+            resolveInitialPublication = () => resolve({});
+          });
+        }
+        return Promise.resolve({});
+      });
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() => expect(resolveInitialPublication).toBeDefined());
+
+      mocks.nodePluginTools = [];
+      mocks.availabilityChanged?.();
+      mocks.nodePluginTools = initialPluginTools;
+      mocks.availabilityChanged?.();
+      resolveInitialPublication?.();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      const pluginPublications = client.request.mock.calls.filter(
+        ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+      );
+      expect(pluginPublications).toHaveLength(1);
+      expect(pluginPublications[0]?.[1]).toEqual({ tools: initialPluginTools });
+    });
+  });
+
   it("preserves retry backoff across duplicate inventory events", async () => {
     let pluginPublicationCount = 0;
     const rejectPublications: Array<((error: Error) => void) | undefined> = [];

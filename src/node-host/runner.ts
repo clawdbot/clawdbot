@@ -292,11 +292,18 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       };
       optionalPublicationStates.set(method, state);
     }
+    if (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) {
+      // The latest desired value remains authoritative even when it matches the
+      // active request. Replace a newer pending value so A -> B -> A cannot publish B.
+      if (state.hasPending) {
+        state.pendingParams = params;
+      }
+      return;
+    }
     if (
       state.status === "unsupported" ||
       (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
       (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
-      (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) ||
       (!state.inFlight &&
         state.hasPublishedParams &&
         isDeepStrictEqual(state.publishedParams, params))
