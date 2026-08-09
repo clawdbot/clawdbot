@@ -1665,15 +1665,3 @@ extension OnboardingAISetupModel {
     }
     #endif
 }
-
-private enum OnboardingAISetupError: LocalizedError {
-    case providerCatalogUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .providerCatalogUnavailable:
-            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
-                "supported provider list. Update OpenClaw on the gateway, then try again."
-        }
-    }
-}
