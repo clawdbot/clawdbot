@@ -3470,6 +3470,36 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     }),
     makeMessagePolicyCase({
+      name: "inherits root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["111111111"],
+        groups: {
+          "-100123456789": { allowFrom: ["123456789"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 1,
+    }),
+    makeMessagePolicyCase({
+      name: "enforces root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["123456789"],
+        groups: {
+          "-100123456789": { allowFrom: ["111111111"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 0,
+    }),
+    makeMessagePolicyCase({
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       telegram: {
         groupPolicy: "allowlist",
