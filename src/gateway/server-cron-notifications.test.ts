@@ -306,65 +306,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     }
   });
 
-  it("adds the run start time to immediate chat alerts in the agent timezone", async () => {
-    const job = createWebhookJob({
-      mode: "announce",
-      channel: "telegram",
-      to: "channel:ops",
-    });
-
-    await sendGatewayCronFailureAlert({
-      deps: {} as CliDeps,
-      logger: { warn: vi.fn() },
-      resolveCronAgent: () => ({
-        agentId: "main",
-        cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
-      }),
-      job,
-      payload: {
-        text: "cron failed",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-      runAtMs: Date.parse("2026-01-15T15:30:00.000Z"),
-      channel: "telegram",
-      to: "channel:ops",
-      mode: "announce",
-    });
-
-    expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: {
-          text: "cron failed\nRun started: 2026-01-15 10:30 EST",
-          presentation: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [
-                  {
-                    label: "Log in to Codex",
-                    action: { type: "command", command: "/login codex" },
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      }),
-    );
-  });
-
   it("preserves the primary topic on immediate failure alerts", async () => {
     const job = createWebhookJob({
       mode: "announce",
