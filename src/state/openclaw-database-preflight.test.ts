@@ -151,7 +151,10 @@ describe("OpenClaw database schema preflight", () => {
 
   it("classifies the same-version run-end cleanup column as startup-repairable without touching the source", async () => {
     const sourcePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace("  run_end_cleanup_json TEXT\n", ""),
+      OPENCLAW_STATE_SCHEMA_SQL.replace(
+        "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
+        "  removed_at INTEGER\n",
+      ),
     );
     const snapshotPath = path.join(
       tempDirs.make("openclaw-consolidated-state-preflight-"),
@@ -259,7 +262,10 @@ describe("OpenClaw database schema preflight", () => {
     const database = new DatabaseSync(":memory:");
     try {
       database.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      const olderV6Schema = OPENCLAW_STATE_SCHEMA_SQL.replace("  run_end_cleanup_json TEXT\n", "");
+      const olderV6Schema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+        "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
+        "  removed_at INTEGER\n",
+      );
 
       expect(collectSqliteSchemaIssues(database, olderV6Schema)).toContainEqual(
         expect.objectContaining({
