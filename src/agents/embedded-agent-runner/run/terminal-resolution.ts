@@ -183,7 +183,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   provider: string;
   modelId: string;
   modelTransportId: string;
-  modelTransportApi: import("../../../config/types.models.js").ModelApi;
+  modelTransportApi: string;
   modelTransportBaseUrl?: string;
   requestTransportOverrides: ProviderRouteOverridePresence;
   authProfileId?: string;

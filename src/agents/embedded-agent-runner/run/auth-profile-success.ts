@@ -1,5 +1,5 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import type { ModelApi } from "../../../config/types.models.js";
+import { MODEL_APIS, type ModelApi } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
@@ -83,7 +83,7 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   provider: string;
   agentDir?: string;
   modelId: string;
-  modelApi: ModelApi;
+  modelApi: string;
   modelBaseUrl?: string;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   config?: OpenClawConfig;
@@ -189,7 +189,8 @@ function resolveOpaqueHarnessMaterialization(
   if (
     !input.pluginHarnessOwnsAuthBootstrap ||
     input.apiKeyInfo ||
-    hasInlineCredentialMaterial(credential)
+    hasInlineCredentialMaterial(credential) ||
+    !isModelApi(input.modelApi)
   ) {
     return undefined;
   }
@@ -217,6 +218,10 @@ function resolveOpaqueHarnessMaterialization(
         })),
   );
   return routes.length === 1 ? routes[0] : undefined;
+}
+
+function isModelApi(value: string): value is ModelApi {
+  return (MODEL_APIS as readonly string[]).includes(value);
 }
 
 function hasInlineCredentialMaterial(
