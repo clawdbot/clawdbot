@@ -289,6 +289,7 @@ it("clears agent run registry state between files", async () => {
     const agentRunRegistryPath = JSON.stringify(
       path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
     );
+    const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
     const sharedVitestConfigPath = JSON.stringify(
       path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"),
     );
@@ -301,12 +302,19 @@ it("clears agent run registry state between files", async () => {
       "a-seed.test.ts",
       [
         `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
+        `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
         'import { expect, it } from "vitest";',
         'it("seeds process-global run contexts", () => {',
         '  registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });',
         '  registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });',
+        '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
+        "  let sequence;",
+        "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
+        '  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });',
+        "  unsubscribe();",
         '  expect(getAgentRunContext("unrelated-run-a")).toBeDefined();',
         '  expect(getAgentRunContext("unrelated-run-b")).toBeDefined();',
+        "  expect(sequence).toBe(1);",
         "});",
         "",
       ].join("\n"),
@@ -314,9 +322,17 @@ it("clears agent run registry state between files", async () => {
     await write(
       "b-observe.test.ts",
       [
-        `import { getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
+        `import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${agentRunRegistryPath};`,
+        `import { emitAgentEvent, onAgentEvent } from ${agentEventsPath};`,
         'import { expect, it } from "vitest";',
-        'it("sweeps only its own target context", () => {',
+        'it("restarts sequence state and sweeps only its own target context", () => {',
+        '  registerAgentRunContext("reused-run", { sessionKey: "reused-session" });',
+        "  let sequence;",
+        "  const unsubscribe = onAgentEvent((event) => { sequence = event.seq; });",
+        '  emitAgentEvent({ runId: "reused-run", stream: "assistant", data: {} });',
+        "  unsubscribe();",
+        "  expect(sequence).toBe(1);",
+        '  clearAgentRunContext("reused-run");',
         '  registerAgentRunContext("target-run", { sessionKey: "target-session" });',
         "  expect(sweepStaleRunContexts(-1)).toBe(1);",
         '  expect(getAgentRunContext("target-run")).toBeUndefined();',

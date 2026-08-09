@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
-import { resetAgentRunRegistryForTest } from "../src/infra/agent-run-registry.js";
+import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 
 type EvaluatedModuleNode = {
@@ -375,7 +375,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
-    resetAgentRunRegistryForTest();
+    resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
     resetOpenClawSessionSuspensionState();
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
