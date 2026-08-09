@@ -201,7 +201,8 @@ describe("agent tool definition adapter", () => {
 
   it("does not mask a frozen tool error while appending a loop warning", async () => {
     const toolCallId = "call-warning-frozen-error";
-    const frozenError = Object.freeze(new TypeError("immutable failure"));
+    const frozenError = new TypeError("immutable failure");
+    Object.freeze(frozenError);
     const tool = wrapToolWithBeforeToolCallHook({
       name: "frozen_error_tool",
       label: "Frozen Error Tool",

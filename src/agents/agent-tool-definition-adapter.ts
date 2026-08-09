@@ -278,14 +278,14 @@ async function executeAdaptedToolOperation(params: {
   run: () => Promise<unknown>;
   hookContext: HookContext | undefined;
 }): Promise<AgentToolResult<unknown>> {
+  const withLoopWarning = (result: AgentToolResult<unknown>) =>
+    appendLoopWarningToToolResult(result, params.toolCallId, params.hookContext?.runId);
   try {
-    return appendLoopWarningToToolResult(
+    return withLoopWarning(
       normalizeToolExecutionResult({
         toolName: params.normalizedToolName,
         result: await params.run(),
       }),
-      params.toolCallId,
-      params.hookContext?.runId,
     );
   } catch (err) {
     if (params.signal?.aborted) {
@@ -294,14 +294,12 @@ async function executeAdaptedToolOperation(params: {
     }
     if (isBeforeToolCallBlockedError(err)) {
       logDebug(`tools: ${params.normalizedToolName} blocked by before_tool_call: ${err.reason}`);
-      return appendLoopWarningToToolResult(
+      return withLoopWarning(
         buildBlockedToolResult({
           reason: err.reason,
           toolCallId: params.toolCallId,
           runId: params.hookContext?.runId,
         }),
-        params.toolCallId,
-        params.hookContext?.runId,
       );
     }
     const described = describeToolExecutionError(err);
@@ -314,13 +312,11 @@ async function executeAdaptedToolOperation(params: {
       effectiveParams: params.getEffectiveParams(),
     });
     logError(`[tools] ${params.normalizedToolName} failed: ${described.message} ${inputPreview}`);
-    return appendLoopWarningToToolResult(
+    return withLoopWarning(
       buildToolExecutionErrorResult({
         toolName: params.normalizedToolName,
         message: described.message,
       }),
-      params.toolCallId,
-      params.hookContext?.runId,
     );
   }
 }
@@ -643,6 +639,8 @@ export function toClientToolDefinitions(
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, signal } = splitToolExecuteArgs(args);
         const control = readInternalExecutionControl(args[4]);
+        const withLoopWarning = (result: AgentToolResult<unknown>) =>
+          appendLoopWarningToToolResult(result, toolCallId, hookContext?.runId);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
@@ -660,15 +658,13 @@ export function toClientToolDefinitions(
               onClientToolCall.discard?.(toolCallId, func.name);
             }
             if (outcome.kind === "veto") {
-              return appendLoopWarningToToolResult(
+              return withLoopWarning(
                 buildBlockedToolResult({
                   reason: outcome.reason,
                   deniedReason: outcome.deniedReason,
                   toolCallId,
                   runId: hookContext?.runId,
                 }),
-                toolCallId,
-                hookContext?.runId,
               );
             }
             throw new Error(outcome.reason);
@@ -694,15 +690,13 @@ export function toClientToolDefinitions(
             if (onClientToolCall && typeof onClientToolCall !== "function") {
               onClientToolCall.discard?.(toolCallId, func.name);
             }
-            return appendLoopWarningToToolResult(
+            return withLoopWarning(
               buildBlockedToolResult({
                 reason: voiceConfirmation.reason,
                 deniedReason: "client-voice-confirmation",
                 toolCallId,
                 runId: hookContext?.runId,
               }),
-              toolCallId,
-              hookContext?.runId,
             );
           }
           decision?.start?.();
@@ -719,13 +713,11 @@ export function toClientToolDefinitions(
             onClientToolCall.discard?.(toolCallId, func.name);
           }
           if (err instanceof ToolInputError) {
-            return appendLoopWarningToToolResult(
+            return withLoopWarning(
               buildToolExecutionErrorResult({
                 toolName: func.name,
                 message: err.message,
               }),
-              toolCallId,
-              hookContext?.runId,
             );
           }
           if (signal?.aborted) {
@@ -735,7 +727,7 @@ export function toClientToolDefinitions(
           throw appendLoopWarningToError(err, toolCallId, hookContext?.runId);
         }
         // Return a terminal pending result; the client will execute the tool.
-        return appendLoopWarningToToolResult(
+        return withLoopWarning(
           {
             ...jsonResult({
               status: "pending",
@@ -744,8 +736,6 @@ export function toClientToolDefinitions(
             }),
             terminate: true,
           },
-          toolCallId,
-          hookContext?.runId,
         );
       },
     } satisfies ToolDefinition;
