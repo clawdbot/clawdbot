@@ -7,6 +7,7 @@ import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   autoMigrateLegacyStateDir,
@@ -106,6 +107,111 @@ describe("legacy state dir auto-migration", () => {
       await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
         installRecords: { demo: { source: "npm", spec: "demo@1.0.0" } },
       });
+    });
+  });
+
+  it("does not move or link a state dir with invalid full-shaped embedded install records", async () => {
+    await withStateDirFixture(async (root) => {
+      const legacyDir = path.join(root, ".clawdbot");
+      const targetDir = path.join(root, ".openclaw");
+      const sourcePath = path.join(legacyDir, "plugins", "installs.json");
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(
+        sourcePath,
+        JSON.stringify({
+          version: 1,
+          hostContractVersion: "legacy",
+          compatRegistryVersion: "legacy",
+          migrationVersion: 1,
+          policyHash: "legacy",
+          generatedAtMs: 0,
+          plugins: [
+            {
+              pluginId: "demo",
+              installRecord: { source: "bogus", passthrough: { retained: true } },
+              manifestPath: "/plugins/demo/openclaw.plugin.json",
+              manifestHash: "legacy",
+              rootDir: "/plugins/demo",
+              origin: "global",
+              enabled: false,
+              startup: { sidecar: false, memory: false, agentHarnesses: [] },
+              compat: [],
+            },
+          ],
+          diagnostics: [],
+        }),
+        "utf8",
+      );
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.migrated).toBe(false);
+      expect(result.warnings).toEqual([
+        `State dir migration skipped because plugin install index ${sourcePath} is invalid`,
+      ]);
+      expect(fs.existsSync(legacyDir)).toBe(true);
+      expect(fs.lstatSync(legacyDir).isSymbolicLink()).toBe(false);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+    });
+  });
+
+  it("does not rewrite invalid SQLite records or archive a valid legacy index", async () => {
+    await withStateDirFixture(async (root) => {
+      const stateDir = path.join(root, "custom-state");
+      const sourcePath = path.join(stateDir, "plugins", "installs.json");
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(
+        sourcePath,
+        JSON.stringify({ records: { demo: { source: "npm", spec: "demo@1.0.0" } } }),
+        "utf8",
+      );
+      const installRecordsJson = '{"demo":{"source":"bogus"}}';
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          db.prepare(
+            `
+              INSERT OR REPLACE INTO installed_plugin_index (
+                index_key, version, host_contract_version, compat_registry_version,
+                migration_version, policy_hash, generated_at_ms, refresh_reason,
+                install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
+              ) VALUES (
+                'installed-plugin-index', 1, 'test', 'test',
+                1, 'test', 1, NULL,
+                ?, '[]', '[]', NULL, 123
+              )
+            `,
+          ).run(installRecordsJson);
+        },
+        { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+      );
+
+      const result = await autoMigrateLegacyStateDir({
+        env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        `Left plugin install index in place because persisted install records in ${stateDir} are invalid`,
+      ]);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+      const row = runOpenClawStateWriteTransaction(
+        ({ db }) =>
+          db
+            .prepare(
+              `SELECT install_records_json, updated_at_ms
+                 FROM installed_plugin_index
+                WHERE index_key = 'installed-plugin-index'`,
+            )
+            .get() as { install_records_json: string; updated_at_ms: number | bigint },
+        { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+      );
+      expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
     });
   });
 

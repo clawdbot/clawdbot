@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import {
@@ -523,6 +524,47 @@ describe("maybeRepairPluginRegistryState", () => {
     );
     expect(vi.mocked(note).mock.calls.join("\n")).toContain("@openclaw/google-meet@2026.5.2");
     expect(fs.existsSync(managed.packageDir)).toBe(true);
+  });
+
+  it("does not mutate stale packages when config install records are invalid", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.2",
+    });
+    const config = {
+      plugins: {
+        installs: { "google-meet": { source: "bogus" } },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        candidates: [
+          createBundledCandidate({
+            rootDir: bundledDir,
+            id: "google-meet",
+            packageName: "@openclaw/google-meet",
+            version: "2026.5.3",
+          }),
+        ],
+        env: hermeticEnv(),
+        config,
+        prompter: { shouldRepair: true },
+      }),
+    ).resolves.toEqual({ config });
+
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
+    expect(vi.mocked(note)).toHaveBeenCalledWith(
+      expect.stringContaining("plugins.installs contains invalid records"),
+      "Plugin registry",
+    );
+    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
   });
 
   it("removes stale managed npm packages that shadow bundled plugins during repair", async () => {
