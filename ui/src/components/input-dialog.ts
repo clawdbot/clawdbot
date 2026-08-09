@@ -89,7 +89,14 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       paint();
       // A thrown operation still has to produce a visible outcome: without this
       // the dialog would stay disabled forever and wedge every later request.
-      const message = await options.submit(value).catch((error: unknown) => String(error));
+      // The call itself is inside the try, so a callback that throws before it
+      // returns a promise is caught too.
+      let message: string | null;
+      try {
+        message = await options.submit(value);
+      } catch (error) {
+        message = String(error);
+      }
       if (settled) {
         return;
       }
