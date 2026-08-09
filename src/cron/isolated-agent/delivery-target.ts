@@ -15,7 +15,6 @@ import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
-import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -26,7 +25,7 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 export type DeliveryTargetResolution =
   | {
       ok: true;
-      channel: OutboundChannel;
+      channel: string;
       to: string;
       accountId?: string;
       threadId?: string | number;
@@ -34,7 +33,7 @@ export type DeliveryTargetResolution =
     }
   | {
       ok: false;
-      channel?: OutboundChannel;
+      channel?: string;
       to?: string;
       accountId?: string;
       threadId?: string | number;
@@ -117,10 +116,7 @@ function shouldCarrySessionThread(params: {
   return routesSharePeer(params.route, params.lastRoute);
 }
 
-function stripSelectedProviderPrefix(params: {
-  channel: OutboundChannel;
-  to?: string;
-}): string | undefined {
+function stripSelectedProviderPrefix(params: { channel: string; to?: string }): string | undefined {
   const trimmed = params.to?.trim();
   if (!trimmed) {
     return undefined;
@@ -196,7 +192,7 @@ export async function resolveDeliveryTarget(
     allowMismatchedLastTo,
   });
 
-  let fallbackChannel: OutboundChannel | undefined;
+  let fallbackChannel: string | undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {

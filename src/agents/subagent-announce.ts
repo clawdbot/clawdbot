@@ -32,7 +32,7 @@ import {
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
 } from "./subagent-announce-delivery.js";
-import { type DescendantWakeDeps, runDescendantWake } from "./subagent-announce-descendant-wake.js";
+import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   resolveAnnounceOrigin,
@@ -62,7 +62,12 @@ import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
-type SubagentAnnounceDeps = DescendantWakeDeps;
+type SubagentAnnounceDeps = {
+  callGateway: typeof callGateway;
+  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
+  getRuntimeConfig: typeof getRuntimeConfig;
+  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
+};
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
@@ -294,20 +299,31 @@ export async function runSubagentAnnounceFlow(params: {
       childRunId: params.childRunId,
     });
 
-    const woke = await runDescendantWake({
-      enabled: params.wakeOnDescendantSettle === true,
-      runId: params.childRunId,
-      childSessionKey: params.childSessionKey,
-      taskLabel: params.label || params.task || "task",
-      findings: childCompletionFindings,
-      isChildSessionEffectsAllowed: childSessionEffectsAllowed,
-      hasUsableSessionEntry,
-      deps: subagentAnnounceDeps,
-      signal: params.signal,
-    });
-    if (woke) {
-      shouldDeleteChildSession = false;
-      return true;
+    if (
+      params.wakeOnDescendantSettle === true &&
+      childCompletionFindings?.trim() &&
+      subagentRegistryRuntime
+    ) {
+      const woke = await runDescendantWake({
+        runId: params.childRunId,
+        childSessionKey: params.childSessionKey,
+        taskLabel: params.label || params.task || "task",
+        findings: childCompletionFindings,
+        announceId,
+        isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+        hasUsableSessionEntry,
+        deps: {
+          callGateway: subagentAnnounceDeps.callGateway,
+          dispatchGatewayMethodInProcess: subagentAnnounceDeps.dispatchGatewayMethodInProcess,
+          getRuntimeConfig: subagentAnnounceDeps.getRuntimeConfig,
+          replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteer,
+        },
+        signal: params.signal,
+      });
+      if (woke) {
+        shouldDeleteChildSession = false;
+        return true;
+      }
     }
 
     const fallbackReply = failedTerminalOutcome
