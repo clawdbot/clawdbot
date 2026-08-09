@@ -18,6 +18,7 @@ import {
   setupDraftStreams,
   telegramProgressPreview,
 } from "./bot-message-dispatch.test-harness.js";
+import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 
 const draftWarn = vi.hoisted(() => vi.fn());
 
@@ -119,7 +120,14 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
     async ({ createMessageContext }) => {
-      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      let answerDraftStream: ReturnType<typeof createTestDraftStream>;
+      answerDraftStream = createTestDraftStream({
+        onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
+      });
+      const reasoningDraftStream = createTestDraftStream();
+      createTelegramDraftStream
+        .mockImplementationOnce(() => answerDraftStream)
+        .mockImplementationOnce(() => reasoningDraftStream);
       let partialAccepted: boolean | void = undefined;
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(true);
@@ -139,6 +147,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       });
 
       expect(partialAccepted).toBeUndefined();
+      expect(answerDraftStream.waitForInFlight).toHaveBeenCalledOnce();
       expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
       expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
       expect(answerDraftStream.update).toHaveBeenLastCalledWith(
