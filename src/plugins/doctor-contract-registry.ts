@@ -57,15 +57,19 @@ type PluginDoctorStateMigrationEntry = {
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
+function loadPluginDoctorContractModule(params: {
+  modulePath: string;
+  rootDir: string;
+}): PluginDoctorContractModule {
+  pluginDoctorContractRegistryLoaderState.moduleRoots.set(params.modulePath, params.rootDir);
   return getCachedPluginModuleLoader({
     cache: pluginDoctorContractRegistryLoaderState.moduleLoaders,
-    modulePath,
+    modulePath: params.modulePath,
     importerUrl: import.meta.url,
     ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
       : {}),
-  })(modulePath) as PluginDoctorContractModule;
+  })(params.modulePath) as PluginDoctorContractModule;
 }
 
 function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
@@ -201,7 +205,7 @@ function loadPluginDoctorContractEntry(
   }
   let mod: PluginDoctorContractModule;
   try {
-    mod = loadPluginDoctorContractModule(contractSource);
+    mod = loadPluginDoctorContractModule({ modulePath: contractSource, rootDir: record.rootDir });
   } catch (error) {
     log.warn(
       `failed to load doctor contract for ${record.id} from ${contractSource}: ${formatErrorMessage(error)}`,
@@ -345,27 +349,34 @@ export function listPluginDoctorSessionStoreAgentIds(params?: {
 function loadLegacyChannelStateMigrationDetector(
   record: PluginManifestRegistryRecord,
 ): BundledChannelLegacyStateMigrationDetector | null {
-  if (
-    !record.setupSource ||
-    record.packageManifest?.setupFeatures?.legacyStateMigrations !== true
-  ) {
+  if (!record.setupSource) {
     return null;
   }
   try {
     const entry = unwrapDefaultModuleExport(
-      loadPluginDoctorContractModule(record.setupSource),
+      loadPluginDoctorContractModule({
+        modulePath: record.setupSource,
+        rootDir: record.rootDir,
+      }),
     ) as Partial<BundledChannelSetupEntryContract> | null;
     if (
       entry?.kind !== "bundled-channel-setup-entry" ||
-      entry.features?.legacyStateMigrations !== true
+      typeof entry.loadSetupPlugin !== "function"
     ) {
       return null;
     }
-    return (
-      entry.loadLegacyStateMigrationDetector?.() ??
-      entry.loadSetupPlugin?.().lifecycle?.detectLegacyStateMigrations ??
-      null
-    );
+    const directDetector =
+      typeof entry.loadLegacyStateMigrationDetector === "function"
+        ? entry.loadLegacyStateMigrationDetector()
+        : undefined;
+    if (typeof directDetector === "function") {
+      return directDetector;
+    }
+    if (entry.features?.legacyStateMigrations !== true) {
+      return null;
+    }
+    const lifecycleDetector = entry.loadSetupPlugin().lifecycle?.detectLegacyStateMigrations;
+    return typeof lifecycleDetector === "function" ? lifecycleDetector : null;
   } catch (error) {
     log.warn(
       `failed to load legacy state migration for ${record.id} from ${record.setupSource}: ${formatErrorMessage(error)}`,
@@ -392,10 +403,9 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     ) {
       continue;
     }
-    // Bundled channel migrations retain their historical allowlist bypass. External owners must
-    // pass normal activation first so an untrusted workspace cannot execute its setup artifact.
+    // Trusted bundled non-channel migrations remain available while plugins are globally disabled.
+    // Every non-bundled owner must pass normal activation before either artifact can execute.
     if (
-      channelOwner &&
       record.origin !== "bundled" &&
       !isActivatedManifestOwner({ plugin: record, normalizedConfig, rootConfig: params?.config })
     ) {
@@ -410,6 +420,9 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     );
     if (modernEntries.length > 0) {
       entries.push(...modernEntries);
+      continue;
+    }
+    if (record.doctorContract?.stateMigrations === true) {
       continue;
     }
     if (!channelOwner) {

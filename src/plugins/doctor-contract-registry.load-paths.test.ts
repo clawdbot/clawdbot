@@ -151,6 +151,7 @@ function writeLegacyChannelMigrationPlugin(params: {
   namespace: string;
   sourceFile: string;
   stateKey: string;
+  label?: string;
 }): void {
   fs.mkdirSync(params.pluginRoot, { recursive: true });
   fs.writeFileSync(
@@ -190,6 +191,7 @@ const pluginId = ${JSON.stringify(params.pluginId)};
 const namespace = ${JSON.stringify(params.namespace)};
 const sourceFile = ${JSON.stringify(params.sourceFile)};
 const stateKey = ${JSON.stringify(params.stateKey)};
+const label = ${JSON.stringify(params.label ?? `${params.pluginId} preserved channel state`)};
 module.exports = {
   kind: 'bundled-channel-setup-entry',
   features: { legacyStateMigrations: true },
@@ -202,7 +204,7 @@ module.exports = {
       if (!fs.existsSync(sourcePath)) return [];
       return [{
         kind: 'plugin-state-import',
-        label: pluginId + ' preserved channel state',
+        label,
         sourcePath,
         targetPath: 'plugin state:' + namespace,
         pluginId,
@@ -215,6 +217,59 @@ module.exports = {
     };
   },
 };\n`,
+    "utf8",
+  );
+}
+
+function writeModernBundledChannelMigrationPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+}): void {
+  fs.mkdirSync(params.pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      channels: [params.pluginId],
+      doctorContract: { stateMigrations: true },
+      configSchema: {},
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.1",
+      type: "commonjs",
+      openclaw: {
+        extensions: ["./index.cjs"],
+        setupEntry: "./setup-entry.cjs",
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "index.cjs"),
+    "throw new Error('shadowed bundled channel runtime loaded');\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "setup-entry.cjs"),
+    `module.exports = {
+  kind: 'bundled-channel-setup-entry',
+  loadSetupPlugin() { return {}; },
+};\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "doctor-contract-api.cjs"),
+    `module.exports = { stateMigrations: [{
+  id: 'bundled-modern-state',
+  label: 'Bundled modern state',
+  detectLegacyState: () => null,
+  migrateLegacyState: () => ({ changes: [], warnings: [] }),
+}] };\n`,
     "utf8",
   );
 }
@@ -333,33 +388,10 @@ describe("doctor contract registry load-path plugins", () => {
       writeLegacyChannelMigrationPlugin({ pluginRoot, pluginId, namespace, sourceFile, stateKey });
       const bundledPluginsDir = path.join(stateDir, "bundled");
       const shadowedBundledRoot = path.join(bundledPluginsDir, pluginId);
-      writeLegacyChannelMigrationPlugin({
+      writeModernBundledChannelMigrationPlugin({
         pluginRoot: shadowedBundledRoot,
         pluginId,
-        namespace,
-        sourceFile,
-        stateKey,
       });
-      fs.writeFileSync(
-        path.join(shadowedBundledRoot, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          channels: [pluginId],
-          doctorContract: { stateMigrations: true },
-          configSchema: {},
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(shadowedBundledRoot, "doctor-contract-api.cjs"),
-        `module.exports = { stateMigrations: [{
-  id: 'shadowed-bundled-migration',
-  label: 'Shadowed bundled migration',
-  detectLegacyState: () => ({ preview: ['shadowed bundled state'] }),
-  migrateLegacyState: () => ({ changes: ['shadowed bundled state'], warnings: [] }),
-}] };\n`,
-        "utf8",
-      );
       const config = createDoctorPluginConfig(pluginRoot, pluginId);
       const env = {
         ...makeHermeticDoctorEnv(stateDir),
@@ -408,6 +440,60 @@ describe("doctor contract registry load-path plugins", () => {
       }
     },
   );
+
+  it("reloads a selected legacy setup entry after the plugin metadata lifecycle clears", async () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "legacy-refresh";
+    const sourceFile = "refresh.json";
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+    const env = makeHermeticDoctorEnv(stateDir);
+    const sourcePath = path.join(stateDir, pluginId, sourceFile);
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, "{}", "utf8");
+    const writePlugin = (label: string) =>
+      writeLegacyChannelMigrationPlugin({
+        pluginRoot,
+        pluginId,
+        namespace: "legacy-refresh",
+        sourceFile,
+        stateKey: "default",
+        label,
+      });
+    const detectPreview = async () => {
+      const [entry] = listPluginDoctorStateMigrationEntries({
+        config,
+        env,
+        pluginIds: [pluginId],
+      });
+      if (!entry) {
+        throw new Error("missing selected legacy setup-entry migration");
+      }
+      return entry.migration.detectLegacyState({
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: {
+          openPluginStateKeyedStore: () => {
+            throw new Error("legacy detection should not open plugin state");
+          },
+        },
+      });
+    };
+
+    writePlugin("Legacy refresh v1");
+    await expect(detectPreview()).resolves.toEqual({
+      preview: [`- Legacy refresh v1: ${sourcePath}`],
+    });
+
+    writePlugin("Legacy refresh v2");
+    clearPluginDoctorContractRegistryCache();
+
+    await expect(detectPreview()).resolves.toEqual({
+      preview: [`- Legacy refresh v2: ${sourcePath}`],
+    });
+  });
 
   it("discovers doctor warning rules from plugins.load.paths", () => {
     const stateDir = makeTempDir();
