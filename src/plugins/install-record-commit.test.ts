@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -18,6 +19,8 @@ import {
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
+
+const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => {
   const lease = {
@@ -483,7 +486,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   });
 
   it("removes a new retirement marker when the leased config commit rolls back", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const stateDir = retentionTempDirs.make("openclaw-record-commit-");
     const installPath = writeManagedNpmPlugin({
       stateDir,
       packageName: "@openclaw/retained-rollback",

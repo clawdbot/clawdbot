@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -83,8 +82,8 @@ describe("retained managed npm record commits", () => {
   );
 
   it("does not retire a removed npm record outside the managed npm root", async () => {
-    await withOpenClawTestState({ label: "retained-outside-root" }, async () => {
-      const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-outside-"));
+    await withOpenClawTestState({ label: "retained-outside-root" }, async (state) => {
+      const outsideRoot = state.path("outside-root");
       try {
         const packageName = "@openclaw/outside-retained";
         const installPath = writeManagedNpmPlugin({

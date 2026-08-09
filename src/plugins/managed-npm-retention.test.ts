@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePluginNpmGenerationProjectDir } from "./install-paths.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
+
+const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
@@ -77,7 +80,7 @@ describe("managed npm retention", () => {
   it.each(["project", "legacy"] as const)(
     "preserves %s packages retained by an explicit keep-files uninstall",
     async (layout) => {
-      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
+      const stateDir = retentionTempDirs.make("openclaw-retention-");
       const npmDir = path.join(stateDir, "npm");
       const projectRoot =
         layout === "legacy"
