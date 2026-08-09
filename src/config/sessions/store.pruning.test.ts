@@ -142,6 +142,23 @@ describe("pruneStaleEntries", () => {
     expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
     expect(store.archived).toBeUndefined();
   });
+
+  it.each([[0], [-1 * DAY_MS]])(
+    "treats a non-positive max age (%s ms) as disabled instead of pruning everything",
+    (maxAgeMs) => {
+      const now = Date.now();
+      const store = makeStore([
+        ["old", makeEntry(now - 31 * DAY_MS)],
+        ["fresh", makeEntry(now - DAY_MS)],
+      ]);
+
+      const pruned = pruneStaleEntries(store, maxAgeMs);
+
+      expect(pruned).toBe(0);
+      expect(store).toHaveProperty("old");
+      expect(store).toHaveProperty("fresh");
+    },
+  );
 });
 
 describe("resolveQuotaSuspensionEntryMaintenance", () => {

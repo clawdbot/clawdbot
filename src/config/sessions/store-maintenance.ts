@@ -253,7 +253,8 @@ function isGatewayModelRunSessionKey(sessionKey: string): boolean {
 /**
  * Remove entries whose `updatedAt` is older than the configured threshold.
  * Entries without `updatedAt` are kept (cannot determine staleness).
- * Mutates `store` in-place.
+ * A non-positive max age disables age pruning (zero would otherwise delete
+ * every entry). Mutates `store` in-place.
  */
 export function pruneStaleEntries(
   store: Record<string, SessionEntry>,
@@ -265,6 +266,15 @@ export function pruneStaleEntries(
   } = {},
 ): number {
   const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
+  // A non-positive max age is a disable signal, not "prune everything": the
+  // cutoff would equal now and the pass would delete every entry with a past
+  // updatedAt. The openclaw.json path rejects zero via the duration schema, but
+  // the plugin SDK forwards `maintenanceConfig.pruneAfterMs` as a raw number, so
+  // the guard belongs at the destructive action. Same convention as the
+  // maxDiskBytes <= 0 guard (#119422) and zero sessionRetention (#120213).
+  if (maxAgeMs <= 0) {
+    return 0;
+  }
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
