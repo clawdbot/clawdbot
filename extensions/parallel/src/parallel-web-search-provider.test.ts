@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
@@ -498,6 +501,38 @@ describe("parallel web search provider", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("Parallel API error (502)");
     expect((error as Error).message).not.toContain(apiKey);
+  });
+  it("applies configured logging.redactPatterns to reflected Parallel error bodies", async () => {
+    // Organization-specific secret shape that no built-in pattern covers.
+    const orgSecret = "acme-internal-bluefin-042";
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-redact-config-"));
+    const configPath = path.join(configDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ logging: { redactPatterns: ["acme-internal-[a-z0-9-]+"] } }),
+    );
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      endpointMockState.responses.push(
+        new Response(`<html><body>edge failure for ${orgSecret}</body></html>`, {
+          status: 502,
+          statusText: "Bad Gateway",
+          headers: { "Content-Type": "text/html" },
+        }),
+      );
+      const error = await paidTool()
+        .execute({
+          objective: `parallel-error-redact-config-${Date.now()}`,
+          search_queries: ["openclaw"],
+        })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("Parallel API error (502)");
+      expect((error as Error).message).not.toContain(orgSecret);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(configDir, { force: true, recursive: true });
+    }
   });
   it("bounds successful Parallel JSON bodies instead of buffering the whole response", async () => {
     const streamed = createStreamingResponse({
