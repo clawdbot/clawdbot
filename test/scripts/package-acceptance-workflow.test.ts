@@ -2496,7 +2496,7 @@ describe("package artifact reuse", () => {
     ).toContain("inputs.enable_prepublish_plugin_registry");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
-    const prepareDockerImageStepNames = prepareDockerImage.steps.map((step) => step.name);
+    const prepareDockerImageStepNames = (prepareDockerImage.steps ?? []).map((step) => step.name);
     expect(prepareDockerImageStepNames.indexOf("Setup Node environment")).toBeLessThan(
       prepareDockerImageStepNames.indexOf("Plan Docker E2E images"),
     );
