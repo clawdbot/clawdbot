@@ -421,15 +421,25 @@ describe("runNodeHost optional publications", () => {
       } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
       await vi.waitFor(() => expect(rejectInitialPublication).toBeDefined());
 
-      rejectInitialPublication?.(new Error("temporary publish failure"));
+      vi.useFakeTimers();
+      try {
+        rejectInitialPublication?.(new Error("temporary publish failure"));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(pluginPublicationCount).toBe(1);
 
-      await vi.waitFor(() => {
-        const publications = client.request.mock.calls.filter(
-          ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
-        );
-        expect(publications).toHaveLength(2);
-        expect(publications[1]?.[1]).toEqual({ tools: mocks.nodePluginTools });
-      });
+        await vi.advanceTimersByTimeAsync(249);
+        expect(pluginPublicationCount).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(pluginPublicationCount).toBe(2);
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+          )[1]?.[1],
+        ).toEqual({ tools: mocks.nodePluginTools });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

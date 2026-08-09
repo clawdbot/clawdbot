@@ -374,6 +374,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
                 state.pendingParams = nextParams;
                 state.hasPending = true;
                 state.retryPending = true;
+                break;
               }
             }
           }
