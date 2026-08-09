@@ -53,6 +53,7 @@ import {
   createCronToolSchema,
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
+import { listCronSelfJob } from "./cron-tool-self-list.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
@@ -111,35 +112,6 @@ function assertCronSelfRemoveScope(
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
 }
 
-function filterCronDeliveryPreviewsByJobId(previews: unknown, jobId: string): unknown {
-  if (!isRecord(previews)) {
-    return previews;
-  }
-  if (!Object.hasOwn(previews, jobId)) {
-    return {};
-  }
-  return { [jobId]: previews[jobId] };
-}
-
-function filterCronListResultToJobId(result: unknown, jobId: string): unknown {
-  if (!isRecord(result) || !Array.isArray(result.jobs)) {
-    return result;
-  }
-  const jobs = result.jobs.filter((job) => isRecord(job) && job.id === jobId);
-  return {
-    ...result,
-    jobs,
-    total: jobs.length,
-    offset: 0,
-    limit: jobs.length,
-    hasMore: false,
-    nextOffset: null,
-    ...(Object.hasOwn(result, "deliveryPreviews")
-      ? { deliveryPreviews: filterCronDeliveryPreviewsByJobId(result.deliveryPreviews, jobId) }
-      : {}),
-  };
-}
-
 function filterCronStatusResultForSelfScope(result: unknown): unknown {
   return { enabled: isRecord(result) && result.enabled === true };
 }
@@ -182,22 +154,6 @@ function formatCronTerminalPresentation(
     default:
       return undefined;
   }
-}
-
-function cronListResultHasJob(result: unknown, jobId: string): boolean {
-  return (
-    isRecord(result) &&
-    Array.isArray(result.jobs) &&
-    result.jobs.some((job) => isRecord(job) && job.id === jobId)
-  );
-}
-
-function readCronListNextOffset(result: unknown, currentOffset: number): number | undefined {
-  if (!isRecord(result) || result.hasMore !== true || typeof result.nextOffset !== "number") {
-    return undefined;
-  }
-  const nextOffset = Math.floor(result.nextOffset);
-  return Number.isFinite(nextOffset) && nextOffset > currentOffset ? nextOffset : undefined;
 }
 
 function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
@@ -299,47 +255,40 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             const requestedOffset = selfRemoveOnlyJobId
               ? undefined
               : readNonNegativeIntegerParam(params, "offset");
-            let offset = requestedOffset ?? 0;
-            let result: unknown;
-            let shouldContinue = true;
             let useCompactList = true;
-            while (shouldContinue) {
-              try {
-                result = await callGateway("cron.list", gatewayOpts, {
-                  includeDisabled,
-                  ...(useCompactList ? { compact: true } : {}),
-                  ...(listAgentId ? { agentId: listAgentId } : {}),
-                  ...(selfRemoveOnlyJobId
-                    ? { limit: CRON_TOOL_LIST_MAX_LIMIT, offset }
-                    : {
-                        ...(requestedLimit !== undefined ? { limit: requestedLimit } : {}),
-                        ...(requestedOffset !== undefined ? { offset: requestedOffset } : {}),
-                      }),
-                });
-              } catch (error) {
-                if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {
-                  throw error;
-                }
-                // Protocol v4 gateways predating compact reject the additive field.
-                // Retry without it for mixed-version correctness; remove at the next protocol break.
-                useCompactList = false;
-                continue;
-              }
-              if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-                shouldContinue = false;
-              } else {
-                const nextOffset = readCronListNextOffset(result, offset);
-                if (nextOffset === undefined) {
-                  shouldContinue = false;
-                } else {
-                  offset = nextOffset;
+            const requestListPage = async (pageParams: Record<string, unknown>) => {
+              for (;;) {
+                try {
+                  return await callGateway("cron.list", gatewayOpts, {
+                    includeDisabled,
+                    ...(useCompactList ? { compact: true } : {}),
+                    ...(listAgentId ? { agentId: listAgentId } : {}),
+                    ...pageParams,
+                  });
+                } catch (error) {
+                  if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {
+                    throw error;
+                  }
+                  // Protocol v4 gateways predating compact reject the additive field.
+                  // Retry without it for mixed-version correctness; remove at the next protocol break.
+                  useCompactList = false;
                 }
               }
+            };
+            if (!selfRemoveOnlyJobId) {
+              const result = await requestListPage({
+                ...(requestedLimit !== undefined ? { limit: requestedLimit } : {}),
+                ...(requestedOffset !== undefined ? { offset: requestedOffset } : {}),
+              });
+              return jsonResult(result);
             }
+
             return jsonResult(
-              selfRemoveOnlyJobId
-                ? filterCronListResultToJobId(result, selfRemoveOnlyJobId)
-                : result,
+              await listCronSelfJob({
+                jobId: selfRemoveOnlyJobId,
+                pageSize: CRON_TOOL_LIST_MAX_LIMIT,
+                requestPage: requestListPage,
+              }),
             );
           }
           case "get": {

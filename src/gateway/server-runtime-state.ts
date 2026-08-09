@@ -60,6 +60,7 @@ import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
+import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -133,6 +134,7 @@ export async function createGatewayRuntimeState(params: {
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
+  workerDesktopTunnels?: WorkerDesktopTunnels;
 }): Promise<{
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -340,6 +342,7 @@ export async function createGatewayRuntimeState(params: {
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
       log: params.log,
+      workerDesktopTunnels: params.workerDesktopTunnels,
     });
     gatewayHttpServers.push(httpServer);
     httpServers.push(httpServer);

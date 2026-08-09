@@ -137,6 +137,7 @@ describe("OpenClaw database maintenance schema validation", () => {
     ).toEqual([
       "claw_installs.bootstrap_content_digest TEXT",
       "claw_installs.bootstrap_source_path TEXT",
+      "worker_environments.desktop_json TEXT",
       "claw_package_refs.extension_adapter_identity TEXT",
       "claw_package_refs.extension_detected_format TEXT",
       "claw_package_refs.extension_format TEXT",

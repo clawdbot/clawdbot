@@ -10,6 +10,7 @@ import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environme
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
+import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 
 type WorkerEnvironmentStore = ReturnType<
   typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
@@ -32,6 +33,7 @@ export type GatewayWorkerEnvironmentStartupState = {
 export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
   workerLiveEvents?: WorkerLiveEventReceiver;
+  workerTunnelManager?: WorkerTunnelManager;
 };
 
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
@@ -134,13 +136,14 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       startupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
     ),
   });
+  const workerTunnelManager = createWorkerTunnelManager();
   const workerEnvironmentService = createWorkerEnvironmentService({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
     // Plugin reload replaces the registry object; resolve against the live binding.
     resolveProvider: (providerId) => resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
-    tunnelManager: createWorkerTunnelManager(),
+    tunnelManager: workerTunnelManager,
     resolveWorkerGateway: params.resolveWorkerGateway,
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
@@ -187,5 +190,5 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     logger: params.log.child("worker-environments"),
   });
-  return { workerEnvironmentService, workerLiveEvents };
+  return { workerEnvironmentService, workerLiveEvents, workerTunnelManager };
 }

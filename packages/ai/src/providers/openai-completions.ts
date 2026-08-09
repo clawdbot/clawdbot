@@ -19,11 +19,16 @@ import {
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import {
+  createOpenAIResponseHook,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
 } from "../transports/openai-transport-shared.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  assignTransportErrorDetails,
+  transportAbortError,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -44,7 +49,6 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { formatProviderError } from "../utils/provider-error.js";
@@ -187,11 +191,13 @@ export const streamOpenAICompletions: StreamFunction<
           requestOptions,
         )
         .withResponse();
-      await options?.onResponse?.(
-        { status: response.status, headers: headersToRecord(response.headers) },
-        model,
-      );
-      stream.push({ type: "start", partial: output });
+      const hookedOpenAIStream = withProviderResponseHook({
+        stream: openaiStream,
+        signal: firstEventAbort.signal,
+        abort: firstEventAbort.abort,
+        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        onReady: () => stream.push({ type: "start", partial: output }),
+      });
 
       interface StreamingToolCallBlock extends ToolCall {
         partialArgs?: string;
@@ -380,7 +386,7 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(hookedOpenAIStream, {
         provider: model.provider,
         api: model.api,
         model: model.id,
@@ -605,7 +611,12 @@ export const streamOpenAICompletions: StreamFunction<
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      const errorReason = options?.signal?.aborted ? "aborted" : "error";
+      if (options?.signal?.aborted) {
+        assignTransportErrorDetails(output, error, options.signal);
+      } else {
+        output.stopReason = errorReason;
+      }
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
       for (const block of output.content) {
         delete (block as { index?: number }).index;
@@ -620,7 +631,7 @@ export const streamOpenAICompletions: StreamFunction<
       if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
         output.errorMessage += `\n${rawMetadata}`;
       }
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      stream.push({ type: "error", reason: errorReason, error: output });
       stream.end();
     } finally {
       firstEventAbort?.dispose();

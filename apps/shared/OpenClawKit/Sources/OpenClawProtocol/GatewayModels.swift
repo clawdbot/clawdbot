@@ -1803,6 +1803,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let attachedsessionids: [String]
     public let tunnelstatus: WorkerTunnelStatus
     public let error: String?
+    public let desktop: Bool?
 
     public init(
         providerid: String,
@@ -1812,7 +1813,8 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         idlems: Int? = nil,
         attachedsessionids: [String],
         tunnelstatus: WorkerTunnelStatus,
-        error: String? = nil)
+        error: String? = nil,
+        desktop: Bool? = nil)
     {
         self.providerid = providerid
         self.leaseid = leaseid
@@ -1822,6 +1824,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.attachedsessionids = attachedsessionids
         self.tunnelstatus = tunnelstatus
         self.error = error
+        self.desktop = desktop
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1833,6 +1836,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case attachedsessionids = "attachedSessionIds"
         case tunnelstatus = "tunnelStatus"
         case error
+        case desktop
     }
 }
 
@@ -2039,6 +2043,54 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case status
         case capabilities
         case worker
+    }
+}
+
+public struct WorkerDesktopObserveParams: Codable, Sendable {
+    public let environmentid: String
+    public let control: Bool?
+
+    public init(
+        environmentid: String,
+        control: Bool? = nil)
+    {
+        self.environmentid = environmentid
+        self.control = control
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+        case control
+    }
+}
+
+public struct WorkerDesktopObserveResult: Codable, Sendable {
+    public let transport: String
+    public let wspath: String
+    public let expiresatms: Int
+    public let control: Bool
+    public let vncpassword: String?
+
+    public init(
+        transport: String,
+        wspath: String,
+        expiresatms: Int,
+        control: Bool,
+        vncpassword: String? = nil)
+    {
+        self.transport = transport
+        self.wspath = wspath
+        self.expiresatms = expiresatms
+        self.control = control
+        self.vncpassword = vncpassword
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case transport
+        case wspath = "wsPath"
+        case expiresatms = "expiresAtMs"
+        case control
+        case vncpassword = "vncPassword"
     }
 }
 

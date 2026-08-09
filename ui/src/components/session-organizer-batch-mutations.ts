@@ -4,6 +4,7 @@ import {
   type SessionsPatchManyResult,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-archive-timeout.ts";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -106,10 +107,14 @@ export async function patchSessionRows(
       break;
     }
     try {
-      const result = await scope.client.request<SessionsPatchManyResult>(
-        "sessions.patchMany",
-        params,
-      );
+      const result =
+        patch.archived === true
+          ? await scope.client.request<SessionsPatchManyResult>(
+              "sessions.patchMany",
+              params,
+              SESSION_ARCHIVE_REQUEST_OPTIONS,
+            )
+          : await scope.client.request<SessionsPatchManyResult>("sessions.patchMany", params);
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return null;
       }

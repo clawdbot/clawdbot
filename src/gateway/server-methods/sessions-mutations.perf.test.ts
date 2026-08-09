@@ -195,6 +195,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         broadcastToConnIds: vi.fn(),
         getSessionEventSubscriberConnIds: () => new Set(),
         chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+        dedupe: new Map(),
         cron: {
           list: cronList,
           updateWithPrecondition: cronUpdate,

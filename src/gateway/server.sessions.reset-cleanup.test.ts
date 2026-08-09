@@ -619,7 +619,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   expect(reset.ok).toBe(true);
   expect(archived).toMatchObject({
     ok: false,
-    error: { message: "Cannot archive a session with an active run." },
+    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
   });
   const entry = loadSessionEntry({ storePath, sessionKey });
   expect(entry?.archivedAt).toBeUndefined();

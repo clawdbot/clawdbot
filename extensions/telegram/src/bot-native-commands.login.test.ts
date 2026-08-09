@@ -12,6 +12,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
@@ -44,7 +45,7 @@ function registerLoginCommand(params: {
     const result = await botHarness.bot.api.sendMessage(100, text, {});
     return { messageId: String(result.message_id), chatId: "100" };
   });
-  registerTelegramNativeCommands({
+  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
     ...nativeParams,
     telegramDeps: {
       ...nativeParams.telegramDeps,
@@ -59,6 +60,7 @@ function registerLoginCommand(params: {
   return {
     ...botHarness,
     handler,
+    nativeCommandCallbackDispatcher,
     sendMessageTelegram,
   };
 }
@@ -186,6 +188,73 @@ describe("registerTelegramNativeCommands /login", () => {
 
     finishLogin.resolve();
     await vi.waitFor(() => expect(loginCompleted).toBe(true));
+    await vi.waitFor(() =>
+      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
+        "Codex login complete. Try your request again now.",
+      ),
+    );
+  });
+
+  it("routes the login button through the non-blocking native login flow", async () => {
+    const finishLogin = createDeferred<void>();
+    const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
+      await params.prompter.deviceCode?.({
+        title: "OpenAI Codex device code",
+        code: "BUTTON-CODE",
+        expiresInMinutes: 15,
+        message: "URL: https://auth.openai.com/codex/device",
+      });
+      await finishLogin.promise;
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+      };
+    });
+    const { nativeCommandCallbackDispatcher, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: { native: true, ownerAllowFrom: ["200"] },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+    if (!nativeCommandCallbackDispatcher) {
+      throw new Error("expected login callback dispatcher to be registered");
+    }
+    const callbackQuery = {
+      id: "login-button",
+      chat_instance: "login-button-chat",
+      data: "tgcmd:/login codex",
+      from: { id: 200, is_bot: false, first_name: "Bob", username: "bob" },
+      message: {
+        message_id: 10,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 100, type: "private" as const, first_name: "Owner" },
+        reply_markup: {
+          inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+        },
+      },
+    };
+
+    await expect(
+      nativeCommandCallbackDispatcher({
+        commandText: "/login codex",
+        botUser: telegramBotInfoForTest,
+        callbackQuery,
+      }),
+    ).resolves.toEqual({ handled: true, clearButtons: true });
+
+    expect(loginFlow).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Code: <code>BUTTON-CODE</code>"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).not.toContain(
+      "Codex login complete. Try your request again now.",
+    );
+
+    finishLogin.resolve();
     await vi.waitFor(() =>
       expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
         "Codex login complete. Try your request again now.",

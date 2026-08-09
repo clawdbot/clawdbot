@@ -2510,7 +2510,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/e2e\/session-runtime-context-docker\.sh$/u,
     [
-      "docker-e2e-clients",
       dockerE2e,
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
       "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -2539,12 +2538,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/e2e\/live-plugin-tool-docker\.sh$/u, ["live-plugin-tool-assertions"]],
   [
     /^scripts\/e2e\/commitments-safety-docker\.sh$/u,
-    [
-      "docker-e2e-clients",
-      dockerE2e,
-      "src/commitments/runtime.test.ts",
-      "src/commitments/store.test.ts",
-    ],
+    [dockerE2e, "src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
   ],
   [/^scripts\/e2e\/onboard-docker\.sh$/u, [dockerBuild, "openclaw-test-state"]],
   [
@@ -2636,12 +2630,11 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/commitments-safety-docker(?:-client)?\.(?:sh|ts)$/u,
-    ["docker-e2e-clients", "src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
+    ["src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
   ],
   [
     /^scripts\/e2e\/session-runtime-context-docker(?:-client)?\.(?:sh|ts)$/u,
     [
-      "docker-e2e-clients",
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
       "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     ],

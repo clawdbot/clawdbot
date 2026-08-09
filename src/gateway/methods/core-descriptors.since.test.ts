@@ -99,5 +99,8 @@ describe("core gateway method release trains", () => {
     expect(methods.find((method) => method.name === "sessions.catalog.startTerminal")?.since).toBe(
       "2026.8",
     );
+    expect(methods.find((method) => method.name === "worker.desktop.observe")?.since).toBe(
+      "2026.8",
+    );
   });
 });
