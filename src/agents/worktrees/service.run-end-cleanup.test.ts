@@ -142,13 +142,13 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
   it("drops a prior-lifecycle outcome write after a concurrent remove and restore", async () => {
     const created = await materialize("aba-restore-race");
     const staleActiveAt = created.lastActiveAt;
-    // Restore must move the activity stamp, so this test needs a ticking clock.
-    let tick = now;
-    const tickingService = new ManagedWorktreeService({ env, now: () => ++tick });
-    await tickingService.acquire(created.id);
-    await expect(tickingService.removeIfLossless(created.id)).resolves.toBe(true);
-    const restored = await tickingService.restore({ id: created.id });
-    expect(restored.lastActiveAt).not.toBe(staleActiveAt);
+    await service.acquire(created.id);
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+    // The pinned clock makes remove and restore share one millisecond — the
+    // exact case where restore must still advance the activity stamp so the
+    // stale writer's fence cannot match.
+    const restored = await service.restore({ id: created.id });
+    expect(restored.lastActiveAt).toBe(staleActiveAt + 1);
 
     // A stale remover from the pre-restore lifecycle writes with the activity
     // stamp it observed (recordOutcome's condition); against the revived row it

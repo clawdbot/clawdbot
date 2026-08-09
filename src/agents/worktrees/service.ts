@@ -1038,7 +1038,10 @@ export class ManagedWorktreeService {
       }
       throw error;
     }
-    const lastActiveAt = this.now();
+    // Advance past the stored stamp even within the same millisecond: stale
+    // cleanup writes fence on the activity stamp they observed, so a restore
+    // must never revive the row with an identical value.
+    const lastActiveAt = Math.max(this.now(), record.lastActiveAt + 1);
     updateRegistryWorktree(this.env, params.id, {
       removedAt: undefined,
       lastActiveAt,
