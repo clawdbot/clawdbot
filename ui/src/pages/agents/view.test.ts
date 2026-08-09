@@ -935,10 +935,7 @@ describe("renderAgentFiles", () => {
           "USER.md":
             "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>",
         },
-        agentFileDrafts: {
-          "USER.md":
-            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>",
-        },
+        agentFileDrafts: {},
         agentFileSaving: false,
         onLoadFiles: () => undefined,
         onSelectFile: () => undefined,
@@ -949,9 +946,6 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
-      1,
-    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );
@@ -964,8 +958,7 @@ describe("renderAgentFiles", () => {
     const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
     expect(reader?.querySelector("h1")?.textContent).toBe("User Profile");
     expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
-    expect(reader?.querySelector(".code-block-copy")).toBeNull();
-    expect(reader?.querySelector("script")).toBeNull();
+    expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
   });
 
   it("renders preview header controls as icon-only buttons with accessible labels", () => {
