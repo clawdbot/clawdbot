@@ -55,16 +55,6 @@ function bindMigrationProviderToRegistry(
   };
 }
 
-function resolveMigrationProviderConfig(params: {
-  cfg?: OpenClawConfig;
-  bundledCompatPluginIds: readonly string[];
-}): OpenClawConfig | undefined {
-  return withBundledPluginEnablementCompat({
-    config: params.cfg,
-    pluginIds: [...params.bundledCompatPluginIds],
-  });
-}
-
 function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; pluginIds: string[] }) {
   const active = getLoadedRuntimePluginRegistry({ requiredPluginIds: params.pluginIds });
   if (active) {
@@ -135,9 +125,9 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   if (resolution.pluginIds.length === 0) {
     return;
   }
-  const compatConfig = resolveMigrationProviderConfig({
-    cfg: params.cfg,
-    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
+  const compatConfig = withBundledPluginEnablementCompat({
+    config: params.cfg,
+    pluginIds: resolution.bundledCompatPluginIds,
   });
   const registry = loadPluginRegistryHandle({
     ...(compatConfig === undefined ? {} : { config: compatConfig }),

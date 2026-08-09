@@ -1025,6 +1025,24 @@ describe("resolvePluginProviders", () => {
     expect(getLastResolvedPluginConfig()).toBeUndefined();
   });
 
+  it("ignores every bundledProviderVitestCompat value without changing loader input", () => {
+    const env = { VITEST: "true" } as NodeJS.ProcessEnv;
+    const inputs = ([undefined, true, false] as const).map((bundledProviderVitestCompat) => {
+      resolvePluginProviders({
+        env,
+        ...(bundledProviderVitestCompat === undefined ? {} : { bundledProviderVitestCompat }),
+      });
+      const { logger: _logger, ...input } = getLastRuntimeRegistryCall();
+      expect(input.config).toBeUndefined();
+      expect(input.activationSourceConfig).toBeUndefined();
+      expect(input.onlyPluginIds).toEqual(["google", "kilocode", "moonshot"]);
+      return input;
+    });
+
+    expect(inputs[1]).toEqual(inputs[0]);
+    expect(inputs[2]).toEqual(inputs[0]);
+  });
+
   it("scopes setup provider plugin discovery to the allowlist by default", () => {
     resolvePluginProviders({
       config: {
