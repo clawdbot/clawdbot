@@ -45,12 +45,12 @@ import {
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
-import { MediaSizeCapExceededError } from "./media-size-cap-error.js";
 import {
   createImageProcessor,
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { MediaSizeCapExceededError } from "./media-size-cap-error.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };

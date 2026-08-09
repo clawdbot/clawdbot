@@ -2923,7 +2923,7 @@ describe("image tool MiniMax VLM routing", () => {
       buf[0] = i;
       return encodePngRgba(buf, 1, 1);
     });
-    const budgetBytes = pngs[0].byteLength + pngs[1].byteLength + pngs[2].byteLength;
+    const budgetBytes = pngs[0]!.byteLength + pngs[1]!.byteLength + pngs[2]!.byteLength;
     const result = await tool.execute("t1", {
       prompt: "Describe.",
       images: pngs.map((png) => `data:image/png;base64,${png.toString("base64")}`),
@@ -2975,9 +2975,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     // Operator mediaMaxMb is a per-image contract: all three images load.
     expect(fetch).toHaveBeenCalledTimes(3);
-    const details = result.details as
-      | { images?: unknown[]; skippedImages?: unknown }
-      | undefined;
+    const details = result.details as { images?: unknown[]; skippedImages?: unknown } | undefined;
     expect(details?.images).toHaveLength(3);
     expect(details?.skippedImages).toBeUndefined();
   });
