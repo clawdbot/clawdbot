@@ -6,8 +6,11 @@ import {
   ErrorCodes,
   errorShape,
   validateDevicePairSetupCodeParams,
+  validateDevicePairSetupStatusParams,
+  type DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readDevicePairSetupCompletion } from "../../infra/device-bootstrap.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -81,6 +84,8 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       respond(
         true,
         {
+          setupId: resolved.setupId,
+          expiresAtMs: resolved.expiresAtMs,
           setupCode,
           ...(qrDataUrl ? { qrDataUrl } : {}),
           gatewayUrl: resolved.payload.url,
@@ -93,6 +98,38 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  // Recovery path for the best-effort device.pair.setup.completed broadcast: a
+  // client that missed the frame must not present a redeemed setup as expired.
+  "device.pair.setupStatus": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateDevicePairSetupStatusParams,
+        "device.pair.setupStatus",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
+      // Retention bookkeeping stays server-side; the wire shape matches the broadcast.
+      const result: DevicePairSetupStatusResult = completion
+        ? {
+            completion: {
+              setupId: completion.setupId,
+              deviceId: completion.deviceId,
+              ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
+              access: completion.access,
+              ts: completion.completedAtMs,
+            },
+          }
+        : {};
+      respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

@@ -46,6 +46,11 @@ vi.mock("../infra/device-bootstrap.js", () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
   })),
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
+    token: "bootstrap-123",
+    expiresAtMs: 123,
+    setupId: "setup-123",
+  })),
 }));
 
 vi.mock("../runtime.js", () => ({

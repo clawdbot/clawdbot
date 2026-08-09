@@ -52,17 +52,20 @@ function createPairingShell(params: {
         approvalNowMs: 0,
         approvalBusy: false,
         devicePairSetupOpen: Boolean(params.setupCode),
-        devicePairSetupLoading: false,
-        devicePairSetupError: null,
-        devicePairSetup: params.setupCode
+        devicePairSetupLifecycle: params.setupCode
           ? {
-              setupCode: params.setupCode,
-              gatewayUrl: "wss://gateway.example.test",
-              auth: "token",
-              urlSource: "test",
+              phase: "waiting",
+              access: "full",
+              setup: {
+                setupId: "setup-copy-test",
+                expiresAtMs: Date.now() + 60_000,
+                setupCode: params.setupCode,
+                gatewayUrl: "wss://gateway.example.test",
+                auth: "token",
+                urlSource: "test",
+              },
             }
-          : null,
-        devicePairSetupAccess: "full",
+          : { phase: "selection", access: "full" },
         devicePairPendingCount: 0,
         updateAvailable: null,
         updateRunning: false,
@@ -93,7 +96,21 @@ function createPairingShell(params: {
     return sidebar;
   };
 
-  return { snapshot, openDevicePairSetup, renderSidebar, container };
+  // The pairing modal is a lazy chunk, so the first shell render emits nothing
+  // for it; re-render until the loaded renderer produces the dialog.
+  const renderPairingDialog = async () => {
+    renderSidebar();
+    return await vi.waitFor(() => {
+      render(shell.render(), container);
+      const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
+      if (!dialog) {
+        throw new Error("Expected the application shell to render its mobile pairing dialog");
+      }
+      return dialog;
+    });
+  };
+
+  return { snapshot, openDevicePairSetup, renderSidebar, renderPairingDialog, container };
 }
 
 afterEach(() => {
@@ -157,15 +174,11 @@ describe("application shell pairing access", () => {
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     const schedule = vi.spyOn(window, "setTimeout");
-    const { container, renderSidebar } = createPairingShell({
+    const { renderPairingDialog } = createPairingShell({
       auth: { role: "operator", scopes: ["operator.pairing"] },
       setupCode: "pair-mobile-secret",
     });
-    renderSidebar();
-    const pairing = container.querySelector<HTMLElement>(".device-pair-setup");
-    if (!pairing) {
-      throw new Error("Expected the application shell to render its mobile pairing dialog");
-    }
+    const pairing = await renderPairingDialog();
     document.body.append(pairing);
     const button = pairing.querySelector<HTMLButtonElement>(".device-pair-setup__actions button");
 

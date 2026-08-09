@@ -19,8 +19,10 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
 }
 
 @Suite struct DeepLinksSecurityTests {
-    @Test func setupResultInitializerKeepsLegacySignature() {
+    @Test func setupResultInitializerDefaultsOptionalFields() {
         let result = DevicePairSetupCodeResult(
+            setupid: "setup-1",
+            expiresatms: 1_700_000_000_000,
             setupcode: "code",
             qrdataurl: nil,
             gatewayurl: "wss://gateway.example.com",
@@ -28,6 +30,7 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
             urlsource: "config")
 
         #expect(result.gatewayurls == nil)
+        #expect(result.accessdowngraded == nil)
     }
 
     @Test func dashboardDeepLinkParses() {

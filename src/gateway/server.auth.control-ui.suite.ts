@@ -1035,7 +1035,7 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("qr setup code returns node token plus full operator handoff", async () => {
-    const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
+    const { issueDevicePairSetupBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
@@ -1056,7 +1056,7 @@ export function registerControlUiAndPairingSuite(): void {
     };
 
     try {
-      const issued = await issueDeviceBootstrapToken({
+      const issued = await issueDevicePairSetupBootstrapToken({
         profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       });
       const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
@@ -1445,7 +1445,7 @@ export function registerControlUiAndPairingSuite(): void {
   );
 
   test("qr bootstrap retry keeps full operator handoff after paired approval", async () => {
-    const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
+    const { issueDevicePairSetupBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveBootstrapDevicePairing, requestDevicePairing } =
@@ -1458,6 +1458,7 @@ export function registerControlUiAndPairingSuite(): void {
     );
     const client = {
       id: "openclaw-ios",
+      displayName: "Test iPhone",
       version: "2026.3.30",
       platform: "iOS 26.3.1",
       mode: "node",
@@ -1465,7 +1466,19 @@ export function registerControlUiAndPairingSuite(): void {
     };
 
     try {
-      const issued = await issueDeviceBootstrapToken({
+      const wsObserver = await openWs(port);
+      const observerConnect = await connectReq(wsObserver, {
+        token: "secret",
+        role: "operator",
+        scopes: ["operator.admin"],
+        client: TEST_OPERATOR_CLIENT,
+      });
+      expect(observerConnect.ok).toBe(true);
+      const completionPromise = onceMessage(
+        wsObserver,
+        (message) => message.type === "event" && message.event === "device.pair.setup.completed",
+      );
+      const issued = await issueDevicePairSetupBootstrapToken({
         profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       });
       const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
@@ -1483,7 +1496,7 @@ export function registerControlUiAndPairingSuite(): void {
         ],
         clientId: client.id,
         clientMode: client.mode,
-        displayName: client.id,
+        displayName: client.displayName,
         platform: client.platform,
         deviceFamily: client.deviceFamily,
         silent: true,
@@ -1524,7 +1537,28 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.write",
       ]);
       expect(operatorHandoff?.scopes).toContain("operator.admin");
+      const completion = await completionPromise;
+      expect(completion.payload).toEqual({
+        setupId: issued.setupId,
+        deviceId: identity.deviceId,
+        deviceName: "Test iPhone",
+        access: "full",
+        ts: expect.any(Number),
+      });
+      // The broadcast is droppable, so the same terminal fact must also be
+      // readable on demand; this is what keeps a missed frame from reading as expiry.
+      const reconciled = await rpcReq(wsObserver, "device.pair.setupStatus", {
+        setupId: issued.setupId,
+      });
+      expect(reconciled.ok).toBe(true);
+      expect(reconciled.payload).toEqual({ completion: completion.payload });
+      const unknownSetup = await rpcReq(wsObserver, "device.pair.setupStatus", {
+        setupId: "setup-never-issued",
+      });
+      expect(unknownSetup.ok).toBe(true);
+      expect(unknownSetup.payload).toEqual({});
       wsRetry.close();
+      wsObserver.close();
 
       await expect(
         verifyDeviceBootstrapToken({

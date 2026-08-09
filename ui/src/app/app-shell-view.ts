@@ -16,7 +16,6 @@ import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import { renderDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -65,6 +64,8 @@ export interface ShellViewHost {
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
+  readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
+  loadDevicePairSetupRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -84,6 +85,24 @@ export interface ShellViewHost {
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
   toggleNavigationSurface(trigger?: HTMLElement): void;
+}
+
+type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtime.ts");
+type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
+
+// Lazy: the pairing modal stays out of the startup chunk (perf budget); it is
+// fetched the first time an operator opens Pair mobile device. Rendering
+// nothing for that one frame is safe because the overlay owns its own state.
+function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupProps) {
+  if (!props.open) {
+    return nothing;
+  }
+  const renderer = host.devicePairSetupRenderer;
+  if (renderer) {
+    return renderer(props);
+  }
+  host.loadDevicePairSetupRenderer();
+  return nothing;
 }
 
 export function renderApplicationShell(host: ShellViewHost) {
@@ -544,12 +563,9 @@ export function renderApplicationShell(host: ShellViewHost) {
             }}
           ></openclaw-exec-approval>`
         : nothing}
-      ${renderDevicePairSetup({
+      ${renderLazyDevicePairSetup(host, {
         open: overlaySnapshot.devicePairSetupOpen,
-        loading: overlaySnapshot.devicePairSetupLoading,
-        error: overlaySnapshot.devicePairSetupError,
-        setup: overlaySnapshot.devicePairSetup,
-        access: overlaySnapshot.devicePairSetupAccess,
+        lifecycle: overlaySnapshot.devicePairSetupLifecycle,
         pendingCount: overlaySnapshot.devicePairPendingCount,
         onRefresh: () => void context.overlays.refreshDevicePairSetup(),
         onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),

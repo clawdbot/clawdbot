@@ -1,15 +1,19 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeDevicePairSetup,
+  completeDevicePairSetup,
   createDevicePairSetupState,
   openDevicePairSetup,
+  parseDevicePairSetupCompletion,
   refreshDevicePairSetup,
   setDevicePairSetupAccess,
-  type DevicePairSetup,
+  type DevicePairSetupLifecycle,
 } from "./device-pair-setup.ts";
 
 type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
+type DevicePairSetup = Extract<DevicePairSetupLifecycle, { phase: "waiting" }>["setup"];
+type DevicePairSetupCompletion = NonNullable<ReturnType<typeof parseDevicePairSetupCompletion>>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -20,17 +24,33 @@ function deferred<T>() {
 }
 
 function setupResult(
+  setupId: string,
   setupCode: string,
-  access?: "full" | "limited",
-  accessDowngraded?: boolean,
+  params: {
+    access?: "full" | "limited";
+    accessDowngraded?: boolean;
+    expiresAtMs?: number;
+  } = {},
 ): DevicePairSetup {
   return {
+    setupId,
     setupCode,
+    expiresAtMs: params.expiresAtMs ?? Date.now() + 60_000,
     gatewayUrl: "wss://gateway.example.com",
     auth: "token",
     urlSource: "test",
-    ...(access ? { access } : {}),
-    ...(accessDowngraded ? { accessDowngraded: true } : {}),
+    ...(params.access ? { access: params.access } : {}),
+    ...(params.accessDowngraded ? { accessDowngraded: true } : {}),
+  };
+}
+
+function completion(setupId: string): DevicePairSetupCompletion {
+  return {
+    setupId,
+    deviceId: "device-1",
+    deviceName: "Operator’s iPhone",
+    access: "full",
+    ts: Date.now(),
   };
 }
 
@@ -40,8 +60,12 @@ function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetu
   return state;
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("device pairing setup state", () => {
-  it("opens without minting a setup credential", async () => {
+  it("opens in access selection without minting a setup credential", async () => {
     const request = vi.fn();
     const state = createDevicePairSetupState({
       client: { request } as unknown as DevicePairSetupState["client"],
@@ -51,6 +75,7 @@ describe("device pairing setup state", () => {
     await openDevicePairSetup(state);
 
     expect(state.devicePairSetupOpen).toBe(true);
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "selection", access: "full" });
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -72,15 +97,17 @@ describe("device pairing setup state", () => {
     state.devicePairSetupOpen = true;
     const newRequest = refreshDevicePairSetup(state);
 
-    oldResponse.resolve(setupResult("OLD"));
+    oldResponse.resolve(setupResult("old-setup", "OLD"));
     await oldRequest;
-    expect(state.devicePairSetup).toBeNull();
-    expect(state.devicePairSetupLoading).toBe(true);
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "loading", access: "full" });
 
-    newResponse.resolve(setupResult("NEW"));
+    newResponse.resolve(setupResult("new-setup", "NEW"));
     await newRequest;
-    expect(state.devicePairSetup?.setupCode).toBe("NEW");
-    expect(state.devicePairSetupLoading).toBe(false);
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      setup: { setupCode: "NEW" },
+    });
+    closeDevicePairSetup(state);
   });
 
   it("ignores an older request after closing and reopening on the same client", async () => {
@@ -99,59 +126,309 @@ describe("device pairing setup state", () => {
     state.devicePairSetupOpen = true;
     const newRequest = refreshDevicePairSetup(state);
 
-    oldResponse.resolve(setupResult("OLD"));
+    oldResponse.resolve(setupResult("old-setup", "OLD"));
     await oldRequest;
-    expect(state.devicePairSetup).toBeNull();
-    expect(state.devicePairSetupLoading).toBe(true);
+    expect(state.devicePairSetupLifecycle.phase).toBe("loading");
 
-    newResponse.resolve(setupResult("NEW"));
+    newResponse.resolve(setupResult("new-setup", "NEW"));
     await newRequest;
-    expect(state.devicePairSetup?.setupCode).toBe("NEW");
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      setup: { setupCode: "NEW" },
+    });
+    closeDevicePairSetup(state);
   });
 
-  it("clears setup credentials and loading state when the dialog closes", () => {
+  it("clears setup credentials and the expiry timer when the dialog closes", () => {
+    vi.useFakeTimers();
     const state = stateWithClient(null);
-    state.devicePairSetupLoading = true;
-    state.devicePairSetupError = "failed";
-    state.devicePairSetup = setupResult("SECRET");
+    state.devicePairSetupLifecycle = {
+      phase: "waiting",
+      access: "full",
+      setup: setupResult("active-setup", "SECRET"),
+    };
+    state.devicePairSetupExpiryTimer = setTimeout(() => {}, 60_000);
 
     closeDevicePairSetup(state);
 
     expect(state.devicePairSetupOpen).toBe(false);
-    expect(state.devicePairSetupLoading).toBe(false);
-    expect(state.devicePairSetupError).toBeNull();
-    expect(state.devicePairSetup).toBeNull();
-    expect(state.devicePairSetupAccess).toBe("full");
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "selection", access: "full" });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("selects limited access before issuing a setup code", async () => {
-    const request = vi.fn().mockResolvedValue(setupResult("LIMITED"));
-    const client = {
-      request,
-    } as unknown as DevicePairSetupState["client"];
-    const state = stateWithClient(client);
+  it("preserves full and limited access request contracts", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("limited-setup", "LIMITED"));
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
     await setDevicePairSetupAccess(state, "limited");
-
     expect(request).not.toHaveBeenCalled();
     await refreshDevicePairSetup(state);
 
     expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
       bootstrapProfile: "limited",
     });
-    expect(state.devicePairSetupAccess).toBe("limited");
-    expect(state.devicePairSetup?.setupCode).toBe("LIMITED");
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      access: "limited",
+      setup: { setupCode: "LIMITED" },
+    });
+    closeDevicePairSetup(state);
+
+    state.devicePairSetupOpen = true;
+    request.mockResolvedValueOnce(setupResult("full-setup", "FULL"));
+    await refreshDevicePairSetup(state);
+    expect(request).toHaveBeenLastCalledWith("device.pair.setupCode", {});
+    closeDevicePairSetup(state);
   });
 
   it("reflects a server-side plaintext downgrade", async () => {
-    const request = vi.fn().mockResolvedValue(setupResult("LIMITED", "limited", true));
-    const state = stateWithClient({
-      request,
-    } as unknown as DevicePairSetupState["client"]);
+    const request = vi.fn().mockResolvedValue(
+      setupResult("downgraded-setup", "LIMITED", {
+        access: "limited",
+        accessDowngraded: true,
+      }),
+    );
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
     await refreshDevicePairSetup(state);
 
-    expect(state.devicePairSetupAccess).toBe("limited");
-    expect(state.devicePairSetup?.accessDowngraded).toBe(true);
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      access: "limited",
+      setup: { accessDowngraded: true },
+    });
+    closeDevicePairSetup(state);
+  });
+
+  it("keeps the selected access when setup creation fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("setup unavailable"));
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
+
+    await refreshDevicePairSetup(state);
+
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "error",
+      access: "full",
+      message: "Error: setup unavailable",
+    });
+    expect(state.devicePairSetupExpiryTimer).toBeNull();
+  });
+
+  it("completes only the exact active setup and immediately retires its credential", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = vi
+      .fn()
+      .mockResolvedValue(
+        setupResult("active-setup", "SECRET", { expiresAtMs: Date.now() + 60_000 }),
+      );
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
+    const onChange = vi.fn();
+    state.onDevicePairSetupChange = onChange;
+    await refreshDevicePairSetup(state);
+
+    expect(completeDevicePairSetup(state, completion("unrelated-setup"))).toBe(false);
+    expect(state.devicePairSetupLifecycle.phase).toBe("waiting");
+
+    expect(completeDevicePairSetup(state, completion("active-setup"))).toBe(true);
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "success",
+      access: "full",
+      deviceName: "Operator’s iPhone",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onChange).toHaveBeenCalledOnce();
+
+    expect(completeDevicePairSetup(state, completion("active-setup"))).toBe(false);
+  });
+
+  // The modal keeps only what it renders; correlation and presentation fields
+  // survive, the rest of the event is dropped rather than carried as dead state.
+  it("keeps only the rendered fields of the completion payload", () => {
+    expect(
+      parseDevicePairSetupCompletion({
+        setupId: "setup-1",
+        deviceId: "device-1",
+        deviceName: "  Operator’s iPhone  ",
+        access: "limited",
+        ts: 1_000,
+      }),
+    ).toEqual({
+      setupId: "setup-1",
+      deviceName: "Operator’s iPhone",
+      access: "limited",
+    });
+    expect(
+      parseDevicePairSetupCompletion({
+        setupId: "setup-1",
+        deviceId: "device-1",
+        deviceName: "   ",
+        access: "node",
+        ts: 1_000,
+      }),
+    ).toEqual({ setupId: "setup-1", access: "node" });
+  });
+
+  it.each([
+    ["a non-record payload", "not-an-object"],
+    ["a missing setup id", { access: "full" }],
+    ["an empty setup id", { setupId: "", access: "full" }],
+    ["an unknown access level", { setupId: "setup-1", access: "admin" }],
+    ["a missing access level", { setupId: "setup-1", deviceId: "device-1" }],
+  ] as const)("rejects %s", (_label, payload) => {
+    expect(parseDevicePairSetupCompletion(payload)).toBeNull();
+  });
+
+  it("expires only the currently active setup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const onChange = vi.fn();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(setupResult("old-setup", "OLD", { expiresAtMs: 2_000 }))
+      .mockResolvedValueOnce(setupResult("new-setup", "NEW", { expiresAtMs: 5_000 }));
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+      onChange,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    await refreshDevicePairSetup(state);
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      setup: { setupId: "new-setup", setupCode: "NEW" },
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state.devicePairSetupLifecycle.phase).toBe("waiting");
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The completion broadcast is droppable, so expiry has to ask the gateway
+  // before it can claim the credential was never used.
+  it("reconciles a missed completion at expiry instead of showing expired", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const onChange = vi.fn();
+    const request = vi.fn(async (method: string) =>
+      method === "device.pair.setupStatus"
+        ? { completion: completion("live-setup") }
+        : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
+    );
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+      onChange,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(request).toHaveBeenCalledWith("device.pair.setupStatus", { setupId: "live-setup" });
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "success",
+      access: "full",
+      deviceName: "Operator’s iPhone",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["no completion is recorded", async () => ({})],
+    [
+      "the reconcile request fails",
+      async () => {
+        throw new Error("offline");
+      },
+    ],
+    [
+      "the recorded completion belongs to another setup",
+      async () => ({
+        completion: completion("other-setup"),
+      }),
+    ],
+  ] as const)("shows expiry when %s", async (_label, statusResponse) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = vi.fn(async (method: string) =>
+      method === "device.pair.setupStatus"
+        ? await statusResponse()
+        : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
+    );
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("lets a regenerated setup outlive a slow reconcile for the retired one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const status = deferred<{ completion?: DevicePairSetupCompletion }>();
+    const request = vi
+      .fn()
+      .mockImplementation(async (method: string) =>
+        method === "device.pair.setupStatus" ? await status.promise : setupResult("new", "NEW"),
+      )
+      .mockImplementationOnce(async () => setupResult("old", "OLD", { expiresAtMs: 2_000 }));
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await refreshDevicePairSetup(state);
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      setup: { setupId: "new" },
+    });
+
+    status.resolve({ completion: completion("old") });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.devicePairSetupLifecycle).toMatchObject({
+      phase: "waiting",
+      setup: { setupId: "new" },
+    });
+  });
+
+  it("retires a setup response that is already expired", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000);
+    const onChange = vi.fn();
+    const request = vi
+      .fn()
+      .mockResolvedValue(setupResult("expired-setup", "SECRET", { expiresAtMs: 1_999 }));
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+      onChange,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    // Even an already-lapsed credential reconciles first; expiry lands one turn later.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

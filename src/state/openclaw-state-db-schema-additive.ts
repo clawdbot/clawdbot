@@ -83,6 +83,24 @@ export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
   `);
 }
 
+/**
+ * Same-version additive table, registered in LAZY_ADDITIVE_STATE_TABLES so
+ * existing v6 databases stay valid without it. Mirrors the canonical schema;
+ * a downgraded reader simply loses setup-completion reconciliation.
+ */
+export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+      setup_id TEXT NOT NULL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      device_name TEXT,
+      access TEXT NOT NULL,
+      completed_at_ms INTEGER NOT NULL,
+      retain_until_ms INTEGER NOT NULL
+    ) STRICT
+  `);
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
@@ -379,6 +397,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
   );
   ensureColumn(db, "device_bootstrap_tokens", "pending_profile_json TEXT");
+  ensureColumn(db, "device_bootstrap_tokens", "setup_id TEXT");
   ensureColumn(db, "gateway_restart_handoff", "restart_trace_started_at INTEGER");
   ensureColumn(db, "gateway_restart_handoff", "restart_trace_last_at INTEGER");
   ensureColumn(db, "gateway_restart_intent", "reason TEXT");

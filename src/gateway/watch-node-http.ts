@@ -51,6 +51,7 @@ import {
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import { hasForwardedRequestHeaders } from "./auth.js";
+import { settleSetupCompletion } from "./device-pair-setup-completion.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
@@ -893,6 +894,19 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             });
           }
           return;
+        }
+        if (revokedBootstrapTokenRecord) {
+          try {
+            await settleSetupCompletion({
+              record: revokedBootstrapTokenRecord,
+              deviceId: session.nodeId,
+              broadcast: options.broadcast,
+              baseDir: options.pairingBaseDir,
+              ts: now(),
+            });
+          } catch (error) {
+            options.onError?.("watch node setup completion settle failed", error);
+          }
         }
         options.rateLimiter?.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE);
         if (reconciliation.shouldClearPendingPairings && cleanupClaim) {

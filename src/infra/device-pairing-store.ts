@@ -6,6 +6,8 @@
 // cross-process last-writer-wins per store) while WAL + busy_timeout make
 // concurrent gateway/CLI access safe at the statement level.
 import type { DatabaseSync } from "node:sqlite";
+import type { PairingSetupAccess } from "../shared/device-bootstrap-profile.js";
+import { ensureDevicePairSetupCompletionSchema } from "../state/openclaw-state-db-schema-additive.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   DevicePairingPaired,
@@ -22,6 +24,7 @@ import type {
   DeviceAuthToken,
   DeviceBootstrapTokenRecord,
   DevicePairingPendingRecord,
+  DevicePairSetupCompletionRecord,
   PairedDevice,
   PairedDeviceApprovalKind,
   PairedDeviceNodeSurface,
@@ -244,6 +247,20 @@ function fromApprovedViaColumn(value: string | null): PairedDeviceApprovalKind |
   return value !== null && APPROVAL_KINDS.has(value) ? (value as PairedDeviceApprovalKind) : null;
 }
 
+// Same compile-time exhaustiveness contract as APPROVAL_KIND_MEMBERS: the
+// completion access level is presented to the operator, so an unrecognized
+// stored value must fall back to the least-privilege label, never leak through.
+const PAIRING_SETUP_ACCESS_MEMBERS = {
+  full: true,
+  limited: true,
+  node: true,
+} satisfies Record<PairingSetupAccess, true>;
+const PAIRING_SETUP_ACCESS_VALUES = new Set(Object.keys(PAIRING_SETUP_ACCESS_MEMBERS));
+
+function fromSetupCompletionAccessColumn(value: string): PairingSetupAccess {
+  return PAIRING_SETUP_ACCESS_VALUES.has(value) ? (value as PairingSetupAccess) : "limited";
+}
+
 function fromPairedRow(row: DevicePairingPaired): PairedDevice {
   return {
     deviceId: row.device_id,
@@ -284,6 +301,7 @@ function toBootstrapRow(
   return {
     token_key: tokenKey,
     token: record.token,
+    setup_id: record.setupId ?? null,
     ts: record.ts,
     device_id: record.deviceId ?? null,
     public_key: record.publicKey ?? null,
@@ -298,6 +316,7 @@ function toBootstrapRow(
 function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecord {
   return {
     token: row.token,
+    ...optional("setupId", row.setup_id),
     ts: row.ts,
     ...optional("deviceId", row.device_id),
     ...optional("publicKey", row.public_key),
@@ -509,5 +528,67 @@ export function persistDeviceBootstrapTokenRecords(
     if (rows.length > 0) {
       executeSqliteQuerySync(db, kysely.insertInto("device_bootstrap_tokens").values(rows));
     }
+  }, resolveDevicePairingStateDbOptions(baseDir));
+}
+
+/** Read one setup-completion record, ignoring any record past its retention horizon. */
+export function loadDevicePairSetupCompletionRecord(
+  setupId: string,
+  nowMs: number,
+  baseDir?: string,
+): DevicePairSetupCompletionRecord | null {
+  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  ensureDevicePairSetupCompletionSchema(db);
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("device_pair_setup_completions")
+      .selectAll()
+      .where("setup_id", "=", setupId)
+      .where("retain_until_ms", ">", nowMs),
+  );
+  return row
+    ? {
+        setupId: row.setup_id,
+        deviceId: row.device_id,
+        ...optional("deviceName", row.device_name),
+        access: fromSetupCompletionAccessColumn(row.access),
+        completedAtMs: row.completed_at_ms,
+        retainUntilMs: row.retain_until_ms,
+      }
+    : null;
+}
+
+/** Persist one setup-completion record and drop every record past retention. */
+export function saveDevicePairSetupCompletionRecord(
+  record: DevicePairSetupCompletionRecord,
+  nowMs: number,
+  baseDir?: string,
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureDevicePairSetupCompletionSchema(db);
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    // Retention prune and replace share one statement so a re-settled setup id
+    // cannot collide with its own primary key.
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("device_pair_setup_completions")
+        .where((eb) =>
+          eb.or([eb("retain_until_ms", "<=", nowMs), eb("setup_id", "=", record.setupId)]),
+        ),
+    );
+    executeSqliteQuerySync(
+      db,
+      kysely.insertInto("device_pair_setup_completions").values({
+        setup_id: record.setupId,
+        device_id: record.deviceId,
+        device_name: record.deviceName ?? null,
+        access: record.access,
+        completed_at_ms: record.completedAtMs,
+        retain_until_ms: record.retainUntilMs,
+      }),
+    );
   }, resolveDevicePairingStateDbOptions(baseDir));
 }

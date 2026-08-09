@@ -8,12 +8,13 @@ import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
+  completeDevicePairSetup,
   createDevicePairSetupState,
   openDevicePairSetup as openDevicePairSetupState,
+  parseDevicePairSetupCompletion,
   readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
   setDevicePairSetupAccess as setPairAccess,
-  type DevicePairSetup,
   type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
 import {
@@ -77,14 +78,8 @@ type ApplicationOverlaySnapshot = {
   approvalBusy: boolean;
   approvalErrors: ReadonlyMap<string, string>;
   approvalNowMs: number;
-  devicePairSetupOpen: boolean;
-  devicePairSetupLoading: boolean;
-  devicePairSetupError: string | null;
-  devicePairSetup: DevicePairSetup | null;
-  devicePairSetupAccess: DevicePairSetupAccess;
-  devicePairPendingCount: number;
   deviceAuthMigration: import("./device-auth-migration.ts").DeviceAuthMigrationSnapshot;
-};
+} & ReturnType<typeof readDevicePairSetupSnapshot>;
 
 export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
@@ -126,10 +121,7 @@ export function createApplicationOverlays(
     approvalErrors: new Map(),
     approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
-    devicePairSetupLoading: false,
-    devicePairSetupError: null,
-    devicePairSetup: null,
-    devicePairSetupAccess: "full",
+    devicePairSetupLifecycle: { phase: "selection", access: "full" },
     devicePairPendingCount: 0,
     deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
   };
@@ -155,6 +147,7 @@ export function createApplicationOverlays(
   const devicePairSetupState = createDevicePairSetupState({
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
+    onChange: () => publish(),
   });
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
@@ -165,7 +158,7 @@ export function createApplicationOverlays(
     execApprovalExpiryTimers: new Map(),
   };
 
-  const publish = () => {
+  function publish() {
     snapshot = {
       ...snapshot,
       // The update RPC can finish before its restart handoff. Keep consumers
@@ -180,7 +173,7 @@ export function createApplicationOverlays(
     for (const listener of listeners) {
       listener(snapshot);
     }
-  };
+  }
   promptState.execApprovalChanged = publish;
   const pairingPendingCount = createOverlayPairingPendingCount({
     gateway,
@@ -307,7 +300,7 @@ export function createApplicationOverlays(
     }
     if (accessTransition.pairingChanged) {
       pairingPendingCount.invalidate({
-        clear: !operatorAccess.canAdmin && !operatorAccess.canPair,
+        clear: !(operatorAccess.canAdmin || operatorAccess.canPair),
       });
     }
     activeClient = next.client;
@@ -391,6 +384,13 @@ export function createApplicationOverlays(
 
   const stopEvents = gateway.subscribeEvents((event) => {
     if (disposed || !isGatewayEvent(event)) {
+      return;
+    }
+    if (event.event === "device.pair.setup.completed") {
+      const completion = parseDevicePairSetupCompletion(event.payload);
+      if (completion) {
+        completeDevicePairSetup(devicePairSetupState, completion);
+      }
       return;
     }
     if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
@@ -690,9 +690,7 @@ export function createApplicationOverlays(
       publish();
     },
     async secureThisBrowser() {
-      const client = activeClient;
-      const epoch = connectedEpoch;
-      await deviceAuthMigration.secure(client, epoch);
+      await deviceAuthMigration.secure(activeClient, connectedEpoch);
     },
     dispose() {
       disposed = true;

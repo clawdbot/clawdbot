@@ -1,4 +1,5 @@
 // Bootstraps device identity and trust state on first run.
+import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -13,19 +14,29 @@ import {
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
+  type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import {
   loadDeviceBootstrapTokenRecords,
+  loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
+  saveDevicePairSetupCompletionRecord,
 } from "./device-pairing-store.js";
-import type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
+import type {
+  DeviceBootstrapTokenRecord,
+  DevicePairSetupCompletionRecord,
+} from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 /** Bootstrap pairing tokens are short-lived bearer credentials for first device auth. */
 const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
+
+// Outlive the credential itself: a client that waits for the full TTL still has
+// to find its completion after the code it was showing has expired.
+const DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS = 2 * DEVICE_BOOTSTRAP_TOKEN_TTL_MS;
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
@@ -180,14 +191,15 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
   return state;
 }
 
-/** Issue a short-lived bootstrap token with a bounded role/scope handoff profile. */
-export async function issueDeviceBootstrapToken(
-  params: {
-    baseDir?: string;
-    profile?: DeviceBootstrapProfileInput;
-    roles?: readonly string[];
-    scopes?: readonly string[];
-  } = {},
+type DeviceBootstrapTokenIssueParams = {
+  baseDir?: string;
+  profile?: DeviceBootstrapProfileInput;
+  roles?: readonly string[];
+  scopes?: readonly string[];
+};
+
+async function issueDeviceBootstrapTokenRecord(
+  params: DeviceBootstrapTokenIssueParams & { setupId?: string },
 ): Promise<{ token: string; expiresAtMs: number }> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
@@ -205,6 +217,7 @@ export async function issueDeviceBootstrapToken(
     warnIfIssuedBootstrapScopesWereStripped({ input: profileInput, profile });
     state[token] = {
       token,
+      ...(params.setupId ? { setupId: params.setupId } : {}),
       ts: issuedAtMs,
       profile,
       redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
@@ -213,6 +226,77 @@ export async function issueDeviceBootstrapToken(
     persistState(state, params.baseDir);
     return { token, expiresAtMs };
   });
+}
+
+/** Issue a short-lived generic bootstrap token with a bounded role/scope handoff profile. */
+export async function issueDeviceBootstrapToken(
+  params: DeviceBootstrapTokenIssueParams = {},
+): Promise<{ token: string; expiresAtMs: number }> {
+  return await issueDeviceBootstrapTokenRecord(params);
+}
+
+/**
+ * Issue a setup bootstrap token plus an opaque correlation id. `setupId` is
+ * minted here, beside the credential, so the presenting client can follow one
+ * exact credential without ever handling the bearer token. Generic bootstrap
+ * handoffs stay uncorrelated: only setup codes have a presenting client.
+ */
+export async function issueDevicePairSetupBootstrapToken(params: {
+  baseDir?: string;
+  profile: DeviceBootstrapProfileInput;
+}): Promise<{ token: string; expiresAtMs: number; setupId: string }> {
+  const setupId = randomUUID();
+  const issued = await issueDeviceBootstrapTokenRecord({ ...params, setupId });
+  return { ...issued, setupId };
+}
+
+/**
+ * Record the terminal outcome of one setup credential. Redemption deletes the
+ * bootstrap row, so without this the completion broadcast is the only proof the
+ * setup succeeded and a dropped frame becomes a false "expired" for the
+ * operator. Retention outlives the credential so a client waiting to its expiry
+ * can always reconcile.
+ */
+export async function recordDevicePairSetupCompletion(params: {
+  setupId: string;
+  deviceId: string;
+  deviceName?: string;
+  access: PairingSetupAccess;
+  completedAtMs: number;
+  baseDir?: string;
+}): Promise<void> {
+  return await withLock(async () => {
+    // Retention runs on the store's own clock, never the event timestamp a
+    // caller supplies, so an injected or skewed `completedAtMs` cannot make a
+    // fresh completion unreadable.
+    const nowMs = Date.now();
+    saveDevicePairSetupCompletionRecord(
+      {
+        setupId: params.setupId,
+        deviceId: params.deviceId,
+        ...(params.deviceName ? { deviceName: params.deviceName } : {}),
+        access: params.access,
+        completedAtMs: params.completedAtMs,
+        retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,
+      },
+      nowMs,
+      params.baseDir,
+    );
+  });
+}
+
+/**
+ * Read the terminal outcome for one setup credential, or null while none is
+ * recorded. Shares this module's lock with issuance and revocation so a status
+ * query never observes a setup mid-settlement.
+ */
+export async function readDevicePairSetupCompletion(params: {
+  setupId: string;
+  baseDir?: string;
+}): Promise<DevicePairSetupCompletionRecord | null> {
+  return await withLock(async () =>
+    loadDevicePairSetupCompletionRecord(params.setupId, Date.now(), params.baseDir),
+  );
 }
 
 /** Remove every outstanding bootstrap token from the pairing state file. */

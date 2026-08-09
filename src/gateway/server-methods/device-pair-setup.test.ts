@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   encodePairingSetupCode: vi.fn(),
   renderQrPngDataUrl: vi.fn(),
   runCommandWithTimeout: vi.fn(),
+  readDevicePairSetupCompletion: vi.fn(),
 }));
 
 vi.mock("../../pairing/setup-code.js", () => ({
@@ -23,6 +24,9 @@ vi.mock("../../media/qr-image.js", () => ({
 }));
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
+vi.mock("../../infra/device-bootstrap.js", () => ({
+  readDevicePairSetupCompletion: mocks.readDevicePairSetupCompletion,
 }));
 
 import { devicePairSetupHandlers } from "./device-pair-setup.js";
@@ -59,6 +63,8 @@ const okResolution = {
   urlSource: "remote",
   access: "full" as const,
   accessDowngraded: false,
+  setupId: "setup-123",
+  expiresAtMs: 1_800_000_000_000,
 };
 
 describe("device.pair.setupCode", () => {
@@ -67,6 +73,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReset();
     mocks.renderQrPngDataUrl.mockReset();
     mocks.runCommandWithTimeout.mockReset();
+    mocks.readDevicePairSetupCompletion.mockReset();
   });
 
   it("returns the setup code, QR data URL, and only an auth label", async () => {
@@ -88,6 +95,8 @@ describe("device.pair.setupCode", () => {
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(payload).toEqual({
+      setupId: "setup-123",
+      expiresAtMs: 1_800_000_000_000,
       setupCode: "SETUP-CODE-XYZ",
       qrDataUrl: "data:image/png;base64,qr",
       gatewayUrl: "wss://gw.example:8443",
@@ -96,7 +105,7 @@ describe("device.pair.setupCode", () => {
       urlSource: "remote",
       access: "full",
     });
-    // The bootstrap token only lives inside the (opaque) setup code, never as a field.
+    // The setup id is an independent correlator; the bearer remains only in the opaque code.
     expect(JSON.stringify(payload)).not.toContain("boot-123");
   });
 
@@ -329,5 +338,73 @@ describe("device.pair.setupCode", () => {
     expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
     expect(payload.qrDataUrl).toBeUndefined();
     expect(error).toBeUndefined();
+  });
+});
+
+describe("device.pair.setupStatus", () => {
+  async function runSetupStatus(params: Record<string, unknown>) {
+    const { options, respond } = createOptions(params);
+    await expectDefined(
+      devicePairSetupHandlers["device.pair.setupStatus"],
+      'devicePairSetupHandlers["device.pair.setupStatus"] test invariant',
+    )(options);
+    return expectDefined(respond.mock.calls[0], "respond.mock.calls[0] test invariant");
+  }
+
+  beforeEach(() => {
+    mocks.readDevicePairSetupCompletion.mockReset();
+  });
+
+  it("returns the recorded completion for the exact setup id", async () => {
+    mocks.readDevicePairSetupCompletion.mockResolvedValue({
+      setupId: "setup-123",
+      deviceId: "device-123",
+      deviceName: "Pixel 9",
+      access: "full",
+      completedAtMs: 1_800_000_000_000,
+      retainUntilMs: 1_800_000_600_000,
+    });
+
+    const [ok, payload, error] = await runSetupStatus({ setupId: "setup-123" });
+
+    expect(mocks.readDevicePairSetupCompletion).toHaveBeenCalledWith({ setupId: "setup-123" });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    // Retention bookkeeping stays server-side; the client sees the event payload only.
+    expect(payload).toEqual({
+      completion: {
+        setupId: "setup-123",
+        deviceId: "device-123",
+        deviceName: "Pixel 9",
+        access: "full",
+        ts: 1_800_000_000_000,
+      },
+    });
+  });
+
+  it("returns an empty result when no completion is recorded", async () => {
+    mocks.readDevicePairSetupCompletion.mockResolvedValue(null);
+
+    const [ok, payload] = await runSetupStatus({ setupId: "setup-unknown" });
+
+    expect(ok).toBe(true);
+    expect(payload).toEqual({});
+  });
+
+  it("rejects unknown params before reading pairing state", async () => {
+    const [ok] = await runSetupStatus({ setupId: "setup-123", bogus: true });
+
+    expect(ok).toBe(false);
+    expect(mocks.readDevicePairSetupCompletion).not.toHaveBeenCalled();
+  });
+
+  it("reports an unavailable error when the completion store throws", async () => {
+    mocks.readDevicePairSetupCompletion.mockRejectedValue(new Error("state db locked"));
+
+    const [ok, payload, error] = await runSetupStatus({ setupId: "setup-123" });
+
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toContain("state db locked");
   });
 });

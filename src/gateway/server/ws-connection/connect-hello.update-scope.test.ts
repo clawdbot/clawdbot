@@ -8,10 +8,29 @@ const {
   emitGatewayAuthSecurityEventMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
+  redeemDeviceBootstrapTokenProfileMock,
+  restoreDeviceBootstrapTokenMock,
+  revokeDeviceBootstrapTokenMock,
+  settleSetupCompletionMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
+  settleSetupCompletionMock: vi.fn(async () => undefined),
+  redeemDeviceBootstrapTokenProfileMock: vi.fn(async () => ({
+    recorded: true,
+    fullyRedeemed: true,
+  })),
+  restoreDeviceBootstrapTokenMock: vi.fn(async () => undefined),
+  revokeDeviceBootstrapTokenMock: vi.fn(async () => ({
+    removed: true,
+    record: {
+      token: "bootstrap-secret",
+      setupId: "setup-failed-send",
+      ts: 1,
+      issuedAtMs: 1,
+    },
+  })),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
     const updateAvailable = {
       currentVersion: "2026.8.7",
@@ -50,6 +69,16 @@ const {
         : {}),
     };
   }),
+}));
+
+vi.mock("../../../infra/device-bootstrap.js", () => ({
+  redeemDeviceBootstrapTokenProfile: redeemDeviceBootstrapTokenProfileMock,
+  restoreDeviceBootstrapToken: restoreDeviceBootstrapTokenMock,
+  revokeDeviceBootstrapToken: revokeDeviceBootstrapTokenMock,
+}));
+
+vi.mock("../../device-pair-setup-completion.js", () => ({
+  settleSetupCompletion: settleSetupCompletionMock,
 }));
 
 vi.mock("../health-state.js", () => ({
@@ -251,5 +280,26 @@ describe("sendGatewayHello update detail scope", () => {
       expect(scope).not.toContain("profile-");
       expect(scope).not.toContain("device-token-");
     }
+  });
+
+  it("restores a setup token without completing it when hello delivery fails", async () => {
+    const context = makeContext("node", []);
+    context.sendFrame.mockRejectedValueOnce(new Error("socket closed"));
+    const state = {
+      ...makeState("node", []),
+      device: { id: "device-123" },
+      authMethod: "bootstrap-token",
+      bootstrapTokenCandidate: "bootstrap-secret",
+      issuedBootstrapProfile: { roles: ["node"], scopes: [] },
+    };
+
+    await sendGatewayHello(context as never, state as never, {});
+
+    expect(revokeDeviceBootstrapTokenMock).toHaveBeenCalledWith({ token: "bootstrap-secret" });
+    expect(restoreDeviceBootstrapTokenMock).toHaveBeenCalledWith({
+      record: expect.objectContaining({ setupId: "setup-failed-send" }),
+    });
+    expect(settleSetupCompletionMock).not.toHaveBeenCalled();
+    expect(context.handler.close).toHaveBeenCalled();
   });
 });

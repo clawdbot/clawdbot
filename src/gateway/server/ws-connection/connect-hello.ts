@@ -20,6 +20,7 @@ import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { settleSetupCompletion } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
@@ -205,6 +206,17 @@ export async function sendGatewayHello(
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
     close();
     return;
+  }
+  if (revokedBootstrapTokenRecord && device) {
+    try {
+      await settleSetupCompletion({
+        record: revokedBootstrapTokenRecord,
+        deviceId: device.id,
+        broadcast: buildRequestContext().broadcast,
+      });
+    } catch (err) {
+      logGateway.warn(`setup completion settle failed device=${device.id}: ${formatForLog(err)}`);
+    }
   }
   let authProvided = authMethod;
   if (authMethod !== "device-token" && authMethod !== "bootstrap-token") {

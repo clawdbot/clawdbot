@@ -22,6 +22,8 @@ export type DeviceBootstrapProfileInput = {
   purpose?: DeviceBootstrapPurpose;
 };
 
+export type PairingSetupAccess = "full" | "limited" | "node";
+
 /** Operator scopes allowed to cross the short-lived bootstrap handoff boundary. */
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
   "operator.approvals",
@@ -136,6 +138,18 @@ export function isNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
   return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+}
+
+export function resolvePairingSetupAccess(
+  input: DeviceBootstrapProfileInput | undefined,
+): PairingSetupAccess {
+  if (deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+    return "full";
+  }
+  if (deviceBootstrapProfilesEqual(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+    return "node";
+  }
+  return "limited";
 }
 
 /** Return whether an input exactly matches the embedded voice-node setup profile. */

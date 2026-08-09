@@ -179,6 +179,23 @@ class OpenClawShell
   criticalNoticeRuntime: Promise<
     typeof import("../pages/chat/critical-observer-notice.runtime.ts")
   > | null = null;
+  // Lazy for the same reason: the pairing modal is opened from Settings, not at
+  // boot, so its template, icons, and strings stay off the startup chunk.
+  @state() devicePairSetupRenderer:
+    | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
+    | null = null;
+  private devicePairSetupRuntime: Promise<unknown> | null = null;
+
+  loadDevicePairSetupRenderer(): void {
+    this.devicePairSetupRuntime ??= import("../pages/devices/view-pairing.runtime.ts")
+      .then((module) => {
+        this.devicePairSetupRenderer = module.renderDevicePairSetup;
+      })
+      .catch(() => {
+        // Allow a later open to retry; the modal renders nothing until it loads.
+        this.devicePairSetupRuntime = null;
+      });
+  }
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellWorkboard = new ShellWorkboardOwner(this);

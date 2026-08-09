@@ -7,14 +7,23 @@ import { flushLogger } from "../logging/logger.js";
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
+  issueDevicePairSetupBootstrapToken,
+  readDevicePairSetupCompletion,
+  recordDevicePairSetupCompletion,
   redeemDeviceBootstrapTokenProfile,
   restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
@@ -78,6 +87,124 @@ describe("device bootstrap tokens", () => {
         ],
       },
     });
+  });
+
+  it("persists setup correlation only on the exact issued bootstrap token", async () => {
+    const baseDir = await createTempDir();
+    const setup = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const otherSetup = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const unrelated = await issueDeviceBootstrapToken({ baseDir });
+
+    const records = loadDeviceBootstrapTokenRecords(baseDir);
+    expect(setup.setupId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(setup.setupId).not.toBe(setup.token);
+    expect(otherSetup.setupId).not.toBe(setup.setupId);
+    expect(records[setup.token]?.setupId).toBe(setup.setupId);
+    expect(records[otherSetup.token]?.setupId).toBe(otherSetup.setupId);
+    expect(records[unrelated.token]?.setupId).toBeUndefined();
+
+    const revoked = await revokeDeviceBootstrapToken({ baseDir, token: setup.token });
+    expect(revoked.record?.setupId).toBe(setup.setupId);
+    expect(revoked.record).not.toHaveProperty("expiresAtMs");
+  });
+
+  // `openclaw qr --voice-node` issues through the same setup boundary. Correlation
+  // must never gate issuance on a profile allowlist or that command stops working.
+  it.each([
+    ["voice node", VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE],
+    ["full access", FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE],
+    ["node", NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE],
+  ] as const)("issues a correlated %s setup credential", async (_label, profile) => {
+    const baseDir = await createTempDir();
+    const issued = await issueDevicePairSetupBootstrapToken({ baseDir, profile });
+    expect(issued.setupId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]?.profile).toEqual(profile);
+  });
+
+  it("recovers the recorded completion after the setup record is revoked", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    await recordDevicePairSetupCompletion({
+      baseDir,
+      setupId: issued.setupId,
+      deviceId: "device-123",
+      deviceName: "Studio watch",
+      access: "node",
+      completedAtMs: 1_000,
+    });
+    await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
+
+    await expect(
+      readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
+    ).resolves.toMatchObject({
+      setupId: issued.setupId,
+      deviceId: "device-123",
+      deviceName: "Studio watch",
+      access: "node",
+      completedAtMs: 1_000,
+    });
+    await expect(
+      readDevicePairSetupCompletion({ baseDir, setupId: "some-other-setup" }),
+    ).resolves.toBeNull();
+  });
+
+  // Databases written before this table shipped stay at the same schema
+  // version, so the feature owner has to create it on first use rather than
+  // the state schema refusing to open.
+  it("creates the completion table on first use in an existing state database", async () => {
+    const baseDir = await createTempDir();
+    await issueDeviceBootstrapToken({ baseDir });
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+    });
+    db.exec("DROP TABLE IF EXISTS device_pair_setup_completions");
+
+    await recordDevicePairSetupCompletion({
+      baseDir,
+      setupId: "setup-first-use",
+      deviceId: "device-123",
+      access: "full",
+      completedAtMs: Date.now(),
+    });
+
+    await expect(
+      readDevicePairSetupCompletion({ baseDir, setupId: "setup-first-use" }),
+    ).resolves.toMatchObject({ setupId: "setup-first-use", access: "full" });
+  });
+
+  // Retention outlives the credential's own 10-minute TTL, so a client that
+  // waits for the full setup window can still reconcile after it lapses.
+  it.each([
+    ["inside retention", 19 * 60 * 1000, true],
+    ["past retention", 20 * 60 * 1000, false],
+  ] as const)("reports a completion %s", async (_label, elapsedMs, expectFound) => {
+    const baseDir = await createTempDir();
+    const recordedAtMs = Date.now();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(recordedAtMs));
+      await recordDevicePairSetupCompletion({
+        baseDir,
+        setupId: "setup-retained",
+        deviceId: "device-123",
+        access: "limited",
+        completedAtMs: recordedAtMs,
+      });
+      vi.setSystemTime(new Date(recordedAtMs + elapsedMs));
+      const found = await readDevicePairSetupCompletion({ baseDir, setupId: "setup-retained" });
+      expect(found === null).toBe(!expectFound);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects bootstrap token issuance when expiry would exceed the Date range", async () => {
@@ -260,7 +387,10 @@ describe("device bootstrap tokens", () => {
 
   it("restores a revoked bootstrap token record after send failure recovery", async () => {
     const baseDir = await createTempDir();
-    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
 
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
     const revoked = await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
@@ -272,6 +402,7 @@ describe("device bootstrap tokens", () => {
     }
     await restoreDeviceBootstrapToken({ baseDir, record: revoked.record });
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]?.setupId).toBe(issued.setupId);
   });
 
   it("revokes a specific bootstrap token", async () => {

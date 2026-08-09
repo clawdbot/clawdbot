@@ -17778,6 +17778,8 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
 }
 
 public struct DevicePairSetupCodeResult: Codable, Sendable {
+    public let setupid: String
+    public let expiresatms: Int
     public let setupcode: String
     public let qrdataurl: String?
     public let gatewayurl: String
@@ -17788,6 +17790,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let accessdowngraded: Bool?
 
     public init(
+        setupid: String,
+        expiresatms: Int,
         setupcode: String,
         qrdataurl: String? = nil,
         gatewayurl: String,
@@ -17797,6 +17801,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         access: AnyCodable? = nil,
         accessdowngraded: Bool? = nil)
     {
+        self.setupid = setupid
+        self.expiresatms = expiresatms
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
         self.gatewayurl = gatewayurl
@@ -17808,6 +17814,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case setupid = "setupId"
+        case expiresatms = "expiresAtMs"
         case setupcode = "setupCode"
         case qrdataurl = "qrDataUrl"
         case gatewayurl = "gatewayUrl"
@@ -17816,6 +17824,34 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case urlsource = "urlSource"
         case access
         case accessdowngraded = "accessDowngraded"
+    }
+}
+
+public struct DevicePairSetupStatusParams: Codable, Sendable {
+    public let setupid: String
+
+    public init(
+        setupid: String)
+    {
+        self.setupid = setupid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case setupid = "setupId"
+    }
+}
+
+public struct DevicePairSetupStatusResult: Codable, Sendable {
+    public let completion: DevicePairSetupCompletedEvent?
+
+    public init(
+        completion: DevicePairSetupCompletedEvent? = nil)
+    {
+        self.completion = completion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case completion
     }
 }
 
@@ -17973,6 +18009,36 @@ public struct DevicePairResolvedEvent: Codable, Sendable {
         case requestid = "requestId"
         case deviceid = "deviceId"
         case decision
+        case ts
+    }
+}
+
+public struct DevicePairSetupCompletedEvent: Codable, Sendable {
+    public let setupid: String
+    public let deviceid: String
+    public let devicename: String?
+    public let access: AnyCodable
+    public let ts: Int
+
+    public init(
+        setupid: String,
+        deviceid: String,
+        devicename: String? = nil,
+        access: AnyCodable,
+        ts: Int)
+    {
+        self.setupid = setupid
+        self.deviceid = deviceid
+        self.devicename = devicename
+        self.access = access
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case setupid = "setupId"
+        case deviceid = "deviceId"
+        case devicename = "deviceName"
+        case access
         case ts
     }
 }

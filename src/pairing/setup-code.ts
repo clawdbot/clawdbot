@@ -19,7 +19,7 @@ import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.j
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
-import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -27,9 +27,10 @@ import {
 import {
   deviceBootstrapProfilesEqual,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolvePairingSetupAccess,
   type DeviceBootstrapProfileInput,
+  type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
@@ -43,8 +44,6 @@ type PairingSetupPayload = {
   urls?: string[];
   bootstrapToken: string;
 };
-
-type PairingSetupAccess = "full" | "limited" | "node";
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
@@ -78,6 +77,8 @@ type PairingSetupResolution =
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
+      setupId: string;
+      expiresAtMs: number;
     }
   | {
       ok: false;
@@ -164,16 +165,6 @@ function isFullAccessMobilePairingUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function resolvePairingSetupAccess(profile: DeviceBootstrapProfileInput): PairingSetupAccess {
-  if (deviceBootstrapProfilesEqual(profile, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
-    return "full";
-  }
-  if (deviceBootstrapProfilesEqual(profile, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
-    return "node";
-  }
-  return "limited";
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
@@ -475,22 +466,23 @@ export async function resolvePairingSetupFromConfig(
   const issuedBootstrapProfile = accessDowngraded
     ? PAIRING_SETUP_BOOTSTRAP_PROFILE
     : requestedBootstrapProfile;
+  const issued = await issueDevicePairSetupBootstrapToken({
+    baseDir: options.pairingBaseDir,
+    profile: issuedBootstrapProfile,
+  });
 
   return {
     ok: true,
     payload: {
       url: urlResult.url,
       ...(uniqueUrls.length > 1 ? { urls: uniqueUrls } : {}),
-      bootstrapToken: (
-        await issueDeviceBootstrapToken({
-          baseDir: options.pairingBaseDir,
-          profile: issuedBootstrapProfile,
-        })
-      ).token,
+      bootstrapToken: issued.token,
     },
     authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
     access: resolvePairingSetupAccess(issuedBootstrapProfile),
     accessDowngraded,
+    setupId: issued.setupId,
+    expiresAtMs: issued.expiresAtMs,
   };
 }
