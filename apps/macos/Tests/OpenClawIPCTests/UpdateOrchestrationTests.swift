@@ -313,9 +313,14 @@ struct UpdateOrchestrationTests {
             OpenClawConfigFile.normalizedGatewayUpdateChannel("  BETA \n")) == ["beta"])
         #expect(OpenClawConfigFile.normalizedGatewayUpdateChannel(" \n") == nil)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "stable").isEmpty)
-        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable").isEmpty)
+        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable") == ["extended-stable"])
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "future").isEmpty)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: nil).isEmpty)
+        #expect(isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "stable"))
+        #expect(!isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "extended-stable"))
+        #expect(isSparkleUpdateAllowed(
+            itemChannel: "extended-stable",
+            forGatewayUpdateChannel: "extended-stable"))
     }
 
     #if canImport(Sparkle)
@@ -325,6 +330,38 @@ struct UpdateOrchestrationTests {
         #expect(!updater.isAvailable)
         updater.checkForUpdates(nil)
         #expect(!updater.isAvailable)
+    }
+
+    @Test func `Sparkle keeps legacy stable fallback when Gateway omits update channel`() async {
+        var starts = 0
+        let updater = SparkleUpdaterController(
+            savedAutoUpdate: false,
+            gatewayUpdateChannelResolver: { nil },
+            onStart: { starts += 1 })
+
+        updater.startAfterResolvingGatewayUpdateChannel()
+        for _ in 0 ..< 10 where !updater.isAvailable {
+            await Task.yield()
+        }
+
+        #expect(updater.isAvailable)
+        #expect(starts == 1)
+    }
+
+    @Test func `Sparkle keeps legacy stable fallback when Gateway channel lookup fails`() async {
+        var starts = 0
+        let updater = SparkleUpdaterController(
+            savedAutoUpdate: false,
+            gatewayUpdateChannelResolver: { throw CancellationError() },
+            onStart: { starts += 1 })
+
+        updater.startAfterResolvingGatewayUpdateChannel()
+        for _ in 0 ..< 10 where !updater.isAvailable {
+            await Task.yield()
+        }
+
+        #expect(updater.isAvailable)
+        #expect(starts == 1)
     }
     #endif
 

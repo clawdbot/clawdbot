@@ -46,7 +46,8 @@ or inconsistent registry data fails closed; it never falls back to `latest`.
 If the selected version is older than the installed version, the normal
 downgrade confirmation still applies. The CLI persists the channel after a
 successful core update; a direct `npm install -g openclaw@extended-stable`
-does not update `update.channel`.
+does not update `update.channel`, but a final extended-stable package version
+still checks only the verified `extended-stable` selector for update availability.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.

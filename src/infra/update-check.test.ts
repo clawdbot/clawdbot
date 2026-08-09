@@ -816,6 +816,31 @@ describe("checkUpdateStatus", () => {
     });
   });
 
+  it("resolves a status registry channel after detecting the install kind", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-registry-channel-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+      const resolveRegistryChannel = vi.fn(() => "extended-stable" as const);
+
+      await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        resolveRegistryChannel,
+      });
+
+      expect(resolveRegistryChannel).toHaveBeenCalledWith({
+        installKind: "package",
+        git: undefined,
+      });
+    });
+  });
+
   it.each([
     {
       name: "text lockfile",

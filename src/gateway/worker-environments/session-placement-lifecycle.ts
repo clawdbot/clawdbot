@@ -34,6 +34,31 @@ type SessionWorkerPlacementMutationParams = {
 };
 
 type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "failed" }>;
+type FailedPlacement = Extract<Placement, { state: "failed" }>;
+
+export function isFailedWorkerPlacementEnvironmentGone(params: {
+  environmentService: SessionWorkerPlacementContext["workerEnvironmentService"];
+  placement: FailedPlacement;
+}): boolean {
+  if (params.placement.environmentId === null) {
+    return true;
+  }
+  // Provisioning persists deterministic allocation intent first; only the configured service
+  // can prove that the corresponding durable environment row was never created or is gone.
+  if (!params.environmentService) {
+    return false;
+  }
+  try {
+    const environment = params.environmentService.get(params.placement.environmentId);
+    return (
+      environment === undefined ||
+      environment.state === "destroyed" ||
+      (environment.state === "failed" && environment.leaseId === null)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function retirementGuard(placement: RetirablePlacement): SessionWorkerPlacementMutationGuard {
   return {
@@ -65,15 +90,13 @@ function resolveSessionWorkerPlacementMutationGuard(
     return retirementGuard(placement);
   }
   if (params.action === "delete" && placement.state === "failed") {
-    const environment = placement.environmentId
-      ? params.context.workerEnvironmentService?.get(placement.environmentId)
-      : undefined;
     // Failed environments retain their lease until teardown is proven, so they stay fenced.
-    const failedPlacementCanDelete =
-      placement.environmentId === null ||
-      environment?.state === "destroyed" ||
-      (environment?.state === "failed" && environment.leaseId === null);
-    if (failedPlacementCanDelete) {
+    if (
+      isFailedWorkerPlacementEnvironmentGone({
+        environmentService: params.context.workerEnvironmentService,
+        placement,
+      })
+    ) {
       return retirementGuard(placement);
     }
   }

@@ -94,6 +94,7 @@ type TunnelEntry = {
   process?: WorkerSshProcess;
   initialization?: Promise<void>;
   loop?: Promise<void>;
+  loopSettled: boolean;
   stopPromise?: Promise<void>;
   readiness: Deferred<WorkerTunnelHandle>;
   workspaceTasks: Set<Promise<unknown>>;
@@ -418,6 +419,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       remoteSocketPath: `${remoteDirectory}/${REMOTE_SOCKET_NAME}`,
       abortController: new AbortController(),
       status: "connecting",
+      loopSettled: false,
       readiness,
       workspaceTasks: new Set(),
     };
@@ -442,7 +444,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         entry.prepared = undefined;
         return;
       }
-      entry.loop = reconnectLoop(entry);
+      entry.loop = reconnectLoop(entry).finally(() => {
+        entry.loopSettled = true;
+      });
       void entry.loop.catch((error: unknown) => {
         entry.readiness.reject(error instanceof Error ? error : new Error("Worker tunnel failed"));
       });
@@ -476,7 +480,8 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     stop,
     stopAll,
     status(environmentId: string): WorkerTunnelStatus {
-      return entries.get(environmentId)?.status ?? "stopped";
+      const entry = entries.get(environmentId);
+      return !entry || entry.loopSettled ? "stopped" : entry.status;
     },
   };
 }

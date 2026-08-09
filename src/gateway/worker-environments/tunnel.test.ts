@@ -93,6 +93,22 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
+  it("reports stopped when the reconnect loop settles without removing its entry", async () => {
+    const fake = fakeRunner();
+    const { manager, handle } = await startConnectedTunnel(fake, "worker:settled-loop", 1, {
+      manager: {
+        sleep: async () => {
+          throw new Error("retry scheduler stopped");
+        },
+      },
+    });
+
+    fake.starts[0]?.process.exit();
+    await waitForFast(() => expect(manager.status("worker:settled-loop")).toBe("stopped"));
+
+    await handle.stop();
+  });
+
   it("times out a marker-less SSH child and retries", async () => {
     vi.useFakeTimers();
     const fake = fakeRunner();

@@ -79,6 +79,9 @@ export function summarizeWorkerEnvironment(
         : {}),
       attachedSessionIds: uniqueSortedStrings(record.attachedSessionIds),
       tunnelStatus: record.tunnelStatus,
+      ...((record.state === "failed" || record.state === "orphaned") && record.error
+        ? { error: record.error }
+        : {}),
     },
   };
 }

@@ -320,6 +320,10 @@ test.each([
     state: "failed" as const,
     withoutEnvironment: true,
   },
+  {
+    name: "failed after missing durable environment",
+    state: "failed" as const,
+  },
 ])("sessions.delete retires a $name placement before deleting its session", async (testCase) => {
   await createSessionStoreDir();
   const caseId = testCase.name.replaceAll(" ", "-");
