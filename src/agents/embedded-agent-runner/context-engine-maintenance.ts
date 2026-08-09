@@ -257,8 +257,8 @@ class DeferredTurnMaintenanceRun {
 
   private async runForegroundPreemption(): Promise<void> {
     const preemptionError = new DeferredTurnMaintenancePreemptedError();
-    this.schedulerAbort.abort(preemptionError);
     this.writeDrain = this.writeFence.close(preemptionError);
+    this.schedulerAbort.abort(preemptionError);
     if (await this.settlesWithinPreemptionGrace()) {
       return;
     }
