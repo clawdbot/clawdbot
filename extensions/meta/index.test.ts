@@ -6,6 +6,9 @@ import {
   createLlmRuntime,
   getAiTransportHost,
   type Api,
+  type AssistantMessageEventStreamContract,
+  type SimpleStreamOptions,
+  type StreamFunction,
 } from "@openclaw/ai";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -47,6 +50,21 @@ function completedSseResponse(): Response {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
+}
+
+function requireSynchronousStream(
+  stream: ReturnType<StreamFn>,
+): AssistantMessageEventStreamContract {
+  if (
+    stream instanceof Promise ||
+    !("push" in stream) ||
+    !("end" in stream) ||
+    typeof stream.push !== "function" ||
+    typeof stream.end !== "function"
+  ) {
+    throw new Error("Expected synchronous assistant event stream");
+  }
+  return stream as AssistantMessageEventStreamContract;
 }
 
 function requireThinkingProfileResolver(
@@ -171,7 +189,11 @@ describe("meta provider", () => {
     const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
     let capturedPayload: Record<string, unknown> | undefined;
     let sourceModelApi: Api | undefined;
-    const sourceStreamFn: StreamFn = (streamModel, _context, options) => {
+    const sourceStreamFn: StreamFunction<"openai-responses", SimpleStreamOptions> = (
+      streamModel,
+      _context,
+      options,
+    ) => {
       sourceModelApi = streamModel.api;
       const payload: Record<string, unknown> = {};
       options?.onPayload?.(payload, streamModel);
@@ -198,14 +220,33 @@ describe("meta provider", () => {
         if (apiRegistry.getApiProvider(api)) {
           return false;
         }
-        apiRegistry.registerApiProvider({ api, stream: streamFn, streamSimple: streamFn });
+        apiRegistry.registerApiProvider({
+          api,
+          stream: (streamModel, streamContext, options) =>
+            requireSynchronousStream(streamFn(streamModel, streamContext, options)),
+          streamSimple: (streamModel, streamContext, options) =>
+            requireSynchronousStream(streamFn(streamModel, streamContext, options)),
+        });
         return true;
       },
       plugin: {
         ...initialAiTransportHost.plugin,
         resolveProviderStream: () => undefined,
-        wrapSimpleCompletionStream: ({ provider: providerId, context }) =>
-          providerId === "meta" ? provider.wrapSimpleCompletionStreamFn?.(context) : undefined,
+        wrapSimpleCompletionStream: ({ provider: providerId, context }) => {
+          if (providerId !== "meta") {
+            return undefined;
+          }
+          return (
+            provider.wrapSimpleCompletionStreamFn?.({
+              agentDir: context.agentDir,
+              workspaceDir: context.workspaceDir,
+              provider: context.provider,
+              modelId: context.modelId,
+              model: context.model,
+              streamFn: context.streamFn,
+            }) ?? undefined
+          );
+        },
       },
     });
 
