@@ -6,6 +6,7 @@ import { cancelChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
   private historyAnchorRequestKey = "";
+  private historyAnchorAttemptGeneration = 0;
 
   private releaseHistoryAnchorRequest(requestKey: string): void {
     if (this.historyAnchorRequestKey === requestKey) {
@@ -31,6 +32,10 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
     state: NonNullable<ChatPaneHistoryAnchor["state"]>,
     anchor: { messageId: string; sessionId: string },
     requestKey: string,
+    attemptGeneration: number,
+    pendingOwner: NonNullable<
+      NonNullable<ChatPaneHistoryAnchor["state"]>["chatHistoryAnchorPending"]
+    >,
     sessionKey: string,
     connectionGeneration: number,
   ): boolean {
@@ -42,7 +47,10 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
       state.sessionKey === sessionKey &&
       this.historyAnchor?.sessionId === anchor.sessionId &&
       this.historyAnchor.messageId === anchor.messageId &&
-      this.historyAnchorRequestKey === requestKey
+      this.historyAnchorRequestKey === requestKey &&
+      this.historyAnchorAttemptGeneration === attemptGeneration &&
+      state.chatHistoryAnchorActive === true &&
+      state.chatHistoryAnchorPending === pendingOwner
     );
   }
 
@@ -62,97 +70,108 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
     if (this.historyAnchorRequestKey === requestKey) {
       return;
     }
+    const attemptGeneration = ++this.historyAnchorAttemptGeneration;
     this.historyAnchorRequestKey = requestKey;
-    void loadChatHistory(state, { deferBranches: true, historyAnchor: anchor }).then(
-      async (result) => {
-        if (!result) {
-          if (state.chatHistoryAnchorFailedRequestKey !== requestKey) {
-            this.releaseHistoryAnchorRequest(requestKey);
-          }
-          return;
-        }
-        if (
-          !this.ownsHistoryAnchorRequest(
-            state,
-            anchor,
-            requestKey,
-            sessionKey,
-            connectionGeneration,
-          )
-        ) {
+    const anchorLoad = loadChatHistory(state, { deferBranches: true, historyAnchor: anchor });
+    const pendingOwner = state.chatHistoryAnchorPending;
+    if (!pendingOwner) {
+      this.releaseHistoryAnchorRequest(requestKey);
+      return;
+    }
+    void anchorLoad.then(async (result) => {
+      if (!result) {
+        if (state.chatHistoryAnchorFailedRequestKey !== requestKey) {
           this.releaseHistoryAnchorRequest(requestKey);
-          return;
         }
-        this.requestUpdate();
-        await this.updateComplete;
-        if (
-          !this.ownsHistoryAnchorRequest(
-            state,
-            anchor,
-            requestKey,
-            sessionKey,
-            connectionGeneration,
-          )
-        ) {
-          this.releaseHistoryAnchorRequest(requestKey);
-          return;
-        }
-        cancelChatScroll(state);
-        const centered = await this.transcript.scrollToMessage(anchor.messageId);
-        if (
-          !this.ownsHistoryAnchorRequest(
-            state,
-            anchor,
-            requestKey,
-            sessionKey,
-            connectionGeneration,
-          )
-        ) {
-          this.releaseHistoryAnchorRequest(requestKey);
-          return;
-        }
-        const completion = completeChatHistoryAnchorVisibility(state, anchor);
-        if (centered) {
-          this.onHistoryAnchorConsumed?.();
-          if (!this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration)) {
-            completion?.completeRefresh(undefined);
-            return;
-          }
-          if (completion?.shouldRefresh) {
-            void loadChatHistory(state, completion.refreshOptions)
-              .then(completion.completeRefresh, () => completion.completeRefresh(undefined))
-              .finally(() => state.requestUpdate?.());
-          }
-          return;
-        }
-
+        return;
+      }
+      if (
+        !this.ownsHistoryAnchorRequest(
+          state,
+          anchor,
+          requestKey,
+          attemptGeneration,
+          pendingOwner,
+          sessionKey,
+          connectionGeneration,
+        )
+      ) {
+        this.releaseHistoryAnchorRequest(requestKey);
+        return;
+      }
+      this.requestUpdate();
+      await this.updateComplete;
+      if (
+        !this.ownsHistoryAnchorRequest(
+          state,
+          anchor,
+          requestKey,
+          attemptGeneration,
+          pendingOwner,
+          sessionKey,
+          connectionGeneration,
+        )
+      ) {
+        this.releaseHistoryAnchorRequest(requestKey);
+        return;
+      }
+      cancelChatScroll(state);
+      const centered = await this.transcript.scrollToMessage(anchor.messageId);
+      if (
+        !this.ownsHistoryAnchorRequest(
+          state,
+          anchor,
+          requestKey,
+          attemptGeneration,
+          pendingOwner,
+          sessionKey,
+          connectionGeneration,
+        )
+      ) {
+        this.releaseHistoryAnchorRequest(requestKey);
+        return;
+      }
+      const completion = completeChatHistoryAnchorVisibility(state, anchor);
+      if (centered) {
         this.onHistoryAnchorConsumed?.();
         if (!this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration)) {
           completion?.completeRefresh(undefined);
           return;
         }
-        let currentHistory: Awaited<ReturnType<typeof loadChatHistory>> = undefined;
-        try {
-          currentHistory = await loadChatHistory(
-            state,
-            completion?.refreshOptions ?? { deferBranches: true },
-          );
-        } finally {
-          completion?.completeRefresh(currentHistory);
+        if (completion?.shouldRefresh) {
+          void loadChatHistory(state, completion.refreshOptions)
+            .then(completion.completeRefresh, () => completion.completeRefresh(undefined))
+            .finally(() => state.requestUpdate?.());
         }
-        if (
-          !currentHistory ||
-          !this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration) ||
-          this.historyAnchorRequestKey !== requestKey
-        ) {
-          return;
-        }
-        const message = t("chat.historyAnchorUnavailable");
-        state.lastError = message;
-        state.chatError = message;
-        showToast({ message });
-        state.requestUpdate?.();
-      },
-    );
+        return;
+      }
+
+      this.onHistoryAnchorConsumed?.();
+      if (!this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration)) {
+        completion?.completeRefresh(undefined);
+        return;
+      }
+      let currentHistory: Awaited<ReturnType<typeof loadChatHistory>> = undefined;
+      try {
+        currentHistory = await loadChatHistory(
+          state,
+          completion?.refreshOptions ?? { deferBranches: true },
+        );
+      } finally {
+        completion?.completeRefresh(currentHistory);
+      }
+      if (
+        !currentHistory ||
+        !this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration) ||
+        this.historyAnchorAttemptGeneration !== attemptGeneration
+      ) {
+        return;
+      }
+      const message = t("chat.historyAnchorUnavailable");
+      state.lastError = message;
+      state.chatError = message;
+      showToast({ message });
+      state.requestUpdate?.();
+    });
   }
 }

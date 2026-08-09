@@ -182,6 +182,7 @@ describe("historical transcript anchor isolation", () => {
           result: null,
           row: {
             key: state.sessionKey,
+            kind: "direct",
             hasActiveRun: false,
             status: "done",
             updatedAt: 2,
@@ -211,6 +212,7 @@ describe("historical transcript anchor isolation", () => {
           result: null,
           row: {
             key: state.sessionKey,
+            kind: "direct",
             hasActiveRun: false,
             status: "done",
             updatedAt: 2,

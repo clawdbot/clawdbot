@@ -380,7 +380,7 @@ export function deferPendingChatHistoryAnchorTerminalRefresh(state: ChatState): 
   return true;
 }
 
-export type ChatHistoryAnchorVisibilityCompletion = {
+type ChatHistoryAnchorVisibilityCompletion = {
   shouldRefresh: boolean;
   refreshOptions: LoadChatHistoryOptions;
   completeRefresh: (result?: ChatHistoryResult) => void;
@@ -425,7 +425,14 @@ export function completeChatHistoryAnchorVisibility(
 
 export function cancelPendingChatHistoryAnchor(state: ChatState): void {
   const pending = state.chatHistoryAnchorPending;
+  if (pending || state.chatHistoryAnchorActive) {
+    const requests = getChatHistoryPaneRequests(state);
+    requests.historyVersion += 1;
+    requests.inFlightHistory = undefined;
+    state.chatLoading = false;
+  }
   state.chatHistoryAnchorPending = null;
+  state.chatHistoryAnchorActive = false;
   state.chatHistoryAnchorFailedRequestKey = undefined;
   pending?.deferredRefresh?.resolve(undefined);
 }

@@ -21,6 +21,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import { cancelPendingChatHistoryAnchor } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   discardStateStagedAttachments,
@@ -604,6 +605,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
           this.stagedAttachmentGatewayOwner,
         );
       }
+      cancelPendingChatHistoryAnchor(this.state);
     }
     this.stagedAttachmentGatewayOwner = null;
     this.clearComposerPrefillAttention();
@@ -627,10 +629,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
     this.resetOlderMessagesViewport();
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
-    if (this.headerCopiedTimer !== null) {
-      window.clearTimeout(this.headerCopiedTimer);
-      this.headerCopiedTimer = null;
-    }
+    window.clearTimeout(this.headerCopiedTimer ?? undefined);
+    this.headerCopiedTimer = null;
     this.swarmHydrator?.dispose();
     this.swarmHydrator = null;
     this.headerWorktreePaths.clear();
