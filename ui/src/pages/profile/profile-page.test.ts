@@ -437,6 +437,8 @@ it("replaces an in-flight identity request after a same-client reconnect", async
 });
 
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
+  const avatarRevision = "avatar-content-hash-png";
+  let publishAvatarPresence: (() => void) | undefined;
   let profile: UserProfile = {
     id: "profile-1",
     displayName: "Ada",
@@ -469,7 +471,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
         hasAvatar: true,
         updatedAt: 4,
       };
-      return { profile };
+      publishAvatarPresence?.();
+      return { profile, avatarRevision };
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -478,6 +481,10 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     email: "ada@example.test",
     name: "Ada",
   });
+  publishAvatarPresence = () =>
+    harness.context.gateway.updateSelfUser?.({
+      avatarUrl: `/api/users/${profile.id}/avatar?v=${avatarRevision}`,
+    });
   const provider = createApplicationContextProvider(harness.context);
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);
@@ -548,8 +555,15 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   );
   await page.updateComplete;
   expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
-    "/api/users/profile-1/avatar?v=4",
+    `/api/users/profile-1/avatar?v=${avatarRevision}`,
   );
+  expect(
+    (
+      page.querySelector("openclaw-viewer-avatar") as
+        | (HTMLElement & { user?: AuthenticatedUser })
+        | null
+    )?.user?.avatarUrl,
+  ).toBe(`/api/users/profile-1/avatar?v=${avatarRevision}`);
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );

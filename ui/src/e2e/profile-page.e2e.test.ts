@@ -398,4 +398,105 @@ suite.define(() => {
       expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
     });
   });
+
+  it("keeps event revisions through same-timestamp avatar responses", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      const avatarRequests: string[] = [];
+      await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
+        avatarRequests.push(route.request().url());
+        await route.fulfill({
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+            "base64",
+          ),
+          contentType: "image/png",
+          status: 200,
+        });
+      });
+      const gateway = await installMockGateway(page, {
+        basePath,
+        deferredMethods: ["users.setAvatar"],
+        presenceUsers: testPresenceUsers,
+        methodResponses: {
+          "users.self": { profile: testProfile },
+        },
+      });
+      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
+      expect(response?.status()).toBe(200);
+      await page.locator("#settings-profile-identity").waitFor({ timeout: 10_000 });
+      const connect = await gateway.waitForRequest("connect");
+      const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
+        ?.client?.instanceId;
+      expect(selfInstanceId).toBeTruthy();
+
+      const avatarProfile = {
+        ...testProfile,
+        avatarMime: "image/png" as const,
+        hasAvatar: true,
+      };
+      const upload = async (revision: string) => {
+        const requestCountBefore = (await gateway.getRequests("users.setAvatar")).length;
+        const updatedAtRevision = String(avatarProfile.updatedAt);
+        const updatedAtRequestCountBefore = avatarRequests.filter(
+          (url) => new URL(url).searchParams.get("v") === updatedAtRevision,
+        ).length;
+        await page.locator('input[type="file"]').setInputFiles({
+          name: "avatar.png",
+          mimeType: "image/png",
+          buffer: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+            "base64",
+          ),
+        });
+        await expect
+          .poll(async () => (await gateway.getRequests("users.setAvatar")).length)
+          .toBe(requestCountBefore + 1);
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              instanceId: selfInstanceId,
+              mode: "webchat",
+              reason: "connect",
+              user: {
+                id: testProfile.id,
+                name: testProfile.displayName,
+                email: testProfile.emails[0],
+                avatarUrl: `/api/users/${testProfile.id}/avatar?v=${revision}`,
+              },
+              watchedSessions: [],
+            },
+          ],
+        });
+        await gateway.resolveDeferred("users.setAvatar", {
+          profile: avatarProfile,
+          avatarRevision: revision,
+        });
+        await expect
+          .poll(() => avatarRequests.some((url) => new URL(url).searchParams.get("v") === revision))
+          .toBe(true);
+        expect(
+          avatarRequests.filter((url) => new URL(url).searchParams.get("v") === updatedAtRevision),
+        ).toHaveLength(updatedAtRequestCountBefore);
+      };
+
+      await upload("first-content-hash-png");
+      await gateway.deferNext("users.setAvatar");
+      await upload("second-content-hash-png");
+
+      const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar");
+      await expect
+        .poll(() =>
+          profileAvatar.evaluate(
+            (element) =>
+              (
+                element as HTMLElement & {
+                  user?: { avatarUrl?: string };
+                }
+              ).user?.avatarUrl,
+          ),
+        )
+        .toBe(`/api/users/${testProfile.id}/avatar?v=second-content-hash-png`);
+      expect(avatarProfile.updatedAt).toBe(testProfile.updatedAt);
+    });
+  });
 });
