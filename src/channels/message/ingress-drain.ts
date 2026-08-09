@@ -110,9 +110,9 @@ export type CreateChannelIngressDrainOptions<
   adoptionStallTimeoutMs?: number;
   /**
    * Claim→adoption timeout after dispatch explicitly defers to downstream
-   * scheduling. Defaults to adoptionStallTimeoutMs. A longer bound lets healthy
-   * queue waits survive without allowing a lost scheduler lifecycle to retain a
-   * refreshed durable claim forever.
+   * scheduling. When omitted, the original claim-time watchdog stays armed. An
+   * explicit longer bound lets healthy queue waits survive without allowing a
+   * lost scheduler lifecycle to retain a refreshed durable claim forever.
    */
   deferredAdoptionStallTimeoutMs?: number;
   claimLeaseMs?: number;
@@ -180,7 +180,7 @@ export function createChannelIngressDrain<
   const ownerId = options.ownerId ?? createIngressDrainOwnerId();
   registerLiveIngressDrainInstance(ownerId);
   const adoptionStallMs = options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS;
-  const deferredStallMs = options.deferredAdoptionStallTimeoutMs ?? adoptionStallMs;
+  const deferredStallMs = options.deferredAdoptionStallTimeoutMs;
   const claimLeaseMs = options.claimLeaseMs ?? INGRESS_CLAIM_LEASE_MS;
   const now = options.now ?? Date.now;
   const formatError = options.formatError ?? formatErrorMessage;
@@ -505,11 +505,13 @@ export function createChannelIngressDrain<
         if (state.phase !== "dispatching") {
           return;
         }
-        // Deferred always holds the durable claim. Reset the watchdog at the
-        // handoff boundary so downstream scheduling gets its own explicit,
-        // bounded adoption window.
+        // Deferred always holds the durable claim. Only explicit owners get a
+        // new bounded window; otherwise preserve the existing claim-time
+        // deadline for compatibility with every other channel.
         state.phase = "deferred";
-        armStallWatchdog(state, deferredStallMs);
+        if (deferredStallMs !== undefined) {
+          armStallWatchdog(state, deferredStallMs);
+        }
         if (deferredLaneOccupancy === "release") {
           if (laneOwnerByKey.get(state.laneKey) === state) {
             laneOwnerByKey.delete(state.laneKey);

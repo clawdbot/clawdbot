@@ -66,6 +66,46 @@ describe("channel ingress deferred stall ownership", () => {
     });
   });
 
+  it("preserves the original claim-time deadline without an explicit deferred timeout", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 30_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-default-deadline", { text: "x" }, { laneKey: "l1" });
+      let finishDispatch: (() => void) | undefined;
+      const dispatchGate = new Promise<void>((resolve) => {
+        finishDispatch = resolve;
+      });
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async () => {
+          await dispatchGate;
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      clock += 4_999;
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(await queue.listClaims()).toHaveLength(1);
+      expectDefined(finishDispatch, "default deadline dispatch gate")();
+      await vi.advanceTimersByTimeAsync(0);
+
+      clock += 1;
+      await vi.advanceTimersByTimeAsync(1);
+      await drain.waitForIdle();
+
+      const result = await queue.enqueue("evt-default-deadline", { text: "x" });
+      expect(result.kind).toBe("failed");
+      if (result.kind === "failed") {
+        expect(result.record.reason).toBe("handler-timeout");
+      }
+      drain.dispose();
+    });
+  });
+
   it("dead-letters a deferred claim when its scheduler never terminates", async () => {
     await withTempState(async (stateDir) => {
       let clock = 30_000;
