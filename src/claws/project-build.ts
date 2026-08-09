@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
@@ -38,7 +38,13 @@ export type ClawBuildResult = {
 
 async function writeStagedFile(stagingRoot: string, path: string, content: Buffer | string) {
   const target = resolve(stagingRoot, path);
-  if (!isSafeClawRelativePath(path) || relative(stagingRoot, target).startsWith("..")) {
+  const targetRelative = relative(stagingRoot, target);
+  if (
+    !isSafeClawRelativePath(path) ||
+    targetRelative === ".." ||
+    targetRelative.startsWith(`..${sep}`) ||
+    isAbsolute(targetRelative)
+  ) {
     throw new ClawProjectError(
       "unsafe_build_path",
       `Cannot package unsafe path ${JSON.stringify(path)}.`,

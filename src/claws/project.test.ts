@@ -244,6 +244,48 @@ describe("Claw projects", () => {
     expect(entries).toContain("package/@notes.md");
   });
 
+  it("packages a valid source whose filename begins with two dots", async () => {
+    const project = tempDirs.make("openclaw-claw-leading-dots-");
+    const output = join(tempDirs.make("openclaw-claw-leading-dots-output-"), "claw.tgz");
+    await writeRichProject(project);
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace("workspace/reference.md", "..notes.md"),
+    );
+    await writeFile(join(project, "..notes.md"), "# Notes\n");
+
+    const result = await buildClawProject(project, output);
+    const entries: string[] = [];
+    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+
+    expect(result.files).toContain("..notes.md");
+    expect(entries).toContain("package/..notes.md");
+  });
+
+  it("normalizes accepted backslash source separators in the built package", async () => {
+    const project = tempDirs.make("openclaw-claw-backslash-source-");
+    const output = join(tempDirs.make("openclaw-claw-backslash-source-output-"), "claw.tgz");
+    await writeRichProject(project);
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace(
+        "    - source: workspace/reference.md",
+        String.raw`    - source: 'workspace\reference.md'`,
+      ),
+    );
+
+    const validation = await validateClawProject(project);
+    const result = await buildClawProject(project, output);
+    const entries: string[] = [];
+    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+
+    expect(validation).toMatchObject({ ok: true });
+    expect(result.files).toContain("workspace/reference.md");
+    expect(entries).toContain("package/workspace/reference.md");
+  });
+
   it("preserves long workspace source paths deterministically", async () => {
     const project = tempDirs.make("openclaw-claw-long-path-");
     const output = tempDirs.make("openclaw-claw-long-path-output-");
