@@ -1676,7 +1676,7 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
-                node scripts/run-oxlint-shards.mjs --only=core --only=extensions --split-core --threads=1
+                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1
               fi
               ;;
             bun-launcher)

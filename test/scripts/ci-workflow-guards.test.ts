@@ -4690,7 +4690,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );
     expect(checksFastRun.run).toContain(
-      "node scripts/run-oxlint-shards.mjs --only=core --only=extensions --split-core --threads=1",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1",
     );
     expect(checksFastRun.run).not.toContain(
       "node scripts/run-oxlint.mjs src ui/src packages extensions",
