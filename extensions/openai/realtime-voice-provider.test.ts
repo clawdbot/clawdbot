@@ -269,7 +269,6 @@ function acknowledgeFunctionOutput(socket: FakeWebSocketInstance, callId: string
 function expectedFunctionOutput(callId: string, result: unknown) {
   return expect.objectContaining({
     type: "conversation.item.create",
-    event_id: expect.stringMatching(/^openclaw-function-output-/),
     item: {
       type: "function_call_output",
       call_id: callId,
@@ -1220,6 +1219,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
     });
     const bindBridge = vi.fn();
+    const onEvent = vi.fn();
     const cfg = {} as never;
 
     expect(
@@ -1235,7 +1235,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
         model: "gpt-realtime-2.1",
         tools: [createRealtimeTool("openclaw_agent_consult")],
-        gatewayControl: { bindBridge },
+        gatewayControl: { bindBridge, onEvent },
       }),
     ).resolves.toMatchObject({
       clientSecret: "gateway-token",
@@ -1251,6 +1251,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       type: "realtime",
       model: "gpt-realtime-2.1",
       tool_choice: "auto",
+      audio: { input: { noise_reduction: { type: "near_field" } } },
     });
     const createBridge = gaSideband.createBridge as (params: {
       apiKey: string;
@@ -1266,8 +1267,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const { connecting, socket } = beginBridgeConnection(bridge);
     expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
     openSocket(socket);
-    emitSessionUpdated(socket);
+    emitServerEvent(socket, {
+      type: "session.created",
+      session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },
+    });
     await connecting;
+    expect(parseSent(socket).filter((event) => event.type === "session.update")).toEqual([]);
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "session.created",
+      detail: "tools=1 toolChoice=auto",
+    });
     bridge.close();
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
@@ -3386,6 +3396,24 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("forces one host-selected function on an otherwise automatic response", async () => {
+    const bridge = createNativeBridge();
+    const socket = await connectReadyBridge(bridge);
+
+    bridge.sendUserMessage?.("Run the deterministic check.", {
+      toolChoice: { type: "function", name: "lookup_weather" },
+    });
+
+    expect(parseSent(socket).at(-1)).toEqual({
+      type: "response.create",
+      event_id: expect.stringMatching(/^openclaw-response-create-/),
+      response: {
+        output_modalities: ["audio"],
+        tool_choice: { type: "function", name: "lookup_weather" },
+      },
+    });
+  });
+
   it("defers manual response.create while a realtime response is active", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);
@@ -3616,7 +3644,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("does not request a realtime response for continuing tool results", async () => {
-    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onEvent, onToolCall: vi.fn() });
     const socket = await connectReadyBridge(bridge);
     emitCompletedToolCalls(socket);
 
@@ -3632,6 +3661,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(hasSentEventType(socket, "response.create")).toBe(false);
     acknowledgeFunctionOutput(socket, "call_1");
     await working;
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.created",
+      detail: "itemType=function_call_output",
+    });
 
     const done = bridge.submitToolResult("call_1", { text: "done" });
     acknowledgeFunctionOutput(socket, "call_1");

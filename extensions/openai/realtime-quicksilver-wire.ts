@@ -21,6 +21,7 @@ const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const OPENAI_REALTIME_LOCATION_MAX_BYTES = 512;
+const OPENAI_REALTIME_CALL_ID_RE = /^[A-Za-z0-9_-]{1,128}$/u;
 const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 const OPENAI_QUICKSILVER_VOICES = [
@@ -326,15 +327,15 @@ function parseOpenAIRealtimeCallLocation(location: string | null): string {
   if (url.origin !== "https://api.openai.com" || url.search || url.hash) {
     throw new Error("OpenAI Realtime call response Location header has an unexpected target");
   }
-  const match = /^\/v1\/realtime\/calls\/(rtc_[A-Za-z0-9_-]{1,128})\/?$/u.exec(url.pathname);
-  if (!match?.[1]) {
+  const match = /^\/v1\/realtime\/calls\/([^/]+)\/?$/u.exec(url.pathname);
+  if (!match?.[1] || !OPENAI_REALTIME_CALL_ID_RE.test(match[1])) {
     throw new Error("OpenAI Realtime call response Location header has no valid call id");
   }
   return match[1];
 }
 
 export function buildOpenAIRealtimeSidebandUrl(callId: string): string {
-  if (!/^rtc_[A-Za-z0-9_-]{1,128}$/u.test(callId)) {
+  if (!OPENAI_REALTIME_CALL_ID_RE.test(callId)) {
     throw new Error("OpenAI Realtime call id is invalid");
   }
   const url = new URL("wss://api.openai.com/v1/realtime");
@@ -529,7 +530,7 @@ export async function hangupOpenAIRealtimeCall(params: {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<void> {
-  if (!/^rtc_[A-Za-z0-9_-]{1,128}$/u.test(params.callId)) {
+  if (!OPENAI_REALTIME_CALL_ID_RE.test(params.callId)) {
     throw new Error("OpenAI Realtime call id is invalid");
   }
   const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;

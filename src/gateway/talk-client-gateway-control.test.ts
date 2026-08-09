@@ -18,7 +18,9 @@ describe("Talk client Gateway control owner", () => {
   it("persists sideband transcripts, completes consults, and closes idempotently", async () => {
     const consultResult = deferred<{ text: string }>();
     const runAgentConsult = vi.fn(async () => await consultResult.promise);
-    const appendTranscript = vi.fn(async () => undefined);
+    const appendTranscript = vi.fn(
+      async (_entry: { entryId: string; role: "user" | "assistant"; text: string }) => undefined,
+    );
     const closeLogicalSession = vi.fn(async () => undefined);
     const closeProvider = vi.fn(async () => undefined);
     const bridge = {
@@ -37,6 +39,7 @@ describe("Talk client Gateway control owner", () => {
       connId: "conn-gateway",
       runAgentConsult,
       appendTranscript,
+      flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
       warn: vi.fn(),
     });
@@ -58,7 +61,7 @@ describe("Talk client Gateway control owner", () => {
       }),
     );
     expect(appendTranscript).toHaveBeenCalledWith({
-      entryId: "gateway-1",
+      entryId: expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
       role: "user",
       text: "check the repository",
     });
@@ -94,6 +97,7 @@ describe("Talk client Gateway control owner", () => {
       connId: "conn-control",
       runAgentConsult,
       appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession: vi.fn(async () => undefined),
       warn: vi.fn(),
     });
@@ -167,6 +171,7 @@ describe("Talk client Gateway control owner", () => {
       runAgentConsult,
       controlAgentRun,
       appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession: vi.fn(async () => undefined),
       warn: vi.fn(),
     });
@@ -213,6 +218,7 @@ describe("Talk client Gateway control owner", () => {
       connId: "conn-disconnect",
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
       warn: vi.fn(),
     });
@@ -232,12 +238,88 @@ describe("Talk client Gateway control owner", () => {
       connId: "conn-close-error",
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
       warn: vi.fn(),
     });
     owner.activate(vi.fn(() => Promise.reject(new Error("provider close failed"))));
 
     await expect(owner.close()).rejects.toThrow("provider close failed");
+    expect(closeLogicalSession).toHaveBeenCalledOnce();
+  });
+
+  it("replaces only the physical transport while preserving the logical owner and run", async () => {
+    const consult = deferred<{ text: string }>();
+    const runStarted = deferred<void>();
+    let runSignal: AbortSignal | undefined;
+    const runAgentConsult = vi.fn(async (_args: unknown, signal: AbortSignal) => {
+      runSignal = signal;
+      runStarted.resolve();
+      return await consult.promise;
+    });
+    const appendTranscript = vi.fn(
+      async (_entry: { entryId: string; role: "user" | "assistant"; text: string }) => undefined,
+    );
+    const closeLogicalSession = vi.fn(async () => undefined);
+    const common = {
+      voiceSessionId: "voice-replacement",
+      sessionKey: "agent:main:main",
+      connId: "conn-replacement",
+      runAgentConsult,
+      appendTranscript,
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession,
+      warn: vi.fn(),
+    };
+    const firstBridge = {
+      connect: vi.fn(async () => undefined),
+      close: vi.fn(),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      isConnected: vi.fn(() => true),
+    } satisfies RealtimeVoiceBridge;
+    const secondBridge = {
+      ...firstBridge,
+      submitToolResult: vi.fn(),
+    } satisfies RealtimeVoiceBridge;
+    const closeFirst = vi.fn(async () => undefined);
+    const closeSecond = vi.fn(async () => undefined);
+    const first = createTalkClientGatewayControlOwner(common);
+    first.control.bindBridge(firstBridge);
+    first.activate(closeFirst);
+    first.control.onTranscript?.("user", "first transport", true);
+    first.control.onToolCall?.({
+      itemId: "item-replacement",
+      callId: "call-replacement",
+      name: "openclaw_agent_consult",
+      args: { question: "keep running" },
+    });
+    await runStarted.promise;
+
+    const second = createTalkClientGatewayControlOwner(common);
+    second.control.bindBridge(secondBridge);
+    second.activate(closeSecond);
+    await vi.waitFor(() => expect(closeFirst).toHaveBeenCalledOnce());
+    first.control.onClose?.("completed");
+    first.control.onTranscript?.("user", "stale transport", true);
+    second.control.onTranscript?.("user", "second transport", true);
+
+    expect(runSignal?.aborted).toBe(false);
+    expect(closeLogicalSession).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(appendTranscript).toHaveBeenCalledTimes(2));
+    const entryIds = appendTranscript.mock.calls.map(([entry]) => entry.entryId);
+    expect(entryIds).toHaveLength(2);
+    expect(entryIds[0]).toMatch(/^gateway-[0-9a-f-]+-1$/);
+    expect(entryIds[1]).toMatch(/^gateway-[0-9a-f-]+-1$/);
+    expect(entryIds[0]).not.toBe(entryIds[1]);
+
+    consult.resolve({ text: "done" });
+    await vi.waitFor(() => expect(closeFirst).toHaveBeenCalledOnce());
+    expect(firstBridge.submitToolResult).not.toHaveBeenCalled();
+    await second.close();
+    expect(closeSecond).toHaveBeenCalledOnce();
     expect(closeLogicalSession).toHaveBeenCalledOnce();
   });
 });

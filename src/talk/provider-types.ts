@@ -217,7 +217,10 @@ export type RealtimeVoiceBridge = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
-  sendUserMessage?(text: string): void;
+  sendUserMessage?(
+    text: string,
+    options?: { toolChoice?: { type: "function"; name: string } },
+  ): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   /**

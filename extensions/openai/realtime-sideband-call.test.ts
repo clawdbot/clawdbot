@@ -23,7 +23,7 @@ describe("OpenAI Realtime sideband call wire", () => {
       expect(form).toContain('"type":"realtime","model":"gpt-realtime-2.1"');
       return new Response("v=0\r\na=answer\r\n", {
         status: 201,
-        headers: { Location: "/v1/realtime/calls/rtc_test-123" },
+        headers: { Location: "/v1/realtime/calls/call_test-123" },
       });
     });
 
@@ -43,8 +43,8 @@ describe("OpenAI Realtime sideband call wire", () => {
     ).resolves.toEqual({
       kind: "ga-sideband",
       answerSdp: "v=0\r\na=answer\r\n",
-      callId: "rtc_test-123",
-      sidebandUrl: "wss://api.openai.com/v1/realtime?call_id=rtc_test-123",
+      callId: "call_test-123",
+      sidebandUrl: "wss://api.openai.com/v1/realtime?call_id=call_test-123",
       status: 201,
     });
   });
@@ -53,8 +53,8 @@ describe("OpenAI Realtime sideband call wire", () => {
     [null, "missing"],
     ["https://attacker.example/v1/realtime/calls/rtc_test", "unexpected target"],
     ["/v1/files/rtc_test", "no valid call id"],
-    ["/v1/realtime/calls/not-a-call", "no valid call id"],
-    [`/v1/realtime/calls/rtc_${"x".repeat(129)}`, "no valid call id"],
+    ["/v1/realtime/calls/bad.id", "no valid call id"],
+    [`/v1/realtime/calls/${"x".repeat(129)}`, "no valid call id"],
     [`/v1/realtime/calls/rtc_test?${"x".repeat(600)}`, "too large"],
   ])("rejects an untrusted Location header", async (location, message) => {
     await expect(
@@ -80,8 +80,8 @@ describe("OpenAI Realtime sideband call wire", () => {
   });
 
   it("constructs and validates the sideband URL locally", () => {
-    expect(buildOpenAIRealtimeSidebandUrl("rtc_a-b_1")).toBe(
-      "wss://api.openai.com/v1/realtime?call_id=rtc_a-b_1",
+    expect(buildOpenAIRealtimeSidebandUrl("call-a_b_1")).toBe(
+      "wss://api.openai.com/v1/realtime?call_id=call-a_b_1",
     );
     expect(() => buildOpenAIRealtimeSidebandUrl("https://attacker.example")).toThrow("invalid");
   });
@@ -90,11 +90,11 @@ describe("OpenAI Realtime sideband call wire", () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
     await hangupOpenAIRealtimeCall({
       apiKey: "sk-platform", // pragma: allowlist secret
-      callId: "rtc_test-123",
+      callId: "call_test-123",
       fetchImpl: fetchImpl as typeof fetch,
     });
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/realtime/calls/rtc_test-123/hangup",
+      "https://api.openai.com/v1/realtime/calls/call_test-123/hangup",
       expect.objectContaining({ method: "POST" }),
     );
   });

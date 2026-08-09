@@ -36,6 +36,7 @@ import {
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
+  flushClientVoiceSessionWrites,
   registerClientVoiceConsultRun,
   resolveClientVoiceAgentSessionId,
   resolveClientVoiceSessionOrigin,
@@ -324,6 +325,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
                   role,
                   text,
                   config: runtimeConfig,
+                }),
+              flushTranscript: () =>
+                flushClientVoiceSessionWrites({
+                  agentId,
+                  voiceSessionId: activeVoiceSessionId!,
                 }),
               closeLogicalSession: async () => {
                 await closeClientVoiceSession({

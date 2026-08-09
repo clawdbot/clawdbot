@@ -28,6 +28,8 @@ function requireStringBody(body: BodyInit | null | undefined): string {
   return body;
 }
 
+const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+
 describe("GPT-Live session shaping", () => {
   it("maps initial roles and normalizes voices without an id field", () => {
     expect(
@@ -249,7 +251,10 @@ describe("GPT-Live offer broker", () => {
         throw new Error("Expected WebRTC reservation");
       }
       const response = createResponseHarness();
-      await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+        response.res,
+      );
       expect(response.res.statusCode).toBe(502);
       expect(response.readBody()).toContain("sideband unavailable");
       expect(bridge.close).toHaveBeenCalledOnce();
@@ -299,7 +304,10 @@ describe("GPT-Live offer broker", () => {
       response.end.mockImplementationOnce(() => {
         queueMicrotask(() => response.res.emit("close"));
       });
-      await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+        response.res,
+      );
 
       expect(bridge.close).toHaveBeenCalledOnce();
       expect(
@@ -309,6 +317,49 @@ describe("GPT-Live offer broker", () => {
       await realtime.cleanup();
     }
   });
+
+  it.each([
+    [
+      "active data channel",
+      `${AUDIO_ONLY_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`,
+      "application media",
+    ],
+    ["video", `${AUDIO_ONLY_SDP}m=video 9 UDP/TLS/RTP/SAVPF 96\r\n`, "video media"],
+    ["no active audio", "v=0\r\nm=audio 0 UDP/TLS/RTP/SAVPF 111\r\n", "active audio"],
+    ["oversized line", `${AUDIO_ONLY_SDP}a=${"x".repeat(4_097)}\r\n`, "line is too large"],
+  ])(
+    "rejects a bounded GA sideband SDP with %s before provider creation",
+    async (_name, body, message) => {
+      const fetchImpl = vi.fn();
+      const { realtime } = createBroker({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      try {
+        const reservation = await realtime.broker.createBrowserSession(
+          {
+            providerConfig: {},
+            model: "gpt-realtime-2.1",
+            gaSideband: {
+              session: { type: "realtime", model: "gpt-realtime-2.1" },
+              createBridge: vi.fn(),
+            },
+          },
+          { type: "api-key", token: "platform-key" },
+        );
+        if (reservation.transport !== "webrtc") {
+          throw new Error("Expected WebRTC reservation");
+        }
+        const response = createResponseHarness();
+        await realtime.handler(
+          createRequest({ token: reservation.clientSecret, body }),
+          response.res,
+        );
+        expect(response.res.statusCode).toBe(400);
+        expect(response.readBody()).toContain(message);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        await realtime.cleanup();
+      }
+    },
+  );
 
   it("brokers GA OAuth with raw SDP and no sideband while preserving single-use tokens", async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
@@ -854,7 +905,7 @@ describe("GPT-Live offer broker", () => {
           { providerConfig: {}, model: "gpt-live-1", runAgentConsult },
           { type: "api-key", token: "platform-key" },
         ),
-      ).rejects.toThrow("Too many concurrent OpenAI realtime sessions");
+      ).rejects.toThrow("Too many concurrent OpenAI GPT-Live sessions");
     } finally {
       await realtime.cleanup();
     }
@@ -862,27 +913,54 @@ describe("GPT-Live offer broker", () => {
 
   it("caps reservations per owning Gateway connection", async () => {
     const { realtime } = createBroker();
+    const gaRequest = (ownerConnId: string) => ({
+      providerConfig: {},
+      model: "gpt-realtime-2.1",
+      ownerConnId,
+      gaSideband: {
+        session: { type: "realtime" as const, model: "gpt-realtime-2.1" },
+        createBridge: vi.fn(),
+      },
+    });
     try {
       await Promise.all(
         Array.from({ length: 2 }, () =>
-          realtime.broker.createBrowserSession(
-            { providerConfig: {}, model: "gpt-realtime-2.1", ownerConnId: "conn-1" },
-            { type: "api-key", token: "platform-key" },
-          ),
+          realtime.broker.createBrowserSession(gaRequest("conn-1"), {
+            type: "api-key",
+            token: "platform-key",
+          }),
         ),
       );
       await expect(
-        realtime.broker.createBrowserSession(
-          { providerConfig: {}, model: "gpt-realtime-2.1", ownerConnId: "conn-1" },
-          { type: "api-key", token: "platform-key" },
-        ),
+        realtime.broker.createBrowserSession(gaRequest("conn-1"), {
+          type: "api-key",
+          token: "platform-key",
+        }),
       ).rejects.toThrow("Too many concurrent OpenAI realtime sessions for this client");
       await expect(
-        realtime.broker.createBrowserSession(
-          { providerConfig: {}, model: "gpt-realtime-2.1", ownerConnId: "conn-2" },
-          { type: "api-key", token: "platform-key" },
-        ),
+        realtime.broker.createBrowserSession(gaRequest("conn-2"), {
+          type: "api-key",
+          token: "platform-key",
+        }),
       ).resolves.toMatchObject({ transport: "webrtc" });
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("does not apply the GA sideband owner quota to legacy broker sessions", async () => {
+    const { realtime } = createBroker();
+    try {
+      await expect(
+        Promise.all(
+          Array.from({ length: 3 }, () =>
+            realtime.broker.createBrowserSession(
+              { providerConfig: {}, model: "gpt-realtime-2.1", ownerConnId: "conn-legacy" },
+              { type: "api-key", token: "platform-key" },
+            ),
+          ),
+        ),
+      ).resolves.toHaveLength(3);
     } finally {
       await realtime.cleanup();
     }

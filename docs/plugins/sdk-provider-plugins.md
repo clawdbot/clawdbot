@@ -873,6 +873,9 @@ catalog, API-key auth, and dynamic model resolution.
         Consumers of `createRealtimeVoiceBridgeSession` may likewise return a
         promise from `onToolCall`; synchronous throws and rejections are routed
         to the session's `onError` callback.
+        The host may pass `sendUserMessage(text, { toolChoice })` while the
+        response state is idle to force one named function for that response;
+        later responses return to the session's configured tool choice.
         Set `handlesInputAudioBargeIn` only when provider VAD confirms an
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.

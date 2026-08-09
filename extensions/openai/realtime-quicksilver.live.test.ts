@@ -24,6 +24,7 @@ const LIVE_ENABLED =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_GPT_LIVE === "1";
 const describeLive = LIVE_ENABLED ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 60_000;
+const LIVE_MILESTONE_TIMEOUT_MS = 30_000;
 
 type BrowserWithGptLivePeer = typeof globalThis & {
   openclawGptLivePeer?: RTCPeerConnection;
@@ -66,6 +67,33 @@ async function applyBrowserAnswer(page: Page, sdp: string): Promise<void> {
     }
     await peer.setRemoteDescription({ type: "answer", sdp: answerSdp });
   }, sdp);
+}
+
+async function waitForLiveMilestone(
+  milestone: Promise<void>,
+  label: string,
+  eventClasses: readonly string[],
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      milestone,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(`GA sideband ${label} timed out; eventClasses=${eventClasses.join(",")}`),
+            ),
+          LIVE_MILESTONE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function closeBrowserPeer(page: Page): Promise<void> {
@@ -252,10 +280,20 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
         | Awaited<ReturnType<NonNullable<typeof provider.createBrowserSession>>>
         | undefined;
       let resolveTool!: () => void;
+      let resolveFunctionOutputAck!: () => void;
       let resolveResponse!: () => void;
+      let rejectFunctionOutputAck!: (error: Error) => void;
       let responseDoneCount = 0;
+      let responseCreateCount = 0;
+      let responseCreateCountAtToolCall = 0;
+      let sessionPolicyReady = false;
+      const eventClasses: string[] = [];
       const toolObserved = new Promise<void>((resolve) => {
         resolveTool = resolve;
+      });
+      const functionOutputAcknowledged = new Promise<void>((resolve, reject) => {
+        resolveFunctionOutputAck = resolve;
+        rejectFunctionOutputAck = reject;
       });
       const responseObserved = new Promise<void>((resolve) => {
         resolveResponse = resolve;
@@ -274,12 +312,45 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
               controlBridge = bridge;
             },
             onToolCall: (event) => {
+              responseCreateCountAtToolCall = responseCreateCount;
               resolveTool();
-              void controlBridge?.submitToolResult(event.callId, {
-                result: "OpenClaw GA sideband live proof passed.",
-              });
+              try {
+                void Promise.resolve(
+                  controlBridge?.submitToolResult(event.callId, {
+                    result: "OpenClaw GA sideband live proof passed.",
+                  }),
+                ).catch((error: unknown) => {
+                  rejectFunctionOutputAck(
+                    error instanceof Error ? error : new Error("function output submission failed"),
+                  );
+                });
+              } catch (error) {
+                rejectFunctionOutputAck(
+                  error instanceof Error ? error : new Error("function output submission failed"),
+                );
+              }
             },
             onEvent: (event) => {
+              if (eventClasses.length < 64) {
+                eventClasses.push(`${event.direction}:${event.type}`);
+              }
+              if (
+                event.direction === "server" &&
+                (event.type === "session.created" || event.type === "session.updated") &&
+                event.detail === "tools=1 toolChoice=auto"
+              ) {
+                sessionPolicyReady = true;
+              }
+              if (event.direction === "client" && event.type === "response.create") {
+                responseCreateCount += 1;
+              }
+              if (
+                event.direction === "server" &&
+                event.type === "conversation.item.created" &&
+                event.detail === "itemType=function_call_output"
+              ) {
+                resolveFunctionOutputAck();
+              }
               if (event.direction === "server" && event.type === "response.done") {
                 responseDoneCount += 1;
                 if (responseDoneCount >= 2) {
@@ -311,16 +382,18 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
         );
         expect(brokerResponse.status).toBe(201);
         await applyBrowserAnswer(page, brokerResponse.answerSdp);
-        controlBridge?.sendUserMessage?.("Please check this through OpenClaw.");
-        const timeout = new Promise<never>((_resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(new Error("GA sideband tool response timed out")),
-            30_000,
-          );
-          timer.unref?.();
+        expect(sessionPolicyReady).toBe(true);
+        controlBridge?.sendUserMessage?.("Run the requested OpenClaw verification.", {
+          toolChoice: { type: "function", name: "openclaw_agent_consult" },
         });
-        await Promise.race([toolObserved, timeout]);
-        await Promise.race([responseObserved, timeout]);
+        await waitForLiveMilestone(toolObserved, "tool call", eventClasses);
+        await waitForLiveMilestone(
+          functionOutputAcknowledged,
+          "function output acknowledgement",
+          eventClasses,
+        );
+        await waitForLiveMilestone(responseObserved, "terminal response", eventClasses);
+        expect(responseCreateCount - responseCreateCountAtToolCall).toBe(1);
       } finally {
         if (reservation) {
           await Promise.resolve(realtime.broker.cancelBrowserSession(reservation)).catch(
@@ -331,6 +404,12 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
         await browser.close();
         await realtime.cleanup();
         await closeServer(server);
+        expect(realtime.getSessionCounts()).toEqual({
+          pending: 0,
+          inFlight: 0,
+          active: 0,
+          reservations: 0,
+        });
       }
     },
     LIVE_TIMEOUT_MS,
