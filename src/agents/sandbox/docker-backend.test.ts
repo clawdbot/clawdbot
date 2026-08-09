@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS } from "./constants.js";
 
 const dockerMocks = vi.hoisted(() => ({
   containerState: vi.fn(),
@@ -294,7 +295,7 @@ describe("docker sandbox backend manager", () => {
     expect(dockerMocks.execContainer).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman", command: "podman" }),
       ["rm", "-f", "sandbox-podman"],
-      { allowFailure: true },
+      { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
     );
     expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman", command: "podman" }),
@@ -412,7 +413,7 @@ describe("docker sandbox backend manager", () => {
       2,
       expect.objectContaining({ id: "podman", command: "podman" }),
       ["image", "inspect", "-f", "{{.Id}}", "openclaw-sandbox:bookworm-slim"],
-      { allowFailure: true },
+      { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
     );
   });
 });
