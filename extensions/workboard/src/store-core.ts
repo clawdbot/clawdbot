@@ -69,10 +69,6 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 
-function isActivePrimarySessionCard(card: Pick<WorkboardCard, "status" | "metadata">): boolean {
-  return !card.metadata?.archivedAt && (card.status === "running" || card.status === "review");
-}
-
 function canHoldPrimarySessionBinding(card: Pick<WorkboardCard, "status" | "metadata">): boolean {
   return !card.metadata?.archivedAt && card.status !== "blocked" && card.status !== "done";
 }
@@ -304,22 +300,20 @@ export class WorkboardCoreStore {
 
   protected assertPrimarySessionAvailable(
     cards: readonly WorkboardCard[],
-    cardId: string,
-    sessionKey: string | undefined,
-    status: WorkboardStatus,
-    strict = false,
+    candidate: WorkboardCard,
   ): void {
-    if (!sessionKey || (!strict && !isActivePrimarySessionCard({ status, metadata: undefined }))) {
+    const sessionKey = cardSessionKey(candidate);
+    if (!sessionKey || !canHoldPrimarySessionBinding(candidate)) {
       return;
     }
     const conflict = cards.find(
       (card) =>
-        card.id !== cardId &&
-        (strict ? canHoldPrimarySessionBinding(card) : isActivePrimarySessionCard(card)) &&
+        card.id !== candidate.id &&
+        canHoldPrimarySessionBinding(card) &&
         cardSessionKey(card) === sessionKey,
     );
     if (conflict) {
-        throw new Error(`session ${sessionKey} is already reserved by card ${conflict.id}.`);
+      throw new Error(`session ${sessionKey} is already reserved by card ${conflict.id}.`);
     }
   }
 
@@ -425,7 +419,6 @@ export class WorkboardCoreStore {
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
-    this.assertPrimarySessionAvailable(cards, "", sessionKey, status, true);
     const boardId = syncedMetadata.automation?.boardId ?? "default";
     const position = Number.isFinite(normalizedPosition)
       ? normalizedPosition
@@ -465,6 +458,7 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
+    this.assertPrimarySessionAvailable(cards, card);
     await this.store.register(card.id, { version: 1, card });
     try {
       for (const parent of parentCards) {
@@ -638,19 +632,8 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
-    const previousSessionKey = cardSessionKey(existing);
-    const nextSessionKey = cardSessionKey(next);
-    if (
-      previousSessionKey !== nextSessionKey ||
-      isActivePrimarySessionCard(next) !== isActivePrimarySessionCard(existing)
-    ) {
-      this.assertPrimarySessionAvailable(
-        await this.list(),
-        next.id,
-        nextSessionKey,
-        next.status,
-        true,
-      );
+    if (cardSessionKey(next) && canHoldPrimarySessionBinding(next)) {
+      this.assertPrimarySessionAvailable(await this.list(), next);
     }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
@@ -709,13 +692,6 @@ export class WorkboardCoreStore {
       if (currentSessionKey === requestedSessionKey) {
         return existing;
       }
-      this.assertPrimarySessionAvailable(
-        await this.list(),
-        id,
-        requestedSessionKey,
-        existing.status,
-        true,
-      );
       return await this.updateCard(id, { sessionKey: requestedSessionKey });
     });
   }
@@ -896,7 +872,10 @@ export class WorkboardCoreStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
-  private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
+  protected async dependencyTargetStatus(
+    card: WorkboardCard,
+    now: number,
+  ): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
     if (card.status === "scheduled" && !scheduledAt) {

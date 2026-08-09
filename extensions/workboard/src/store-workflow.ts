@@ -92,7 +92,25 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         now,
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
-      const guarded = await this.promoteDependencyReady(id, now);
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const callerSessionKey = normalizeOptionalString(input.sessionKey);
+      const boundSessionKey = cardSessionKey(existing);
+      if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
+        throw new Error(`card is bound to session ${boundSessionKey}.`);
+      }
+      const preflight =
+        callerSessionKey && !boundSessionKey
+          ? { ...existing, sessionKey: callerSessionKey }
+          : existing;
+      if (cardSessionKey(preflight)) {
+        this.assertPrimarySessionAvailable(await this.list(), preflight);
+      }
+      const dependencyStatus = await this.dependencyTargetStatus(existing, now);
+      const guarded =
+        dependencyStatus === existing.status ? existing : { ...existing, status: dependencyStatus };
       if (guarded.metadata?.archivedAt) {
         throw new Error("card is archived.");
       }
@@ -134,40 +152,23 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const callerSessionKey = normalizeOptionalString(input.sessionKey);
-      const boundSessionKey = cardSessionKey(guarded);
-      if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
-        throw new Error(`card is bound to session ${boundSessionKey}.`);
-      }
-      let claimable =
-        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
-          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
-          : guarded;
-      if (callerSessionKey && !cardSessionKey(claimable)) {
-        this.assertPrimarySessionAvailable(
-          await this.list(),
-          id,
-          callerSessionKey,
-          claimable.status,
-          true,
-        );
-        claimable = await this.updateCard(id, { sessionKey: callerSessionKey });
-      }
-      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
+      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
       const card = await this.updateCard(id, {
+        ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+          ? { workspaceAccess: options.adoptWorkspaceAccess }
+          : {}),
+        ...(callerSessionKey && !boundSessionKey ? { sessionKey: callerSessionKey } : {}),
+        status:
+          guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+            ? "running"
+            : guarded.status,
+        agentId: guarded.agentId ?? ownerId,
         metadata: {
           ...metadata,
           claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
         },
       });
-      const next = await this.updateCard(card.id, {
-        status:
-          card.status === "backlog" || card.status === "todo" || card.status === "ready"
-            ? "running"
-            : card.status,
-        agentId: card.agentId ?? ownerId,
-      });
-      return { card: next, token };
+      return { card, token };
     });
   }
 

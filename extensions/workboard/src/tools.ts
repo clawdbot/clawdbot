@@ -376,7 +376,7 @@ export function createWorkboardTools(params: {
       name: "workboard_session_bind",
       label: "Workboard Session Bind",
       description:
-        "Bind, explicitly rebind, or detach a Workboard card from the current chat session.",
+        "Bind, explicitly rebind, or detach a Workboard card from the current chat session. Use detach or rebind to recover duplicate legacy bindings without choosing a winner automatically.",
       parameters: Type.Object(
         {
           id: cardIdField(),

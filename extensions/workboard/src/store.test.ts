@@ -961,6 +961,145 @@ describe("WorkboardStore", () => {
     expect(claimed.card.sessionKey).toBe(sessionKey);
   });
 
+  it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:execution-only";
+    const first = await store.create({
+      title: "Execution-only binding",
+      execution: {
+        id: "exec-primary",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        sessionKey,
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    });
+
+    expect(first.sessionKey).toBeUndefined();
+    expect(first.execution?.sessionKey).toBe(sessionKey);
+    await expect(store.create({ title: "Top-level duplicate", sessionKey })).rejects.toThrow(
+      "already reserved by card",
+    );
+    await expect(
+      store.create({
+        title: "Execution duplicate",
+        execution: {
+          id: "exec-duplicate",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "idle",
+          sessionKey,
+          startedAt: 20,
+          updatedAt: 20,
+        },
+      }),
+    ).rejects.toThrow("already reserved by card");
+
+    await expect(
+      store.create({ title: "Blocked duplicate", status: "blocked", sessionKey }),
+    ).resolves.toMatchObject({ status: "blocked", sessionKey });
+    await expect(
+      store.create({ title: "Done duplicate", status: "done", sessionKey }),
+    ).resolves.toMatchObject({ status: "done", sessionKey });
+  });
+
+  it.each(["ready", "running", "review"] as const)(
+    "rejects a legacy duplicate %s claim before any mutation",
+    async (status) => {
+      const keyed = createMemoryStore();
+      const store = new WorkboardStore(keyed);
+      const sessionKey = `agent:main:legacy-${status}`;
+      await store.create({ title: "Existing reservation", sessionKey });
+      const duplicate = await store.create({ title: "Legacy duplicate", status });
+      await keyed.register(duplicate.id, {
+        version: 1,
+        card: { ...duplicate, sessionKey },
+      });
+      const before = structuredClone(await store.get(duplicate.id));
+
+      await expect(
+        store.claim(
+          duplicate.id,
+          { ownerId: "dispatcher" },
+          { adoptWorkspaceAccess: { unrestricted: true } },
+        ),
+      ).rejects.toThrow("already reserved by card");
+
+      expect(await store.get(duplicate.id)).toEqual(before);
+    },
+  );
+
+  it("persists a successful session-bound claim in one card write", async () => {
+    const beforeRegister = vi.fn();
+    const store = new WorkboardStore(createMemoryStore({ beforeRegister }));
+    const card = await store.create({ title: "Atomic claim", status: "ready" });
+    beforeRegister.mockClear();
+
+    const claimed = await store.claim(
+      card.id,
+      { ownerId: "dispatcher", sessionKey: "agent:main:atomic" },
+      { adoptWorkspaceAccess: { unrestricted: true } },
+    );
+
+    expect(beforeRegister).toHaveBeenCalledOnce();
+    expect(claimed.card).toMatchObject({
+      status: "running",
+      agentId: "dispatcher",
+      sessionKey: "agent:main:atomic",
+      metadata: {
+        automation: { workspaceAccess: { unrestricted: true } },
+        claim: { ownerId: "dispatcher" },
+      },
+    });
+  });
+
+  it("recovers legacy duplicate sqlite bindings by explicitly detaching one owner", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-session-recovery-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const sessionKey = "agent:main:legacy-sqlite";
+    let activeStores: ReturnType<typeof createWorkboardSqliteStores> | undefined;
+    try {
+      activeStores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(activeStores.cards);
+      const first = await store.create({ title: "First owner", sessionKey });
+      const duplicate = await store.create({ title: "Duplicate owner", status: "ready" });
+      await activeStores.cards.register(duplicate.id, {
+        version: 1,
+        card: { ...duplicate, sessionKey },
+      });
+      activeStores.close();
+      activeStores = undefined;
+
+      activeStores = createWorkboardSqliteStores({ dbPath });
+      const reopened = new WorkboardStore(activeStores.cards);
+      const before = structuredClone(await reopened.get(duplicate.id));
+      await expect(
+        reopened.claim(duplicate.id, { ownerId: "dispatcher", sessionKey }),
+      ).rejects.toThrow("already reserved by card");
+      expect(await reopened.get(duplicate.id)).toEqual(before);
+
+      const detached = await reopened.bindSession(first.id, { action: "detach" });
+      expect(detached.id).toBe(first.id);
+      expect(detached).not.toHaveProperty("sessionKey");
+      const claimed = await reopened.claim(duplicate.id, {
+        ownerId: "dispatcher",
+        sessionKey,
+      });
+      expect(claimed.card).toMatchObject({
+        id: duplicate.id,
+        status: "running",
+        sessionKey,
+        metadata: { claim: { ownerId: "dispatcher" } },
+      });
+    } finally {
+      activeStores?.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("tracks execution attempts as card metadata", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Run worker" });
