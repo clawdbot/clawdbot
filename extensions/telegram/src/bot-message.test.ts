@@ -855,26 +855,33 @@ describe("telegram bot message processor", () => {
     );
   });
 
-  it("swallows fallback delivery failures after dispatch throws", async () => {
+  it("records an undeliverable fallback notice after dispatch throws", async () => {
     const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
     const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
       {
         chatId: 123,
+        threadSpec: { id: 456, scope: "forum" },
         route: { sessionKey: "agent:main:main" },
       },
       sendMessage,
     );
     const result = await processSampleMessage(processMessage);
 
+    // A failed notice must not propagate: the turn still settles as retryable.
     expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
       "Something went wrong while processing your request. Please try again.",
-      undefined,
+      { message_thread_id: 456 },
     );
     expect(runtimeError).toHaveBeenCalledWith(
       "telegram message processing failed: Error: dispatch exploded",
+    );
+    // The notice inherits the thread that just failed, so its own failure is the
+    // only signal that the turn reached the user with nothing at all.
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram failure notice undeliverable chat=123 thread=456: Error: blocked by user",
     );
   });
 });

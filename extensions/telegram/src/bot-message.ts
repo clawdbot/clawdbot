@@ -322,7 +322,16 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               "Something went wrong while processing your request. Please try again.",
               buildTelegramThreadParams(context.threadSpec),
             );
-          } catch {}
+          } catch (notifyErr) {
+            // This notice inherits the thread binding that just failed, so a dead
+            // topic silences it too. Record the miss: it is the only signal that
+            // the turn ended with nothing visible to the user at all.
+            runtime.error?.(
+              danger(
+                `telegram failure notice undeliverable chat=${context.chatId} thread=${context.threadSpec.id ?? "none"}: ${String(notifyErr)}`,
+              ),
+            );
+          }
         }
         const result: TelegramMessageProcessingResult = {
           kind: "failed-retryable",
