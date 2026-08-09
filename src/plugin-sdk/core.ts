@@ -564,8 +564,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
 /**
  * Canonical entry helper for channel plugins.
  *
- * This shares `definePluginEntry(...)`'s lazy schema primitive, registers the
- * channel capability, and optionally exposes extra full-runtime registration
+ * Registers the channel capability and optionally exposes full-runtime hooks
  * such as tools or gateway handlers outside setup-only registration modes.
  */
 export function defineChannelPluginEntry<TPlugin>({
