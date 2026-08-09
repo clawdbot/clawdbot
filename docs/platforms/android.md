@@ -346,7 +346,13 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   silently dropping the attempt.
 - Start continuous **Talk** from the Chat waveform. Dictation, voice-note
   recording, and Talk are mutually exclusive microphone paths.
-- Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
+- Talk Mode updates the existing foreground service before capture starts. On
+  Android 9, the service uses the legacy untyped foreground-service path. On
+  Android 10, it uses `connectedDevice`; Android 11 and newer add `microphone`
+  while capture is active and remove it when Talk stops. The node service
+  declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`;
+  Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration,
+  the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Android does not advertise the `voiceWake` capability. Use Chat dictation,
