@@ -7,8 +7,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
@@ -17,8 +16,6 @@ import {
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("msteams polls", () => {
   beforeEach(() => {
@@ -145,36 +142,41 @@ describe("state poll store", () => {
   });
 
   it("keeps each account's poll retention quota independent", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-polls-");
-    const defaultStore = createMSTeamsPollStoreState({ stateDir });
-    const busyStore = createMSTeamsPollStoreState({ stateDir, accountId: "busy" });
-    await defaultStore.createPoll({
-      id: "default-poll",
-      question: "Default?",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: "2026-08-01T00:00:00.000Z",
-      votes: {},
-    });
-
-    for (let index = 0; index <= 1000; index += 1) {
-      await busyStore.createPoll({
-        id: `busy-poll-${String(index).padStart(4, "0")}`,
-        question: "Busy?",
+    // openclaw-temp-dir: allow plugin tests cannot import core test helpers; cleanup is explicit.
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    try {
+      const defaultStore = createMSTeamsPollStoreState({ stateDir });
+      const busyStore = createMSTeamsPollStoreState({ stateDir, accountId: "busy" });
+      await defaultStore.createPoll({
+        id: "default-poll",
+        question: "Default?",
         options: ["A", "B"],
         maxSelections: 1,
-        createdAt: new Date(Date.UTC(2026, 7, 1, 0, 0, index)).toISOString(),
+        createdAt: "2026-08-01T00:00:00.000Z",
         votes: {},
       });
-    }
 
-    await expect(defaultStore.getPoll("default-poll")).resolves.toMatchObject({
-      id: "default-poll",
-    });
-    await expect(busyStore.getPoll("busy-poll-0000")).resolves.toBeNull();
-    await expect(busyStore.getPoll("busy-poll-1000")).resolves.toMatchObject({
-      id: "busy-poll-1000",
-    });
+      for (let index = 0; index <= 1000; index += 1) {
+        await busyStore.createPoll({
+          id: `busy-poll-${String(index).padStart(4, "0")}`,
+          question: "Busy?",
+          options: ["A", "B"],
+          maxSelections: 1,
+          createdAt: new Date(Date.UTC(2026, 7, 1, 0, 0, index)).toISOString(),
+          votes: {},
+        });
+      }
+
+      await expect(defaultStore.getPoll("default-poll")).resolves.toMatchObject({
+        id: "default-poll",
+      });
+      await expect(busyStore.getPoll("busy-poll-0000")).resolves.toBeNull();
+      await expect(busyStore.getPoll("busy-poll-1000")).resolves.toMatchObject({
+        id: "busy-poll-1000",
+      });
+    } finally {
+      await fs.promises.rm(stateDir, { force: true, recursive: true });
+    }
   });
 
   it("serializes concurrent votes for the same poll", async () => {
