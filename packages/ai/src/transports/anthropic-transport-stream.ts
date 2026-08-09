@@ -98,6 +98,7 @@ import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
+  markTransportUsageReportUnavailableUnlessReported,
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
@@ -176,6 +177,7 @@ type MutableAssistantOutput = {
     cacheRead: number;
     cacheWrite: number;
     cacheWrite1h?: number;
+    usageReport?: { state: "available" | "unavailable" };
     contextUsage?: ContextUsage;
     totalTokens: number;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
@@ -1725,6 +1727,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             for (const block of output.content) {
               delete block.index;
             }
+            markTransportUsageReportUnavailableUnlessReported(output.usage);
           },
         });
       }

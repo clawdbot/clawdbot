@@ -406,6 +406,7 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.usage.cost.total).toBe(0);
     expect(result.usage.cost.totalOrigin).toBe("provider-billed");
+    expect(result.usage.usageReport).toEqual({ state: "available" });
   });
 
   it("keeps the catalog estimate for an invalid provider-reported usage cost", async () => {
@@ -454,6 +455,13 @@ describe("OpenAI-compatible completions params", () => {
       expect(result.errorMessage).toContain("provider=openai");
       expect(result.errorMessage).toContain("api=openai-completions");
       expect(result.errorMessage).toContain("model=gpt-5.5");
+      // No usage payload arrived; zero placeholders must not look measured.
+      expect(result.usage).toMatchObject({
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+        usageReport: { state: "unavailable" },
+      });
       const signal = (mockOpenAIOptionsRef.requests[0] as { signal?: AbortSignal } | undefined)
         ?.signal;
       expect(signal?.aborted).toBe(true);

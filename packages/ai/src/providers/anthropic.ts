@@ -661,6 +661,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         output.content = [];
       }
       output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
+      if (output.usage.usageReport?.state !== "available") {
+        output.usage.usageReport = { state: "unavailable" };
+      }
       // A bare JSON.stringify here dies on the circular error objects HTTP/socket
       // layers raise, and the throw escapes this catch so stream.end() never runs
       // and the consumer hangs. formatProviderError guards that conversion, matching

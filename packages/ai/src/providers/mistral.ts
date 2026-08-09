@@ -195,6 +195,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       // Failed or canceled generations must never retain partially repaired tool calls.
       output.content = output.content.filter((block) => block.type !== "toolCall");
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      if (output.usage.usageReport?.state !== "available") {
+        output.usage.usageReport = { state: "unavailable" };
+      }
       output.errorMessage = formatMistralError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
@@ -612,6 +615,7 @@ async function consumeChatStream(
       output.usage.totalTokens =
         chunk.usage.totalTokens ||
         output.usage.input + output.usage.output + output.usage.cacheRead;
+      output.usage.usageReport = { state: "available" };
       calculateCost(model, output.usage);
     }
 

@@ -63,6 +63,13 @@ describe("OpenAI Responses provider", () => {
     }).result();
 
     expect(result.stopReason).toBe("error");
+    // Fail before a terminal usage event: zeros are unmeasured, not free.
+    expect(result.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      totalTokens: 0,
+      usageReport: { state: "unavailable" },
+    });
     expect(openAiMockState.configs).toHaveLength(1);
     expect((openAiMockState.configs[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
   });

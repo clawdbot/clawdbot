@@ -179,7 +179,7 @@ describe.each([
   it.each(scenarios)("preserves $name", async (scenario) => {
     installUsageChunk(scenario);
     const result = await createStream().result();
-    const expectedUsage = { ...scenario.expectedUsage };
+    const expectedUsage = { ...scenario.expectedUsage, usageReport: { state: "available" } };
     if (!preservesReasoningTokens) {
       delete expectedUsage.reasoningTokens;
       expect(result.usage).not.toHaveProperty("reasoningTokens");
@@ -190,5 +190,41 @@ describe.each([
     if (scenario.expectedCost !== undefined) {
       expect(result.usage.cost.total).toBeCloseTo(scenario.expectedCost, 10);
     }
+  });
+
+  it("marks usageReport unavailable when the stream ends before the usage chunk", async () => {
+    const contentChunk = {
+      id: "chatcmpl-interrupted",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: model.id,
+      choices: [
+        {
+          index: 0,
+          delta: { role: "assistant", content: "Partial content." },
+          finish_reason: null,
+        },
+      ],
+    } as ChatCompletionChunk;
+    // Content arrives, but the stream ends without the terminal include_usage chunk —
+    // the same shape as a proxy timeout/reset after content blocks.
+    const body = `data: ${JSON.stringify(contentChunk)}\n\n`;
+    configureAiTransportHost({
+      buildModelFetch: () => async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+
+    const result = await createStream().result();
+    expect(result.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      usageReport: { state: "unavailable" },
+    });
   });
 });

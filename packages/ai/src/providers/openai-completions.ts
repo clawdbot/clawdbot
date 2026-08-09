@@ -607,6 +607,11 @@ export const streamOpenAICompletions: StreamFunction<
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+      // OpenAI sends usage only on the final chunk; a mid-stream failure must not
+      // leave the zero placeholder looking like measured usage.
+      if (output.usage.usageReport?.state !== "available") {
+        output.usage.usageReport = { state: "unavailable" };
+      }
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // Streaming scratch buffers are only used during parsing; never persist them.

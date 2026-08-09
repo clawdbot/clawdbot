@@ -110,6 +110,8 @@ export function applyAnthropicMessageStartUsage(
   target: Usage,
   payload: AnthropicUsagePayload,
 ): AnthropicPromptUsageSnapshot | undefined {
+  // Any provider usage payload is measured, even when individual buckets are zero.
+  target.usageReport = { state: "available" };
   const promptUsage = readAnthropicPromptUsageSnapshot(payload);
   const promptTokens = promptUsage
     ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
@@ -158,6 +160,9 @@ export function applyAnthropicMessageDeltaUsage(
   messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
 ): void {
   const usage = payload ?? {};
+  if (payload) {
+    target.usageReport = { state: "available" };
+  }
   const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
   if (inputTokens !== undefined) {
     target.input = inputTokens;
