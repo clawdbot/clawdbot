@@ -12,8 +12,13 @@ import {
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import {
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+  readAcpxProcessLeaseIdentity,
+} from "./process-lease.js";
 import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
+import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 
 type TestSessionStore = {
   load(sessionId: string): Promise<Record<string, unknown> | undefined>;
@@ -445,6 +450,101 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(Array.from(leaseStore.leases.values())).toEqual([
       expect.objectContaining({ rootPid: 0, state: "open" }),
     ]);
+  });
+
+  it("coalesces repeated probe uncertainty before it can evict a live lease", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-live", {
+      leaseId: "lease-live",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:live",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 700,
+      commandHash: "hash-live",
+      startedAt: 1,
+      state: "open",
+    });
+    leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
+      const leaseId = String(lease.leaseId);
+      leaseStore.leases.delete(leaseId);
+      leaseStore.leases.set(leaseId, lease);
+      if (leaseStore.leases.size > ACPX_PROCESS_LEASE_MAX_ENTRIES) {
+        const oldestLeaseId = leaseStore.leases.keys().next().value;
+        if (oldestLeaseId) {
+          leaseStore.leases.delete(oldestLeaseId);
+        }
+      }
+    });
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+        agentRegistry: {
+          resolve: (agentName: string) =>
+            agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+          list: () => ["codex"],
+        },
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => []),
+        },
+      },
+    );
+    const probeLeaseIds = new Set<string>();
+    vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+      const command = (
+        runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+      ).scopedAgentRegistry.resolve("codex");
+      const identity = readAcpxProcessLeaseIdentity(command);
+      expect(identity).toBeDefined();
+      probeLeaseIds.add(String(identity?.leaseId));
+    });
+
+    for (let index = 0; index <= ACPX_PROCESS_LEASE_MAX_ENTRIES; index += 1) {
+      await runtime.probeAvailability();
+    }
+
+    const { runtime: updatedRuntime, delegate: updatedDelegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+        agentRegistry: {
+          resolve: (agentName: string) =>
+            agentName === "codex" ? `${CODEX_ACP_WRAPPER_COMMAND} --updated` : agentName,
+          list: () => ["codex"],
+        },
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => []),
+        },
+      },
+    );
+    vi.spyOn(updatedDelegate, "probeAvailability").mockImplementation(async () => {
+      const command = (
+        updatedRuntime as unknown as {
+          scopedAgentRegistry: { resolve(agent: string): string };
+        }
+      ).scopedAgentRegistry.resolve("codex");
+      const identity = readAcpxProcessLeaseIdentity(command);
+      expect(identity).toBeDefined();
+      probeLeaseIds.add(String(identity?.leaseId));
+    });
+    await updatedRuntime.probeAvailability();
+
+    expect(leaseStore.leases.has("lease-live")).toBe(true);
+    expect(leaseStore.leases.size).toBe(2);
+    expect(probeLeaseIds.size).toBe(1);
   });
 
   it("leases generated-wrapper doctor probes and keeps uncertain failures open", async () => {

@@ -116,6 +116,7 @@ export function openAcpxProcessLeaseStateStore(
   return openKeyedStore<AcpxProcessLease>({
     namespace: ACPX_PROCESS_LEASE_NAMESPACE,
     maxEntries: ACPX_PROCESS_LEASE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
   });
 }
 
