@@ -59,15 +59,15 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
   }
   const candidates: CandidateTarget[] = [
     ...listDefaultAgentDatabaseTargets(params.env, params.warnings),
-    ...registered.map((entry) => ({
-      agentId: entry.agentId,
-      path: entry.path,
-      source: "registry" as const,
-    })),
     ...params.configuredAgentDatabaseTargets.map((target) => ({
       agentId: target.agentId,
       path: target.path,
       source: "configured" as const,
+    })),
+    ...registered.map((entry) => ({
+      agentId: entry.agentId,
+      path: entry.path,
+      source: "registry" as const,
     })),
   ];
   const activeStateDir = resolveStateDir(params.env);
@@ -84,7 +84,9 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
   const configuredPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const targets: AgentDatabaseMediaMigrationTarget[] = [];
   for (const candidate of candidates) {
-    const pathname = path.resolve(candidate.path);
+    // Preserve the original locator: lexical normalization of `link/../file`
+    // can select a different file than filesystem symlink traversal does.
+    const pathname = candidate.path;
     if (!isPersistentOpenClawAgentDatabasePath(pathname, params.env)) {
       if (candidate.source === "registry") {
         unregisterOpenClawAgentDatabase({
@@ -107,6 +109,9 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
       }
     }
     const isConfiguredPath = params.configuredAgentDatabaseTargets.some((configuredTarget) => {
+      if (normalizeAgentId(configuredTarget.agentId) !== normalizeAgentId(candidate.agentId)) {
+        return false;
+      }
       try {
         return configuredPathMatcher(pathname, configuredTarget.path);
       } catch {

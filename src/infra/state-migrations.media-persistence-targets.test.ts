@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
@@ -21,9 +24,14 @@ import { migrateLegacyMediaPersistence } from "./state-migrations.media-persiste
 const tempDirs: string[] = [];
 const PREVIOUS_VERSION = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
 
-function createLegacyAgentDatabase(params: { env: NodeJS.ProcessEnv; path?: string }): string {
+function createLegacyAgentDatabase(params: {
+  agentId?: string;
+  env: NodeJS.ProcessEnv;
+  path?: string;
+}): string {
+  const agentId = params.agentId ?? "main";
   const opened = openOpenClawAgentDatabase({
-    agentId: "main",
+    agentId,
     env: params.env,
     ...(params.path ? { path: params.path } : {}),
   });
@@ -81,6 +89,37 @@ describe("media persistence migration targets", () => {
         schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
     ]);
+  });
+
+  it("preserves filesystem traversal for registered paths containing dot-dot segments", () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-symlink-path-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const symlinkTarget = path.join(stateDir, "external", "subdir");
+    fs.mkdirSync(symlinkTarget, { recursive: true });
+    fs.symlinkSync(symlinkTarget, path.join(stateDir, "link"), "dir");
+    const filesystemPath = path.join(stateDir, "external", "x", "openclaw-agent.sqlite");
+    const lexicalPath = path.join(stateDir, "x", "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ env, path: filesystemPath });
+    createLegacyAgentDatabase({ env, path: lexicalPath });
+    unregisterOpenClawAgentDatabase({ agentId: "main", env, path: filesystemPath });
+    unregisterOpenClawAgentDatabase({ agentId: "main", env, path: lexicalPath });
+    const registeredPath = `${path.join(stateDir, "link")}${path.sep}..${path.sep}x${path.sep}openclaw-agent.sqlite`;
+    expect(fs.realpathSync.native(registeredPath)).toBe(filesystemPath);
+    expect(path.resolve(registeredPath)).toBe(lexicalPath);
+    registerOpenClawAgentDatabase({
+      agentId: "main",
+      env,
+      path: registeredPath,
+      schemaVersion: PREVIOUS_VERSION,
+    });
+
+    const result = migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(readUserVersion(filesystemPath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(readUserVersion(lexicalPath)).toBe(PREVIOUS_VERSION);
   });
 
   it("unregisters foreign registry paths without touching their databases", () => {
@@ -156,6 +195,41 @@ describe("media persistence migration targets", () => {
         includeIncompatibleSchemaVersions: true,
       }),
     ).toEqual([expect.objectContaining({ agentId: "main", path: databasePath })]);
+  });
+
+  it("prefers the configured owner over a stale registry owner for the same path", () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-stale-owner-active-"),
+    );
+    const customRoot = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-stale-owner-store-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = path.join(customRoot, "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ agentId: "new", env, path: databasePath });
+    unregisterOpenClawAgentDatabase({ agentId: "new", env, path: databasePath });
+    registerOpenClawAgentDatabase({
+      agentId: "old",
+      env,
+      path: databasePath,
+      schemaVersion: PREVIOUS_VERSION,
+    });
+
+    const result = migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: [{ agentId: "new", path: databasePath }],
+      env,
+    });
+
+    expect(result.warnings).toContain(
+      `Skipped foreign agent database ${databasePath}; it is outside the active state directory and is not a configured session store.`,
+    );
+    expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId: "new", path: databasePath })]);
   });
 
   it("prunes missing and archived registry entries before migration", () => {
