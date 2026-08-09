@@ -486,22 +486,15 @@ describe("command queue", () => {
     await expect(other).resolves.toBe("other");
   });
 
-  it("task timeout rejects the caller but holds the lane until the task settles", async () => {
+  it("task timeout releases a stuck lane and drains queued work", async () => {
     const lane = `timeout-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
 
     vi.useFakeTimers();
     try {
-      const blocker = createDeferred();
-      const first = enqueueCommandInLane(
-        lane,
-        async () => {
-          await blocker.promise;
-        },
-        {
-          taskTimeoutMs: 25,
-        },
-      );
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+      });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
         message: expect.stringContaining("elapsed 25ms reached task budget 25ms"),
@@ -519,15 +512,8 @@ describe("command queue", () => {
       });
 
       await vi.advanceTimersByTimeAsync(25);
+
       await firstRejected;
-
-      expect(secondRan).toBe(false);
-      expectLaneSnapshotFields(lane, {
-        activeCount: 1,
-        queuedCount: 1,
-      });
-
-      blocker.resolve();
       await expect(second).resolves.toBe("second");
       expect(secondRan).toBe(true);
       expectLaneSnapshotFields(lane, {
@@ -613,18 +599,11 @@ describe("command queue", () => {
     vi.useFakeTimers();
     try {
       const abortController = new AbortController();
-      const blocker = createDeferred();
-      const first = enqueueCommandInLane(
-        lane,
-        async () => {
-          await blocker.promise;
-        },
-        {
-          taskTimeoutMs: 48 * 60 * 60 * 1000,
-          taskTimeoutAbortSignal: abortController.signal,
-          taskTimeoutAbortGraceMs: 25,
-        },
-      );
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 48 * 60 * 60 * 1000,
+        taskTimeoutAbortSignal: abortController.signal,
+        taskTimeoutAbortGraceMs: 25,
+      });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
         message: expect.stringContaining(
@@ -643,9 +622,6 @@ describe("command queue", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       await firstRejected;
-      expect(secondRan).toBe(false);
-
-      blocker.resolve();
       await expect(second).resolves.toBe("second");
       expect(secondRan).toBe(true);
     } finally {

@@ -30,12 +30,10 @@ export class CommandLaneClearedError extends Error {
 
 /**
  * Dedicated error type thrown when an active command exceeds its caller-owned
- * lane timeout. The caller is rejected immediately, but the lane remains occupied
- * until the underlying task settles so queued work cannot overlap hidden side effects.
+ * lane timeout. The underlying task may still be unwinding, but the lane is
+ * released so queued work is not blocked forever.
  */
 class CommandLaneTaskTimeoutError extends Error {
-  readonly holdLaneUntilSettlement: boolean;
-
   constructor(
     lane: string,
     details:
@@ -43,7 +41,6 @@ class CommandLaneTaskTimeoutError extends Error {
       | { cause: "progress-idle"; elapsedMs: number; idleMs: number; taskBudgetMs: number }
       | { cause: "abort-grace"; elapsedMs: number; graceMs: number; taskBudgetMs: number }
       | { cause: "release-signal"; elapsedMs: number; taskBudgetMs: number },
-    readonly taskSettlement: Promise<void>,
   ) {
     const message = (() => {
       switch (details.cause) {
@@ -61,7 +58,6 @@ class CommandLaneTaskTimeoutError extends Error {
     })();
     super(`Command lane "${lane}" task timed out: ${message}`);
     this.name = "CommandLaneTaskTimeoutError";
-    this.holdLaneUntilSettlement = details.cause !== "release-signal";
   }
 }
 
@@ -338,10 +334,6 @@ async function runQueueEntryTask(
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
-  const taskSettlement = taskPromise.then(
-    () => undefined,
-    () => undefined,
-  );
   const taskTimeoutMs = normalizeTaskTimeoutMs(entry.taskTimeoutMs);
   if (taskTimeoutMs === undefined) {
     return await taskPromise;
@@ -376,15 +368,11 @@ async function runQueueEntryTask(
     ) => {
       timedOut = true;
       reject(
-        new CommandLaneTaskTimeoutError(
-          lane,
-          {
-            ...details,
-            elapsedMs: elapsedSinceStartMs(),
-            taskBudgetMs: taskTimeoutMs,
-          },
-          taskSettlement,
-        ),
+        new CommandLaneTaskTimeoutError(lane, {
+          ...details,
+          elapsedMs: elapsedSinceStartMs(),
+          taskBudgetMs: taskTimeoutMs,
+        }),
       );
     };
     const armTimer = (delayMs: number, onTimeout: () => void) => {
@@ -519,16 +507,6 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
-            const timeoutSettlement =
-              err instanceof CommandLaneTaskTimeoutError && err.holdLaneUntilSettlement
-                ? err.taskSettlement
-                : undefined;
-            if (timeoutSettlement) {
-              // Preserve caller timeout semantics while keeping the lane fail-closed
-              // until the underlying task can no longer produce hidden side effects.
-              entry.reject(err);
-              await timeoutSettlement;
-            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = isQuietProbeLane(lane);
             if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
@@ -544,9 +522,7 @@ function drainLane(lane: string) {
               notifyActiveTaskWaiters();
               pump();
             }
-            if (!timeoutSettlement) {
-              entry.reject(err);
-            }
+            entry.reject(err);
           }
         })();
       }
