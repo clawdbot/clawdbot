@@ -1,10 +1,14 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  runExclusiveSqliteSessionWrite,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
@@ -64,6 +68,75 @@ describe("CronService.remove session cleanup", () => {
     expect(
       loadExactSessionEntry({ storePath: sessionStorePath, sessionKey: otherSessionKey }),
     ).toMatchObject({ entry: { sessionId: "other-session" } });
+  });
+
+  it("releases the cron lock before waiting for the session lifecycle writer", async () => {
+    const { storePath } = await makeStorePath();
+    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "main",
+      resolveSessionStorePath: () => sessionStorePath,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job = await cron.add({
+      id: "contended-session-writer",
+      name: "contended session writer",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "work" },
+    });
+    const sessionKey = `agent:main:cron:${job.id}`;
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey },
+      { sessionId: "contended-session", updatedAt: Date.now() },
+    );
+
+    const writerEntered = createDeferred<void>();
+    const releaseWriter = createDeferred<void>();
+    const resolvedSessionScope = resolveSqliteScope({
+      agentId: "main",
+      sessionKey,
+      storePath: sessionStorePath,
+    });
+    const heldWriter = runExclusiveSqliteSessionWrite(resolvedSessionScope, async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    });
+    await writerEntered.promise;
+
+    const removal = cron.remove(job.id);
+    let unrelatedAdded = false;
+    const unrelatedAdd = cron
+      .add({
+        id: "unrelated-during-session-cleanup",
+        name: "unrelated during session cleanup",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 120_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "unrelated" },
+      })
+      .then(() => {
+        unrelatedAdded = true;
+      });
+
+    try {
+      await vi.advanceTimersByTimeAsync(50);
+      expect(unrelatedAdded).toBe(true);
+    } finally {
+      releaseWriter.resolve();
+      await heldWriter;
+      await Promise.all([removal, unrelatedAdd]);
+    }
+
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
   });
 
   it("removes a base session recreated by an already-admitted run", async () => {

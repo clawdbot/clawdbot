@@ -549,17 +549,17 @@ export async function remove(
   const { activeMarker, agentId, sessionStorePath, finish, release } = sessionCleanup;
   const cleanup = async () => {
     try {
-      await locked(state, async () => {
+      const shouldRemove = await locked(state, async () => {
         await ensureLoaded(state, { skipRecompute: true });
-        if (state.store?.jobs.some((job) => job.id === id)) {
-          return;
-        }
+        return !state.store?.jobs.some((job) => job.id === id);
+      });
+      if (shouldRemove) {
         await removeCronJobBaseSession({
           agentId,
           jobId: id,
           sessionStorePath,
         });
-      });
+      }
     } catch (error) {
       state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
     } finally {
