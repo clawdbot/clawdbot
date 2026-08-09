@@ -10,7 +10,7 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
-  resolveProviderObservedTelegramThreadId,
+  resolveProviderObservedTelegramThreadSpec,
 } from "./message-cache.js";
 import { resetTelegramMessageCacheForTest as resetCache } from "./runtime.test-support.js";
 
@@ -25,7 +25,10 @@ type PersistedValue = {
   botUserId?: number;
   promptContextProjection?: unknown;
   resolvedMedia?: TelegramResolvedMedia;
-  threadBinding?: { kind: "provider-observed-v1"; threadId: string };
+  threadBinding?: {
+    kind: "provider-observed-v1";
+    threadSpec: { scope: "direct-messages" | "dm" | "forum"; id: number };
+  };
   threadId?: string;
 };
 
@@ -195,7 +198,11 @@ describe("telegram message cache", () => {
         is_topic_message: true,
         reply_to_message: parent,
       }),
-      { chatId: -1001, threadId: 77, providerObservedThreadId: 77 },
+      {
+        chatId: -1001,
+        threadId: 77,
+        providerObservedThread: { scope: "forum", id: 77 },
+      },
     );
 
     expect(entries.size).toBe(2);
@@ -203,7 +210,8 @@ describe("telegram message cache", () => {
       Array.from(entries.values()).every(
         (value) =>
           value.threadBinding?.kind === "provider-observed-v1" &&
-          value.threadBinding.threadId === "77",
+          value.threadBinding.threadSpec.scope === "forum" &&
+          value.threadBinding.threadSpec.id === 77,
       ),
     ).toBe(true);
 
@@ -212,7 +220,7 @@ describe("telegram message cache", () => {
     for (const messageId of ["901", "902"]) {
       const node = await get(reloaded, messageId, { chatId: -1001 });
       expect(hasProviderObservedTelegramThreadBinding(node, 77)).toBe(true);
-      expect(resolveProviderObservedTelegramThreadId(node)).toBe(77);
+      expect(resolveProviderObservedTelegramThreadSpec(node)).toEqual({ scope: "forum", id: 77 });
     }
   });
 
@@ -240,17 +248,52 @@ describe("telegram message cache", () => {
     const recorded = await record(cache, root, {
       chatId: -1001,
       threadId: 77,
-      providerObservedThreadId: 77,
+      providerObservedThread: { scope: "forum", id: 77 },
     });
 
     expect(recorded.threadId).toBe("77");
-    expect(resolveProviderObservedTelegramThreadId(recorded)).toBe(77);
+    expect(resolveProviderObservedTelegramThreadSpec(recorded)).toEqual({
+      scope: "forum",
+      id: 77,
+    });
     expect((await get(cache, "905", { chatId: -1001 }))?.threadId).toBe("88");
     expect((await get(cache, "904", { chatId: -1001 }))?.threadId).toBe("88");
     const persistedRoot = Array.from(entries.values()).find(
       (entry) => entry.sourceMessage.message_id === 906,
     );
     expect(persistedRoot?.threadId).toBe("77");
+  });
+
+  it("persists a channel Direct Messages binding ahead of conflicting raw thread metadata", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    await record(
+      cache,
+      message(904, "Ada", {
+        chat: {
+          id: -1002,
+          type: "supergroup",
+          title: "Channel replies",
+          is_direct_messages: true,
+        },
+        direct_messages_topic: { topic_id: 77 },
+        message_thread_id: 999,
+        is_topic_message: true,
+      }),
+      {
+        chatId: -1002,
+        threadId: 999,
+        providerObservedThread: { scope: "direct-messages", id: 77 },
+      },
+    );
+
+    resetCache();
+    const reloaded = await get(cacheFor(bucketKey, store), "904", { chatId: -1002 });
+    expect(reloaded?.threadId).toBe("77");
+    expect(resolveProviderObservedTelegramThreadSpec(reloaded)).toEqual({
+      scope: "direct-messages",
+      id: 77,
+    });
   });
 
   it("does not resolve caller-only topic metadata as a provider-observed binding", async () => {
@@ -266,7 +309,7 @@ describe("telegram message cache", () => {
     );
 
     const node = await get(cache, "903", { chatId: -1001 });
-    expect(resolveProviderObservedTelegramThreadId(node)).toBeUndefined();
+    expect(resolveProviderObservedTelegramThreadSpec(node)).toBeUndefined();
   });
 
   it("hydrates reply chains from persisted cached messages", async () => {
@@ -634,7 +677,6 @@ describe("telegram message cache", () => {
     });
     expect(reloaded?.promptContextProjectionMarker).toBeUndefined();
     expect(hasProviderObservedTelegramThreadBinding(reloaded, 77)).toBe(false);
-    expect(resolveProviderObservedTelegramThreadId(reloaded)).toBeUndefined();
   });
 
   it("rejects unknown future persisted cache versions", async () => {

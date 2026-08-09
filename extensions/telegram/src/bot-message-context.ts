@@ -410,7 +410,9 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
-    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
+    botHasTopicsEnabled:
+      (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
+      resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
   const threadKeys =
     useDmThreadSession && dmThreadId != null

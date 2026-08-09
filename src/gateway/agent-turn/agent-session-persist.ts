@@ -24,21 +24,21 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { formatForLog } from "../ws-log.js";
 import {
   assertExpectedExistingSession,
   ExpectedExistingSessionChangedError,
-} from "./agent-expected-session.js";
+} from "../server-methods/agent-expected-session.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
+import type { TrustedSessionCreation } from "../server-methods/session-creation-provenance.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { formatForLog } from "../ws-log.js";
 import {
   cronContinuationHasReusableRuntime,
   emitAgentSendSessionLifecycleTransition,
   withSqliteSessionFileMarker,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
-import type { AgentSessionPatchBuild } from "./agent-session-patch.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type CronContinuationClaim = {
   storePath: string;

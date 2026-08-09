@@ -8,7 +8,6 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { resolveTelegramThreadSpec } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { findTelegramPollRegistryEntry, retireTelegramPollRegistryEntry } from "./poll-registry.js";
 
@@ -78,7 +77,6 @@ export function registerTelegramPollHandlers(
 
       const chatId = entry.chat.id;
       const isGroup = entry.chat.type === "group" || entry.chat.type === "supergroup";
-      const isForum = entry.chat.type === "supergroup" && entry.chat.is_forum === true;
       const senderId = user?.id != null ? String(user.id) : "";
       const senderUsername = user?.username ?? "";
       if (!isGroup && user.id !== chatId) {
@@ -97,11 +95,7 @@ export function registerTelegramPollHandlers(
         chatId,
         isGroup,
         senderId,
-        threadSpec: resolveTelegramThreadSpec({
-          isGroup,
-          isForum,
-          messageThreadId: entry.messageThreadId,
-        }),
+        threadSpec: entry.threadSpec,
       });
       const senderAuthorization = await authorizeTelegramEventSender({
         chatId,
@@ -134,15 +128,17 @@ export function registerTelegramPollHandlers(
 
       const optionLabels = optionIds.map((index) => entry.options[index] ?? `option ${index}`);
       const text = `Poll response to "${entry.question}": ${optionLabels.join(", ")}`;
+      const messageThreadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
       const syntheticMessage = buildSyntheticTextMessage({
         base: {
           message_id: entry.messageId,
           date: Math.floor(Date.now() / 1000),
           chat: entry.chat,
-          ...(entry.messageThreadId == null
+          ...(messageThreadId == null
             ? {}
             : {
-                message_thread_id: entry.messageThreadId,
+                message_thread_id: messageThreadId,
+                is_topic_message: true,
               }),
         },
         from: user,

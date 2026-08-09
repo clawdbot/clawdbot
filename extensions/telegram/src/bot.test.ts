@@ -201,6 +201,7 @@ function makeTelegramPollRegistryEntry(
 ): Omit<TelegramPollRegistryEntry, "createdAt"> {
   return {
     chat: { id: 9876, type: "private", first_name: "Ada" },
+    threadSpec: { scope: "dm" },
     question: "Ready?",
     options: ["Yes", "No"],
     ...overrides,
@@ -934,10 +935,9 @@ describe("createTelegramBot", () => {
           id: -1001234567890,
           type: "supergroup",
           title: "Reviewers",
-          is_forum: true,
         },
         messageId: 321,
-        messageThreadId: 99,
+        threadSpec: { scope: "forum", id: 99 },
         question: "Escalate?",
       }),
     );
@@ -995,7 +995,7 @@ describe("createTelegramBot", () => {
           is_forum: true,
         },
         messageId: 324,
-        messageThreadId: 99,
+        threadSpec: { scope: "forum", id: 99 },
         question: "Escalate?",
       }),
     );
@@ -1091,7 +1091,7 @@ describe("createTelegramBot", () => {
       makeTelegramPollRegistryEntry({
         pollId: "poll-dm-topic",
         messageId: 323,
-        messageThreadId: 42,
+        threadSpec: { scope: "dm", id: 42 },
       }),
     );
 
@@ -1100,7 +1100,7 @@ describe("createTelegramBot", () => {
 
       await getTelegramPollAnswerHandlerForTests()({
         update: { update_id: 9002 },
-        me: { id: 999, username: "openclaw_bot", has_topics_enabled: true },
+        me: { id: 999, username: "openclaw_bot", has_topics_enabled: false },
         getFile: getEmptyTelegramFile,
         pollAnswer: {
           poll_id: "poll-dm-topic",

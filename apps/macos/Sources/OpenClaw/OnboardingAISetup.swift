@@ -110,7 +110,7 @@ final class OnboardingAISetupModel {
 
     init(
         gateway: GatewayConnection = .shared,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         routeIdentityProvider: @escaping @MainActor () -> String? = {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity()
         },

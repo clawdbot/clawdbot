@@ -29,7 +29,6 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import type { AgentTurnContext } from "../agent-turn/types.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
@@ -37,14 +36,15 @@ import {
   parseMessageWithAttachments,
   type ChatAttachment,
 } from "../chat-attachments.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<
   ReturnType<

@@ -2408,7 +2408,7 @@ importers:
         specifier: 3.1.0
         version: 3.1.0
       '@novnc/novnc':
-        specifier: ^1.7.0
+        specifier: 1.7.0
         version: 1.7.0
       '@openclaw/gateway-client':
         specifier: workspace:*

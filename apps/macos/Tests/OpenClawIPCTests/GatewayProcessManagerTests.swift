@@ -7,6 +7,29 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `colliding profile ports cannot attach another profile gateway`() {
+        let first = AppProfile(environment: ["OPENCLAW_PROFILE": "p1402"])
+        let second = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        #expect(first.defaultGatewayPort == 55636)
+        #expect(second.defaultGatewayPort == 55636)
+        #expect(GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: first,
+            listenerPID: 1402,
+            managedServicePID: 1402))
+        #expect(!GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: second,
+            listenerPID: 1402,
+            managedServicePID: 2380))
+        #expect(!GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: second,
+            listenerPID: 1402,
+            managedServicePID: nil))
+        #expect(GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: AppProfile(environment: [:]),
+            listenerPID: 1402,
+            managedServicePID: nil))
+    }
+
     private func availableGatewayPort() throws -> Int {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -114,12 +137,16 @@ struct GatewayProcessManagerTests {
 
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
-        stallsFirstHealthResponse: Bool = false) -> GatewayTestWebSocketTask
+        stallsFirstHealthResponse: Bool = false,
+        healthResponseGates: [AsyncTestGate] = []) -> GatewayTestWebSocketTask
     {
         GatewayTestWebSocketTask(
             sendHook: { task, message, sendIndex in
                 guard sendIndex > 0 else { return }
                 guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                if healthResponseGates.indices.contains(sendIndex - 1) {
+                    await healthResponseGates[sendIndex - 1].wait()
+                }
                 if stallsFirstHealthResponse, sendIndex == 1 { return }
                 if unavailableResponses.map({ sendIndex <= $0 }) ?? true {
                     let response = Data(
@@ -1074,8 +1101,11 @@ struct GatewayProcessManagerTests {
     @Test func `new launchd gateway can cross multiple readiness deadlines`() async throws {
         let port = 19116
         let url = try #require(URL(string: "ws://example.invalid"))
-        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(healthSucceedsAfter: 2)
+        let responseGates = [AsyncTestGate(), AsyncTestGate()]
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(
+                healthSucceedsAfter: 2,
+                healthResponseGates: responseGates)
         }
         defer { manager.setTestingConnection(nil) }
 
@@ -1097,8 +1127,18 @@ struct GatewayProcessManagerTests {
             manager._testStartLaunchdGatewayReadiness(
                 port: port,
                 pid: 4242,
-                readinessWindow: 0.05,
-                firstInstallReadinessBudget: 0.15)
+                readinessWindow: 0.2,
+                firstInstallReadinessBudget: 5)
+            // Release each response only after its 200 ms window so the test owns
+            // both deadline crossings instead of depending on runner scheduling.
+            await self.waitForCondition { session.latestTask()?.snapshotSendCount() ?? 0 >= 2 }
+            #expect(session.latestTask()?.snapshotSendCount() ?? 0 >= 2)
+            try await Task.sleep(for: .milliseconds(250))
+            responseGates[0].open()
+            await self.waitForCondition { session.latestTask()?.snapshotSendCount() ?? 0 >= 3 }
+            #expect(session.latestTask()?.snapshotSendCount() ?? 0 >= 3)
+            try await Task.sleep(for: .milliseconds(250))
+            responseGates[1].open()
             await manager.waitForStartupAttempt()
 
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
