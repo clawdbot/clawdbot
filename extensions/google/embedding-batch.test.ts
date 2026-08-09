@@ -265,16 +265,6 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect((error as Error).message).toContain(label);
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
-    if (stage === "download") {
-      expect(loggerMocks.warn).toHaveBeenCalledWith(
-        "memory embeddings: gemini batch output reconciliation failed",
-        expect.objectContaining({
-          failureKind: "http",
-          providerStatus: 503,
-          unreconciledResponses: 1,
-        }),
-      );
-    }
   });
 
   it("reports malformed output without logging response content", async () => {
@@ -309,6 +299,16 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect((error as Error).message).toContain(label);
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
+    if (stage === "download") {
+      expect(loggerMocks.warn).toHaveBeenCalledWith(
+        "memory embeddings: gemini batch output reconciliation failed",
+        expect.objectContaining({
+          failureKind: "http",
+          providerStatus: 503,
+          unreconciledResponses: 1,
+        }),
+      );
+    }
   });
 
   it("marks create 404 as unavailable while preserving the structured cause", async () => {
@@ -722,8 +722,8 @@ describe("Google embedding-batch bounded JSON reads", () => {
     );
   });
 
-  it("rejects conflicting output files in one Operation", async () => {
-    stubBatchFetch((stage) =>
+  it("prefers canonical output over stale legacy aliases", async () => {
+    const fetchMock = stubBatchFetch((stage) =>
       stage === "create"
         ? jsonResponse({
             name: "batches/b-0",
@@ -739,14 +739,17 @@ describe("Google embedding-batch bounded JSON reads", () => {
         : undefined,
     );
 
-    await expect(runBatch()).rejects.toThrow("conflicting output files");
+    await expect(runBatch()).resolves.toEqual(new Map([["r0", [1, 0, 0]]]));
+    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toContain(
+      "https://generativelanguage.googleapis.com/download/v1beta/files/top-level-output:download?alt=media",
+    );
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "memory embeddings: gemini batch completed",
       expect.objectContaining({ state: "succeeded" }),
     );
-    expect(loggerMocks.warn).toHaveBeenCalledWith(
+    expect(loggerMocks.warn).not.toHaveBeenCalledWith(
       "memory embeddings: gemini batch output metadata unusable",
-      expect.objectContaining({ failureKind: "conflicting-output-files" }),
+      expect.anything(),
     );
   });
 

@@ -266,17 +266,11 @@ function getGeminiBatchState(operation: GeminiBatchOperation): GeminiBatchState 
 }
 
 function getGeminiBatchOutputFileId(operation: GeminiBatchOperation): string | undefined {
-  // Google currently documents response.responsesFile while the official SDK
-  // consumes metadata.output.responsesFile. Accept both raw Operation shapes.
+  // Prefer the canonical top-level Batch output. Legacy Operation aliases can
+  // lag behind the terminal Batch fields, so they are fallback-only.
   const outputFile = operation.output?.responsesFile;
   const responseFile = operation.response?.responsesFile;
   const metadataFile = operation.metadata?.output?.responsesFile;
-  const files = [outputFile, responseFile, metadataFile].filter(
-    (file): file is string => typeof file === "string" && file.length > 0,
-  );
-  if (new Set(files).size > 1) {
-    throw new Error("gemini batch operation returned conflicting output files");
-  }
   return outputFile ?? responseFile ?? metadataFile;
 }
 
@@ -511,16 +505,7 @@ async function waitForGeminiBatch(params: {
     if (state === "succeeded") {
       const terminalLog = buildGeminiBatchLifecycleLog(params.lifecycle, operation, state);
       log.info("memory embeddings: gemini batch completed", terminalLog);
-      let outputFileId: string | undefined;
-      try {
-        outputFileId = getGeminiBatchOutputFileId(operation);
-      } catch (error) {
-        log.warn("memory embeddings: gemini batch output metadata unusable", {
-          ...terminalLog,
-          failureKind: "conflicting-output-files",
-        });
-        throw error;
-      }
+      const outputFileId = getGeminiBatchOutputFileId(operation);
       if (!outputFileId) {
         log.warn("memory embeddings: gemini batch output metadata unusable", {
           ...terminalLog,
