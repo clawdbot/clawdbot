@@ -563,10 +563,14 @@ extension OnboardingView {
                 .foregroundStyle(.secondary)
         case let .ok(_, success):
             VStack(alignment: .leading, spacing: 2) {
-                Label(success.title, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                if let detail = success.detail {
+                Label {
+                    Text(success.titleResource)
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .font(.caption)
+                .foregroundStyle(.green)
+                if let detail = success.detailResource {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -592,14 +596,14 @@ extension OnboardingView {
                 .frame(width: 16, alignment: .center)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                Text(issue.title)
+                Text(issue.titleResource)
                     .font(.caption.weight(.semibold))
-                Text(.init(issue.body))
+                Text(issue.bodyResource)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let footnote = issue.footnote {
-                    Text(.init(footnote))
+                if let footnote = issue.footnoteResource {
+                    Text(footnote)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -896,7 +900,8 @@ extension OnboardingView {
                         title: self.cliExecutableReady
                             ? "The Gateway didn’t start"
                             : "OpenClaw installation failed",
-                        message: self.cliStatus ?? "The installer did not finish.",
+                        message: self.cliStatus?.nonEmpty.map(OnboardingTextValue.verbatim)
+                            ?? "The installer did not finish.",
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
                     {
@@ -907,7 +912,7 @@ extension OnboardingView {
                         }
                     }
                 } else if let cliStatus, !self.cliInstalled {
-                    Text(cliStatus)
+                    Text(verbatim: cliStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

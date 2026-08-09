@@ -156,7 +156,53 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "zh-CN": "zh-Hans",
   "zh-TW": "zh-Hant",
 };
+const REMOTE_GATEWAY_SUCCESS_RESOURCE_CONTRACTS = [
+  "Text(success.titleResource)",
+  "if let detail = success.detailResource",
+] as const;
+const REMOTE_GATEWAY_SUCCESS_DYNAMIC_PROJECTIONS = [
+  "Label(success.title,",
+  "Text(success.title)",
+  "if let detail = success.detail {",
+  "Text(success.detail)",
+] as const;
 const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/GeneralSettings.swift": REMOTE_GATEWAY_SUCCESS_RESOURCE_CONTRACTS,
+  "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift": [
+    "enum OnboardingTextValue: Equatable, ExpressibleByStringLiteral",
+    "case localized(LocalizedStringResource)",
+    "case verbatim(String)",
+    "var resolvedString: String",
+    "struct OnboardingErrorCard: View {\n    let title: OnboardingTextValue\n    let message: OnboardingTextValue",
+    "message: .localized(issue.statusMessageResource)",
+    "message: .verbatim(detectError.summary)",
+    "message: .verbatim(providerCatalogError)",
+    "message: .verbatim(error.summary)",
+    "message: .verbatim(manualError.summary)",
+    "OnboardingErrorDetails.copy(self.message.resolvedString)",
+    "Text(verbatim: self.text)",
+  ],
+  "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift": [
+    "self.cliStatus?.nonEmpty.map(OnboardingTextValue.verbatim)",
+    "Text(verbatim: cliStatus)",
+    ...REMOTE_GATEWAY_SUCCESS_RESOURCE_CONTRACTS,
+    "Text(issue.titleResource)",
+    "Text(issue.bodyResource)",
+    "if let footnote = issue.footnoteResource",
+  ],
+  "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift": [
+    "var titleResource: LocalizedStringResource",
+    "var bodyResource: LocalizedStringResource",
+    "var footnoteResource: LocalizedStringResource?",
+    "var statusMessageResource: LocalizedStringResource",
+    "var detailResource: LocalizedStringResource?",
+    "String(localized: self.titleResource)",
+    "String(localized: self.bodyResource)",
+    "self.footnoteResource.map { String(localized: $0) }",
+    'LocalizedStringResource(\n                "This gateway requires an auth token.',
+    "String(localized: self.statusMessageResource)",
+    "self.detailResource.map { String(localized: $0) }",
+  ],
   "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
     "enum SettingsTextValue: ExpressibleByStringLiteral",
     "case localized(LocalizedStringKey)",
@@ -321,6 +367,33 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
 };
 const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/GeneralSettings.swift": REMOTE_GATEWAY_SUCCESS_DYNAMIC_PROJECTIONS,
+  "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift": [
+    "struct OnboardingErrorCard: View {\n    let title: String",
+    "message: detectError.summary",
+    "message: providerCatalogError",
+    "message: error.summary",
+    "message: manualError.summary",
+    "OnboardingErrorDetails.copy(self.message)",
+    "Text(self.text)",
+  ],
+  "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift": [
+    "message: self.cliStatus ??",
+    "Text(cliStatus)",
+    ...REMOTE_GATEWAY_SUCCESS_DYNAMIC_PROJECTIONS,
+    "Text(issue.title)",
+    "Text(.init(issue.body))",
+    "if let footnote = issue.footnote {",
+    "Text(.init(footnote))",
+  ],
+  "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift": [
+    "var title: String {\n        switch self",
+    "var body: String {\n        switch self",
+    "var footnote: String? {\n        switch self",
+    "var statusMessage: String {\n        switch self {",
+    "var title: String {\n        switch self.authSource",
+    "var detail: String? {\n        switch self.authSource",
+  ],
   "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
     "let title: String",
     "let subtitle: String?",

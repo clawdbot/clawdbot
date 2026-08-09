@@ -724,10 +724,14 @@ struct GeneralSettings: View {
                 .foregroundStyle(.secondary)
         case let .ok(success):
             VStack(alignment: .leading, spacing: 2) {
-                Label(success.title, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                if let detail = success.detail {
+                Label {
+                    Text(success.titleResource)
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .font(.caption)
+                .foregroundStyle(.green)
+                if let detail = success.detailResource {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)

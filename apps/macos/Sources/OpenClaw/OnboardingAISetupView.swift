@@ -148,11 +148,38 @@ private struct OnboardingRecommendedInstallCard: View {
     }
 }
 
+enum OnboardingTextValue: Equatable, ExpressibleByStringLiteral {
+    case localized(LocalizedStringResource)
+    case verbatim(String)
+
+    init(stringLiteral value: String) {
+        self = .localized(LocalizedStringResource(stringLiteral: value))
+    }
+
+    var text: Text {
+        switch self {
+        case let .localized(resource):
+            Text(resource)
+        case let .verbatim(value):
+            Text(verbatim: value)
+        }
+    }
+
+    var resolvedString: String {
+        switch self {
+        case let .localized(resource):
+            String(localized: resource)
+        case let .verbatim(value):
+            value
+        }
+    }
+}
+
 struct GatewayAuthCard: Equatable {
-    let title: String
-    let message: String
-    let primaryTitle: String
-    let secondaryTitle: String
+    let title: OnboardingTextValue
+    let message: OnboardingTextValue
+    let primaryTitle: OnboardingTextValue
+    let secondaryTitle: OnboardingTextValue
 }
 
 struct OnboardingAISetupView: View {
@@ -165,10 +192,10 @@ struct OnboardingAISetupView: View {
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
         GatewayAuthCard(
-            title: "Gateway authentication required",
-            message: issue.statusMessage,
-            primaryTitle: "Back to Gateway",
-            secondaryTitle: "Try again")
+            title: .localized("Gateway authentication required"),
+            message: .localized(issue.statusMessageResource),
+            primaryTitle: .localized("Back to Gateway"),
+            secondaryTitle: .localized("Try again"))
     }
 
     var body: some View {
@@ -256,7 +283,7 @@ struct OnboardingAISetupView: View {
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
                     : "Couldn’t check this Gateway for AI access",
-                message: detectError.summary,
+                message: .verbatim(detectError.summary),
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
@@ -272,7 +299,7 @@ struct OnboardingAISetupView: View {
         if let providerCatalogError = model.providerCatalogError {
             OnboardingErrorCard(
                 title: "Couldn’t load the full provider list",
-                message: providerCatalogError,
+                message: .verbatim(providerCatalogError),
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
             {
@@ -745,7 +772,7 @@ struct OnboardingAISetupView: View {
                     title: self.model.isPreparingModel
                         ? "Model setup didn’t complete"
                         : "Sign-in didn’t complete",
-                    message: error.summary,
+                    message: .verbatim(error.summary),
                     details: error.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
@@ -907,7 +934,7 @@ struct OnboardingAISetupView: View {
             if let manualError = model.manualError {
                 OnboardingErrorCard(
                     title: "That key didn’t work",
-                    message: manualError.summary,
+                    message: .verbatim(manualError.summary),
                     details: manualError.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
@@ -951,22 +978,22 @@ struct OnboardingAISetupView: View {
 /// Every onboarding failure points at a docs.openclaw.ai page so people are
 /// never stuck staring at a raw error string.
 struct OnboardingErrorCard: View {
-    let title: String
-    let message: String
+    let title: OnboardingTextValue
+    let message: OnboardingTextValue
     var details: String?
     let docsSlug: String
-    var retryTitle: String?
+    var retryTitle: OnboardingTextValue?
     var retry: (() -> Void)?
-    var secondaryTitle: String?
+    var secondaryTitle: OnboardingTextValue?
     var secondary: (() -> Void)?
 
     init(
-        title: String,
-        message: String,
+        title: OnboardingTextValue,
+        message: OnboardingTextValue,
         details: String? = nil,
         docsSlug: String,
-        retryTitle: String? = nil,
-        secondaryTitle: String? = nil,
+        retryTitle: OnboardingTextValue? = nil,
+        secondaryTitle: OnboardingTextValue? = nil,
         secondary: (() -> Void)? = nil,
         retry: (() -> Void)? = nil)
     {
@@ -986,9 +1013,9 @@ struct OnboardingErrorCard: View {
                 .foregroundStyle(.orange)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                Text(self.title)
+                self.title.text
                     .font(.callout.weight(.semibold))
-                Text(self.message)
+                self.message.text
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -998,14 +1025,18 @@ struct OnboardingErrorCard: View {
                 }
                 HStack(spacing: 14) {
                     if let retryTitle, let retry {
-                        Button(retryTitle, action: retry)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
+                        Button(action: retry) {
+                            retryTitle.text
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                     }
                     if let secondaryTitle, let secondary {
-                        Button(secondaryTitle, action: secondary)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button(action: secondary) {
+                            secondaryTitle.text
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                     Button("Open help…") {
                         if let url = URL(string: "https://docs.openclaw.ai/\(docsSlug)") {
@@ -1016,7 +1047,7 @@ struct OnboardingErrorCard: View {
                     .font(.caption)
                     if details == nil {
                         Button("Copy error") {
-                            OnboardingErrorDetails.copy(self.message)
+                            OnboardingErrorDetails.copy(self.message.resolvedString)
                         }
                         .buttonStyle(.link)
                         .font(.caption)
@@ -1054,7 +1085,7 @@ private struct OnboardingErrorDetails: View {
 
             if self.expanded {
                 ScrollView(.vertical) {
-                    Text(self.text)
+                    Text(verbatim: self.text)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)

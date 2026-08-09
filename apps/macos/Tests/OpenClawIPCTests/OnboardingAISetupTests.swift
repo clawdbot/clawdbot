@@ -2108,7 +2108,7 @@ struct OnboardingAISetupTests {
         #expect(card.title == "Gateway authentication required")
         #expect(card.primaryTitle == "Back to Gateway")
         #expect(card.secondaryTitle == "Try again")
-        #expect(!card.title.localizedCaseInsensitiveContains("AI account"))
+        #expect(!card.title.resolvedString.localizedCaseInsensitiveContains("AI account"))
 
         let decision = try #require(OnboardingView.gatewayAuthenticationReturnDecision(
             connectionMode: appState.connectionMode,

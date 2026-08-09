@@ -49,78 +49,127 @@ enum RemoteGatewayAuthIssue: Equatable {
         }
     }
 
-    var title: String {
+    var titleResource: LocalizedStringResource {
         switch self {
         case .tokenRequired:
-            "This gateway requires an auth token"
+            LocalizedStringResource("This gateway requires an auth token")
         case .tokenMismatch:
-            "That token did not match the gateway"
+            LocalizedStringResource("That token did not match the gateway")
         case .gatewayTokenNotConfigured:
-            "This gateway host needs token setup"
+            LocalizedStringResource("This gateway host needs token setup")
         case .setupCodeExpired:
-            "This setup code is no longer valid"
+            LocalizedStringResource("This setup code is no longer valid")
         case .passwordRequired:
-            "This gateway is using unsupported auth"
+            LocalizedStringResource("This gateway is using unsupported auth")
         case .pairingRequired:
-            "This device needs pairing approval"
+            LocalizedStringResource("This device needs pairing approval")
+        }
+    }
+
+    var title: String {
+        String(localized: self.titleResource)
+    }
+
+    var bodyResource: LocalizedStringResource {
+        switch self {
+        case .tokenRequired:
+            LocalizedStringResource(
+                """
+                Paste the token configured on the gateway host. \
+                On the gateway host, run `openclaw gateway auth-token --show` \
+                in an interactive terminal, then paste its output.
+                """)
+        case .tokenMismatch:
+            LocalizedStringResource(
+                """
+                On the gateway host, run `openclaw gateway auth-token --show` \
+                in an interactive terminal, then replace the token and try again.
+                """)
+        case .gatewayTokenNotConfigured:
+            LocalizedStringResource(
+                """
+                This gateway is set to token auth, but no `gateway.auth.token` is configured \
+                on the gateway host. If the gateway uses an environment variable instead, \
+                set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway.
+                """)
+        case .setupCodeExpired:
+            LocalizedStringResource(
+                "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again.")
+        case .passwordRequired:
+            LocalizedStringResource(
+                """
+                This onboarding flow does not support password auth yet. \
+                Reconfigure the gateway to use token auth, then retry.
+                """)
+        case .pairingRequired:
+            LocalizedStringResource(
+                """
+                Approve this device from an already-paired OpenClaw client. \
+                In your OpenClaw chat, run `/pair approve`, \
+                then click **Check connection** again.
+                """)
         }
     }
 
     var body: String {
-        switch self {
-        case .tokenRequired:
-            "Paste the token configured on the gateway host. "
-                + "On the gateway host, run `openclaw gateway auth-token --show` "
-                + "in an interactive terminal, then paste its output."
-        case .tokenMismatch:
-            "On the gateway host, run `openclaw gateway auth-token --show` "
-                + "in an interactive terminal, then replace the token and try again."
-        case .gatewayTokenNotConfigured:
-            "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. "
-                + "If the gateway uses an environment variable instead, "
-                + "set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
-        case .setupCodeExpired:
-            "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
-        case .passwordRequired:
-            "This onboarding flow does not support password auth yet. "
-                + "Reconfigure the gateway to use token auth, then retry."
-        case .pairingRequired:
-            "Approve this device from an already-paired OpenClaw client. "
-                + "In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
-        }
+        String(localized: self.bodyResource)
     }
 
-    var footnote: String? {
+    var footnoteResource: LocalizedStringResource? {
         switch self {
         case .tokenRequired, .gatewayTokenNotConfigured:
-            "No token yet? Generate one on the gateway host with "
-                + "`openclaw doctor --generate-gateway-token`, then set it as `gateway.auth.token`."
+            LocalizedStringResource(
+                """
+                No token yet? Generate one on the gateway host with \
+                `openclaw doctor --generate-gateway-token`, \
+                then set it as `gateway.auth.token`.
+                """)
         case .setupCodeExpired:
             nil
         case .pairingRequired:
-            "If you do not have another paired OpenClaw client yet, "
-                + "approve the pending request on the gateway host with `openclaw devices approve`."
+            LocalizedStringResource(
+                """
+                If you do not have another paired OpenClaw client yet, \
+                approve the pending request on the gateway host \
+                with `openclaw devices approve`.
+                """)
         case .tokenMismatch, .passwordRequired:
             nil
         }
     }
 
-    var statusMessage: String {
+    var footnote: String? {
+        self.footnoteResource.map { String(localized: $0) }
+    }
+
+    var statusMessageResource: LocalizedStringResource {
         switch self {
         case .tokenRequired:
-            "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host."
+            LocalizedStringResource(
+                "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.")
         case .tokenMismatch:
-            "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host."
+            LocalizedStringResource(
+                "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.")
         case .gatewayTokenNotConfigured:
-            "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
+            LocalizedStringResource(
+                "This gateway has token auth enabled, but no gateway.auth.token is configured on the host.")
         case .setupCodeExpired:
-            "Setup code expired or already used. Scan a fresh setup code, then try again."
+            LocalizedStringResource(
+                "Setup code expired or already used. Scan a fresh setup code, then try again.")
         case .passwordRequired:
-            "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
+            LocalizedStringResource(
+                "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet.")
         case .pairingRequired:
-            "Pairing required. In an already-paired OpenClaw client, "
-                + "run /pair approve, then check the connection again."
+            LocalizedStringResource(
+                """
+                Pairing required. In an already-paired OpenClaw client, \
+                run /pair approve, then check the connection again.
+                """)
         }
+    }
+
+    var statusMessage: String {
+        String(localized: self.statusMessageResource)
     }
 }
 
@@ -133,31 +182,46 @@ enum RemoteGatewayProbeResult: Equatable {
 struct RemoteGatewayProbeSuccess: Equatable {
     let authSource: GatewayAuthSource?
 
-    var title: String {
+    var titleResource: LocalizedStringResource {
         switch self.authSource {
         case .some(.deviceToken):
-            "Connected via paired device"
+            LocalizedStringResource("Connected via paired device")
         case .some(.bootstrapToken):
-            "Connected with setup code"
+            LocalizedStringResource("Connected with setup code")
         case .some(.sharedToken):
-            "Connected with gateway token"
+            LocalizedStringResource("Connected with gateway token")
         case .some(.password):
-            "Connected with password"
+            LocalizedStringResource("Connected with password")
         case .some(GatewayAuthSource.none), nil:
-            "Remote gateway ready"
+            LocalizedStringResource("Remote gateway ready")
+        }
+    }
+
+    var title: String {
+        String(localized: self.titleResource)
+    }
+
+    var detailResource: LocalizedStringResource? {
+        switch self.authSource {
+        case .some(.deviceToken):
+            LocalizedStringResource(
+                """
+                This app used a stored device token. \
+                New or unpaired devices may still need the gateway token.
+                """)
+        case .some(.bootstrapToken):
+            LocalizedStringResource(
+                """
+                This app is still using the temporary setup code. \
+                Approve pairing to finish provisioning device-scoped auth.
+                """)
+        case .some(.sharedToken), .some(.password), .some(GatewayAuthSource.none), nil:
+            nil
         }
     }
 
     var detail: String? {
-        switch self.authSource {
-        case .some(.deviceToken):
-            "This app used a stored device token. New or unpaired devices may still need the gateway token."
-        case .some(.bootstrapToken):
-            "This app is still using the temporary setup code. "
-                + "Approve pairing to finish provisioning device-scoped auth."
-        case .some(.sharedToken), .some(.password), .some(GatewayAuthSource.none), nil:
-            nil
-        }
+        self.detailResource.map { String(localized: $0) }
     }
 }
 

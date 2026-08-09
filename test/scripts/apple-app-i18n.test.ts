@@ -113,14 +113,22 @@ describe("Apple app i18n catalogs", () => {
     expect(keys.length).toBeGreaterThan(900);
     expect(keys).toEqual(
       expect.arrayContaining([
+        "Back to Gateway",
         "Browse ClawHub",
         "Done in %@",
         "Enable debug tools",
         "Everyday OpenClaw app behavior.",
+        "Gateway authentication required",
+        "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
         "General",
+        "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again.",
         "Searching…",
+        "Setup code expired or already used. Scan a fresh setup code, then try again.",
         "Shelling",
         "Stopped",
+        "This gateway has token auth enabled, but no gateway.auth.token is configured on the host.",
+        "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+        "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet.",
         "Voice Wake requires macOS 26 or newer",
         "Waiting",
       ]),
@@ -186,6 +194,53 @@ describe("Apple app i18n catalogs", () => {
     expect(approvals).toContain("subtitle: .localized(self.model.security.policyDescription)");
     expect(approvals).toContain("subtitle: .localized(self.model.ask.policyDescription)");
     expect(voiceWake).toContain('format: String(localized: "Language %lld")');
+  });
+
+  it("keeps macOS probe labels localized and runtime failures verbatim", async () => {
+    const [aiSetup, general, pages, remoteProbe] = await Promise.all([
+      readFile("apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift", "utf8"),
+      readFile("apps/macos/Sources/OpenClaw/GeneralSettings.swift", "utf8"),
+      readFile("apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift", "utf8"),
+      readFile("apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift", "utf8"),
+    ]);
+
+    expect(aiSetup).toContain("enum OnboardingTextValue: Equatable, ExpressibleByStringLiteral");
+    expect(aiSetup).toContain("case localized(LocalizedStringResource)");
+    expect(aiSetup).toContain("message: .localized(issue.statusMessageResource)");
+    expect(aiSetup).toContain("message: .verbatim(detectError.summary)");
+    expect(aiSetup).toContain("message: .verbatim(providerCatalogError)");
+    expect(aiSetup).toContain("message: .verbatim(error.summary)");
+    expect(aiSetup).toContain("message: .verbatim(manualError.summary)");
+    expect(aiSetup).toContain("OnboardingErrorDetails.copy(self.message.resolvedString)");
+    expect(aiSetup).toContain("Text(verbatim: self.text)");
+    expect(pages).toContain("self.cliStatus?.nonEmpty.map(OnboardingTextValue.verbatim)");
+    expect(pages).toContain("Text(verbatim: cliStatus)");
+    for (const source of [general, pages]) {
+      expect(source).toContain("Text(success.titleResource)");
+      expect(source).toContain("if let detail = success.detailResource");
+      expect(source).not.toContain("Label(success.title,");
+      expect(source).not.toContain("Text(success.title)");
+      expect(source).not.toContain("if let detail = success.detail {");
+      expect(source).not.toContain("Text(success.detail)");
+    }
+    expect(pages).toContain("Text(issue.titleResource)");
+    expect(pages).toContain("Text(issue.bodyResource)");
+    expect(pages).toContain("if let footnote = issue.footnoteResource");
+    expect(pages).not.toContain("Text(issue.title)");
+    expect(pages).not.toContain("Text(.init(issue.body))");
+    expect(remoteProbe).toContain("var titleResource: LocalizedStringResource");
+    expect(remoteProbe).toContain("var bodyResource: LocalizedStringResource");
+    expect(remoteProbe).toContain("var footnoteResource: LocalizedStringResource?");
+    expect(remoteProbe).toContain("var statusMessageResource: LocalizedStringResource");
+    expect(remoteProbe).toContain("var detailResource: LocalizedStringResource?");
+    expect(remoteProbe).toContain("String(localized: self.titleResource)");
+    expect(remoteProbe).toContain("String(localized: self.bodyResource)");
+    expect(remoteProbe).toContain("self.footnoteResource.map { String(localized: $0) }");
+    expect(remoteProbe).toContain(
+      'LocalizedStringResource(\n                "This gateway requires an auth token.',
+    );
+    expect(remoteProbe).toContain("String(localized: self.statusMessageResource)");
+    expect(remoteProbe).toContain("self.detailResource.map { String(localized: $0) }");
   });
 
   it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
