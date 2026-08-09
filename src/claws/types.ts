@@ -218,12 +218,12 @@ export type ClawWorkspaceSourceSnapshot = {
   digest: string;
 };
 
-export type ClawSourceFileSnapshot = {
+type ClawSourceFileSnapshot = {
   byteLength: number;
   digest: string;
 };
 
-export type ClawProfileSourceSnapshot = ClawSourceFileSnapshot & {
+type ClawProfileSourceSnapshot = ClawSourceFileSnapshot & {
   sourcePath: string;
 };
 

@@ -18,7 +18,7 @@ type ClawProjectPackageJson = {
   openclaw: { claw: "CLAW.md" };
 };
 
-export type ClawProjectValidationResult =
+type ClawProjectValidationResult =
   | {
       ok: true;
       root: string;

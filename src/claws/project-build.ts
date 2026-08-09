@@ -25,7 +25,7 @@ import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 export const CLAW_BUILD_RESULT_SCHEMA_VERSION = "openclaw.clawBuild.v1" as const;
 
-export type ClawBuildResult = {
+type ClawBuildResult = {
   schemaVersion: typeof CLAW_BUILD_RESULT_SCHEMA_VERSION;
   projectSchemaVersion: typeof CLAW_PROJECT_RESULT_SCHEMA_VERSION;
   artifact: string;
