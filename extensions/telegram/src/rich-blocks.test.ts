@@ -518,15 +518,17 @@ describe("splitTelegramRichBlocks", () => {
       expect(chunks).toHaveLength(2);
       expect(chunks.every((chunk) => countInputRichBlocks(chunk) <= 5)).toBe(true);
       expect(
-        chunks.flat().flatMap((part) =>
-          part.type === "blockquote" || part.type === "details" ? part.blocks : [],
-        ),
+        chunks
+          .flat()
+          .flatMap((part) =>
+            part.type === "blockquote" || part.type === "details" ? part.blocks : [],
+          ),
       ).toEqual(children);
       if (type === "blockquote") {
         expect(
-          chunks.flat().flatMap((part) =>
-            part.type === "blockquote" && part.credit ? [part.credit] : [],
-          ),
+          chunks
+            .flat()
+            .flatMap((part) => (part.type === "blockquote" && part.credit ? [part.credit] : [])),
         ).toEqual(["Author"]);
       }
     },
@@ -583,8 +585,7 @@ describe("splitTelegramRichBlocks", () => {
     ]);
     expect(
       mediaChunks.every(
-        (chunk) =>
-          chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0) <= 50,
+        (chunk) => chunk.reduce((total, block) => total + countInputRichBlockMedia(block), 0) <= 50,
       ),
     ).toBe(true);
     expect(albums.flatMap((album) => album.blocks)).toEqual(collage.blocks);

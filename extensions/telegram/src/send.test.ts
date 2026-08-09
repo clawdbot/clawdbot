@@ -110,11 +110,11 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: {
-  blocks?: InputRichBlock[];
-  markdown?: string;
-  html?: string;
-}): string {
+type RichMessageTestPayload = Parameters<
+  NonNullable<NonNullable<RichRawTextTestApi["raw"]>["sendRichMessage"]>
+>[0]["rich_message"];
+
+function richTextForTest(richMessage: RichMessageTestPayload): string {
   if (richMessage.blocks) {
     return inputRichBlocksToPlainText(richMessage.blocks);
   }
@@ -1424,10 +1424,9 @@ describe("sendMessageTelegram", () => {
 
   it("keeps recursive list and album payloads within Telegram transport limits", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
-    const list = Array.from(
-      { length: 250 },
-      (_, index) => `${index + 1}. item ${index + 1}`,
-    ).join("\n");
+    const list = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
+      "\n",
+    );
     const photos = Array.from(
       { length: 51 },
       (_, index) => `<img src="https://example.com/${index}.jpg"/>`,
@@ -1442,7 +1441,8 @@ describe("sendMessageTelegram", () => {
       },
     );
 
-    const requests = botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    const requests: Array<RichMessageTestPayload | undefined> =
+      botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
     const blocks = requests.flatMap((request) => request?.blocks ?? []);
     const items = blocks.flatMap((block) => (block.type === "list" ? block.items : []));
     const albums = blocks.filter((block) => block.type === "collage");

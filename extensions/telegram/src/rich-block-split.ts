@@ -132,10 +132,7 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
   return pieces;
 }
 
-function splitOversizedRichBlock(
-  block: InputRichBlock,
-  limits: RichBlockLimits,
-): InputRichBlock[] {
+function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits): InputRichBlock[] {
   const { textLimit, blockLimit } = limits;
   if (!exceedsRichBlockLimits(measureRichBlocks([block]), limits)) {
     return [block];
