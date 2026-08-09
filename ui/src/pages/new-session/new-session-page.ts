@@ -116,6 +116,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private openedFor: string | null = null;
   private openedAgentId = "";
+  private messageOwnerKey = "";
   private agentsHydrated = false;
   private nodesHydrated = false;
   // Discovery retry provenance separates user choices from Gateway-derived defaults.
@@ -499,13 +500,21 @@ class NewSessionPage extends OpenClawLightDomElement {
       agentState.client === this.gatewayClient &&
       this.agents().length > 0,
     );
-    const openKey = catalog.routeKey(this.data);
+    const openKey = this.data
+      ? catalog.routeKey(this.data)
+      : catalog.routeKeyFromSearch(window.location.search);
     const resolvedAgentId = this.data?.agentId ?? "";
     if (this.openedFor !== openKey) {
+      // Route changes reset every source-owned control. Only text typed after
+      // the URL changed belongs to the destination and may survive that reset.
+      const ownedMessage = this.messageOwnerKey === openKey ? this.message : "";
       this.openedFor = openKey;
       this.openedAgentId = resolvedAgentId;
       this.agentsHydrated = agentsReady;
       this.resetDraft();
+      if (ownedMessage) {
+        this.setMessage(ownedMessage, openKey);
+      }
       return;
     }
     if (this.openedAgentId !== resolvedAgentId) {
@@ -803,11 +812,11 @@ class NewSessionPage extends OpenClawLightDomElement {
       // Show the staged repo (not the agent workspace) while the draft is locked.
       this.folder = this.pendingCloud.createParams?.cwd ?? "";
       this.pendingCloud.restored = false;
-      this.message = this.pendingCloud.message;
+      this.setMessage(this.pendingCloud.message);
       this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
     } else {
       this.clearPendingCloudRecovery();
-      this.message = "";
+      this.setMessage("");
     }
     this.error = null;
     this.placePopoverHiding = false;
@@ -817,6 +826,17 @@ class NewSessionPage extends OpenClawLightDomElement {
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
+  }
+
+  private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
+    this.message = message;
+    this.messageOwnerKey = ownerKey;
+  }
+
+  private setMessageFromUser(message: string) {
+    // History changes before an async route loader settles. Input accepted from
+    // the retained composer belongs to the browser destination, not stale data.
+    this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
   }
 
   private invalidateSubmission(outcomeUnknown: SubmissionOutcomeReason | null = null) {
@@ -861,7 +881,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.visibility = recovery.createParams?.incognito === true ? "incognito" : "normal";
     // Show the staged repo (not the agent workspace) while the draft is locked.
     this.folder = recovery.createParams?.cwd ?? "";
-    this.message = recovery.message;
+    this.setMessage(recovery.message);
     this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
   }
 
@@ -1326,7 +1346,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           const retryAllowed = requestId === this.submitRequestToken;
           this.pendingCloud.retryAllowed = retryAllowed;
           this.submissionOutcomeUnknown = retryAllowed ? null : "cloud-interrupted";
-          this.message = this.pendingCloud.message;
+          this.setMessage(this.pendingCloud.message);
           this.error = t("newSession.cloudStartFailed", { error: cloudStart.error });
           return;
         }
@@ -1834,7 +1854,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           incognitoDisabledReason: this.incognitoDisabledReason(),
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
-              this.message = message;
+              this.setMessageFromUser(message);
             }
           },
           onVisibilityChange: (visibility) => {
@@ -1873,7 +1893,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       },
       onDraftChange: (next) => {
         if (!this.submitting && !this.pendingCloud.sessionKey) {
-          this.message = next;
+          this.setMessageFromUser(next);
         }
       },
       onSend: () => void this.submit(),

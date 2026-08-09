@@ -12,6 +12,7 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  navigateInApp,
   pollLocatorText,
 } from "./new-session-page.test-support.ts";
 
@@ -475,6 +476,7 @@ suite.define(() => {
       const message = page.locator(".new-session-page__message");
       await message.fill("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
+      await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(false);
@@ -512,6 +514,54 @@ suite.define(() => {
       });
       expect(create.params).not.toHaveProperty("model");
       expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("clears the draft after a genuine new-session route navigation settles", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: REFRESHED_RESEARCH_WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=research`);
+      await page.getByRole("heading", { name: "Research" }).waitFor();
+      const message = page.locator(".new-session-page__message");
+      await message.fill("discard on real navigation");
+
+      await navigateInApp(page, "new-session", "?agent=main");
+
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await expect.poll(() => message.inputValue()).toBe("");
     } finally {
       await context.close();
     }
