@@ -502,7 +502,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -574,7 +574,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -1059,7 +1059,7 @@ openclaw-settings-save-indicator {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 .sidebar-attention__dismiss {
@@ -1071,7 +1071,7 @@ openclaw-settings-save-indicator {
   border: 0;
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   opacity: 0.6;
 }
 
@@ -1189,7 +1189,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
   color: var(--text);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-align: left;
   transition:
     background var(--duration-fast) ease,
@@ -1216,7 +1216,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
@@ -1305,7 +1305,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .sidebar-update-card__dismiss:hover {
@@ -1370,9 +1370,9 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 10px;
   margin: 0 -8px;
-  /* Sessions are app chrome, not hyperlinks: the whole region uses the
-     default arrow cursor; the pointer hand is reserved for real links. */
-  cursor: default;
+  /* Sessions are app chrome, not hyperlinks: the whole region follows the
+     base.css cursor policy so it tracks the window it is running in. */
+  cursor: var(--cursor-action);
 }
 
 .sidebar-shell__body--scroll-top {
@@ -1847,7 +1847,7 @@ html.openclaw-native-macos
   background: transparent;
   color: color-mix(in srgb, var(--muted) 35%, var(--text) 65%);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-align: left;
   transition:
     background var(--duration-fast) ease,
@@ -1961,7 +1961,7 @@ html.openclaw-native-macos
   padding-right: 4px;
   border-radius: var(--radius-md);
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1997,7 +1997,7 @@ html.openclaw-native-macos
   min-width: 0;
   padding: 3px 4px 3px 0;
   color: inherit;
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -2200,7 +2200,7 @@ html.openclaw-native-macos
   border: none;
   border-radius: var(--radius-full);
   background: none;
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 .viewer-facepile-trigger:hover,
@@ -2488,8 +2488,8 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: 13px;
   text-align: left;
-  /* More-menu route rows are anchors acting as chrome (see base.css cursor convention). */
-  cursor: default;
+  /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
+  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -2849,7 +2849,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -3054,7 +3054,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) ease;
 }
 
@@ -3185,7 +3185,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition:
     color var(--duration-fast) ease,
     background var(--duration-fast) ease;
@@ -3241,7 +3241,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) ease;
 }
 
@@ -3486,7 +3486,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-family: inherit;
   font-size: 11px;
   font-weight: 600;
