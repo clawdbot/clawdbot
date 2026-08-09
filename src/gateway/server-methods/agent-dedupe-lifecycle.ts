@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import type { AgentTurnContext } from "../agent-turn/types.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import {
@@ -25,7 +26,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export type AgentDedupeLifecycle = ReturnType<typeof createAgentDedupeLifecycle>;
 
 export function createAgentDedupeLifecycle(params: {
-  cfg: ReturnType<GatewayRequestHandlerOptions["context"]["getRuntimeConfig"]>;
+  cfg: ReturnType<AgentTurnContext["getRuntimeConfig"]>;
   request: AgentRunRequest;
   runId: string;
   lifecycleGeneration: string;
@@ -33,7 +34,7 @@ export function createAgentDedupeLifecycle(params: {
   suppressVisibleSessionEffects: boolean;
   ownerConnId?: string;
   ownerDeviceId?: string;
-  context: GatewayRequestHandlerOptions["context"];
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
 }) {
   let reserved = false;

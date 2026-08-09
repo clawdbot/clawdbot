@@ -11,6 +11,7 @@ type CreateStaticCatalogResolver =
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
+  preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
   authStorage: {
     getAll: vi.fn<() => AuthStorageData>(() => ({
       custom: { type: "api_key", key: "test-key" },
@@ -108,7 +109,8 @@ vi.mock("./agent-scope.js", () => ({
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
-  getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
+  getPreparedRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
+  getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
@@ -116,6 +118,10 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
     preparedModelRuntimeMocks.mutationListener = listener;
     return () => {};
   },
+}));
+
+vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: () => [],
 }));
 
 vi.mock("./model-discovery-context.js", () => ({
@@ -172,6 +178,7 @@ export function resetPreparedModelRuntimeHarness(): void {
     custom: { type: "api_key", key: "test-key" },
   });
   preparedModelRuntimeMocks.authStorage.getOAuthProviders.mockReset().mockReturnValue([]);
+  preparedModelRuntimeMocks.preparedAuthStore = undefined;
   preparedModelRuntimeMocks.modelRegistry.fork
     .mockReset()
     .mockImplementation((authStorage: unknown) => ({ authStorage }));

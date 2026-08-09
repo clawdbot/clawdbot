@@ -29,6 +29,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { AgentTurnContext } from "../agent-turn/types.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
@@ -69,7 +70,7 @@ type AgentContentPhaseResult = {
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
   cfg: OpenClawConfig;
-  context: GatewayRequestHandlerOptions["context"];
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   isRawModelRun: boolean;
   inputProvenance?: InputProvenance;

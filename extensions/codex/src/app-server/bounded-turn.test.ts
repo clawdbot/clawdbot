@@ -197,7 +197,7 @@ function createClientFactory(
                 cachedInputTokens: 2,
                 cacheWriteInputTokens: 1,
                 outputTokens: 4,
-                reasoningOutputTokens: 0,
+                reasoningOutputTokens: 3,
               },
             },
           });
@@ -399,6 +399,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         output: 4,
         cacheRead: 2,
         cacheWrite: 1,
+        reasoningTokens: 3,
         total: 12,
       },
     });

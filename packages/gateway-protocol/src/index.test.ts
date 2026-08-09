@@ -49,6 +49,7 @@ import type {
   ConfigSchemaLookupParams,
   ModelsListParams,
   SessionsCatalogListParams,
+  SessionsCatalogStartTerminalParams,
   TalkEvent,
 } from "./index.js";
 import * as schemaExportRegistry from "./schema-export-registry.js";
@@ -122,6 +123,7 @@ describe("protocol export registries", () => {
     expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
     expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<SessionsCatalogStartTerminalParams>().toEqualTypeOf<Schema.SessionsCatalogStartTerminalParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
 
@@ -482,6 +484,47 @@ describe("lazy protocol validators", () => {
       {},
       { visible: "true" },
       { visible: false, extra: true },
+    ]);
+  });
+
+  it("validates worker desktop observer request and result contracts", () => {
+    expectAccepted(protocol.validateWorkerDesktopObserveParams, [
+      { environmentId: "worker:one" },
+      { environmentId: "worker:one", control: true },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopObserveParams, [
+      { environmentId: "" },
+      { environmentId: "worker:one", control: "yes" },
+      { environmentId: "worker:one", extra: true },
+    ]);
+    expectAccepted(protocol.validateWorkerDesktopObserveResult, [
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: true,
+        vncPassword: "secret",
+      },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopObserveResult, [
+      {
+        transport: "vnc",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+      {
+        transport: "rfb",
+        wsPath: "",
+        expiresAtMs: -1,
+        control: false,
+      },
     ]);
   });
 

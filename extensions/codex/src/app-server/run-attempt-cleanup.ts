@@ -43,6 +43,7 @@ export async function cleanupCodexAttempt(
   const { codexModelCallDiagnostics } = requestRuntime;
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
   try {
+    steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
       await maybeEmitFastModeAutoResetBestEffort();
     }
@@ -70,9 +71,6 @@ export async function cleanupCodexAttempt(
       });
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
-    if (!state.timedOut && !runAbortController.signal.aborted) {
-      await steeringQueueRef.current?.flushPending();
-    }
     const retainLiveIncognitoThread =
       terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
     // Native-preserved and supervision threads have separate ownership and can

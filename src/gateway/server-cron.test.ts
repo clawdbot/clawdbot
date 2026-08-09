@@ -1723,8 +1723,8 @@ describe("buildGatewayCronService", () => {
       );
       expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          message: "queue changed",
           jobId: job.id,
+          payload: { text: "queue changed" },
           target: expect.objectContaining({ threadId: 456 }),
         }),
       );
@@ -1970,7 +1970,8 @@ describe("buildGatewayCronService", () => {
         callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
         "cron announce payload",
       );
-      const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
+      const payload = requireRecord(announcePayload.payload, "cron announce reply payload");
+      const message = typeof payload.text === "string" ? payload.text : "";
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");

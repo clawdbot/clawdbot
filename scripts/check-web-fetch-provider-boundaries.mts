@@ -79,7 +79,7 @@ let webFetchProviderViolationsPromise:
 /**
  * Collects web-fetch provider boundary violations in core source files.
  */
-export async function collectWebFetchProviderBoundaryViolations() {
+async function collectWebFetchProviderBoundaryViolations() {
   if (!webFetchProviderViolationsPromise) {
     webFetchProviderViolationsPromise = scanWebFetchProviderBoundaryViolations();
     try {

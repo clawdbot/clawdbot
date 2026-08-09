@@ -1,7 +1,5 @@
 // Slack plugin module implements reactions behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -41,58 +39,58 @@ export function registerSlackReactionEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
-    try {
-      const item = event.item;
-      if (!item || item.type !== "message") {
-        return;
-      }
-      if (ctx.reactionMode === "off") {
-        return;
-      }
-      if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
-        return;
-      }
-      trackEvent?.();
-
-      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx,
-        senderId: event.user,
-        channelId: item.channel,
-        eventKind: "reaction",
-      });
-      if (!ingressContext) {
-        return;
-      }
-
-      const actorInfoPromise: Promise<{ name?: string } | undefined> = event.user
-        ? ctx.resolveUserName(event.user)
-        : Promise.resolve(undefined);
-      const authorInfoPromise: Promise<{ name?: string } | undefined> = event.item_user
-        ? ctx.resolveUserName(event.item_user)
-        : Promise.resolve(undefined);
-      const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
-      if (
-        !shouldEmitSlackReactionNotification({
-          ctx,
-          event,
-          actorName: actorInfo?.name,
-        })
-      ) {
-        return;
-      }
-      const actorLabel = actorInfo?.name ?? event.user;
-      const emojiLabel = event.reaction ?? "emoji";
-      const authorLabel = authorInfo?.name ?? event.item_user;
-      const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
-      const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      enqueueSystemEvent(text, {
-        sessionKey: ingressContext.sessionKey,
-        contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
-      });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));
+  const handleReactionEvent = async (
+    event: SlackReactionEvent,
+    action: "added" | "removed",
+    eventId: string,
+  ) => {
+    const item = event.item;
+    if (!item || item.type !== "message") {
+      return;
     }
+    if (ctx.reactionMode === "off") {
+      return;
+    }
+    if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
+      return;
+    }
+    trackEvent?.();
+
+    const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+      ctx,
+      senderId: event.user,
+      channelId: item.channel,
+      eventKind: "reaction",
+    });
+    if (!ingressContext) {
+      return;
+    }
+
+    const actorInfoPromise: Promise<{ name?: string } | undefined> = event.user
+      ? ctx.resolveUserName(event.user)
+      : Promise.resolve(undefined);
+    const authorInfoPromise: Promise<{ name?: string } | undefined> = event.item_user
+      ? ctx.resolveUserName(event.item_user)
+      : Promise.resolve(undefined);
+    const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
+    if (
+      !shouldEmitSlackReactionNotification({
+        ctx,
+        event,
+        actorName: actorInfo?.name,
+      })
+    ) {
+      return;
+    }
+    const actorLabel = actorInfo?.name ?? event.user;
+    const emojiLabel = event.reaction ?? "emoji";
+    const authorLabel = authorInfo?.name ?? event.item_user;
+    const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${ingressContext.channelLabel} msg ${item.ts}`;
+    const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
+    enqueueSystemEvent(text, {
+      sessionKey: ingressContext.sessionKey,
+      contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}:${eventId}`,
+    });
   };
 
   ctx.app.event(
@@ -101,7 +99,7 @@ export function registerSlackReactionEvents(params: {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
-      await handleReactionEvent(event as SlackReactionEvent, "added");
+      await handleReactionEvent(event as SlackReactionEvent, "added", body.event_id);
     },
   );
 
@@ -111,7 +109,7 @@ export function registerSlackReactionEvents(params: {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
-      await handleReactionEvent(event as SlackReactionEvent, "removed");
+      await handleReactionEvent(event as SlackReactionEvent, "removed", body.event_id);
     },
   );
 }
