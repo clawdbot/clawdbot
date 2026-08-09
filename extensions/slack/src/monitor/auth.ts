@@ -490,6 +490,7 @@ export async function authorizeSlackSystemEventSender(params: {
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
+  eventScope?: SlackEventScope;
   expectedSenderId?: string;
   /** When true, requires expectedSenderId, rejects ambiguous channel types,
    *  and applies interactive-only owner allowFrom checks without changing the
@@ -518,7 +519,10 @@ export async function authorizeSlackSystemEventSender(params: {
     const info: {
       name?: string;
       type?: "im" | "mpim" | "channel" | "group";
-    } = await params.ctx.resolveChannelName(channelId).catch(() => ({}));
+    } = await (params.eventScope
+      ? params.ctx.resolveChannelName(channelId, params.eventScope)
+      : params.ctx.resolveChannelName(channelId)
+    ).catch(() => ({}));
     channelName = info.name;
     const resolvedTypeSource = params.channelType ?? info.type;
     channelType = normalizeSlackChannelType(resolvedTypeSource, channelId);
@@ -563,9 +567,10 @@ export async function authorizeSlackSystemEventSender(params: {
     }
   }
 
-  const senderInfo: { name?: string } = await params.ctx
-    .resolveUserName(senderId)
-    .catch(() => ({}));
+  const senderInfo: { name?: string } = await (params.eventScope
+    ? params.ctx.resolveUserName(senderId, params.eventScope)
+    : params.ctx.resolveUserName(senderId)
+  ).catch(() => ({}));
   const senderName = senderInfo.name;
   const ingressChannelType = channelType ?? "channel";
 

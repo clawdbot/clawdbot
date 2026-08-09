@@ -37,6 +37,11 @@ import {
   type SlackSuggestedPromptsInput,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
+import {
+  qualifySlackConversationId,
+  qualifySlackRoutePeerId,
+  resolveSlackEnterpriseMainDmSessionKey,
+} from "./workspace-routing.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
@@ -162,6 +167,7 @@ export type SlackMonitorContext = {
     channelType?: string | null;
     senderId?: string | null;
     threadTs?: string | null;
+    eventScope?: SlackEventScope;
   }) => string;
   isChannelAllowed: (params: {
     channelId?: string;
@@ -381,13 +387,14 @@ export function createSlackMonitorContext(params: {
     channelType?: string | null;
     senderId?: string | null;
     threadTs?: string | null;
+    eventScope?: SlackEventScope;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
     const senderId = normalizeOptionalString(p.senderId) ?? "";
     // System events can omit channel_type too; prefer a type already seen on events
     // for this channel over C-prefix inference so they key the same session (#102676).
     const channelType = normalizeSlackChannelType(
-      p.channelType ?? recallSlackChannelType(channelId),
+      p.channelType ?? recallSlackChannelType(channelId, p.eventScope),
       channelId,
     );
     const isDirectMessage = channelType === "im";
@@ -407,16 +414,34 @@ export function createSlackMonitorContext(params: {
       const peerKind = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
       const peerId = isDirectMessage ? senderId : channelId;
       if (peerId) {
-        const route = resolveAgentRoute({
+        let route = resolveAgentRoute({
           cfg: params.cfg,
           channel: "slack",
           accountId: params.accountId,
-          teamId: params.teamId,
-          peer: { kind: peerKind, id: peerId },
+          teamId: p.eventScope?.teamId ?? params.teamId,
+          peer: {
+            kind: peerKind,
+            id: qualifySlackRoutePeerId({
+              id: peerId,
+              kind: isDirectMessage ? "user" : "channel",
+              eventScope: p.eventScope,
+            }),
+          },
         });
+        if (p.eventScope && isDirectMessage && route.dmScope === "main") {
+          const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
+            baseSessionKey: route.sessionKey,
+            accountId: params.accountId,
+            eventScope: p.eventScope,
+          });
+          route = { ...route, sessionKey, mainSessionKey: sessionKey };
+        }
         const threadTs = normalizeOptionalString(p.threadTs);
-        const baseConversationId = isDirectMessage ? `user:${senderId}` : channelId;
-        const threadBindingRoute = threadTs
+        const baseConversationId = qualifySlackConversationId(
+          isDirectMessage ? `user:${senderId}` : channelId,
+          p.eventScope,
+        );
+        const threadBindingRoute = !p.eventScope && threadTs
           ? resolveRuntimeConversationBindingRoute({
               route,
               conversation: {
@@ -427,8 +452,9 @@ export function createSlackMonitorContext(params: {
               },
             })
           : null;
-        const runtimeRoute =
-          threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
+        const runtimeRoute = p.eventScope
+          ? { route, bindingRecord: null, boundSessionKey: undefined }
+          : threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
             ? threadBindingRoute
             : resolveRuntimeConversationBindingRoute({
                 route,
@@ -452,9 +478,16 @@ export function createSlackMonitorContext(params: {
       // Fall through to legacy key derivation.
     }
 
+    const fallbackFrom = p.eventScope
+      ? `slack:${qualifySlackRoutePeerId({
+          id: isDirectMessage ? senderId : channelId,
+          kind: isDirectMessage ? "user" : "channel",
+          eventScope: p.eventScope,
+        })}`
+      : from;
     const legacySessionKey = resolveSessionKey(
       params.sessionScope,
-      { From: from, ChatType: chatType, Provider: "slack" },
+      { From: fallbackFrom, ChatType: chatType, Provider: "slack" },
       params.mainKey,
       resolveDefaultAgentId(params.cfg),
     );
