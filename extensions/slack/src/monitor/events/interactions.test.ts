@@ -214,7 +214,7 @@ vi.mock("../conversation.runtime.js", () => {
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
   client?: { chat: { update: ReturnType<typeof vi.fn> } };
-  context?: { teamId?: string };
+  context?: TestBoltContext;
   body: {
     user: { id: string; team_id?: string };
     team?: { id?: string };
@@ -231,7 +231,7 @@ type RegisteredHandler = (args: {
 type RegisteredViewHandler = (args: {
   ack: () => Promise<void>;
   client?: { chat: { update: ReturnType<typeof vi.fn> } };
-  context?: { teamId?: string };
+  context?: TestBoltContext;
   body: {
     user?: { id?: string; team_id?: string };
     team?: { id?: string };
@@ -254,9 +254,15 @@ type RegisteredViewHandler = (args: {
 type RegisteredShortcutHandler = (
   args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body"> & {
     client?: { chat: { update: ReturnType<typeof vi.fn> } };
-    context?: { teamId?: string };
+    context?: TestBoltContext;
   },
 ) => Promise<void>;
+
+type TestBoltContext = {
+  teamId?: string;
+  isEnterpriseInstall?: boolean;
+  enterpriseId?: string;
+};
 
 function createContext(overrides?: {
   dmEnabled?: boolean;
@@ -286,13 +292,17 @@ function createContext(overrides?: {
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewHandler | null = null;
   let shortcutHandler: RegisteredShortcutHandler | null = null;
+  const installationIdentity = overrides?.installationIdentity ?? {
+    kind: "workspace" as const,
+    teamId: "T_TEST",
+  };
   const listenerClient = {
     chat: {
       update: vi.fn().mockResolvedValue(undefined),
     },
   };
   const withBoltScope = <
-    Args extends { body: unknown; context?: { teamId?: string }; client?: typeof listenerClient },
+    Args extends { body: unknown; context?: TestBoltContext; client?: typeof listenerClient },
   >(
     args: Args,
   ) => {
@@ -301,11 +311,19 @@ function createContext(overrides?: {
       user?: { team_id?: string };
       view?: { app_installed_team_id?: string };
     };
+    const context = args.context ?? {
+      teamId: body.view?.app_installed_team_id ?? body.team?.id ?? body.user?.team_id,
+    };
     return {
       ...args,
-      context: args.context ?? {
-        teamId: body.view?.app_installed_team_id ?? body.team?.id ?? body.user?.team_id,
-      },
+      context:
+        installationIdentity.kind === "enterprise"
+          ? {
+              ...context,
+              isEnterpriseInstall: true,
+              enterpriseId: installationIdentity.enterpriseId,
+            }
+          : context,
       client: args.client ?? listenerClient,
     };
   };
@@ -355,10 +373,6 @@ function createContext(overrides?: {
     .mockImplementation(
       (channelId) => overrides?.resolveChannelName?.(channelId) ?? Promise.resolve({}),
     );
-  const installationIdentity = overrides?.installationIdentity ?? {
-    kind: "workspace" as const,
-    teamId: "T_TEST",
-  };
   const ctx = {
     app,
     accountId: "default",
