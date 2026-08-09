@@ -252,6 +252,11 @@ export function parseBareSessionInvocation(argv: readonly string[]): BareSession
       BARE_SESSION_TUI_VALUE_OPTIONS[flag as keyof typeof BARE_SESSION_TUI_VALUE_OPTIONS];
     if (!optionKey) {
       if (!arg.startsWith("-")) {
+        // A positional before the URL is an explicit core/plugin command owner.
+        // Leave its URL argument untouched for Commander and plugin routing.
+        if (index < targetIndex) {
+          return null;
+        }
         throw new Error(
           "Unexpected extra argument for bare session URL. Use `openclaw tui <url> --help` for the full option list.",
         );

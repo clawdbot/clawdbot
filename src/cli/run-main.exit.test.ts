@@ -2724,6 +2724,46 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
   });
 
+  it.each(["tui", "attach", "logs"])(
+    "leaves an explicit %s URL invocation on the Commander path",
+    async (command) => {
+      const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+      const argv = ["node", "openclaw", command, target];
+      buildProgramMock.mockReturnValueOnce({
+        commands: [{ name: () => command, aliases: () => [] }],
+        parseAsync: commanderParseAsyncMock,
+      });
+
+      await runCli(argv);
+
+      expect(runTuiCliActionMock).not.toHaveBeenCalled();
+      expect(buildProgramMock).toHaveBeenCalledTimes(1);
+      expect(commanderParseAsyncMock).toHaveBeenCalledWith(argv);
+    },
+  );
+
+  it("leaves plugin-owned URL arguments on the plugin command path", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+    const argv = ["node", "openclaw", "googlemeet", target];
+    buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: commanderParseAsyncMock });
+
+    await runCli(argv);
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenCalledWith(argv);
+  });
+
+  it("does not steal a URL argument from an unowned command", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+
+    await expect(runCli(["node", "openclaw", "unknown-owner", target])).rejects.toThrow(
+      "Unknown command: openclaw unknown-owner",
+    );
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       label: "after the URL",
@@ -2787,7 +2827,6 @@ describe("runCli exit behavior", () => {
   it.each([
     ["unknown inline option", ["--typo=do-not-print-me"]],
     ["unknown split option", ["--typo", "do-not-print-me"]],
-    ["extra positional", ["do-not-print-me"]],
     ["option terminator", ["--"]],
   ])("rejects a pre-URL %s without reflecting values", async (_label, prefix) => {
     const target = "https://gateway.example/dashboard/main/movies-a1166b81";

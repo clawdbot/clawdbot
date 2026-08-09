@@ -226,6 +226,13 @@ describe("bare-root session URL options", () => {
     expect(parseBareSessionInvocation(argv(...args))).toBeNull();
   });
 
+  it.each(["tui", "attach", "logs", "googlemeet", "unowned-command"])(
+    "leaves an explicit %s command's URL argument to its owner",
+    (command) => {
+      expect(parseBareSessionInvocation(argv(command, target))).toBeNull();
+    },
+  );
+
   it.each([
     ["split before", ["--token", target]],
     ["split after", [target, "--token"]],
@@ -254,7 +261,6 @@ describe("bare-root session URL options", () => {
   it.each([
     ["terminator before", ["--", target], "Unsupported bare session URL option: --"],
     ["terminator after", [target, "--"], "Unsupported bare session URL option: --"],
-    ["extra before", ["do-not-print-me", target], "Unexpected extra argument"],
     ["extra after", [target, "do-not-print-me"], "Unexpected extra argument"],
     ["second URL", [target, "https://secret.example/path"], "Unexpected extra argument"],
   ])("rejects %s without reflecting extra values", (_label, args, expected) => {
