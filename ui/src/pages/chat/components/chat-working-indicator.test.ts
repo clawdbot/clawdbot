@@ -1,22 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
+import { SURPRISE_CLASSES, selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
-
-const SURPRISE_CLASSES = [
-  "chat-reading-indicator--southpaw",
-  "chat-reading-indicator--flurry",
-  "chat-reading-indicator--spin",
-  "chat-reading-indicator--shadowbox",
-  "chat-reading-indicator--backflip",
-  "chat-reading-indicator--zen",
-  "chat-reading-indicator--drummer",
-  "chat-reading-indicator--peekaboo",
-  "chat-reading-indicator--nodoff",
-  "chat-reading-indicator--curious",
-  "chat-reading-indicator--omnom",
-  "chat-reading-indicator--fakeout",
-] as const;
 
 // The keyed sample is deterministic for a fixed salt, so the rarity and spread
 // assertions below are exact re-runs, not statistical flakes.

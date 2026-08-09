@@ -15,6 +15,7 @@ import {
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
+import { SURPRISE_CLASSES } from "./chat-working-indicator-surprise.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const localStorageValues = new Map<string, string>();
@@ -1705,16 +1706,7 @@ describe("grouped chat rendering", () => {
     // At most one surprise modifier; plain in-place clawing is the unmarked default.
     expect(first.length).toBeLessThanOrEqual(1);
     for (const cls of first) {
-      expect([
-        "chat-reading-indicator--southpaw",
-        "chat-reading-indicator--flurry",
-        "chat-reading-indicator--spin",
-        "chat-reading-indicator--shadowbox",
-        "chat-reading-indicator--backflip",
-        "chat-reading-indicator--zen",
-        "chat-reading-indicator--drummer",
-        "chat-reading-indicator--peekaboo",
-      ]).toContain(cls);
+      expect(SURPRISE_CLASSES).toContain(cls);
     }
   });
 
