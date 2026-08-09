@@ -1,6 +1,4 @@
-import {
-  SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
-} from "../../config/sessions/session-transcript-projection-error.js";
+import { SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 
 export class SessionTranscriptActiveLeafIdentityUnavailableError extends ProjectionUnavailableError {
   constructor(sessionId: string) {

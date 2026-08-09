@@ -20,7 +20,6 @@ import {
   readSessionTranscriptMessageEventSnapshotWithGuard,
 } from "./session-accessor.sqlite-guarded-message-events.js";
 import {
-  readVisibleMessageRange,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";

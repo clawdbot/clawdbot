@@ -1,8 +1,8 @@
-import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import {
   resolveSessionTranscriptGuardState,
   type SessionTranscriptGuardState,
 } from "./session-accessor.sqlite-active-boundary.js";
+import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 
 export {
@@ -10,8 +10,6 @@ export {
   readSessionTranscriptMessageAnchorPageWithGuard,
   readSessionTranscriptMessageEventPageWithGuard,
   readSessionTranscriptMessageEventSnapshotWithGuard,
-  type SessionTranscriptMessageAnchorPageWithGuard,
-  type SessionTranscriptMessageEventPageWithGuard,
 } from "./session-accessor.sqlite-guarded-message-events.js";
 export type { SessionTranscriptGuardState };
 

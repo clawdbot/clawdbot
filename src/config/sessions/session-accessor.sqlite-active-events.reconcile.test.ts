@@ -17,9 +17,7 @@ import {
   readSessionTranscriptMessageEventPage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
-import {
-  readRecentSessionTranscriptMessageEventsWithGuard,
-} from "./session-accessor.sqlite-guarded-message-events.js";
+import { readRecentSessionTranscriptMessageEventsWithGuard } from "./session-accessor.sqlite-guarded-message-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {

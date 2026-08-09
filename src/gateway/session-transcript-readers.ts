@@ -156,7 +156,9 @@ function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): Sql
 }
 
 function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget) {
-  const snapshot = readSessionTranscriptMessageEventSnapshotWithGuard(toTranscriptReadScope(target));
+  const snapshot = readSessionTranscriptMessageEventSnapshotWithGuard(
+    toTranscriptReadScope(target),
+  );
   return {
     hasTranscriptEvents: snapshot.hasTranscriptEvents,
     records: extractMessageRecordsFromEventEntries(snapshot.events),

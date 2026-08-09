@@ -1,7 +1,5 @@
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
-import {
-  readSessionTranscriptMessageAnchorPageWithGuard,
-} from "../config/sessions/session-transcript-guard.runtime.js";
+import { readSessionTranscriptMessageAnchorPageWithGuard } from "../config/sessions/session-transcript-guard.runtime.js";
 import {
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
