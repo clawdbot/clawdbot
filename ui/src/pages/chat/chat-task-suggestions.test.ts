@@ -3,7 +3,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
-import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
+import {
+  renderChatTaskSuggestionTray,
+  type ChatTaskSuggestionTrayProps,
+} from "./components/chat-task-suggestions.ts";
 
 const suggestion: TaskSuggestion = {
   id: "task_123",
@@ -16,25 +19,23 @@ const suggestion: TaskSuggestion = {
   createdAt: 1,
 };
 
-function renderSuggestion(
-  overrides: Partial<Parameters<typeof renderChatTaskSuggestions>[0]> = {},
-) {
+function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) {
   const container = document.createElement("div");
   const onAccept = vi.fn();
   const onDismiss = vi.fn();
   const onCopyPrompt = vi.fn();
   render(
-    renderChatTaskSuggestions({
-      suggestions: [suggestion],
-      busyIds: new Set(),
-      canAccept: true,
-      canAcceptModes: true,
-      canDismiss: true,
-      cloudProfiles: [],
-      onAccept,
-      onDismiss,
-      onCopyPrompt,
-      copiedIds: new Set<string>(),
+    renderChatTaskSuggestionTray({
+      taskSuggestions: [suggestion],
+      taskSuggestionBusyIds: new Set(),
+      canAcceptTaskSuggestions: true,
+      canAcceptTaskSuggestionModes: true,
+      canDismissTaskSuggestions: true,
+      taskSuggestionCloudProfiles: [],
+      onAcceptTaskSuggestion: onAccept,
+      onDismissTaskSuggestion: onDismiss,
+      onCopyTaskSuggestionPrompt: onCopyPrompt,
+      taskSuggestionCopiedIds: new Set<string>(),
       ...overrides,
     }),
     container,
@@ -83,7 +84,7 @@ describe("chat task suggestions", () => {
 
   it("forwards local, session, and per-profile cloud menu actions", () => {
     const { container, onAccept } = renderSuggestion({
-      cloudProfiles: [{ id: "build" }, { id: "review" }],
+      taskSuggestionCloudProfiles: [{ id: "build" }, { id: "review" }],
     });
     const local = container.querySelector('wa-dropdown-item[value="local"]');
     const session = container.querySelector('wa-dropdown-item[value="session"]');
@@ -110,8 +111,8 @@ describe("chat task suggestions", () => {
 
   it("forwards copy-prompt without accepting, even without acceptance access", () => {
     const { container, onAccept, onCopyPrompt } = renderSuggestion({
-      canAccept: false,
-      canAcceptModes: false,
+      canAcceptTaskSuggestions: false,
+      canAcceptTaskSuggestionModes: false,
     });
     const trigger = container.querySelector(".task-suggestion__menu-trigger");
     expect(trigger?.hasAttribute("disabled")).toBe(false);
@@ -124,7 +125,9 @@ describe("chat task suggestions", () => {
   });
 
   it("shows copied feedback while the suggestion id is marked copied", () => {
-    const { container } = renderSuggestion({ copiedIds: new Set([suggestion.id]) });
+    const { container } = renderSuggestion({
+      taskSuggestionCopiedIds: new Set([suggestion.id]),
+    });
     const copy = container.querySelector('wa-dropdown-item[value="copy-prompt"]');
     expect(copy?.textContent?.trim()).toBe("Copied");
   });
@@ -135,7 +138,9 @@ describe("chat task suggestions", () => {
   });
 
   it("offers no acceptance-mode actions when modes are not advertised", () => {
-    const { container, onAccept } = renderSuggestion({ canAcceptModes: false });
+    const { container, onAccept } = renderSuggestion({
+      canAcceptTaskSuggestionModes: false,
+    });
 
     expect(container.querySelector(".task-suggestion__start")).not.toBeNull();
     // The menu itself stays: it carries the client-local Copy prompt action.
@@ -149,7 +154,9 @@ describe("chat task suggestions", () => {
   });
 
   it("uses a generic single-cloud label and a disabled hint when none are configured", () => {
-    const single = renderSuggestion({ cloudProfiles: [{ id: "build" }] }).container;
+    const single = renderSuggestion({
+      taskSuggestionCloudProfiles: [{ id: "build" }],
+    }).container;
     expect(single.querySelector('wa-dropdown-item[value="cloud"]')?.textContent?.trim()).toBe(
       "Send to cloud",
     );
@@ -161,12 +168,18 @@ describe("chat task suggestions", () => {
   });
 
   it("renders nothing when no task actions are permitted", () => {
-    const { container } = renderSuggestion({ canAccept: false, canDismiss: false });
+    const { container } = renderSuggestion({
+      canAcceptTaskSuggestions: false,
+      canDismissTaskSuggestions: false,
+    });
     expect(container.querySelector(".task-suggestions")).toBeNull();
   });
 
   it("allows dismissal while requiring admin access to start", () => {
-    const { container } = renderSuggestion({ canAccept: false, canDismiss: true });
+    const { container } = renderSuggestion({
+      canAcceptTaskSuggestions: false,
+      canDismissTaskSuggestions: true,
+    });
 
     const start = container.querySelector<HTMLButtonElement>(".task-suggestion__start");
     expect(start?.disabled).toBe(true);
@@ -177,7 +190,7 @@ describe("chat task suggestions", () => {
   it("strips bidi controls from every displayed field", () => {
     const rawProfileId = "build\u202eprofile";
     const { container, onAccept } = renderSuggestion({
-      suggestions: [
+      taskSuggestions: [
         {
           ...suggestion,
           title: "safe\u202eevil",
@@ -186,7 +199,7 @@ describe("chat task suggestions", () => {
           prompt: "run\u202d exactly",
         },
       ],
-      cloudProfiles: [{ id: rawProfileId }, { id: "review" }],
+      taskSuggestionCloudProfiles: [{ id: rawProfileId }, { id: "review" }],
     });
 
     expect(container.textContent).toContain("safeevil");

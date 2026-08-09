@@ -48,7 +48,7 @@ function sanitizeTaskSuggestionText(text: string): string {
   return text.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
-export function renderChatTaskSuggestions(props: {
+function renderChatTaskSuggestions(props: {
   suggestions: TaskSuggestion[];
   busyIds: ReadonlySet<string>;
   canAccept: boolean;
