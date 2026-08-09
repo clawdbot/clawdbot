@@ -34,6 +34,30 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     return files;
   }
 
+  // Loader result as workspace-relative paths, sorted, for differential parity.
+  const loaderRelative = async (workspaceDir: string, pattern: string): Promise<string[]> => {
+    const files = await loadExtraBootstrapFileList(workspaceDir, [pattern]);
+    return files
+      .map((file) => path.relative(workspaceDir, file.path).replaceAll(path.sep, "/"))
+      .toSorted();
+  };
+
+  // Oracle for `..`-surviving patterns: Node fs.glob's match set restricted to
+  // entries that stay inside the workspace. fs.glob's globstar-parent `..` can step
+  // above the cwd (yielding `../AGENTS.md`), which the loader prunes for
+  // containment, so the parity target is fs.glob's contained subset — exactly what
+  // the loader is allowed to return.
+  const nodeGlobContained = async (workspaceDir: string, pattern: string): Promise<string[]> => {
+    const contained: string[] = [];
+    for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+      const rel = match.replaceAll(path.sep, "/");
+      if (rel !== ".." && !rel.startsWith("../")) {
+        contained.push(rel);
+      }
+    }
+    return contained.toSorted();
+  };
+
   it("loads recognized bootstrap files from glob patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
@@ -311,68 +335,108 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(diagnostics.map((diagnostic) => diagnostic.path)).toContain(dirNamedLikeBootstrap);
   });
 
-  it("rejects a globstar with repeated parent traversal and emits a diagnostic", async () => {
-    // FINDING 2: `**/../../AGENTS.md` is a degenerate fs.glob shape whose contained
-    // match set is depth-dependent. The recursive parent-traversal walk used to
-    // return a SUPERSET here — on this tree it would surface `a/AGENTS.md` (reached
-    // by `a/x/deep` popping twice), which Node fs.glob never matches — silently
-    // injecting the wrong bootstrap files. The loader now drops that alternative and
-    // surfaces a visible `unsupported-pattern` diagnostic instead.
+  it("returns Node fs.glob's contained set for a globstar with repeated parent traversal", async () => {
+    // P1-A: `**/../../AGENTS.md` is a supported fs.glob shape — Node steps up two
+    // levels and returns the CONTAINED matches. Earlier this branch rejected the
+    // pattern outright and dropped every configured file; the loader now routes the
+    // `..`-surviving alternative through fs.glob and keeps its workspace-contained
+    // result. Differential: the loader's set equals fs.glob's, restricted to matches
+    // inside the workspace, and is not the empty reject.
     const workspaceDir = await createWorkspaceDir("repeated-parent");
     await fs.mkdir(path.join(workspaceDir, "a", "x", "deep"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
     await fs.writeFile(path.join(workspaceDir, "a", "AGENTS.md"), "a", "utf-8");
 
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+    const { diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
       "**/../../AGENTS.md",
     ]);
+    const expected = await nodeGlobContained(workspaceDir, "**/../../AGENTS.md");
 
-    expect(files).toStrictEqual([]);
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.reason).toBe("unsupported-pattern");
-    expect(diagnostics[0]?.detail).toContain("**/../../AGENTS.md");
+    expect(await loaderRelative(workspaceDir, "**/../../AGENTS.md")).toStrictEqual(expected);
+    // The fix's whole point: the contained set is non-empty, not the old reject.
+    expect(expected.length).toBeGreaterThan(0);
+    expect(diagnostics).toHaveLength(0);
   });
 
   it("keeps single-.. globstar parent traversal supported (regression guard)", async () => {
-    // Guard the fix's boundary: exactly one `..` after the globstar (`**/../AGENTS.md`)
-    // stays exact fs.glob parity and must NOT be flagged unsupported. fs.glob returns
-    // both the root file (via `a` popping) and `a/AGENTS.md` (via `a/x` popping).
+    // Guard the reducible boundary: one `..` after the globstar (`**/../AGENTS.md`)
+    // stays exact fs.glob parity. fs.glob returns both the root file (via `a`
+    // popping) and `a/AGENTS.md` (via `a/x` popping).
     const workspaceDir = await createWorkspaceDir("single-parent");
     await fs.mkdir(path.join(workspaceDir, "a", "x"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
     await fs.writeFile(path.join(workspaceDir, "a", "AGENTS.md"), "a", "utf-8");
 
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+    const { diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
       "**/../AGENTS.md",
     ]);
 
-    const loaded = files
-      .map((file) => path.relative(workspaceDir, file.path).replaceAll(path.sep, "/"))
-      .toSorted();
-    expect(loaded).toStrictEqual(["AGENTS.md", "a/AGENTS.md"]);
+    expect(await loaderRelative(workspaceDir, "**/../AGENTS.md")).toStrictEqual(
+      await nodeGlobContained(workspaceDir, "**/../AGENTS.md"),
+    );
+    expect(await loaderRelative(workspaceDir, "**/../AGENTS.md")).toStrictEqual([
+      "AGENTS.md",
+      "a/AGENTS.md",
+    ]);
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("resolves valid brace alternatives while rejecting the repeated-parent one", async () => {
-    // Per-alternative rejection: a brace pattern mixing a valid downward alternative
-    // (`a/AGENTS.md`) with the unsupported repeated-parent shape resolves the valid
-    // alternative and still emits the `unsupported-pattern` diagnostic for the bad
-    // one — the whole pattern is not dropped.
+  it("routes each brace alternative correctly: hot-path walker and fs.glob-contained", async () => {
+    // Mixed-brace routing: `{**/../../AGENTS.md,a/AGENTS.md}` mixes a `..`-surviving
+    // alternative (resolved via fs.glob + containment) with a `..`-free downward
+    // alternative (resolved by the yielding walker). The loader returns the union of
+    // both, with no diagnostic — parity with fs.glob over the whole pattern.
     const workspaceDir = await createWorkspaceDir("brace-mixed-parent");
-    await fs.mkdir(path.join(workspaceDir, "a"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "a", "x", "deep"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
     await fs.writeFile(path.join(workspaceDir, "a", "AGENTS.md"), "a", "utf-8");
 
-    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-      "{**/../../AGENTS.md,a/AGENTS.md}",
-    ]);
+    const pattern = "{**/../../AGENTS.md,a/AGENTS.md}";
+    const { diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [pattern]);
+    const expected = await nodeGlobContained(workspaceDir, pattern);
 
-    expect(
-      files.map((file) => path.relative(workspaceDir, file.path).replaceAll(path.sep, "/")),
-    ).toStrictEqual(["a/AGENTS.md"]);
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.reason).toBe("unsupported-pattern");
-    expect(diagnostics[0]?.detail).toContain("{**/../../AGENTS.md,a/AGENTS.md}");
+    expect(await loaderRelative(workspaceDir, pattern)).toStrictEqual(expected);
+    // Both routes contribute: the downward `a/AGENTS.md` and at least the contained
+    // repeated-parent match.
+    expect(expected).toContain("a/AGENTS.md");
+    expect(expected).toContain("AGENTS.md");
+    expect(diagnostics).toHaveLength(0);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "emits a security diagnostic for a glob whose literal root is an external symlink",
+    async () => {
+      // P1-B: a glob whose literal root prefix is a directory symlink pointing
+      // OUTSIDE the workspace (`outside-link/**/AGENTS.md` where `outside-link` ->
+      // ../outside) must not silently resolve to nothing. The loader's walk-root gate
+      // resolves the symlink's realpath, sees it escape the workspace, and surfaces a
+      // `security` diagnostic instead of a silent no-op.
+      const rootDir = await createWorkspaceDir("external-symlink-root");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
+      const linkPath = path.join(workspaceDir, "outside-link");
+      try {
+        await fs.symlink(path.join("..", "outside"), linkPath, "dir");
+      } catch (err) {
+        if (["EPERM", "EACCES", "ENOSYS"].includes((err as NodeJS.ErrnoException).code ?? "")) {
+          return;
+        }
+        throw err;
+      }
+
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "outside-link/**/AGENTS.md",
+      ]);
+
+      expect(files).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.reason).toBe("security");
+      expect(diagnostics[0]?.path).toBe(path.join(workspaceDir, "outside-link/**/AGENTS.md"));
+    },
+  );
 
   it("loads literal bootstrap paths with square brackets", async () => {
     const workspaceDir = await createWorkspaceDir("literal-brackets");

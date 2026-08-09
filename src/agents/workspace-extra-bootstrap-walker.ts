@@ -59,8 +59,9 @@ function extraBootstrapMatchOptions() {
     // (gate-neutral — hasMagic classification is identical with or without the
     // flag). A globstar parent traversal like `**/../AGENTS.md` is NOT collapsible,
     // so a `..` survives in the optimized globParts; the downward matcher cannot
-    // resolve it, so walkExtraBootstrapParentTraversalMatches walks those contained
-    // parent transitions separately to reproduce fs.glob's in-root match set.
+    // resolve it, so those `..`-surviving alternatives are handed to Node's async
+    // fs.glob and filtered to workspace-contained realpaths (see
+    // resolveContainedParentTraversalMatches).
     optimizationLevel: 2,
   };
 }
@@ -94,8 +95,9 @@ export function hasGlobPattern(pattern: string): boolean {
 // reducible forms (`*/../`, `<p>/../`) into a downward pattern the walk matches,
 // but a globstar parent (`**/../`) cannot be reduced, so its `..` survives in
 // the optimized globParts. Those surviving alternatives are resolved by
-// walkExtraBootstrapParentTraversalMatches, which walks the contained parent
-// transitions directly; a collapsible or `..`-free pattern never reaches it.
+// resolveContainedParentTraversalMatches via Node's async fs.glob, filtered to
+// workspace-contained realpaths; a collapsible or `..`-free pattern never
+// reaches it.
 function normalizeWorkspacePatternPath(value: string): string {
   return value
     .replaceAll(path.sep, "/")
@@ -508,203 +510,79 @@ async function* walkWorkspaceFiles(
   }
 }
 
-// A globstar immediately followed by two or more consecutive `..` transitions
-// (`**/../../AGENTS.md`) is a degenerate fs.glob shape. Node's repeated-parent
-// semantics are depth/structure-dependent, so the recursive parent-traversal walk
-// returns a SUPERSET of fs.glob's contained set there — bootstrap files fs.glob
-// never matched. The walk rejects such an alternative instead of walking it, and
-// the loader surfaces a diagnostic. A single `..` after the globstar (`**/../X`)
-// is exact parity and is not flagged, so this only fires on the repeated shape.
-function isRepeatedGlobstarParentAlternative(parts: readonly string[]): boolean {
-  for (let index = 0; index < parts.length; index += 1) {
-    if (parts[index] !== "**") {
-      continue;
-    }
-    let consecutiveParentSteps = 0;
-    for (let next = index + 1; parts[next] === ".."; next += 1) {
-      consecutiveParentSteps += 1;
-    }
-    if (consecutiveParentSteps >= 2) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Loader-facing check mirroring the parent-traversal walk's alternative filter:
-// true when the pattern expands to any globstar-with-repeated-`..` alternative the
-// walker rejects (see isRepeatedGlobstarParentAlternative). The loader emits an
-// `unsupported-pattern` diagnostic from this while resolveExtraBootstrapPatternPaths
-// still resolves the pattern's other (valid) brace alternatives, so a mixed brace
-// pattern loses only the unsupported alternative — not every configured file.
-export function patternHasUnsupportedParentTraversal(pattern: string): boolean {
-  const normalized = normalizeWorkspacePatternPath(pattern);
-  const { globParts } = new Minimatch(normalized, extraBootstrapMatchOptions());
-  return globParts.some((parts) => isRepeatedGlobstarParentAlternative(parts));
-}
-
-// Resolve the contained `..` (parent) transitions Node fs.glob performs for a
-// globstar-parent pattern such as `**/../AGENTS.md`. optimizationLevel 2 reduces
-// the collapsible `..` shapes (`*/../`, `<literal>/../`, `a/**/../b`) into a
-// downward form the main matcher already handles, but a globstar parent (`**/..`)
-// cannot be rewritten downward, so a `..` survives in globParts. fs.glob resolves
-// it by, at each directory reachable by the globstar, matching the tokens after
-// the `..` from that directory's parent (and descending its children with the
-// globstar retained). This walker mirrors that rule directly: a `**` matches zero
-// or more real child directories, and a `..` pops one level, so "globstar matches
-// zero, then `..`" lands on the parent exactly as fs.glob does. Popping is lexical
-// and any pop that would leave the workspace root is pruned, so no parent
-// transition escapes containment (the boundary fs.glob itself does not enforce).
-// Symlink descent mirrors the downward walk: a globstar never crosses a symlink,
-// and a literal token follows a directory symlink only when its realpath stays in
-// the workspace (a wildcard-reached or out-of-tree link is never followed), so the
-// two walkers agree with each other and with fs.glob's followed-symlink rule.
-// Only alternatives that still carry a `..` are walked here; every `..`-free
-// alternative is already covered by the downward matcher in walkWorkspaceFiles.
-// A globstar followed by two or more consecutive `..` (`**/../../AGENTS.md`) is
-// rejected rather than walked: Node's repeated-parent semantics are
-// depth-dependent, so this recursive rule would return a superset of fs.glob's
-// contained set — bootstrap files fs.glob never matched. Such an alternative is
-// filtered out below (per brace alternative), and the loader surfaces an
-// `unsupported-pattern` diagnostic via patternHasUnsupportedParentTraversal so the
-// operator sees why the pattern produced fewer files. A single `..` after the
-// globstar (`**/../X`) stays exact parity and is unaffected.
-async function* walkExtraBootstrapParentTraversalMatches(
+// Resolve the globstar-parent (`..`-surviving) alternatives fs.glob supports but
+// the downward matcher cannot. optimizationLevel 2 reduces the collapsible `..`
+// shapes (`*/../`, `<literal>/../`, `a/**/../b`) into a downward form the main
+// matcher already handles, but a globstar parent (`**/..`) cannot be rewritten
+// downward, so a `..` survives in globParts. Hand each such alternative to Node's
+// async fs.glob — the same resolver bootstrap-context used before this walker
+// existed, so the match set is fs.glob's by construction — then keep only the
+// results whose realpath stays inside the workspace root. fs.glob resolves `..`
+// above the workspace and follows literal-named symlinks out of the tree; the
+// realpath containment filter drops those escaping matches so out-of-workspace
+// bootstrap content never enters the prompt (a boundary fs.glob itself does not
+// enforce). The async iterator awaits between directory reads, so this stays
+// event-loop-friendly — and the `..`-free hot path never reaches here because it
+// has no surviving `..` alternative.
+async function resolveContainedParentTraversalMatches(
   workspaceDir: string,
   strictRead: boolean,
-  globParts: string[][],
-): AsyncGenerator<string> {
-  const parentAlternatives = globParts.filter(
-    (parts) => parts.includes("..") && !isRepeatedGlobstarParentAlternative(parts),
-  );
+  globParts: readonly string[][],
+): Promise<string[]> {
+  const parentAlternatives = globParts.filter((parts) => parts.includes(".."));
   if (parentAlternatives.length === 0) {
-    return;
+    return [];
   }
-  // Canonical workspace root bounds literal-symlink descent below, exactly as the
-  // downward walk does via resolveSymlinkDescent.
+  // Canonical workspace root bounds containment: a symlinked workspace dir
+  // (macOS /var -> /private/var) must compare against its realpath, not its
+  // lexical path, or every contained match would be rejected.
   let workspaceRealpath: string;
   try {
     workspaceRealpath = await fs.realpath(workspaceDir);
   } catch {
     workspaceRealpath = path.resolve(workspaceDir);
   }
-  const emitted = new Set<string>();
-  let visitedEntries = 0;
-  const readDirEntries = async (relativeDir: string): Promise<syncFs.Dirent[] | null> => {
-    const abs = path.resolve(workspaceDir, relativeDir);
-    if (!isPathInside(workspaceDir, abs)) {
-      return null;
-    }
+  const matches = new Set<string>();
+  for (const parts of parentAlternatives) {
+    // Reconstruct the single-alternative glob from its optimized tokens; fs.glob
+    // re-applies its own brace/`..` handling, so the tokens round-trip cleanly.
+    const alternativePattern = parts.join("/");
     try {
-      return await fs.readdir(abs, { withFileTypes: true });
+      for await (const relativeMatch of fs.glob(alternativePattern, { cwd: workspaceDir })) {
+        const absolute = path.resolve(workspaceDir, relativeMatch);
+        let realpath: string;
+        try {
+          realpath = await fs.realpath(absolute);
+        } catch {
+          continue;
+        }
+        if (isPathInside(workspaceRealpath, realpath)) {
+          matches.add(normalizeWorkspacePatternPath(relativeMatch));
+        }
+      }
     } catch (error) {
+      // fs.glob resolves the whole alternative internally and swallows per-entry
+      // read errors (a permission-denied subtree is skipped, not thrown), so this
+      // only fires on a top-level failure such as a missing cwd. In strict doctor
+      // discovery surface a genuine non-ENOENT failure; a normal bootstrap load
+      // drops only this alternative rather than failing the whole load.
       if (strictRead && (error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      return null;
-    }
-  };
-  async function* matchTokens(
-    relativeDir: string,
-    tokens: string[],
-    tokenIndex: number,
-  ): AsyncGenerator<string> {
-    if (tokenIndex >= tokens.length) {
-      return;
-    }
-    const token = tokens[tokenIndex]!;
-    const isLastToken = tokenIndex === tokens.length - 1;
-    if (token === "..") {
-      // Lexical parent step. An empty relativeDir is the workspace root, so a pop
-      // there escapes the workspace — prune it to keep the transition contained.
-      if (relativeDir === "") {
-        return;
-      }
-      const separatorIndex = relativeDir.lastIndexOf("/");
-      const parent = separatorIndex === -1 ? "" : relativeDir.slice(0, separatorIndex);
-      yield* matchTokens(parent, tokens, tokenIndex + 1);
-      return;
-    }
-    if (token === "**") {
-      // Globstar matches zero segments: advance past it at the same directory. A
-      // following `..` then pops to this directory's parent, reproducing fs.glob's
-      // `**/..` parent transition.
-      yield* matchTokens(relativeDir, tokens, tokenIndex + 1);
-      const entries = await readDirEntries(relativeDir);
-      if (!entries) {
-        return;
-      }
-      for (const entry of entries) {
-        visitedEntries += 1;
-        if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
-          await yieldImmediate();
-        }
-        // Globstar matches one-or-more real directories; like the downward walk it
-        // never crosses a symlink or a leading-dot segment.
-        if (!entry.isDirectory() || entry.name.startsWith(".")) {
-          continue;
-        }
-        const childRelativeDir = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-        yield* matchTokens(childRelativeDir, tokens, tokenIndex);
-      }
-      return;
-    }
-    // Literal or single-segment glob token.
-    const entries = await readDirEntries(relativeDir);
-    if (!entries) {
-      return;
-    }
-    for (const entry of entries) {
-      visitedEntries += 1;
-      if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
-        await yieldImmediate();
-      }
-      if (!path.matchesGlob(entry.name, token)) {
-        continue;
-      }
-      const childRelativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-      if (isLastToken) {
-        // Terminal segment matches files and directories alike (fs.glob yields
-        // matching directories too). Dedupe: the same target is reached once per
-        // globstar-descended directory whose parent holds it.
-        if (!emitted.has(childRelativePath)) {
-          emitted.add(childRelativePath);
-          yield childRelativePath;
-        }
-      } else if (entry.isDirectory()) {
-        yield* matchTokens(childRelativePath, tokens, tokenIndex + 1);
-      } else if (entry.isSymbolicLink() && !hasGlobPattern(token)) {
-        // fs.glob follows a directory symlink only when a LITERAL segment names it,
-        // never one reached through a `*`/`**` wildcard, and this walker enforces
-        // the workspace containment fs.glob does not: resolveSymlinkDescent rejects
-        // a link whose realpath escapes the root (and non-directory targets). Match
-        // the downward walk here — without it the token walk would follow a
-        // wildcard-reached or out-of-tree link that neither fs.glob nor
-        // walkWorkspaceFiles would, breaking parity and the containment invariant.
-        const descend = await resolveSymlinkDescent(
-          workspaceDir,
-          workspaceRealpath,
-          childRelativePath,
-          new Set(),
-        );
-        if (descend) {
-          yield* matchTokens(childRelativePath, tokens, tokenIndex + 1);
-        }
-      }
     }
   }
-  for (const tokens of parentAlternatives) {
-    yield* matchTokens("", tokens, 0);
-  }
+  return [...matches];
 }
 
-// Always resolve globs with the yielding walker. fs.glob would be faster for
-// simple patterns, but it only exposes matched paths — Node traverses the
-// directory tree internally, so a sparse pattern like `**/AGENTS.md` across a
-// huge workspace can block the event loop. The walker yields periodically while
-// it walks, so the active path can never stall. The walk always completes and
-// returns every file matched within the real tree; the downstream bootstrap
-// character budget handles content limiting.
+// Resolve globs cooperatively without blocking the event loop. The `..`-free hot
+// path (the common `**/AGENTS.md` case whose sparse walk over a huge workspace is
+// where the measured stall came from) runs on the yielding custom walker: fs.glob
+// would be faster but only exposes matched paths while traversing the whole tree
+// internally, so it can stall bootstrap-context. The rare `..`-surviving
+// globstar-parent alternatives run through Node's async fs.glob with a workspace
+// containment filter (see resolveContainedParentTraversalMatches). Both passes
+// walk the real tree to completion and return every contained match; the
+// downstream bootstrap character budget handles content limiting.
 export async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
@@ -718,8 +596,7 @@ export async function resolveExtraBootstrapPatternPaths(
   const matcher = new Minimatch(normalizedPattern, extraBootstrapMatchOptions());
   // A Set dedupes the two passes below: a globstar-parent pattern can expand to
   // both a downward alternative (matched by walkWorkspaceFiles) and a `..`
-  // alternative (matched by the parent-traversal walk), and the same target can
-  // surface from either.
+  // alternative (matched via fs.glob), and the same target can surface from either.
   const matches = new Set<string>();
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
@@ -735,10 +612,10 @@ export async function resolveExtraBootstrapPatternPaths(
     matches.add(candidate);
   }
   // Globstar-parent patterns (`**/../AGENTS.md`) keep a `..` in the optimized
-  // globParts that the downward matcher cannot resolve. Walk those contained
-  // parent transitions so the pattern returns the same in-root match set as
-  // fs.glob instead of silently resolving to nothing.
-  for await (const candidate of walkExtraBootstrapParentTraversalMatches(
+  // globParts that the downward matcher cannot resolve. Resolve those via Node's
+  // async fs.glob and filter to workspace-contained realpaths so the pattern
+  // returns fs.glob's in-root match set instead of silently resolving to nothing.
+  for (const candidate of await resolveContainedParentTraversalMatches(
     workspaceDir,
     strictRead,
     matcher.globParts,
@@ -751,7 +628,33 @@ export async function resolveExtraBootstrapPatternPaths(
   return [...matches];
 }
 
-export function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
+// Loader gate: reject a pattern whose glob walk root escapes the workspace so the
+// loader surfaces a `security` diagnostic instead of a silent empty resolve.
+// Checks lexical containment first (a literal `../outside` prefix), then realpath
+// containment: a literal-prefix directory symlink can point outside the workspace
+// while staying lexically inside (`linked/**` where `linked` -> /external), and
+// both fs.glob and the walker would resolve that external target (P1-B). A walk
+// root that does not exist yet has no realpath — fall through to the lexical
+// result, since the walk simply finds nothing there.
+export async function patternWalkRootStaysInWorkspace(
+  workspaceDir: string,
+  pattern: string,
+): Promise<boolean> {
   const walkRoot = path.resolve(workspaceDir, resolveGlobWalkRoot(pattern));
-  return isPathInside(workspaceDir, walkRoot);
+  if (!isPathInside(workspaceDir, walkRoot)) {
+    return false;
+  }
+  let workspaceRealpath: string;
+  try {
+    workspaceRealpath = await fs.realpath(workspaceDir);
+  } catch {
+    return true;
+  }
+  let rootRealpath: string;
+  try {
+    rootRealpath = await fs.realpath(walkRoot);
+  } catch {
+    return true;
+  }
+  return isPathInside(workspaceRealpath, rootRealpath);
 }
