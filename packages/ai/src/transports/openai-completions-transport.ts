@@ -75,6 +75,7 @@ import {
   createModelStreamCooperativeScheduler,
   isOpenAICompletionsThinkingEnabled,
   log,
+  measureUtf8AppendBytes,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   resolvePromptCacheKey,
@@ -393,7 +394,6 @@ async function processOpenAICompletionsStream(
   },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
-  const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
@@ -422,7 +422,6 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const provisionalCommentaryTags: PendingCommentaryTags = new Map();
-  const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let sawStopFinishReason = false;
@@ -805,12 +804,6 @@ async function processOpenAICompletionsStream(
             block.thoughtSignature = deltaSig;
           }
           if (toolCall.function?.arguments) {
-            const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
-            const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
-            if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
-              throw new Error("Exceeded tool-call argument buffer limit");
-            }
-            toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
             block.partialArgs += toolCall.function.arguments;
             block.arguments = parseStreamingJson(block.partialArgs);
             pushStreamEvent({
@@ -897,7 +890,7 @@ const DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN = Math.max(
   ...DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS.map((token) => token.length),
 );
 
-// Match MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES / MAX_POST_TOOL_CALL_BUFFER_BYTES.
+// Match the shared Chat tool-argument and post-tool-call buffer limits.
 const MAX_DSML_RECOVERY_BUFFER_BYTES = 256_000;
 const DEEPSEEK_DSML_SCAN_BATCH_CHARS = 64 * 1_024;
 
@@ -1013,7 +1006,7 @@ function createDeepSeekDsmlToolCallRecoverer() {
 
   return {
     push(chunk: string) {
-      const append = utf8ByteLengthForAppend(bufferEndsWithHighSurrogate, chunk);
+      const append = measureUtf8AppendBytes(bufferEndsWithHighSurrogate, chunk);
       bufferBytes += append.bytes;
       bufferEndsWithHighSurrogate = append.endsWithHighSurrogate;
       buffer += chunk;
@@ -1227,23 +1220,6 @@ function scanDeepSeekDsmlToolBlock(
     return next;
   }
   return { kind: "incomplete" };
-}
-
-function utf8ByteLengthForAppend(bufferEndsWithHighSurrogate: boolean, chunk: string) {
-  let bytes = Buffer.byteLength(chunk, "utf8");
-  if (!chunk) {
-    return { bytes, endsWithHighSurrogate: bufferEndsWithHighSurrogate };
-  }
-  const nextCodeUnit = chunk.charCodeAt(0);
-  if (bufferEndsWithHighSurrogate && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
-    // Each isolated surrogate counts as three UTF-8 bytes; the joined scalar is four.
-    bytes -= 2;
-  }
-  const finalCodeUnit = chunk.charCodeAt(chunk.length - 1);
-  return {
-    bytes,
-    endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
-  };
 }
 
 function longestDeepSeekDsmlToolOpenPrefixSuffixLength(text: string) {
