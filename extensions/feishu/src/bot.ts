@@ -712,6 +712,13 @@ export async function handleFeishuMessage(params: {
   let conflictNoticeCfg = cfg;
   let conflictNoticeReplyToMessageId: string | undefined = ctx.messageId;
   let conflictNoticeReplyInThread = false;
+  // Broadcast fan-out settlement, captured when the broadcast path runs so the
+  // conflict-notice catch can settle the durable event: adopt once the notice
+  // lands, abandon when the notice send fails. Without it the durable event
+  // would stay abandoned after a delivered notice and redeliver a duplicate.
+  let broadcastIngressSettlement:
+    | ReturnType<typeof createFeishuBroadcastIngressSettlement>
+    | undefined;
   try {
     const core = {
       channel: channelRuntime?.inbound ? channelRuntime : getFeishuRuntime().channel,
@@ -1582,6 +1589,7 @@ export async function handleFeishuMessage(params: {
           );
         }
       };
+      broadcastIngressSettlement = broadcastSettlement;
 
       // --- Broadcast dispatch: send message to all configured agents ---
       const rawStrategy = (
@@ -1814,7 +1822,14 @@ export async function handleFeishuMessage(params: {
           failures.length === 1
             ? failures[0]
             : new AggregateError(failures, "Feishu broadcast dispatch failed");
-        await abandonBroadcast(failure);
+        // A reply-session conflict is surfaced as a visible notice by the
+        // outer catch; keep the settlement open so a delivered notice can
+        // adopt the durable event and a notice-send failure can abandon it.
+        // Abandoning here would release the replay claim before the notice
+        // and let a redelivery duplicate the notice.
+        if (!isFeishuReplySessionInitConflictError(failure)) {
+          await abandonBroadcast(failure);
+        }
         throw failure;
       }
 
@@ -1945,12 +1960,22 @@ export async function handleFeishuMessage(params: {
           replyInThread: conflictNoticeReplyInThread,
           accountId: account.accountId,
         });
+        // The notice landed, so the broadcast event is visibly handled: adopt
+        // and commit the durable event instead of letting an abandoned
+        // settlement redeliver it and duplicate the notice.
+        if (broadcastIngressSettlement) {
+          await broadcastIngressSettlement.onNoticeDelivered();
+        }
       } catch (noticeError) {
         error(
           `feishu[${account.accountId}]: reply-session conflict notice failed: ${String(noticeError)}`,
         );
         // The notice never landed, so a durable event must not be adopted:
-        // rethrow to abandon the ingress lifecycle and keep redelivery alive.
+        // abandon the broadcast settlement to keep redelivery alive, then
+        // rethrow to abandon the direct-ingress lifecycle path.
+        if (broadcastIngressSettlement) {
+          await broadcastIngressSettlement.onDispatchFailed(err);
+        }
         if (turnAdoptionLifecycle) {
           throw err;
         }

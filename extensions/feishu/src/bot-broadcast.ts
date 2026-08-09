@@ -16,6 +16,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
   onLanePending: () => void;
   onDispatchComplete: () => Promise<void>;
   onDispatchFailed: (error: unknown) => Promise<void>;
+  onNoticeDelivered: () => Promise<void>;
 } {
   type LaneState = {
     replayClaim?: ChannelReplayClaimHandle;
@@ -231,6 +232,14 @@ export function createFeishuBroadcastIngressSettlement(params: {
       failures.push(error);
       fanoutSettled = true;
       await maybeSettle();
+    },
+    // A lane failure surfaced to the user as a visible notice (e.g. an
+    // exhausted reply-session conflict) counts as handled: adopt and commit
+    // the durable event so redelivery cannot duplicate the notice. maybeSettle
+    // would abandon on the recorded lane failures, so this adopts directly.
+    onNoticeDelivered: async () => {
+      fanoutSettled = true;
+      await adopt();
     },
   };
 }
