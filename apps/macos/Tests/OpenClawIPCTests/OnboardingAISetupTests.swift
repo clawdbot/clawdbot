@@ -1789,6 +1789,46 @@ struct OnboardingAISetupTests {
         #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) == nil)
     }
 
+    @Test func `unbound activation leases stay attempt-specific`() throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUnboundLeaseTests"))
+        let attemptA = OnboardingSystemAgentResumeStore.ActivationOwner.unbound()
+        let attemptB = OnboardingSystemAgentResumeStore.ActivationOwner.unbound()
+        _ = markPending(defaults, for: "local", owner: attemptB)
+
+        // A stale keychain-unavailable attempt must not complete or clear a
+        // newer attempt's record: candidate and manual-key flows both key the
+        // store by this per-attempt lease.
+        #expect(!markCompleted(defaults, for: "local", owner: attemptA))
+        #expect(!OnboardingSystemAgentResumeStore.clear(
+            ifOwnedBy: "local",
+            activationOwner: attemptA,
+            defaults: defaults))
+        #expect(markCompleted(defaults, for: "local", owner: attemptB))
+    }
+
+    @Test func `unbound completed receipt never authorizes a relaunch handoff`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUnboundReceiptGuardTests"))
+        let attempt = OnboardingSystemAgentResumeStore.ActivationOwner.unbound()
+        _ = markPending(defaults, for: "local", owner: attempt)
+        #expect(markCompleted(defaults, for: "local", owner: attempt))
+
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            request.method == "openclaw.setup.verify"
+                ? verifiedSetupResponse(id: request.id)
+                : unavailableGatewayResponse(id: request.id)
+        }
+        let model = harness.model(defaults: defaults)
+
+        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+        let outcome = await model.verifyPendingConfiguredInference()
+
+        // The unbound receipt is refused before any handoff; setup restarts.
+        #expect(outcome == .freshSetupAllowed)
+        #expect(!model.connected)
+        #expect(pendingState(defaults) == .none)
+    }
+
     @Test func `ownerless completed receipt never authorizes a relaunch handoff`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingOwnerlessReceiptGuardTests"))
         // The durable state a keychain-unavailable activation leaves behind when

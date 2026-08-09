@@ -282,6 +282,13 @@ final class OnboardingAISetupModel {
               await self.gateway.isCurrentServerLease(lease)
         else { return .superseded }
         if let activationOwner = pendingActivationOwner {
+            if activationOwner.isUnbound {
+                // Unbound receipts never resume across relaunch or verification
+                // retry; a fresh activation is the only safe continuation.
+                self.pendingActivationVerification = false
+                clearPendingHandoff(ifOwnedBy: context)
+                return .freshSetupAllowed
+            }
             guard let currentFingerprint = await gateway.activationOwnershipFingerprint(
                 ifCurrentServerLease: lease)
             else {
@@ -354,11 +361,12 @@ final class OnboardingAISetupModel {
                         return .freshSetupAllowed
                     }
                 case .completed:
-                    guard self.pendingActivationOwner != nil else {
-                        // Ownerless (keychain-unavailable) receipts carry no auth
-                        // binding, so they can belong to replaced credentials on
-                        // this route. Never let one authorize a handoff — repeat
-                        // a fresh activation instead.
+                    guard let receiptOwner = self.pendingActivationOwner, !receiptOwner.isUnbound
+                    else {
+                        // Ownerless and unbound receipts carry no auth binding,
+                        // so they can belong to replaced credentials on this
+                        // route. Never let one authorize a handoff — repeat a
+                        // fresh activation instead.
                         self.pendingActivationVerification = false
                         clearPendingHandoff(ifOwnedBy: context)
                         return .freshSetupAllowed
@@ -464,7 +472,7 @@ final class OnboardingAISetupModel {
 
     private func retainAmbiguousActivation(
         ifOwnedBy context: AttemptContext,
-        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?,
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         activationDeadline: Date)
     {
         guard isCurrentAttempt(context) else { return }
@@ -881,14 +889,15 @@ extension OnboardingAISetupModel {
             kind: kind,
             modelRef: modelRef,
             supportsExactModel: supportsExactModel)
-        // Keychain-unavailable degrades to an ownerless resume record instead of
-        // refusing setup: relaunch then repeats activation rather than trusting
-        // the receipt, so a broken login keychain cannot dead-end onboarding.
+        // Keychain-unavailable degrades to an unbound per-attempt lease instead
+        // of refusing setup: live matching stays attempt-exact, and relaunch
+        // repeats activation rather than trusting the receipt, so a broken
+        // login keychain cannot dead-end onboarding.
         let activationOwner = routeFingerprint.map { fingerprint in
             OnboardingSystemAgentResumeStore.ActivationOwner(
                 id: UUID().uuidString,
                 routeFingerprint: fingerprint)
-        }
+        } ?? .unbound()
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Activation can persist before the response reaches the app. Cover the
@@ -976,10 +985,10 @@ extension OnboardingAISetupModel {
                 // A managed Gateway can restart after persisting fresh-Mac Codex setup.
                 // The retired process cannot mutate further, so accept only the same
                 // route/auth owner, an exact persisted transition, and a fresh live turn.
-                // Ownerless (keychain-unavailable) activations cannot prove ownership
-                // and fall through to the deadline probe instead.
+                // Unbound (keychain-unavailable) leases cannot prove ownership;
+                // reconciliation's fingerprint guard rejects them and setup
+                // falls through to the deadline probe instead.
                 if !Task.isCancelled,
-                   let activationOwner,
                    await !(self.gateway.isCurrentServerLease(lease)),
                    await self.reconcileActivationAfterGatewayRestart(
                        kind: kind,
@@ -1511,12 +1520,12 @@ extension OnboardingAISetupModel {
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let requestTimeoutMs = Self.activationRequestTimeoutMs(for: "api-key")
         // Same keychain-unavailable degradation as detected candidates: an
-        // ownerless record keeps the ambiguity window without a resume receipt.
+        // unbound lease keeps the ambiguity window without a resume receipt.
         let activationOwner = routeFingerprint.map { fingerprint in
             OnboardingSystemAgentResumeStore.ActivationOwner(
                 id: UUID().uuidString,
                 routeFingerprint: fingerprint)
-        }
+        } ?? .unbound()
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Manual activation has the same persist-before-response ambiguity as

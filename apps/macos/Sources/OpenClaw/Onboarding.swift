@@ -36,6 +36,20 @@ enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
         let routeFingerprint: String
+
+        /// Keychain-unavailable attempts carry a random per-attempt lease id
+        /// with this sentinel instead of an auth-bound fingerprint: live
+        /// matching stays attempt-exact, while relaunch reconciliation refuses
+        /// the receipt. Real fingerprints are 64-char HMAC hex, never this.
+        static let unboundFingerprint = "unbound"
+
+        static func unbound() -> ActivationOwner {
+            ActivationOwner(id: UUID().uuidString, routeFingerprint: self.unboundFingerprint)
+        }
+
+        var isUnbound: Bool {
+            self.routeFingerprint == Self.unboundFingerprint
+        }
     }
 
     enum PendingState: Equatable {
@@ -232,13 +246,11 @@ enum OnboardingSystemAgentResumeStore {
     }
 
     static func isOwned(
-        by activationOwner: ActivationOwner?,
+        by activationOwner: ActivationOwner,
         for routeIdentity: String?,
         defaults: UserDefaults = .standard,
         now: Date = Date()) -> Bool
     {
-        // A nil owner names ownerless (keychain-unavailable) records exactly,
-        // never a wildcard — mirroring ownerMatches.
         guard let routeIdentity = normalized(routeIdentity),
               let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return false }
