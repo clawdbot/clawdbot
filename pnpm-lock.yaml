@@ -2406,12 +2406,21 @@ importers:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../packages/gateway-client
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
         specifier: 0.3.2
         version: 0.3.2
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
+      '@openclaw/model-catalog-core':
+        specifier: workspace:*
+        version: link:../packages/model-catalog-core
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../packages/net-policy
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core
