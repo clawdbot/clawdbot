@@ -407,7 +407,8 @@ export class ChatPane extends ChatPaneHeader {
             state,
             selectedSession,
             agentDefaultModel,
-            mutationAccess: mutationAccess.runtimePatch,
+            modelAccess: mutationAccess.model,
+            effortAccess: mutationAccess.effort,
             preferencesBrowserOnly:
               this.context.runtimeConfig.state.connected &&
               this.context.runtimeConfig.canPatch === false,
