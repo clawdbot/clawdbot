@@ -558,12 +558,20 @@ function isStalledModelCallRecoveryEligible(params: {
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
+  // A configured provider request allowance (models.providers.<id>.timeoutSeconds,
+  // recorded from model.call.started) is the authoritative deadline for a silent
+  // call: defer the abort until it expires so recovery cannot kill a turn the
+  // provider contract still considers in flight.
+  const abortMs = Math.max(
+    params.stuckSessionAbortMs,
+    params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+  );
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= abortMs
   );
 }
 

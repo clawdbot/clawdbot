@@ -14,16 +14,19 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  /** Resolved provider request allowance of the active model call(s), when known. */
+  activeModelCallRequestTimeoutMs?: number;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
 };
 
 type SnapshotTool = { toolName: string; toolCallId?: string; startedAt: number };
+type SnapshotModelCall = { requestTimeoutMs?: number };
 type SnapshotActivity = DiagnosticArgumentChurnActivity &
   DiagnosticRepeatedRequestActivity & {
     activeEmbeddedRuns: ReadonlyMap<string, { runId: string; sequence: number }>;
-    activeModelCalls: ReadonlyMap<string, unknown>;
+    activeModelCalls: ReadonlyMap<string, SnapshotModelCall>;
     activeTools: ReadonlyMap<string, SnapshotTool>;
     lastProgressAt: number;
     lastProgressReason?: string;
@@ -47,6 +50,17 @@ export function buildDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
+  // Concurrent model calls share the lane; the widest recorded allowance is the
+  // one recovery must outlast before it may abort a silent call.
+  let activeModelCallRequestTimeoutMs: number | undefined;
+  for (const modelCall of activity.activeModelCalls.values()) {
+    if (modelCall.requestTimeoutMs !== undefined) {
+      activeModelCallRequestTimeoutMs = Math.max(
+        activeModelCallRequestTimeoutMs ?? 0,
+        modelCall.requestTimeoutMs,
+      );
+    }
+  }
   const churnProgress = resolveArgumentChurnProgress(
     activity,
     activity.activeEmbeddedRuns.values(),
@@ -58,6 +72,7 @@ export function buildDiagnosticSessionActivitySnapshot(
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
+    ...(activeModelCallRequestTimeoutMs !== undefined ? { activeModelCallRequestTimeoutMs } : {}),
     lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
     lastProgressReason: churnProgress.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(

@@ -254,6 +254,38 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
   });
 
+  it("carries the resolved provider request allowance on model-call events", async () => {
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        requestTimeoutMs: 600_000,
+        trace: createDiagnosticTraceContext({
+          traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+          spanId: "00f067aa0ba902b7",
+        }),
+        nextCallId: () => "call-1",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(
+        wrapped({} as never, {} as never, {} as never) as unknown as AsyncIterable<unknown>,
+      );
+    });
+
+    const startedEvent = getEvent(events, 0);
+    expect(startedEvent.type).toBe("model.call.started");
+    expect(startedEvent.requestTimeoutMs).toBe(600_000);
+  });
+
   it.each([
     {
       name: "visible text",

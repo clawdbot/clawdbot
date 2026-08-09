@@ -643,6 +643,8 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   provider: string;
   model: string;
   api?: string;
+  /** Resolved provider request allowance (models.providers.<id>.timeoutSeconds). */
+  requestTimeoutMs?: number;
   transport?: string;
   /** Defaults to request for emitters created before turn-level CLI diagnostics. */
   observationUnit?: "request" | "turn";

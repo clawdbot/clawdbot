@@ -64,6 +64,8 @@ type ActiveModelCall = {
   sessionId?: string;
   sessionKey?: string;
   sequence?: number;
+  /** Resolved provider request allowance recorded from model.call.started. */
+  requestTimeoutMs?: number;
 };
 
 type DiagnosticToolStartedActivityEvent = Pick<
@@ -73,7 +75,13 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "observationUnit"
+  | "runId"
+  | "sessionId"
+  | "sessionKey"
+  | "provider"
+  | "model"
+  | "observationUnit"
+  | "requestTimeoutMs"
 > & { seq?: number };
 
 type RunProgressEvent = Pick<
@@ -310,6 +318,7 @@ function recordModelStarted(event: ModelStartedActivityEvent, coreRequest: boole
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
     sequence: event.seq,
+    requestTimeoutMs: event.requestTimeoutMs,
   });
   touchSessionActivity(activity, "model_call:started");
 }

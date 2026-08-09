@@ -1324,6 +1324,44 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("defers silent model-call aborts until the provider request allowance expires", () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionAbortMs = 60_000;
+    // Provider allowance (models.providers.<id>.timeoutSeconds) above the
+    // built-in 5-minute recovery floor; the retired diagnostics tuning keys
+    // stay retired, so the regression is driven by the provider allowance.
+    const requestTimeoutMs = 600_000;
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticModelStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5",
+      requestTimeoutMs,
+    });
+
+    vi.advanceTimersByTime(stuckSessionAbortMs);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(requestTimeoutMs - stuckSessionAbortMs);
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
   it("recovers stale model calls without active embedded-run ownership", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

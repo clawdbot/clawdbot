@@ -50,6 +50,8 @@ type ModelCallDiagnosticContext = {
   model: string;
   api?: string;
   transport?: string;
+  /** Resolved provider request allowance (models.providers.<id>.timeoutSeconds). */
+  requestTimeoutMs?: number;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
@@ -459,6 +461,7 @@ function baseModelCallEvent(
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
     observationUnit: "request",
+    ...(ctx.requestTimeoutMs !== undefined ? { requestTimeoutMs: ctx.requestTimeoutMs } : {}),
     ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
     ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
     ...(ctx.contextWindowReferenceTokens

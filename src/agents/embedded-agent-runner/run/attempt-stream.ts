@@ -255,11 +255,14 @@ export function installEmbeddedAttemptStreamGuards(input: {
   const resolvedRunTimeoutMs =
     attempt.runTimeoutOverrideMs ??
     (attempt.timeoutMs !== configuredRunTimeoutMs ? attempt.timeoutMs : undefined);
+  // The resolved provider request allowance also feeds the model-call
+  // diagnostic events so stuck-session recovery can honor the same deadline.
+  const modelRequestTimeoutMs = (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs;
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({
     cfg: attempt.config,
     trigger: attempt.trigger,
     runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+    modelRequestTimeoutMs,
     model: {
       baseUrl: attempt.model.baseUrl,
       id: attempt.modelId,
@@ -269,7 +272,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
   const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
     cfg: attempt.config,
     runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+    modelRequestTimeoutMs,
     model: {
       baseUrl: attempt.model.baseUrl,
       id: attempt.modelId,
@@ -318,6 +321,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
     model: attempt.modelId,
     api: attempt.model.api,
     transport: input.effectiveAgentTransport,
+    ...(modelRequestTimeoutMs !== undefined ? { requestTimeoutMs: modelRequestTimeoutMs } : {}),
     ...(attempt.contextWindowInfo?.tokens
       ? { contextTokenBudget: attempt.contextWindowInfo.tokens }
       : {}),

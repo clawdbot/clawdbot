@@ -907,6 +907,40 @@ describe("repeated request liveness", () => {
   });
 });
 
+describe("model call request allowance", () => {
+  it("surfaces the active model call allowance while the call is in flight", () => {
+    const ref = { sessionId: "allowance-session", sessionKey: "agent:main:allowance" };
+
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId: "allowance-run",
+      provider: "openai",
+      model: "gpt-5",
+      requestTimeoutMs: 600_000,
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "model_call",
+      activeModelCallRequestTimeoutMs: 600_000,
+    });
+  });
+
+  it("omits the allowance when no active model call records one", () => {
+    const ref = { sessionId: "no-allowance-session", sessionKey: "agent:main:no-allowance" };
+
+    markDiagnosticModelStartedForTest({
+      ...ref,
+      runId: "no-allowance-run",
+      provider: "openai",
+      model: "gpt-5",
+    });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).activeModelCallRequestTimeoutMs,
+    ).toBeUndefined();
+  });
+});
+
 describe("resolveRunStaleThresholdMs", () => {
   it.each([
     {
