@@ -235,6 +235,7 @@
   "realtime-transcription",
   "realtime-bootstrap-context",
   "realtime-voice-audio-queue",
+  "realtime-voice-activation",
   "realtime-voice",
   "meeting-runtime",
   "transcripts",

@@ -1141,6 +1141,9 @@
     "./plugin-sdk/realtime-voice-audio-queue": {
       "default": "./dist/plugin-sdk/realtime-voice-audio-queue.js"
     },
+    "./plugin-sdk/realtime-voice-activation": {
+      "default": "./dist/plugin-sdk/realtime-voice-activation.js"
+    },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
