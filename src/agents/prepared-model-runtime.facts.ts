@@ -20,8 +20,8 @@ import {
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
+import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { runProviderDynamicModel } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
@@ -697,20 +697,20 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
                 const providerConfig =
                   input.config.models?.providers?.[provider] ??
                   findNormalizedProviderValue(input.config.models?.providers, provider);
-                return runProviderDynamicModel({
+                return resolveLoadedProviderRuntimePlugin({
                   provider,
+                  modelId,
                   config: input.config,
                   workspaceDir: input.workspaceDir,
                   env: facts.env,
-                  context: {
-                    config: input.config,
-                    agentDir: input.agentDir,
-                    workspaceDir: input.workspaceDir,
-                    provider,
-                    modelId,
-                    modelRegistry: templateModelRegistry,
-                    providerConfig,
-                  },
+                })?.resolveDynamicModel?.({
+                  config: input.config,
+                  agentDir: input.agentDir,
+                  workspaceDir: input.workspaceDir,
+                  provider,
+                  modelId,
+                  modelRegistry: templateModelRegistry,
+                  providerConfig,
                 });
               },
             })
