@@ -123,14 +123,17 @@ type ChatRunRecord = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen?: number;
   deltaLastBroadcastText?: string;
-  /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
-  pendingDeltaFlush?: PendingChatDeltaFlush;
   agentText?: {
     assistant?: ChatRunAgentTextState;
     thinking?: ChatRunAgentTextState;
   };
   abortMarker?: ChatAbortMarker;
   toolRecipient?: ChatRunToolRecipientState;
+};
+
+type InternalChatRunRecord = ChatRunRecord & {
+  /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
+  pendingDeltaFlush?: PendingChatDeltaFlush;
 };
 
 type ChatRunRecordStore = {
@@ -160,12 +163,17 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
+function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
+  return record;
+}
+
 function clearPendingChatDeltaFlush(record: ChatRunRecord): void {
-  if (!record.pendingDeltaFlush) {
+  const internal = internalChatRunRecord(record);
+  if (!internal.pendingDeltaFlush) {
     return;
   }
-  clearTimeout(record.pendingDeltaFlush.timer);
-  delete record.pendingDeltaFlush;
+  clearTimeout(internal.pendingDeltaFlush.timer);
+  delete internal.pendingDeltaFlush;
 }
 
 export type ChatRunRegistry = {
@@ -258,6 +266,29 @@ export type ChatRunState = {
   clearRun: (runId: string) => void;
   clear: () => void;
 };
+
+export function getChatRunDeltaFlush(
+  state: Pick<ChatRunState, "runs">,
+  runId: string,
+): PendingChatDeltaFlush | undefined {
+  const record = state.runs.get(runId);
+  return record ? internalChatRunRecord(record).pendingDeltaFlush : undefined;
+}
+
+export function setChatRunDeltaFlush(
+  state: Pick<ChatRunState, "getOrCreate">,
+  runId: string,
+  pending: PendingChatDeltaFlush,
+): void {
+  internalChatRunRecord(state.getOrCreate(runId)).pendingDeltaFlush = pending;
+}
+
+export function cancelChatRunDeltaFlush(state: Pick<ChatRunState, "runs">, runId: string): void {
+  const record = state.runs.get(runId);
+  if (record) {
+    clearPendingChatDeltaFlush(record);
+  }
+}
 
 /** Create the single record map used by Gateway chat-run runtime state. */
 export function createChatRunState(): ChatRunState {
