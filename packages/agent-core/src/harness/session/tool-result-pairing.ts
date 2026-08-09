@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../types.js";
+import type { SessionTreeEntry } from "../types.js";
 
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolResult";
@@ -341,4 +342,24 @@ export function classifyToolUseResultPairing(
   }
 
   return { frames: frameRecords, droppedDuplicateCount, droppedOrphanCount };
+}
+
+/** Select reset-tail model context without changing persisted entry bytes or order. */
+export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
+  const messages = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+  const pairing = classifyToolUseResultPairing(messages);
+  const pairedResults = new Set(
+    pairing.frames.flatMap((frame) =>
+      frame.occurrences.flatMap((occurrence) =>
+        occurrence.sourceResult ? [occurrence.sourceResult] : [],
+      ),
+    ),
+  );
+  return entries.filter(
+    (entry) =>
+      entry.type === "message" &&
+      (entry.message.role === "user" ||
+        entry.message.role === "assistant" ||
+        (entry.message.role === "toolResult" && pairedResults.has(entry.message))),
+  );
 }

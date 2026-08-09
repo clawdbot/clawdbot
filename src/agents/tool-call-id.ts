@@ -1,8 +1,8 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import {
-  extractToolCallsFromAssistant,
-  extractToolResultId,
-  extractToolResultIds,
+  extractToolCallsFromAssistant as extractPairingToolCalls,
+  extractToolResultId as extractPairingToolResultId,
+  extractToolResultIds as extractPairingToolResultIds,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 /**
  * Tool call id normalization and extraction helpers.
@@ -20,6 +20,11 @@ const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
 
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+type ToolCallLike = {
+  id: string;
+  name?: string;
+};
 
 type ReplaySafeToolCallBlock = {
   type?: unknown;
@@ -63,7 +68,21 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
-export { extractToolCallsFromAssistant, extractToolResultId, extractToolResultIds };
+export function extractToolCallsFromAssistant(
+  msg: Extract<AgentMessage, { role: "assistant" }>,
+): ToolCallLike[] {
+  return extractPairingToolCalls(msg);
+}
+
+export function extractToolResultId(
+  msg: Extract<AgentMessage, { role: "toolResult" }>,
+): string | null {
+  return extractPairingToolResultId(msg);
+}
+
+export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolResult" }>): string[] {
+  return extractPairingToolResultIds(msg);
+}
 
 function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;

@@ -7,7 +7,7 @@ import {
   createCustomMessage,
 } from "../messages.js";
 import type { CompactionEntry, ResetEntry, SessionContext, SessionTreeEntry } from "../types.js";
-import { classifyToolUseResultPairing } from "./tool-result-pairing.js";
+import { selectResetKeptEntries } from "./tool-result-pairing.js";
 
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -77,26 +77,6 @@ function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntr
   } else if (entry.message.role === "toolResult") {
     messages.push(entry.message);
   }
-}
-
-/** Select reset-tail model context without changing persisted entry bytes or order. */
-export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
-  const messages = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-  const pairing = classifyToolUseResultPairing(messages);
-  const pairedResults = new Set(
-    pairing.frames.flatMap((frame) =>
-      frame.occurrences.flatMap((occurrence) =>
-        occurrence.sourceResult ? [occurrence.sourceResult] : [],
-      ),
-    ),
-  );
-  return entries.filter(
-    (entry) =>
-      entry.type === "message" &&
-      (entry.message.role === "user" ||
-        entry.message.role === "assistant" ||
-        (entry.message.role === "toolResult" && pairedResults.has(entry.message))),
-  );
 }
 
 /** Build model context from an ordered session branch and its latest state markers. */

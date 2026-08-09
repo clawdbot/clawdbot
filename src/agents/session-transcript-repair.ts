@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   classifyToolUseResultPairing,
-  makeMissingToolResult,
+  makeMissingToolResult as makePairingMissingToolResult,
   normalizeLegacyToolResultId,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
@@ -180,6 +180,14 @@ function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
     }
   }
   return false;
+}
+
+function makeMissingToolResult(params: {
+  toolCallId: string;
+  toolName?: string;
+  text?: string;
+}): Extract<AgentMessage, { role: "toolResult" }> {
+  return makePairingMissingToolResult(params);
 }
 
 export { makeMissingToolResult };

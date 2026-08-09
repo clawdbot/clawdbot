@@ -17,11 +17,8 @@ import {
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { convertToLlm, type HarnessMessage } from "../messages.js";
-import {
-  buildSessionContext,
-  projectSessionEntryMessage,
-  selectResetKeptEntries,
-} from "../session/session.js";
+import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
+import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
   type CompactionEntry,
   CompactionError,
