@@ -171,6 +171,49 @@ export function registerTelegramCallbackQueryHandler(
         );
         return;
       }
+      const actions = createTelegramCallbackMessageActions({
+        bot,
+        callbackMessage,
+        isForum,
+      });
+      const clearRoutedCallbackButtons = async () => {
+        try {
+          await actions.clearCallbackButtons();
+        } catch (editErr) {
+          if (
+            !isTelegramMessageNotModifiedError(editErr) &&
+            !isPermanentTelegramCallbackEditError(editErr)
+          ) {
+            throw new TelegramRetryableCallbackError(editErr);
+          }
+        }
+      };
+      const terminalizeUnavailableCallback = async () => {
+        logVerbose("telegram: typed callback unavailable (handler missing or payload invalid)");
+        await clearRoutedCallbackButtons();
+        await actions.replyToCallbackChat("This action is no longer available.");
+      };
+
+      if (
+        inlineButtonsUnavailable &&
+        ((nativeCallbackCommand && !legacyApprovalCallback) || hasReservedOpaquePrefix)
+      ) {
+        await terminalizeUnavailableCallback();
+        return;
+      }
+      if (nativeCallbackCommand && nativeCommandCallbackDispatcher) {
+        const dispatch = await nativeCommandCallbackDispatcher({
+          botUser: ctx.me,
+          callbackQuery: callback,
+          commandText: nativeCallbackCommand,
+        });
+        if (dispatch.handled) {
+          if (dispatch.clearButtons) {
+            await clearRoutedCallbackButtons();
+          }
+          return;
+        }
+      }
       const authorizationMode: TelegramEventAuthorizationMode = hasReservedQuestionPrefix
         ? "callback-runtime-allowlist"
         : !isGroup || (!isRuntimeControlCallback && inlineButtonsScope === "allowlist")
@@ -193,11 +236,6 @@ export function registerTelegramCallbackQueryHandler(
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
       const runtimeCfg = telegramDeps.getRuntimeConfig();
-      const actions = createTelegramCallbackMessageActions({
-        bot,
-        callbackMessage,
-        isForum,
-      });
       const approvalRuntime = createTelegramCallbackApprovalRuntime({
         accountId,
         telegramDeps,
@@ -213,24 +251,6 @@ export function registerTelegramCallbackQueryHandler(
           senderUsername,
           context: eventAuthContext,
         });
-      const clearRoutedCallbackButtons = async () => {
-        try {
-          await actions.clearCallbackButtons();
-        } catch (editErr) {
-          if (
-            !isTelegramMessageNotModifiedError(editErr) &&
-            !isPermanentTelegramCallbackEditError(editErr)
-          ) {
-            throw new TelegramRetryableCallbackError(editErr);
-          }
-        }
-      };
-      const terminalizeUnavailableCallback = async () => {
-        logVerbose("telegram: typed callback unavailable (handler missing or payload invalid)");
-        await clearRoutedCallbackButtons();
-        await actions.replyToCallbackChat("This action is no longer available.");
-      };
-
       if (typedApprovalCallback) {
         await approvalRuntime.handleCanonical(typedApprovalCallback);
         return;
@@ -255,26 +275,6 @@ export function registerTelegramCallbackQueryHandler(
       if (hasReservedApprovalPrefix) {
         await approvalRuntime.handleMalformedReserved();
         return;
-      }
-      if (
-        inlineButtonsUnavailable &&
-        ((nativeCallbackCommand && !legacyApprovalCallback) || hasReservedOpaquePrefix)
-      ) {
-        await terminalizeUnavailableCallback();
-        return;
-      }
-      if (nativeCallbackCommand && nativeCommandCallbackDispatcher) {
-        const dispatch = await nativeCommandCallbackDispatcher({
-          botUser: ctx.me,
-          callbackQuery: callback,
-          commandText: nativeCallbackCommand,
-        });
-        if (dispatch.handled) {
-          if (dispatch.clearButtons) {
-            await clearRoutedCallbackButtons();
-          }
-          return;
-        }
       }
       if (
         !nativeCallbackCommand &&

@@ -85,6 +85,7 @@ type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
+const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
@@ -2157,6 +2158,53 @@ describe("createTelegramBot", () => {
       "Only a configured OpenClaw owner can start Codex login from Telegram.",
       {},
     );
+  });
+
+  it("lets an owner start Codex login from a pairing-policy DM callback", async () => {
+    const runModelsAuthLoginFlow = vi
+      .spyOn(defaultTelegramNativeCommandDeps, "runModelsAuthLoginFlow")
+      .mockImplementation(async (params) => {
+        await params.prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "OWNER-CODE",
+          message: "URL: https://auth.openai.com/codex/device",
+        });
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      });
+    loadConfig.mockReturnValue({
+      commands: { native: true, ownerAllowFrom: ["9"] },
+      channels: { telegram: { dmPolicy: "pairing" } },
+      agents: { list: [{ id: "main", default: true }] },
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: "cbq-login-owner",
+          data: "tgcmd:/login codex",
+          messageId: 10,
+          message: {
+            reply_markup: {
+              inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+            },
+          },
+        }),
+      );
+
+      expect(runModelsAuthLoginFlow).toHaveBeenCalledOnce();
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        expect.stringContaining("Code: <code>OWNER-CODE</code>"),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    } finally {
+      runModelsAuthLoginFlow.mockRestore();
+    }
   });
 
   it.each([
