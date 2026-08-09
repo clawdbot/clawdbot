@@ -11,7 +11,7 @@ import {
   isAvatarHttpUrl,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "./agent-scope.js";
 import { resolveLocalAgentAvatarPath } from "./identity-avatar-file.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
@@ -39,12 +39,9 @@ function resolveAvatarSource(
   opts?: { includeUiOverride?: boolean },
 ): string | null {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
   if (opts?.includeUiOverride) {
-    // UI override only wins for the default agent unless callers explicitly ask
-    // for it as a final fallback for non-default agents.
-    if (normalizedAgentId === defaultAgentId && fromUiConfig) {
+    if (normalizedAgentId === tryResolveSoleAgentId(cfg) && fromUiConfig) {
       return fromUiConfig;
     }
   }

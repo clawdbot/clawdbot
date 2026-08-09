@@ -1,37 +1,30 @@
 // Covers resolving the active agent id from session keys and explicit config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { AgentSelectionRequiredError } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 
 describe("resolveSessionAgentIds", () => {
   const cfg = {
     agents: {
-      list: [{ id: "main" }, { id: "beta", default: true }],
+      entries: { main: {}, beta: {} },
     },
   } as OpenClawConfig;
 
-  it("falls back to the configured default when sessionKey is missing", () => {
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      config: cfg,
-    });
-    expect(defaultAgentId).toBe("beta");
-    expect(sessionAgentId).toBe("beta");
+  it("requires an owner when sessionKey is missing", () => {
+    expect(() => resolveSessionAgentIds({ config: cfg })).toThrow(AgentSelectionRequiredError);
   });
 
-  it("falls back to the configured default when sessionKey is non-agent", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "quietchat:slash:123",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("beta");
+  it("requires an owner when sessionKey is non-agent", () => {
+    expect(() =>
+      resolveSessionAgentIds({ sessionKey: "quietchat:slash:123", config: cfg }),
+    ).toThrow(AgentSelectionRequiredError);
   });
 
-  it("falls back to the configured default for global sessions", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "global",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("beta");
+  it("requires an owner for global sessions", () => {
+    expect(() => resolveSessionAgentIds({ sessionKey: "global", config: cfg })).toThrow(
+      AgentSelectionRequiredError,
+    );
   });
 
   it("keeps the agent id for provider-qualified agent sessions", () => {

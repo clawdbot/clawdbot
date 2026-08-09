@@ -120,6 +120,10 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
+}));
+
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => ["default"],
@@ -127,6 +131,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
   resolveDefaultAgentDir: () => "/tmp/prepared-static-agent",
   resolveDefaultAgentId: () => "default",
+  tryResolveSoleAgentId: () => "default",
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({

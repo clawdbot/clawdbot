@@ -31,6 +31,7 @@ import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "./agent-scope-config.js";
 export {
   listAgentEntries,
@@ -43,8 +44,13 @@ export {
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveSoleAgentId,
+  tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
+  AgentSelectionRequiredError,
+  type AgentSelectionContext,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
@@ -305,7 +311,6 @@ export function resolveSessionAgentIds(params: {
   defaultAgentId: string;
   sessionAgentId: string;
 } {
-  const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
   const explicitAgentIdRaw = normalizeLowercaseStringOrEmpty(params.agentId);
   const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
   const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
@@ -313,9 +318,17 @@ export function resolveSessionAgentIds(params: {
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
+  const scopedAgentId =
+    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : fallbackAgentId);
+  const soleAgentId = tryResolveSoleAgentId(params.config ?? {});
   const sessionAgentId =
-    explicitAgentId ??
-    (parsed?.agentId ? normalizeAgentId(parsed.agentId) : (fallbackAgentId ?? defaultAgentId));
+    scopedAgentId ??
+    soleAgentId ??
+    resolveDefaultAgentId(params.config ?? {}, {
+      surface: "session agent resolution",
+      hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
+    });
+  const defaultAgentId = soleAgentId ?? sessionAgentId;
   return { defaultAgentId, sessionAgentId };
 }
 

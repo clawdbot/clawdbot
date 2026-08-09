@@ -122,6 +122,8 @@ describe("resolveModelRuntimePolicy", () => {
   it("honors provider wildcard agent model runtime policy entries", () => {
     const config = {
       agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
         defaults: {
           models: {
             "vllm/*": { agentRuntime: { id: "openclaw" } },

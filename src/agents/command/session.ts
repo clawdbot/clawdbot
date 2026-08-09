@@ -9,6 +9,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
@@ -34,6 +35,7 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
@@ -198,7 +200,11 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const sessionId = opts.sessionId.trim();
   const storeAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
-    : resolveDefaultAgentId(opts.cfg);
+    : (tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+      resolveDefaultAgentId(opts.cfg, {
+        surface: "stored session lookup",
+        hint: "Pass an explicit agent id when looking up a session by id.",
+      }));
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
@@ -233,7 +239,6 @@ export function resolveSessionKeyForRequestCore(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const requestedSessionKey = opts.sessionKey?.trim() || undefined;
@@ -250,6 +255,19 @@ export function resolveSessionKeyForRequestCore(opts: {
           agentId: requestedAgentId,
         })
       : undefined);
+  const scopedSessionAgentId = parseAgentSessionKey(explicitSessionKey)?.agentId;
+  const sessionIdScanAnchor = requestedSessionId
+    ? (tryResolveLegacyCompatibilityAgentId(opts.cfg) ?? "main")
+    : undefined;
+  const defaultAgentId = normalizeAgentId(
+    requestedAgentId ??
+      scopedSessionAgentId ??
+      sessionIdScanAnchor ??
+      resolveDefaultAgentId(opts.cfg, {
+        surface: "agent command session routing",
+        hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+      }),
+  );
   const storeAgentId = explicitSessionKey
     ? isUnscopedSessionKeySentinel(explicitSessionKey)
       ? (requestedAgentId ?? defaultAgentId)
@@ -341,9 +359,15 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
-  const sessionAgentId = opts.agentId?.trim()
-    ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
+  const sessionAgentId = normalizeAgentId(
+    (opts.agentId?.trim() ? opts.agentId : undefined) ??
+      parseAgentSessionKey(sessionKey)?.agentId ??
+      tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+      resolveDefaultAgentId(opts.cfg, {
+        surface: "agent command session ownership",
+        hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+      }),
+  );
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({

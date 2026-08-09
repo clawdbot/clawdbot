@@ -8,7 +8,10 @@ type DeliveryDeps = {
   callGateway: typeof import("./subagent-announce-delivery.runtime.js").callGateway;
   dispatchGatewayMethodInProcess: typeof import("./subagent-announce-delivery.runtime.js").dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof import("./subagent-announce-delivery.runtime.js").getRuntimeConfig;
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
+  getRequesterSessionActivity: (
+    requesterSessionKey: string,
+    requesterAgentId?: string,
+  ) => {
     sessionId?: string;
     isActive: boolean;
   };

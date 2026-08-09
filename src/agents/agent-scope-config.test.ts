@@ -2,11 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  AgentSelectionRequiredError,
   listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentConfig,
   resolveDefaultAgentId,
+  resolveSoleAgentId,
   tryResolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -26,9 +29,11 @@ describe("agent roster resolution", () => {
     expect(() => resolveDefaultAgentId({ agents: { list: [] } })).toThrow("No agents configured");
   });
 
-  it("preserves legacy first-entry selection while diagnostic lookup stays strict", () => {
+  it("preserves raw legacy markers while sole-agent lookup stays strict", () => {
+    expect(resolveSoleAgentId({ agents: { entries: { alpha: {} } } })).toBe("alpha");
+    expect(tryResolveSoleAgentId({ agents: { entries: { alpha: {} } } })).toBe("alpha");
     const missingDefault = { agents: { list: [{ id: "alpha" }, { id: "beta" }] } };
-    expect(resolveDefaultAgentId(missingDefault)).toBe("alpha");
+    expect(() => resolveDefaultAgentId(missingDefault)).toThrow(AgentSelectionRequiredError);
     expect(tryResolveDefaultAgentId(missingDefault)).toBeUndefined();
     expect(
       resolveDefaultAgentId({
@@ -43,7 +48,7 @@ describe("agent roster resolution", () => {
         ],
       },
     };
-    expect(resolveDefaultAgentId(duplicateDefaults)).toBe("alpha");
+    expect(() => resolveDefaultAgentId(duplicateDefaults)).toThrow(AgentSelectionRequiredError);
     expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
   });
 
@@ -57,13 +62,13 @@ describe("agent roster resolution", () => {
   });
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
-    expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBeUndefined();
+    expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBe("alpha");
     for (const marker of ["false", 1]) {
       expect(
         tryResolveDefaultAgentId({
           agents: { entries: { alpha: { default: marker } } },
         } as unknown as OpenClawConfig),
-      ).toBeUndefined();
+      ).toBe("alpha");
     }
   });
 

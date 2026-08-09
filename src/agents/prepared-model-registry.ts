@@ -3,12 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { normalizeDiscoveredAgentModel } from "./agent-model-discovery.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   prepareModelRuntimeSnapshot,
@@ -127,7 +123,7 @@ function resolveInput(
     agentId,
     agentDir,
     config,
-    inheritedAuthDir: resolveDefaultAgentDir(config),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
     ...(usesCredentialFreeRegistry(options) ? { skipCredentials: true } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };

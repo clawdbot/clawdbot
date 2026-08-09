@@ -4,7 +4,6 @@ import {
   listAgentEntriesWithSource,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
-  resolveDefaultAgentId,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -139,11 +138,6 @@ function collectTouchedTextModelRefs(params: {
   touchedPaths: readonly (readonly string[])[];
 }): TouchedModelRef[] {
   const listedAgentEntries = listAgentEntriesWithSource(params.config);
-  const agentEntries = listedAgentEntries.map(({ entry }) => entry);
-  if (agentEntries.filter((entry) => entry.default === true).length !== 1) {
-    // Draft validation runs before roster schema errors are reported.
-    return [];
-  }
   const defaultPrimaryPath = ["agents", "defaults", "model", "primary"];
   const defaultPrimaryTouched = params.touchedPaths.some(
     (touchedPath) =>
@@ -312,10 +306,7 @@ function expandInheritedDefaultRefs(
   refs: TouchedModelRef[],
 ): TouchedModelRef[] {
   const agentEntries = listAgentEntries(config);
-  if (agentEntries.filter((entry) => entry.default === true).length !== 1) {
-    return refs;
-  }
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const defaultAgentId = tryResolveDefaultAgentId(config);
   const expanded: TouchedModelRef[] = [];
   const seen = new Set<string>();
   const push = (ref: TouchedModelRef) => {
@@ -330,19 +321,21 @@ function expandInheritedDefaultRefs(
       push(ref);
       continue;
     }
-    const defaultAgentConfigured = agentEntries.some(
-      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId),
-    );
-    const defaultAgentInherits =
-      !defaultAgentConfigured ||
-      (ref.fallback
-        ? resolveAgentModelFallbacksOverride(config, defaultAgentId) === undefined
-        : resolveAgentExplicitModelPrimary(config, defaultAgentId) === undefined);
-    if (defaultAgentInherits) {
-      push(ref);
+    if (defaultAgentId) {
+      const defaultAgentConfigured = agentEntries.some(
+        (entry) => normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId),
+      );
+      const defaultAgentInherits =
+        !defaultAgentConfigured ||
+        (ref.fallback
+          ? resolveAgentModelFallbacksOverride(config, defaultAgentId) === undefined
+          : resolveAgentExplicitModelPrimary(config, defaultAgentId) === undefined);
+      if (defaultAgentInherits) {
+        push(ref);
+      }
     }
     for (const { id: agentId } of agentEntries) {
-      if (normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
+      if (defaultAgentId && normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
         continue;
       }
       const inherits = ref.fallback

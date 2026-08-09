@@ -652,6 +652,7 @@ export function createOpenClawTools(
           // stamp for materialized agent roots (opts.callGateway === undefined
           // is the gate in ensureConfiguredAgentMainSession).
           createSessionsSendTool({
+            agentId: sessionAgentId,
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,

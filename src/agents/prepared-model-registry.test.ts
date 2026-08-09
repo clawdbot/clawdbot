@@ -24,6 +24,10 @@ vi.mock("./agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
 }));
 
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/agents/main",
+}));
+
 vi.mock("./agent-model-discovery.js", () => ({
   normalizeDiscoveredAgentModel: mocks.normalizeModel,
 }));
