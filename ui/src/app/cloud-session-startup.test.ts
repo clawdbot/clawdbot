@@ -91,7 +91,6 @@ function harness(
     input: { recovery, persistRecovery: true, recovering: false, createdAt: 1_000 },
     client,
     gateway,
-    gatewayListeners,
     sessions,
     state,
     initialUserMessage,
@@ -205,12 +204,12 @@ describe("application cloud startup", () => {
     const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
 
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    await startup.retry(input.recovery.sessionKey);
+    startup.retry(input.recovery.sessionKey);
     expect(loader).not.toHaveBeenCalled();
     startup.dispose();
   });
 
-  it("keeps a runtime load failure visible and retries the failed chunk", async () => {
+  it("rejects a runtime load and fresh-imports on the next start", async () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi
@@ -221,97 +220,19 @@ describe("application cloud startup", () => {
     const listener = vi.fn();
     startup.subscribe(listener);
 
-    await startup.start(input);
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      error: "cloud startup chunk unavailable",
-      retryable: true,
-    });
-    expect(startup.get("agent:cloud:other-session")).toBeNull();
-    expect(listener).toHaveBeenCalledOnce();
+    await expect(startup.start(input)).rejects.toThrow("cloud startup chunk unavailable");
+    expect(startup.get(input.recovery.sessionKey)).toBeNull();
+    expect(listener).not.toHaveBeenCalled();
 
-    await startup.retry("agent:cloud:other-session");
-    expect(loader).toHaveBeenCalledOnce();
-    await startup.retry(input.recovery.sessionKey);
+    await startup.start(input);
     expect(loader).toHaveBeenCalledTimes(2);
     expect(factory).toHaveBeenCalledWith(expect.anything(), {
       reconcileCurrentSnapshot: false,
     });
     expect(fake.runtime.start).toHaveBeenCalledWith(input);
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledOnce();
     startup.dispose();
-  });
-
-  it("replaces a prior load failure only when another session explicitly starts", async () => {
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("first chunk failure"))
-      .mockRejectedValueOnce(new Error("replacement chunk failure"));
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
-    const replacementInput: CloudStartupInput = {
-      ...input,
-      recovery: { ...input.recovery, sessionKey: "agent:cloud:replacement" },
-      createdAt: 2_000,
-    };
-
-    await startup.start(input);
-    await startup.retry(replacementInput.recovery.sessionKey);
-    expect(loader).toHaveBeenCalledOnce();
-
-    await startup.start(replacementInput);
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    expect(startup.get(replacementInput.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      startedAt: replacementInput.createdAt,
-      error: "replacement chunk failure",
-      retryable: true,
-    });
-    await startup.retry(input.recovery.sessionKey);
-    expect(loader).toHaveBeenCalledTimes(2);
-    startup.dispose();
-  });
-
-  it("delegates retries after recovery loads the runtime without dropping its load failure", async () => {
-    const createCombinedState = async () => {
-      sessionStorage.clear();
-      const fake = createFakeRuntime();
-      const factory = vi.fn(() => fake.runtime);
-      const loader = vi
-        .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
-        .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-        .mockResolvedValueOnce({ createApplicationCloudStartupRuntime: factory });
-      const result = harness(vi.fn(), { loadRuntime: loader });
-
-      await result.startup.start(result.input);
-      for (const listener of result.gatewayListeners) {
-        listener(result.gateway.snapshot);
-      }
-      await flush();
-      expect(factory).toHaveBeenCalledWith(expect.anything(), {
-        reconcileCurrentSnapshot: true,
-      });
-      expect(result.startup.get(result.input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        error: "cloud startup chunk unavailable",
-      });
-      return { ...result, fake };
-    };
-
-    const active = await createCombinedState();
-    const otherSessionKey = "agent:cloud:other-session";
-    await active.startup.retry(otherSessionKey);
-    expect(active.fake.runtime.retry).toHaveBeenCalledWith(otherSessionKey);
-    expect(active.startup.get(active.input.recovery.sessionKey)?.phase).toBe("failed");
-
-    await active.startup.retry(active.input.recovery.sessionKey);
-    expect(active.fake.runtime.retry).toHaveBeenCalledWith(active.input.recovery.sessionKey);
-    expect(active.fake.runtime.start).not.toHaveBeenCalled();
-    active.startup.dispose();
-    expect(active.fake.runtime.dispose).toHaveBeenCalledOnce();
-    expect(active.startup.get(active.input.recovery.sessionKey)).toBeNull();
-    await active.startup.retry(active.input.recovery.sessionKey);
-    expect(active.fake.runtime.retry).toHaveBeenCalledTimes(2);
   });
 
   it("loads and reconciles recovery when constructed on an existing connection", async () => {
@@ -446,7 +367,7 @@ describe("application cloud startup", () => {
       retryable: true,
     });
 
-    await startup.retry(input.recovery.sessionKey);
+    startup.retry(input.recovery.sessionKey);
     await flush();
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
@@ -484,7 +405,7 @@ describe("application cloud startup", () => {
       setItem: storage.setItem.bind(storage),
       removeItem: storage.removeItem.bind(storage),
     });
-    await startup.retry(input.recovery.sessionKey);
+    startup.retry(input.recovery.sessionKey);
     await flush();
     expect(storageRead).toHaveBeenCalledWith(
       "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
@@ -493,13 +414,13 @@ describe("application cloud startup", () => {
 
     const requestCount = request.mock.calls.length;
     (gateway.connection as { gatewayUrl: string }).gatewayUrl = "ws://other.example";
-    await startup.retry(input.recovery.sessionKey);
+    startup.retry(input.recovery.sessionKey);
     await flush();
     expect(request).toHaveBeenCalledTimes(requestCount);
 
     (gateway.connection as { gatewayUrl: string }).gatewayUrl = input.recovery.gatewayUrl;
     client.recoveryScope = "principal-b";
-    await startup.retry(input.recovery.sessionKey);
+    startup.retry(input.recovery.sessionKey);
     await flush();
     expect(request).toHaveBeenCalledTimes(requestCount);
     startup.dispose();

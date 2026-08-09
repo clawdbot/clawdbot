@@ -41,25 +41,18 @@ export type ApplicationCloudStartupRuntime = {
   dispose: () => void;
 };
 
-export type ApplicationCloudStartup = Omit<ApplicationCloudStartupRuntime, "start" | "retry"> & {
+export type ApplicationCloudStartup = Omit<ApplicationCloudStartupRuntime, "start"> & {
   start: (input: CloudStartupInput) => Promise<void>;
-  retry: (sessionKey: string) => Promise<void>;
 };
 
 type CloudStartupRuntimeModule = typeof import("./cloud-session-startup.runtime.ts");
 type CloudStartupRuntimeLoader = () => Promise<CloudStartupRuntimeModule>;
-
-type LoadFailure = {
-  input: CloudStartupInput;
-  status: ApplicationCloudStartupStatus;
-};
 
 export function createApplicationCloudStartup(
   dependencies: ApplicationCloudStartupDependencies,
   loadRuntime: CloudStartupRuntimeLoader = () => import("./cloud-session-startup.runtime.ts"),
 ): ApplicationCloudStartup {
   const listeners = new Set<() => void>();
-  let loadFailure: LoadFailure | null = null;
   let runtime: ApplicationCloudStartupRuntime | null = null;
   let runtimeLoad: Promise<ApplicationCloudStartupRuntime | null> | null = null;
   let disposed = false;
@@ -71,9 +64,6 @@ export function createApplicationCloudStartup(
   const ensureRuntime = (
     reconcileCurrentSnapshot = true,
   ): Promise<ApplicationCloudStartupRuntime | null> => {
-    if (disposed) {
-      return Promise.resolve(null);
-    }
     if (runtime) {
       return Promise.resolve(runtime);
     }
@@ -114,55 +104,30 @@ export function createApplicationCloudStartup(
     ) {
       return;
     }
-    void ensureRuntime().catch(() => undefined);
+    void ensureRuntime().catch(() => {
+      // Keep the durable recovery for New Session, whose next user-triggered submit retries the
+      // import and surfaces any load error without spinning in the background.
+    });
   };
 
   const stopGateway = dependencies.gateway.subscribe(maybeLoadRecovery);
   maybeLoadRecovery(dependencies.gateway.snapshot);
 
   const start: ApplicationCloudStartup["start"] = async (input) => {
-    loadFailure = null;
-    try {
-      const target = await ensureRuntime(false);
-      if (!target || disposed) {
-        return;
-      }
-      target.start(input);
-    } catch (error) {
-      if (disposed) {
-        return;
-      }
-      loadFailure = {
-        input,
-        status: {
-          sessionKey: input.recovery.sessionKey,
-          phase: "failed",
-          startedAt: input.createdAt,
-          error: error instanceof Error ? error.message : String(error),
-          retryable: true,
-        },
-      };
-      publish();
-    }
-  };
-
-  const retry: ApplicationCloudStartup["retry"] = async (sessionKey) => {
-    if (runtime) {
-      runtime.retry(sessionKey);
+    const target = await ensureRuntime(false);
+    if (!target || disposed) {
       return;
     }
-    const failure = loadFailure;
-    if (failure?.status.sessionKey === sessionKey) {
-      return start(failure.input);
-    }
+    target.start(input);
+  };
+
+  const retry: ApplicationCloudStartup["retry"] = (sessionKey) => {
+    runtime?.retry(sessionKey);
   };
 
   return {
     get(sessionKey) {
-      return (
-        runtime?.get(sessionKey) ??
-        (loadFailure?.status.sessionKey === sessionKey ? loadFailure.status : null)
-      );
+      return runtime?.get(sessionKey) ?? null;
     },
     start,
     retry,
@@ -179,7 +144,6 @@ export function createApplicationCloudStartup(
       runtime?.dispose();
       runtime = null;
       runtimeLoad = null;
-      loadFailure = null;
       listeners.clear();
     },
   };

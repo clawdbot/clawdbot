@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { CloudSessionRecovery } from "../../lib/sessions/cloud-recovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page.ts";
 
@@ -9,6 +12,23 @@ type TestNewSessionPage = {
   openedFor: string | null;
   visibility: "normal" | "draft" | "incognito";
   worktree: boolean;
+  agentId: string;
+  cloudProfileId: string;
+  context: ApplicationContext;
+  error: string | null;
+  submitting: boolean;
+  gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"];
+  gatewayConnected: boolean;
+  gatewayRecoveryScope: string;
+  gatewayUrl: string;
+  pendingCloud: { capture(): CloudSessionRecovery | null };
+  attachmentDraft: {
+    attachments: ChatAttachment[];
+    replace(attachments: ChatAttachment[]): void;
+  };
+  canSubmit(): boolean;
+  submissionAccess(): { allowed: true };
+  submit(): Promise<void>;
   setMessageFromUser(message: string): void;
   updated(): void;
 };
@@ -25,6 +45,8 @@ function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
 }
 
 afterEach(() => {
+  document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  sessionStorage.clear();
   window.history.replaceState({}, "", "/");
 });
 
@@ -91,5 +113,87 @@ describe("new session draft route ownership", () => {
     page.updated();
 
     expect(page.message).toBe("");
+  });
+
+  it("keeps cloud recovery on a lazy-runtime failure and retries the same identity", async () => {
+    window.history.replaceState({}, "", "/new");
+    const page = document.createElement(
+      "openclaw-new-session-page",
+    ) as unknown as TestNewSessionPage;
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    const client = { recoveryScope: "principal-a", recoveryScopeReady: true };
+    const createResult = vi.fn(async (params: Record<string, unknown>) => ({
+      key: String(params.key),
+      initialRun: { status: "idle" as const },
+    }));
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const navigate = vi.fn();
+    const setSessionKey = vi.fn();
+    const selectAgent = vi.fn();
+    page.context = {
+      basePath: "",
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.example" },
+        snapshot: {
+          phase: "connected",
+          client,
+          hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+        },
+        setSessionKey,
+      },
+      agents: { state: { agentsList: null } },
+      agentSelection: { state: { selectedId: "cloud" }, set: selectAgent },
+      sessions: { state: { result: null }, createResult },
+      cloudStartup: { start },
+      navigate,
+    } as unknown as ApplicationContext;
+    page.agentId = "cloud";
+    page.cloudProfileId = "aws";
+    page.message = "keep this cloud task";
+    page.visibility = "normal";
+    page.worktree = true;
+    page.gatewayClient = client as ApplicationContext["gateway"]["snapshot"]["client"];
+    page.gatewayConnected = true;
+    page.gatewayRecoveryScope = client.recoveryScope;
+    page.gatewayUrl = "ws://gateway.example";
+    page.canSubmit = () => true;
+    page.submissionAccess = () => ({ allowed: true });
+    page.attachmentDraft.replace([
+      {
+        id: "attachment-1",
+        dataUrl: "data:text/plain;base64,SGk=",
+        mimeType: "text/plain",
+        fileName: "note.txt",
+      },
+    ]);
+
+    await page.submit();
+    const retained = page.pendingCloud.capture();
+    expect(page.error).toContain("cloud startup chunk unavailable");
+    expect(page.message).toBe("keep this cloud task");
+    expect(page.attachmentDraft.attachments).toHaveLength(1);
+    expect(retained).toMatchObject({
+      message: "keep this cloud task",
+      attachments: [{ fileName: "note.txt", content: "SGk=" }],
+      phase: "dispatching",
+    });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(page.submitting).toBe(false);
+    expect(window.location.pathname).toBe("/new");
+
+    await page.submit();
+    expect(createResult).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start.mock.calls[1]?.[0].recovery).toMatchObject({
+      sessionKey: retained?.sessionKey,
+      messageId: retained?.messageId,
+      message: retained?.message,
+    });
+    expect(setSessionKey).toHaveBeenCalledWith(retained?.sessionKey);
+    expect(selectAgent).toHaveBeenCalledWith("cloud");
+    expect(navigate).toHaveBeenCalledOnce();
   });
 });
