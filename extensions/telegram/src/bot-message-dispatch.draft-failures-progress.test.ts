@@ -120,8 +120,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
     async ({ createMessageContext }) => {
-      let answerDraftStream: ReturnType<typeof createTestDraftStream>;
-      answerDraftStream = createTestDraftStream({
+      const answerDraftStream = createTestDraftStream({
         onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
       });
       const reasoningDraftStream = createTestDraftStream();
