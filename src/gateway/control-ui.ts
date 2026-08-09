@@ -344,6 +344,7 @@ async function authorizeControlUiReadRequest(
   );
   let resolvedAuthResult = authResult;
   let verifiedDeviceScopes: string[] | undefined;
+  let deviceTokenValidationFailed = false;
   if (
     !resolvedAuthResult.ok &&
     token &&
@@ -369,15 +370,20 @@ async function authorizeControlUiReadRequest(
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
-        await opts.rateLimiter?.recordFailureAndDelay(
-          clientIp,
-          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-        );
-        await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+        deviceTokenValidationFailed = true;
       }
     }
   }
   if (!resolvedAuthResult.ok) {
+    if (
+      resolvedAuthResult.reason === "token_mismatch" ||
+      resolvedAuthResult.reason === "password_mismatch"
+    ) {
+      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    }
+    if (deviceTokenValidationFailed) {
+      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+    }
     sendGatewayAuthFailure(res, resolvedAuthResult);
     return false;
   }

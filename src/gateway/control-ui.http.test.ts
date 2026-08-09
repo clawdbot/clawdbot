@@ -226,6 +226,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
     rateLimiter?: AuthRateLimiter;
+    trustedProxies?: string[];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
     const url = params.basePath
@@ -244,6 +245,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.auth ? { auth: params.auth } : {}),
         ...(params.config ? { config: params.config } : {}),
         ...(params.rateLimiter ? { rateLimiter: params.rateLimiter } : {}),
+        ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -1983,6 +1985,44 @@ describe("handleControlUiHttpRequest", () => {
           expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(2);
         },
       });
+    });
+  });
+
+  it("penalizes a trusted-proxy local password mismatch only as a shared secret", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const rateLimiter = createAuthRateLimiterSpy();
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            password: "local-password",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+          trustedProxies: ["127.0.0.1"],
+          headers: {
+            host: "localhost",
+            authorization: "Bearer wrong-password",
+          },
+          rateLimiter,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(responseJson(end)).toEqual({
+          error: { message: "Unauthorized", type: "unauthorized" },
+        });
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(1);
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+        );
+      },
     });
   });
 
