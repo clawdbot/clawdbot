@@ -10,7 +10,11 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import {
+  applySqliteSessionEntryCanonicalReplacements,
+  type SessionEntryCanonicalReplacement,
+} from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
@@ -124,35 +128,6 @@ function createCommitGuard(key: string, assertCurrent: (() => void) | undefined)
   };
 }
 
-function addLabelOwner(
-  labelOwners: Map<string, Set<string>>,
-  sessionKey: string,
-  entry: SessionEntry,
-): void {
-  if (!entry.label) {
-    return;
-  }
-  const owners = labelOwners.get(entry.label) ?? new Set<string>();
-  owners.add(sessionKey);
-  labelOwners.set(entry.label, owners);
-}
-
-function removeWorkingEntry(
-  store: Record<string, SessionEntry>,
-  labelOwners: Map<string, Set<string>>,
-  sessionKey: string,
-): void {
-  const entry = store[sessionKey];
-  if (entry?.label) {
-    const owners = labelOwners.get(entry.label);
-    owners?.delete(sessionKey);
-    if (owners?.size === 0) {
-      labelOwners.delete(entry.label);
-    }
-  }
-  delete store[sessionKey];
-}
-
 async function executeSessionPatchMutations(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
@@ -235,17 +210,8 @@ async function executeSessionPatchMutations(params: {
     }
     // Commit guards are core control state; construct the protocol patch from
     // its public identity fields so closures can never reach hooks or entries.
-    const fullPatch = {
-      ...params.patch,
-      key: input.key,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-      ...(input.expectedSessionId !== undefined
-        ? { expectedSessionId: input.expectedSessionId }
-        : {}),
-      ...(input.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: input.expectedLifecycleRevision }
-        : {}),
-    } as SessionsPatchParams;
+    const { commitGuard: _commitGuard, ...identity } = input;
+    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
     let initialPlacementPatchError: string | undefined;
     try {
       initialPlacementPatchError = resolveSessionWorkerPlacementPatchError({
@@ -326,7 +292,7 @@ async function executeSessionPatchMutations(params: {
           [...groups.values()].map(async (group) => {
             const first = group[0]!;
             try {
-              const groupOutcomes = await applySessionEntryReplacements({
+              const groupOutcomes = await applySqliteSessionEntryCanonicalReplacements({
                 agentId: first.targetAgentId,
                 storePath: first.storePath,
                 skipMaintenance: true,
@@ -336,15 +302,8 @@ async function executeSessionPatchMutations(params: {
                       isInternalSessionEffectsKey(sessionKey) ? [] : [[sessionKey, entry] as const],
                     ),
                   );
-                  const labelOwners = new Map<string, Set<string>>();
-                  for (const [sessionKey, entry] of Object.entries(workingStore)) {
-                    addLabelOwner(labelOwners, sessionKey, entry);
-                  }
-                  const replacements: Array<{
-                    entry: SessionEntry;
-                    previousSessionKeys: readonly string[];
-                    sessionKey: string;
-                  }> = [];
+                  const labelOwners = new SessionLabelOwnerIndex(workingStore);
+                  const replacements: SessionEntryCanonicalReplacement[] = [];
                   const projectedOutcomes: MutationOutcome[] = [];
                   for (const target of group) {
                     try {
@@ -434,14 +393,7 @@ async function executeSessionPatchMutations(params: {
                       const projected = await projectSessionsPatchEntry({
                         cfg,
                         existingEntry,
-                        isLabelInUse: (label) => {
-                          const owners = labelOwners.get(label);
-                          if (!owners) {
-                            return false;
-                          }
-                          const candidateKeySet = new Set(candidateKeys);
-                          return [...owners].some((owner) => !candidateKeySet.has(owner));
-                        },
+                        isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
                         storeKey: primaryKey,
                         agentId: target.requestedAgentId,
                         patch: target.fullPatch,
@@ -482,12 +434,11 @@ async function executeSessionPatchMutations(params: {
                         previousSessionKeys,
                         sessionKey: primaryKey,
                       });
-                      for (const candidateKey of candidateKeys) {
-                        removeWorkingEntry(workingStore, labelOwners, candidateKey);
-                      }
-                      const cloned = structuredClone(projected.entry);
-                      workingStore[primaryKey] = cloned;
-                      addLabelOwner(labelOwners, primaryKey, cloned);
+                      const cloned = labelOwners.replaceEntry(
+                        candidateKeys,
+                        primaryKey,
+                        projected.entry,
+                      );
                       projectedOutcomes.push({
                         ok: true,
                         archiveStateChanged:
@@ -550,7 +501,7 @@ async function executeSessionPatchMutations(params: {
     });
   }
 
-  let patchedCategory: string | undefined;
+  let patched = false;
   const archivedSessionKeys = new Set<string>();
   for (const target of prepared) {
     const outcome = outcomes[target.index];
@@ -578,17 +529,15 @@ async function executeSessionPatchMutations(params: {
         : {}),
       reason: "patch",
     });
-    const category = target.fullPatch.category;
-    if (typeof category === "string" && category.trim()) {
-      patchedCategory = category;
-    }
+    patched = true;
     if (target.fullPatch.archived === true) {
       archivedSessionKeys.add(target.canonicalKey);
     }
   }
 
-  if (patchedCategory) {
-    ensureSessionGroupRegistered(patchedCategory);
+  const category = params.patch.category;
+  if (patched && typeof category === "string" && category.trim()) {
+    ensureSessionGroupRegistered(category);
   }
   if (callerCanManageCron && archivedSessionKeys.size > 0) {
     try {

@@ -370,10 +370,12 @@ describe("EmbeddedTuiBackend", () => {
           primaryKey: string;
           store: Readonly<Record<string, unknown>>;
         }) => Promise<unknown>;
-        resolveTarget: (store: Readonly<Record<string, unknown>>) => { primaryKey: string };
+        resolveTarget: (snapshot: { store: Readonly<Record<string, unknown>> }) => {
+          primaryKey: string;
+        };
       }) => {
         const store = {};
-        const target = params.resolveTarget(store);
+        const target = params.resolveTarget({ store });
         return await params.project({ ...target, store, isLabelInUse: () => false });
       },
     );
@@ -801,12 +803,12 @@ describe("EmbeddedTuiBackend", () => {
           primaryKey: string;
           store: Readonly<Record<string, typeof existingEntry>>;
         }) => Promise<unknown>;
-        resolveTarget: (store: Readonly<Record<string, typeof existingEntry>>) => {
+        resolveTarget: (snapshot: { store: Readonly<Record<string, typeof existingEntry>> }) => {
           primaryKey: string;
         };
       }) => {
         const store = { [sessionKey]: existingEntry };
-        const target = params.resolveTarget(store);
+        const target = params.resolveTarget({ store });
         return await params.project({
           ...target,
           store,

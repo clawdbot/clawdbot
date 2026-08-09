@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applySessionEntryReplacements,
   loadSessionEntry,
   patchSessionEntry,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { applySqliteSessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -589,7 +589,7 @@ describe("sessions.patchMany orchestration", () => {
       }).storePath;
       const writerStarted = createDeferred();
       const insertConflictingAlias = createDeferred();
-      const writer = applySessionEntryReplacements({
+      const writer = applySqliteSessionEntryCanonicalReplacements({
         agentId: "main",
         sessionKeys: [conflictingAlias],
         storePath,

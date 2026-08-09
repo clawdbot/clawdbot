@@ -26,6 +26,7 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
+  applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -55,6 +56,7 @@ import {
   replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
+  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -70,6 +72,7 @@ import {
   readSqliteSessionEntryCount,
   readSqliteSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
+import { applySqliteSessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   applySqliteSessionEntryLifecycleMutation,
   appendSqliteTranscriptEventSync,
@@ -2058,16 +2061,16 @@ describe("session accessor seam", () => {
       }),
     ).rejects.toThrow("outside the selected key set");
 
+    const runtimeAliasMarker = {
+      sessionKey: "agent:main:missing",
+      entry: { sessionId: "missing", status: "running" as const, updatedAt: 30 },
+      previousSessionKeys: [],
+    };
     const missingSelectionResult = await applySessionEntryReplacements({
       sessionKeys: ["agent:main:missing"],
       storePath,
       update: () => ({
-        replacements: [
-          {
-            sessionKey: "agent:main:missing",
-            entry: { sessionId: "missing", status: "running", updatedAt: 30 },
-          },
-        ],
+        replacements: [runtimeAliasMarker],
         result: "missing-row-no-op",
       }),
     });
@@ -2088,9 +2091,91 @@ describe("session accessor seam", () => {
     ).rejects.toThrow("outside the selected row set");
   });
 
+  it("ignores runtime-only alias rekey fields on public exact replacements", async () => {
+    const canonicalKey = "agent:main:runtime-canonical";
+    const aliasKey = "agent:main:runtime-alias";
+    await upsertSessionEntry(
+      { sessionKey: canonicalKey, storePath },
+      { sessionId: "runtime-canonical", updatedAt: 1 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: aliasKey, storePath },
+      { sessionId: "runtime-alias", updatedAt: 2 },
+    );
+    const runtimeAliasRekeyMarker = {
+      sessionKey: canonicalKey,
+      entry: { sessionId: "runtime-canonical", label: "Updated", updatedAt: 3 },
+      previousSessionKeys: [aliasKey],
+    };
+
+    await applySessionEntryReplacements({
+      sessionKeys: [canonicalKey, aliasKey],
+      storePath,
+      update: () => ({ replacements: [runtimeAliasRekeyMarker], result: undefined }),
+    });
+
+    expect(loadSessionEntry({ sessionKey: canonicalKey, storePath })).toMatchObject({
+      label: "Updated",
+      sessionId: "runtime-canonical",
+    });
+    expect(loadSessionEntry({ sessionKey: aliasKey, storePath })).toMatchObject({
+      sessionId: "runtime-alias",
+    });
+  });
+
+  it("projects ordered patches against one mutable store view", async () => {
+    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
+    for (const [index, sessionKey] of keys.entries()) {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: `batch-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const snapshots = new Set<object>();
+    const operation = (
+      index: number,
+      label: string,
+      authorize?: () => { ok: false; error: string } | undefined,
+    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
+      resolveTarget: (snapshot) => {
+        snapshots.add(snapshot.store);
+        return { primaryKey: keys[index]! };
+      },
+      project: ({ existingEntry, isLabelInUse }) => {
+        if (isLabelInUse(label)) {
+          return { ok: false as const, error: `duplicate:${label}` };
+        }
+        return { ok: true as const, entry: { ...existingEntry!, label } };
+      },
+      ...(authorize ? { authorize } : {}),
+    });
+
+    const results = await applySessionPatchProjections({
+      storePath,
+      operations: [
+        operation(0, "Shared"),
+        operation(1, "Shared"),
+        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
+        operation(3, "Blocked"),
+      ],
+    });
+
+    expect(snapshots.size).toBe(1);
+    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
+      "Shared",
+      "duplicate:Shared",
+      "authorization changed",
+      "Blocked",
+    ]);
+    expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
+    expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
+  });
+
   it("inserts and canonically rekeys through the bulk replacement owner", async () => {
     const insertedKey = "agent:main:replacement-insert";
-    await applySessionEntryReplacements({
+    await applySqliteSessionEntryCanonicalReplacements({
       sessionKeys: [insertedKey],
       storePath,
       update: () => ({
@@ -2129,7 +2214,7 @@ describe("session accessor seam", () => {
       .run(previousKey, "member-1", "test", 1);
     const identityListener = vi.fn();
     const unsubscribe = onSessionIdentityMutation(identityListener);
-    await applySessionEntryReplacements({
+    await applySqliteSessionEntryCanonicalReplacements({
       sessionKeys: [canonicalKey, previousKey],
       storePath,
       update: (entries) => ({
@@ -2163,6 +2248,53 @@ describe("session accessor seam", () => {
         .get("member-1"),
     ).toEqual({ session_key: canonicalKey, identity_id: "member-1" });
     expect(identityListener.mock.calls.map(([event]) => event.kind)).toEqual(["move", "replace"]);
+  });
+
+  it("rejects internal canonical targets and alias sources without changing rows or events", async () => {
+    const visibleKey = "agent:main:replacement-visible";
+    const internalKey = "agent:main:internal-session-effects:replacement-guard";
+    await upsertSessionEntry(
+      { sessionKey: visibleKey, storePath },
+      { label: "Visible", sessionId: "replacement-visible", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: internalKey, storePath },
+      { label: "Internal", sessionId: "replacement-internal", updatedAt: 20 },
+    );
+    const snapshot = () =>
+      [visibleKey, internalKey].map((sessionKey) =>
+        loadExactSqliteSessionEntry({ sessionKey, storePath }),
+      );
+    const before = snapshot();
+    const identityListener = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityListener);
+
+    try {
+      for (const replacement of [
+        {
+          entry: { sessionId: "fabricated-target", updatedAt: 30 },
+          previousSessionKeys: [],
+          sessionKey: internalKey,
+        },
+        {
+          entry: { sessionId: "fabricated-alias", updatedAt: 30 },
+          previousSessionKeys: [internalKey],
+          sessionKey: visibleKey,
+        },
+      ]) {
+        await expect(
+          applySqliteSessionEntryCanonicalReplacements({
+            sessionKeys: [visibleKey, internalKey],
+            storePath,
+            update: () => ({ replacements: [replacement], result: undefined }),
+          }),
+        ).rejects.toThrow("cannot target internal effects rows");
+        expect(snapshot()).toEqual(before);
+      }
+    } finally {
+      unsubscribe();
+    }
+    expect(identityListener).not.toHaveBeenCalled();
   });
 
   it("rolls back mixed exact replacements and canonical rekeys as one transaction", async () => {
@@ -2209,7 +2341,7 @@ describe("session accessor seam", () => {
 
     try {
       await expect(
-        applySessionEntryReplacements({
+        applySqliteSessionEntryCanonicalReplacements({
           sessionKeys: [exactKey, canonicalKey, previousKey],
           storePath,
           update: (entries) => ({
@@ -2219,6 +2351,7 @@ describe("session accessor seam", () => {
                   ...entries.find((entry) => entry.sessionKey === exactKey)!.entry,
                   label: "Exact updated",
                 },
+                previousSessionKeys: [],
                 sessionKey: exactKey,
               },
               {

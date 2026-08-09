@@ -5,7 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -36,7 +40,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
   createSessionRowModelCacheKey,
@@ -536,12 +540,11 @@ export async function projectSessionPatchResult(params: {
   storePath: string;
   targetAgentId: string;
 }): Promise<SessionsPatchResult> {
-  const parsed = parseAgentSessionKey(params.canonicalKey);
-  const agentId = normalizeAgentId(
-    params.canonicalKey === "global"
-      ? params.targetAgentId
-      : (parsed?.agentId ?? resolveDefaultAgentId(params.cfg)),
-  );
+  const agentId = resolveSessionAgentId({
+    config: params.cfg,
+    sessionKey: params.canonicalKey,
+    ...(params.canonicalKey === "global" ? { agentId: params.targetAgentId } : {}),
+  });
   const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
   const displayModel = resolveSessionDisplayModelIdentityRef({
     cfg: params.cfg,
