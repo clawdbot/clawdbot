@@ -33,8 +33,9 @@ export type CreateIndicatorParams = {
   indicator_family?: string;
   default_params?: Record<string, unknown>;
   output_schema?: Record<string, unknown>;
-  source_text?: string;
-  intent_brief: string;
+  /** Complete agent-authored Python; the BFF assigns source provenance. */
+  source_text: string;
+  intent_brief?: string;
   [key: string]: unknown;
 };
 
@@ -57,13 +58,13 @@ export default defineToolPlugin({
   id: "vctraderai-create-indicator",
   name: "VC Trader AI Create Indicator",
   description:
-    "Creates a new indicator directly (authors + persists an indicator + manifest, owner-scoped).",
+    "Creates a directly authored Python indicator, validated and persisted owner-scoped; no second authoring model.",
   tools: (tool) => [
     tool({
       name: CREATE_INDICATOR_TOOL_NAME,
       label: "Create Indicator",
       description:
-        "Create a NEW indicator. This CREATES it directly (authors Python + an indicator manifest, validates, and persists it immediately, owner-scoped to your workspace) - it does NOT run a backtest or touch live money. Provide an intent_brief describing what the indicator computes; other fields are optional hints for the engine.",
+        "Create a NEW indicator directly. Always provide complete native-Python source_text with compute(...), then lint before create. The deterministic validator persists the source only after AST, contract, smoke, and capability checks; this does not run a backtest or touch live money.",
       parameters: Type.Object(
         {
           name: Type.Optional(Type.String({ description: "Human-readable indicator name." })),
@@ -86,13 +87,13 @@ export default defineToolPlugin({
               description: "Declared output schema for the indicator's series.",
             }),
           ),
-          source_text: Type.Optional(
-            Type.String({ description: "Raw natural-language source describing the indicator." }),
-          ),
-          intent_brief: Type.String({
-            description: "Required. One or two sentences describing the indicator's intent.",
+          source_text: Type.String({
+            description: "Required complete native-Python source with compute(data, params=None).",
             minLength: 1,
           }),
+          intent_brief: Type.Optional(
+            Type.String({ description: "Optional concise intent metadata for the indicator." }),
+          ),
         },
         { additionalProperties: true },
       ),

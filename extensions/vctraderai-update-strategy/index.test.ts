@@ -25,8 +25,8 @@ describe("vctraderai-update-strategy", () => {
     });
   });
 
-  it("stages the proposal and wraps the descriptor with a review message", async () => {
-    const descriptor = { staged_id: "stg-2", tool_name: "update_strategy", status: "staged" };
+  it("updates directly through the guarded registry endpoint", async () => {
+    const descriptor = { strategy_id: "str-9", version: 2 };
     const fetchImpl = (async () =>
       new Response(JSON.stringify(descriptor), {
         status: 200,
@@ -36,13 +36,10 @@ describe("vctraderai-update-strategy", () => {
       { strategy_id: "str-9", intent_brief: "widen stop" },
       { fetchImpl },
     );
-    expect(result).toMatchObject({
-      staged: descriptor,
-      message: "Staged a strategy-update proposal. Review + Apply it in the chat.",
-    });
+    expect(result).toEqual(descriptor);
   });
 
-  it("posts to the stage path with the staging envelope", async () => {
+  it("posts the update to the guarded registry path", async () => {
     let capturedUrl = "";
     let capturedMethod = "";
     let capturedBody: unknown = undefined;
@@ -58,13 +55,12 @@ describe("vctraderai-update-strategy", () => {
       { fetchImpl },
     );
     const parsed = new URL(capturedUrl);
-    expect(parsed.pathname).toBe("/api/v1/openclaw/stage");
+    expect(parsed.pathname).toBe("/api/v1/openclaw/registry/update-strategy");
     expect(capturedMethod).toBe("POST");
     expect(capturedBody).toMatchObject({
-      tool_name: "update_strategy",
-      workspace_id: "ws-001",
-      summary: "Update strategy str-9: widen stop",
-      params: { strategy_id: "str-9", intent_brief: "widen stop", timeframes: ["H1"] },
+      strategy_id: "str-9",
+      intent_brief: "widen stop",
+      timeframes: ["H1"],
     });
   });
 

@@ -33,8 +33,11 @@ export type CreateStrategyParams = {
   name?: string;
   strategy_type?: string;
   archetype?: string;
-  intent_brief: string;
-  source_text?: string;
+  intent_brief?: string;
+  /** Complete agent-authored Python; the BFF assigns source provenance. */
+  source_text: string;
+  entry_function?: string;
+  runtime_tag?: "vbt" | "nautilus";
   default_params?: Record<string, unknown>;
   timeframes?: string[];
   instruments?: string[];
@@ -62,13 +65,13 @@ export default defineToolPlugin({
   id: "vctraderai-create-strategy",
   name: "VC Trader AI Create Strategy",
   description:
-    "Creates a new strategy directly (authors + persists a research artifact + registry pointer, owner-scoped).",
+    "Creates a directly authored Python strategy, validated and persisted owner-scoped; no second authoring model.",
   tools: (tool) => [
     tool({
       name: CREATE_STRATEGY_TOOL_NAME,
       label: "Create Strategy",
       description:
-        "Create a NEW trading strategy. This CREATES it directly (authors Python + a manifest, validates, and persists the strategy + registry pointer immediately, owner-scoped to your workspace) - it does NOT run a backtest, deploy, or touch live money. Provide an intent_brief describing what the strategy should do; other fields are optional hints for the engine.",
+        "Create a NEW trading strategy directly. Always provide complete native-Python source_text, then lint before create. runtime_tag=vbt with run(...) is a research signal artifact. runtime_tag=nautilus requires a named nautilus_trader Strategy class in entry_function; only a pinned validated Nautilus class can deploy. This does not backtest, deploy, or touch live money.",
       parameters: Type.Object(
         {
           name: Type.Optional(Type.String({ description: "Human-readable strategy name." })),
@@ -81,12 +84,25 @@ export default defineToolPlugin({
           archetype: Type.Optional(
             Type.String({ description: "Strategy archetype (e.g. trend, mean-reversion)." }),
           ),
-          intent_brief: Type.String({
-            description: "Required. One or two sentences describing the strategy's intent.",
+          intent_brief: Type.Optional(
+            Type.String({ description: "Optional concise intent metadata for the strategy." }),
+          ),
+          source_text: Type.String({
+            description:
+              "Required complete native-Python source. Use run(...) for vbt research, or a named nautilus_trader Strategy class for runtime_tag=nautilus.",
             minLength: 1,
           }),
-          source_text: Type.Optional(
-            Type.String({ description: "Raw natural-language source describing the strategy." }),
+          entry_function: Type.Optional(
+            Type.String({
+              description:
+                "run for vbt research; the exact Strategy class name for a native Nautilus artifact.",
+            }),
+          ),
+          runtime_tag: Type.Optional(
+            Type.String({
+              enum: ["vbt", "nautilus"],
+              description: "vbt is research; nautilus selects the class-native, deployable lane.",
+            }),
           ),
           default_params: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {

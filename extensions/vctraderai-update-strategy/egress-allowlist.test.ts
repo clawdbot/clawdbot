@@ -7,8 +7,10 @@ import {
 } from "./src/internal-http-client.js";
 
 describe("vctraderai-update-strategy egress allowlist", () => {
-  it("the stage path is permitted by the allowlist", () => {
-    expect("/api/v1/openclaw/stage").toMatch(VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN);
+  it("the direct registry path is permitted by the allowlist", () => {
+    expect("/api/v1/openclaw/registry/update-strategy").toMatch(
+      VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN,
+    );
   });
 
   it("every captured url on the happy path matches the allowlist", async () => {

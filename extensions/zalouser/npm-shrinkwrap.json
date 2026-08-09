@@ -65,6 +65,7 @@
       "version": "4.2.0",
       "resolved": "https://registry.npmjs.org/crypto-js/-/crypto-js-4.2.0.tgz",
       "integrity": "sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==",
+      "deprecated": "Active development of CryptoJS has been discontinued. This library is no longer maintained.",
       "license": "MIT"
     },
     "node_modules/delayed-stream": {

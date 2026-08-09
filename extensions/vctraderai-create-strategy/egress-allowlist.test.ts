@@ -7,8 +7,10 @@ import {
 } from "./src/internal-http-client.js";
 
 describe("vctraderai-create-strategy egress allowlist", () => {
-  it("the stage path is permitted by the allowlist", () => {
-    expect("/api/v1/openclaw/stage").toMatch(VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN);
+  it("the direct registry path is permitted by the allowlist", () => {
+    expect("/api/v1/openclaw/registry/create-strategy").toMatch(
+      VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN,
+    );
   });
 
   it("every captured url on the happy path matches the allowlist", async () => {
@@ -17,7 +19,10 @@ describe("vctraderai-create-strategy egress allowlist", () => {
       urls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
       return new Response(JSON.stringify({}), { status: 200 });
     }) as typeof globalThis.fetch;
-    await runCreateStrategy({ intent_brief: "x" }, { fetchImpl });
+    await runCreateStrategy(
+      { intent_brief: "x", source_text: "def run(data, params=None, context=None):\n    return {}" },
+      { fetchImpl },
+    );
     expect(urls.length).toBeGreaterThan(0);
     for (const url of urls) {
       expect(new URL(url).pathname).toMatch(VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN);
@@ -78,7 +83,11 @@ describe("vctraderai-create-strategy egress allowlist", () => {
     }) as typeof globalThis.fetch;
     controller.abort();
     await expect(
-      runCreateStrategy({ intent_brief: "x" }, { fetchImpl }, controller.signal),
+      runCreateStrategy(
+        { intent_brief: "x", source_text: "def run(data, params=None, context=None):\n    return {}" },
+        { fetchImpl },
+        controller.signal,
+      ),
     ).rejects.toMatchObject({ name: "AbortError" });
   });
 });

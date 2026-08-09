@@ -25,24 +25,25 @@ describe("vctraderai-create-indicator", () => {
     });
   });
 
-  it("stages the proposal and wraps the descriptor with a review message", async () => {
-    const descriptor = { staged_id: "stg-3", tool_name: "create_indicator", status: "staged" };
+  it("creates directly through the guarded registry endpoint", async () => {
+    const descriptor = { indicator_id: "indicator-1", source_kind: "python_authored" };
     const fetchImpl = (async () =>
       new Response(JSON.stringify(descriptor), {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as typeof globalThis.fetch;
     const result = await runCreateIndicator(
-      { intent_brief: "rolling zscore", name: "ZScore" },
+      {
+        intent_brief: "rolling zscore",
+        name: "ZScore",
+        source_text: "def compute(data, params=None):\n    return data",
+      },
       { fetchImpl },
     );
-    expect(result).toMatchObject({
-      staged: descriptor,
-      message: "Staged a new indicator proposal. Review + Apply it in the chat.",
-    });
+    expect(result).toEqual(descriptor);
   });
 
-  it("posts to the stage path with the staging envelope", async () => {
+  it("posts authored source to the guarded registry path", async () => {
     let capturedUrl = "";
     let capturedMethod = "";
     let capturedBody: unknown = undefined;
@@ -54,17 +55,22 @@ describe("vctraderai-create-indicator", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     }) as typeof globalThis.fetch;
     await runCreateIndicator(
-      { intent_brief: "rolling zscore", name: "ZScore", indicator_family: "statistical" },
+      {
+        intent_brief: "rolling zscore",
+        name: "ZScore",
+        indicator_family: "statistical",
+        source_text: "def compute(data, params=None):\n    return data",
+      },
       { fetchImpl },
     );
     const parsed = new URL(capturedUrl);
-    expect(parsed.pathname).toBe("/api/v1/openclaw/stage");
+    expect(parsed.pathname).toBe("/api/v1/openclaw/registry/create-indicator");
     expect(capturedMethod).toBe("POST");
     expect(capturedBody).toMatchObject({
-      tool_name: "create_indicator",
-      workspace_id: "ws-001",
-      summary: "Create ZScore: rolling zscore",
-      params: { intent_brief: "rolling zscore", name: "ZScore", indicator_family: "statistical" },
+      intent_brief: "rolling zscore",
+      name: "ZScore",
+      indicator_family: "statistical",
+      source_text: "def compute(data, params=None):\n    return data",
     });
   });
 
@@ -74,7 +80,12 @@ describe("vctraderai-create-indicator", () => {
         status: 500,
         statusText: "Internal Server Error",
       })) as typeof globalThis.fetch;
-    await expect(runCreateIndicator({ intent_brief: "x" }, { fetchImpl })).rejects.toMatchObject({
+    await expect(
+      runCreateIndicator(
+        { intent_brief: "x", source_text: "def compute(data, params=None):\n    return data" },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({
       name: "BffRequestError",
       detail: { code: "bff_500", status: 500 },
     });

@@ -35,6 +35,8 @@ export type UpdateStrategyParams = {
   sessions?: string[];
   indicators?: string[];
   source_text?: string;
+  entry_function?: string;
+  runtime_tag?: "vbt" | "nautilus";
   intent_brief?: string;
   [key: string]: unknown;
 };
@@ -58,13 +60,13 @@ export default defineToolPlugin({
   id: "vctraderai-update-strategy",
   name: "VC Trader AI Update Strategy",
   description:
-    "Updates an existing strategy directly (owner-scoped); does not deploy or touch live money.",
+    "Updates an owner-scoped strategy directly; edited Python is deterministically validated and never delegated to a second model.",
   tools: (tool) => [
     tool({
       name: UPDATE_STRATEGY_TOOL_NAME,
       label: "Update Strategy",
       description:
-        "UPDATE an existing strategy. This mutates it directly (owner-scoped to your workspace) - it does NOT run a backtest, deploy, or touch live money. strategy_id is required; supply only the fields you want to change.",
+        "UPDATE an existing strategy directly. For a source edit, first get_strategy_source, lint_strategy, then provide the complete repaired Python source_text. A vbt run(...) artifact remains research-only; a Nautilus promotion names a Strategy class in entry_function with runtime_tag=nautilus. This does not backtest, deploy, or touch live money.",
       parameters: Type.Object(
         {
           strategy_id: Type.String({
@@ -90,7 +92,16 @@ export default defineToolPlugin({
             Type.Array(Type.String(), { description: "Indicator names the strategy uses." }),
           ),
           source_text: Type.Optional(
-            Type.String({ description: "Raw natural-language source describing the change." }),
+            Type.String({ description: "Complete repaired native-Python source, required whenever changing source." }),
+          ),
+          entry_function: Type.Optional(
+            Type.String({ description: "Updated run entrypoint or named Nautilus Strategy class." }),
+          ),
+          runtime_tag: Type.Optional(
+            Type.String({
+              enum: ["vbt", "nautilus"],
+              description: "vbt is research; nautilus requires a class-native deployable artifact.",
+            }),
           ),
           intent_brief: Type.Optional(
             Type.String({ description: "One or two sentences describing the intended change." }),

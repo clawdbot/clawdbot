@@ -25,24 +25,25 @@ describe("vctraderai-create-strategy", () => {
     });
   });
 
-  it("stages the proposal and wraps the descriptor with a review message", async () => {
-    const descriptor = { staged_id: "stg-1", tool_name: "create_strategy", status: "staged" };
+  it("creates directly through the guarded registry endpoint", async () => {
+    const descriptor = { strategy_id: "strategy-1", source_kind: "python_authored" };
     const fetchImpl = (async () =>
       new Response(JSON.stringify(descriptor), {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as typeof globalThis.fetch;
     const result = await runCreateStrategy(
-      { intent_brief: "trend-follow EURUSD", name: "Trendy" },
+      {
+        intent_brief: "trend-follow EURUSD",
+        name: "Trendy",
+        source_text: "def run(data, params=None, context=None):\n    return {}",
+      },
       { fetchImpl },
     );
-    expect(result).toMatchObject({
-      staged: descriptor,
-      message: "Staged a new strategy proposal. Review + Apply it in the chat.",
-    });
+    expect(result).toEqual(descriptor);
   });
 
-  it("posts to the stage path with the staging envelope", async () => {
+  it("posts authored source to the guarded registry path", async () => {
     let capturedUrl = "";
     let capturedMethod = "";
     let capturedBody: unknown = undefined;
@@ -54,17 +55,22 @@ describe("vctraderai-create-strategy", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     }) as typeof globalThis.fetch;
     await runCreateStrategy(
-      { intent_brief: "mean reversion", name: "MR", instruments: ["EUR_USD"] },
+      {
+        intent_brief: "mean reversion",
+        name: "MR",
+        instruments: ["EUR_USD"],
+        source_text: "def run(data, params=None, context=None):\n    return {}",
+      },
       { fetchImpl },
     );
     const parsed = new URL(capturedUrl);
-    expect(parsed.pathname).toBe("/api/v1/openclaw/stage");
+    expect(parsed.pathname).toBe("/api/v1/openclaw/registry/create-strategy");
     expect(capturedMethod).toBe("POST");
     expect(capturedBody).toMatchObject({
-      tool_name: "create_strategy",
-      workspace_id: "ws-001",
-      summary: "Create MR: mean reversion",
-      params: { intent_brief: "mean reversion", name: "MR", instruments: ["EUR_USD"] },
+      intent_brief: "mean reversion",
+      name: "MR",
+      instruments: ["EUR_USD"],
+      source_text: "def run(data, params=None, context=None):\n    return {}",
     });
   });
 
@@ -74,7 +80,12 @@ describe("vctraderai-create-strategy", () => {
         status: 500,
         statusText: "Internal Server Error",
       })) as typeof globalThis.fetch;
-    await expect(runCreateStrategy({ intent_brief: "x" }, { fetchImpl })).rejects.toMatchObject({
+    await expect(
+      runCreateStrategy(
+        { intent_brief: "x", source_text: "def run(data, params=None, context=None):\n    return {}" },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({
       name: "BffRequestError",
       detail: { code: "bff_500", status: 500 },
     });

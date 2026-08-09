@@ -701,6 +701,7 @@
       "version": "0.15.0",
       "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.15.0.tgz",
       "integrity": "sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==",
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "bin": {
         "codex-acp": "bin/codex-acp.js"
@@ -721,6 +722,7 @@
       "cpu": [
         "arm64"
       ],
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -737,6 +739,7 @@
       "cpu": [
         "x64"
       ],
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -753,6 +756,7 @@
       "cpu": [
         "arm64"
       ],
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -769,6 +773,7 @@
       "cpu": [
         "x64"
       ],
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -785,6 +790,7 @@
       "cpu": [
         "arm64"
       ],
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -801,6 +807,7 @@
       "cpu": [
         "x64"
       ],
+      "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
       "license": "Apache-2.0",
       "optional": true,
       "os": [
