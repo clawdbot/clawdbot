@@ -1432,6 +1432,88 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("preempts an abort-ignoring same-session deferred run on the normal inbound foreground path", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetDeferredMaintenanceHarnessState();
+        resetSystemEventsForTest();
+
+        // run-orchestrator.ts:189 (normal inbound admission, inside
+        // enqueueSession before enqueueGlobal/lease.begin()) and
+        // cli-runner.ts:818 (CLI next turn) both admit a foreground run through
+        // this same helper. Preempting here proves the production foreground
+        // path is covered, not only the manual /compact path
+        // (compact.queued.ts:271).
+        const sessionKey = "agent:main:session-inbound-preempt";
+        const otherSessionKey = "agent:main:session-inbound-preempt-other";
+
+        const wedged = createControlledMaintenance();
+        const wedgedEngine = createBackgroundContextEngine(wedged.maintain, {
+          id: "inbound-preempt-wedge",
+          name: "Inbound Preempt Wedge Engine",
+        });
+        const scheduled = await scheduleDeferredMaintenance({
+          contextEngine: wedgedEngine,
+          sessionId: "session-inbound-preempt",
+          sessionKey,
+          sessionFile: "/tmp/session-inbound-preempt.jsonl",
+          reason: "turn",
+        });
+        const wedgedParams = await wedged.started;
+
+        // A different session's in-flight run must stay untouched by a wait on S.
+        const other = createControlledMaintenance();
+        const otherEngine = createBackgroundContextEngine(other.maintain, {
+          id: "inbound-preempt-other",
+          name: "Inbound Preempt Other Engine",
+        });
+        const otherScheduled = await scheduleDeferredMaintenance({
+          contextEngine: otherEngine,
+          sessionId: "session-inbound-preempt-other",
+          sessionKey: otherSessionKey,
+          sessionFile: "/tmp/session-inbound-preempt-other.jsonl",
+          reason: "turn",
+        });
+        const otherParams = await other.started;
+
+        // The successor turn admits through the same helper the inbound path
+        // calls; the abort-ignoring wedge never yields, so the wait fails closed.
+        const foregroundWait = expect(
+          waitForDeferredTurnMaintenanceForSession(sessionKey),
+        ).rejects.toThrow("this turn was stopped to avoid overlapping engine operations");
+        await flushAsyncWork();
+
+        // preemptForForeground() fired against the S lane's run.
+        expect(wedgedParams.abortSignal?.aborted).toBe(true);
+        // The wait targeted only the S lane, so S2's run is not aborted.
+        expect(otherParams.abortSignal?.aborted).toBe(false);
+
+        // Bounded by the preempt grace: the wait settles instead of hanging on
+        // the maintenance run that ignores its abort signal.
+        await vi.advanceTimersByTimeAsync(1_001);
+        await foregroundWait;
+
+        expect(wedged.maintain).toHaveBeenCalledTimes(1);
+        expect(scheduled.isSettled()).toBe(false);
+        expect(otherScheduled.isSettled()).toBe(false);
+        expect(otherParams.abortSignal?.aborted).toBe(false);
+        const timedOutTask = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(timedOutTask?.status).toBe("timed_out");
+
+        // Drain both wedged runs so harness teardown stays clean.
+        wedged.release();
+        other.release();
+        await scheduled.completion;
+        await otherScheduled.completion;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("keeps fallback serialized behind a quarantined maintenance run", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
