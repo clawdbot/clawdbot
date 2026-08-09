@@ -6,7 +6,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
-import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-snapshots.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,

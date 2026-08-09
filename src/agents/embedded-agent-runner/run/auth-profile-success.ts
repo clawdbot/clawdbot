@@ -8,7 +8,7 @@ import { resolveProviderModelRoutes } from "../../../plugins/provider-model-rout
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { markAuthProfileSuccess } from "../../auth-profiles.js";
-import { recordRuntimeAuthMaterialization } from "../../auth-profiles/runtime-snapshots.js";
+import { recordRuntimeAuthMaterialization } from "../../auth-profiles/runtime-materializations.js";
 import {
   fingerprintAuthProfileOwnerShape,
   fingerprintAwsSdkRuntimeOwner,

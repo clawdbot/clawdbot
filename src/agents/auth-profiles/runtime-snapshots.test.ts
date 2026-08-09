@@ -6,17 +6,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  getPreparedRuntimeAuthMaterializations,
+  recordRuntimeAuthMaterialization,
+  revokeRuntimeAuthMaterializations,
+} from "./runtime-materializations.js";
+import {
   clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
-  getPreparedRuntimeAuthMaterializations,
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialsRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
-  recordRuntimeAuthMaterialization,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
-  revokeRuntimeAuthMaterializations,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { testing } from "./runtime-snapshots.test-support.js";

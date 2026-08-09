@@ -31,7 +31,7 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
-import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-snapshots.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {

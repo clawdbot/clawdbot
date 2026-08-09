@@ -5,7 +5,7 @@ import {
   markAuthProfileFailure,
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
-import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-snapshots.js";
+import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";

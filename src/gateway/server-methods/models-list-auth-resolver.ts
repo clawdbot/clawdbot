@@ -4,7 +4,7 @@ import {
   ensureAuthProfileStore,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../../agents/auth-profiles.js";
-import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-snapshots.js";
+import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,

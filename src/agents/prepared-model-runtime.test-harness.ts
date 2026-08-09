@@ -13,7 +13,7 @@ type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
   preparedAuthMaterializations:
-    [] as import("./auth-profiles/runtime-snapshots.js").RuntimeAuthMaterialization[],
+    [] as import("./auth-profiles/runtime-materializations.js").RuntimeAuthMaterialization[],
   authStorage: {
     getAll: vi.fn<() => AuthStorageData>(() => ({
       custom: { type: "api_key", key: "test-key" },
@@ -113,12 +113,9 @@ vi.mock("./agent-scope.js", () => ({
   }),
 }));
 
-vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+vi.mock("./auth-profiles/runtime-materializations.js", () => ({
   getPreparedRuntimeAuthMaterializations: () =>
     preparedModelRuntimeMocks.preparedAuthMaterializations,
-  getPreparedRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
-  getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
-  getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
   recordRuntimeAuthMaterialization: (params: {
     agentDir?: string;
     provider: string;
@@ -172,6 +169,12 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
     }
     return true;
   },
+}));
+
+vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+  getPreparedRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
+  getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
+  getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {

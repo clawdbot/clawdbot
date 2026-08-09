@@ -1,5 +1,5 @@
 /** Secret-free successful-auth facts owned by an immutable prepared model generation. */
-import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-snapshots.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const materializationsBySnapshot = new WeakMap<
