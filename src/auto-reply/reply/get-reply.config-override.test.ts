@@ -10,7 +10,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
-import { runWithPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -95,23 +95,21 @@ describe("getReplyFromConfig configOverride", () => {
     });
 
     const conflictingRuntime = createPreparedDispatchRuntime();
-    await runWithPreparedReplyDispatchRuntime(conflictingRuntime, () =>
-      getReplyFromConfig(
-        buildGetReplyCtx(),
-        undefined,
-        withFullRuntimeReplyConfig({
-          channels: {
-            telegram: {
-              botToken: "resolved-telegram-token",
-            },
+    await bindPreparedReplyDispatchRuntime(conflictingRuntime, getReplyFromConfig)(
+      buildGetReplyCtx(),
+      undefined,
+      withFullRuntimeReplyConfig({
+        channels: {
+          telegram: {
+            botToken: "resolved-telegram-token",
           },
-          agents: {
-            defaults: {
-              userTimezone: "America/New_York",
-            },
+        },
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
           },
-        } satisfies OpenClawConfig),
-      ),
+        },
+      } satisfies OpenClawConfig),
     );
 
     expect(loadConfigMock).not.toHaveBeenCalled();
@@ -130,9 +128,7 @@ describe("getReplyFromConfig configOverride", () => {
       throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
     });
 
-    await runWithPreparedReplyDispatchRuntime(preparedRuntime, () =>
-      getReplyFromConfig(buildGetReplyCtx()),
-    );
+    await bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx());
 
     expect(loadConfigMock).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
@@ -153,9 +149,7 @@ describe("getReplyFromConfig configOverride", () => {
     });
 
     await expect(
-      runWithPreparedReplyDispatchRuntime(preparedRuntime, () =>
-        getReplyFromConfig(buildGetReplyCtx()),
-      ),
+      bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx()),
     ).rejects.toThrow("reply model catalog owner changed from main to worker");
   });
 

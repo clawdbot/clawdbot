@@ -6,7 +6,7 @@ const preparedReplyDispatchRuntime = new AsyncLocalStorage<
 >();
 
 /** Keeps the configured Gateway generation request-scoped without widening the public resolver. */
-export function runWithPreparedReplyDispatchRuntime<T>(
+function runWithPreparedReplyDispatchRuntime<T>(
   runtime: PreparedReplyDispatchRuntime | undefined,
   run: () => T,
 ): T {
