@@ -644,7 +644,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       )
       .toEqual({
         detail:
-          "Sharing adds this tab to the OpenClaw group. The copilot can act here, but nowhere else.",
+          "Use the current access mode to allow OpenClaw here. Restricted and incognito tabs remain unavailable.",
         title: "Allow this tab",
       });
     expect(await alphaPanel.disabled("#message-input")).toBe(true);

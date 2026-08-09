@@ -848,7 +848,6 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
         { timeout: 10_000 },
       )
       .toContain("Connected");
-
     await evaluateToolbarPopup<void>(
       browserCdp,
       attached.sessionId,
@@ -860,6 +859,8 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
         new MutationObserver(() => { window.__openclawPopupRefreshes += 1; })
           .observe(relayValue, { childList: true });
         button.dataset.tabId = ${JSON.stringify(String(missingTabId))};
+        button.dataset.accessMode = "all";
+        button.dataset.grant = "false";
         button.classList.remove("hidden");
         button.disabled = false;
         button.click();
