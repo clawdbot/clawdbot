@@ -246,10 +246,14 @@ export async function deleteSessionsBatch(
   if (rows.length === 0) {
     return;
   }
-  if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
-    return;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+  });
+  // A reconnect or a replaced sessions capability can land while the modal is
+  // open, so the captured scope is revalidated before any delete leaves here.
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const requests = rows.map((row) => ({
@@ -607,14 +611,18 @@ export async function stopCloudWorker(
   scope: SidebarSessionMutationScope,
 ) {
   const stopAction = session.cloudWorkerStopAction;
-  if (
-    !stopAction ||
-    (stopAction.method === "sessions.reclaim" && session.hasActiveRun) ||
-    !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
-  ) {
+  // Reclaim during an active run is never offered, so decide that before the
+  // await; a run starting while the modal is open is left to the gateway, whose
+  // rejection is a recorded reason instead of a silently dropped confirmation.
+  if (!stopAction || (stopAction.method === "sessions.reclaim" && session.hasActiveRun)) {
     return;
   }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
+    danger: true,
+  });
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   if (!requireSessionMutationAccess(host, scope, stopAction)) {
@@ -648,10 +656,12 @@ export async function deleteSession(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
-  if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
-    return;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+  });
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
@@ -696,24 +706,29 @@ export async function deleteSession(
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-      } else if (
-        window.confirm(
-          t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
-        )
-      ) {
+      } else {
+        const removeWorktree = await showConfirmDialog({
+          message: t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          confirmLabel: t("common.remove"),
+          danger: true,
+        });
+        // Cancel needs this guard too: the delete already landed, so a scope
+        // retired while the modal was open must not drive the navigation below.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-        try {
-          await scope.client.request("worktrees.remove", {
-            id: preserved.id,
-            force: true,
-          });
-        } catch (error) {
-          host.sessionData.publishSessionMutationError(scope, error);
-        }
-        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return;
+        if (removeWorktree) {
+          try {
+            await scope.client.request("worktrees.remove", {
+              id: preserved.id,
+              force: true,
+            });
+          } catch (error) {
+            host.sessionData.publishSessionMutationError(scope, error);
+          }
+          if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+            return;
+          }
         }
       }
     }

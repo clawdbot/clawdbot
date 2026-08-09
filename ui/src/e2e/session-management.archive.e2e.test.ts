@@ -10,17 +10,14 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 async function confirmDelete(page: import("playwright").Page, proofName?: string) {
-  const dialog = page.locator("openclaw-modal-dialog").last();
-  const nativeDialog = dialog.locator("wa-dialog").locator("dialog");
-  await expect
-    .poll(() => nativeDialog.evaluate((element) => getComputedStyle(element).opacity))
-    .toBe("1");
+  const dialog = await waitForConfirmModal(page);
   if (proofName) {
     await captureUiProof(page, proofName);
   }

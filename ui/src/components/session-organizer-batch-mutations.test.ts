@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -6,16 +8,27 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import {
+  answerConfirmDialog,
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../test-helpers/modal-dialog.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import {
+  deleteSession,
+  deleteSessionsBatch,
+  stopCloudWorker,
+} from "./session-organizer-operations.runtime.ts";
 
 function sessionRow(index: number): SidebarRecentSession {
   return {
     key: `agent:main:batch-${index}`,
+    label: `Batch ${index}`,
     pinned: index === 0 || index === 100,
   } as SidebarRecentSession;
 }
@@ -70,16 +83,23 @@ function createHarness(
     },
   } as ApplicationGatewaySnapshot;
   const refreshReplacement = vi.fn(async () => undefined);
+  const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
+  const deleteOne = vi.fn(async () => ({ deleted: true }));
   const scope = {
     epoch: 1,
-    context: {},
+    context: { agents: { state: { agentsList: null } } },
     gateway: { snapshot },
-    sessions: { refreshReplacement } as unknown as SessionCapability,
+    sessions: {
+      refreshReplacement,
+      delete: deleteOne,
+      deleteMany,
+    } as unknown as SessionCapability,
     client,
     selectedAgentId: "main",
   } as SidebarSessionMutationScope;
   const publishSessionMutationError = vi.fn();
   const pruneSidebarSessionEntry = vi.fn();
+  const replaceCurrentSession = vi.fn();
   const host = {
     sessionData: {
       isSessionMutationScopeCurrent: vi.fn(() => current),
@@ -88,13 +108,21 @@ function createHarness(
     },
     sidebarSessionStatusFilter: () => "active",
     pruneSidebarSessionEntry,
+    replaceCurrentSession,
   } as unknown as SessionOrganizerControllerHost;
   return {
+    deleteMany,
+    deleteOne,
     host,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
     refreshReplacement,
+    replaceCurrentSession,
     request,
+    // Stands in for a reconnect or agent switch landing while a confirm is open.
+    retireScope: () => {
+      current = false;
+    },
     scope,
   };
 }
@@ -324,5 +352,128 @@ describe("patchSessionRows", () => {
       harness.scope,
       "This action requires operator.write access.",
     );
+  });
+});
+
+type OperationsHarness = ReturnType<typeof createHarness>;
+
+const destructiveHarness = {
+  methods: ["sessions.delete", "sessions.reclaim"],
+  scopes: ["operator.write", "operator.admin"],
+} as const;
+
+function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
+  return {
+    ...sessionRow(0),
+    hasActiveRun,
+    cloudWorkerStopAction: { method: "sessions.reclaim", requiredScope: "operator.admin" },
+  } as SidebarRecentSession;
+}
+
+const destructiveOperations = [
+  {
+    name: "batch delete",
+    run: (harness: OperationsHarness) =>
+      deleteSessionsBatch(harness.host, [sessionRow(0), sessionRow(1)], harness.scope),
+    mutation: (harness: OperationsHarness) => harness.deleteMany,
+  },
+  {
+    name: "session delete",
+    run: (harness: OperationsHarness) => deleteSession(harness.host, sessionRow(0), harness.scope),
+    mutation: (harness: OperationsHarness) => harness.deleteOne,
+  },
+  {
+    name: "cloud worker stop",
+    run: (harness: OperationsHarness) =>
+      stopCloudWorker(harness.host, cloudWorkerRow(false), harness.scope),
+    mutation: (harness: OperationsHarness) => harness.request,
+  },
+] as const;
+
+describe("session organizer destructive confirmations", () => {
+  let restoreDialogPolyfill: () => void;
+
+  beforeEach(() => {
+    restoreDialogPolyfill = installDialogPolyfill();
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    restoreDialogPolyfill();
+  });
+
+  it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
+    const harness = createHarness(destructiveHarness);
+    const rows = [sessionRow(0), sessionRow(1)];
+
+    const pending = deleteSessionsBatch(harness.host, rows, harness.scope);
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      "Delete 2 sessions and their transcripts?",
+    );
+    answerConfirmDialog(actions, "confirm");
+    await pending;
+
+    expect(harness.deleteMany).toHaveBeenCalledWith([
+      { key: rows[0]!.key, agentId: "main", deleteTranscript: true },
+      { key: rows[1]!.key, agentId: "main", deleteTranscript: true },
+    ]);
+  });
+
+  it.each(destructiveOperations)("sends no $name request when cancelled", async (operation) => {
+    const harness = createHarness(destructiveHarness);
+
+    const pending = operation.run(harness);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "cancel");
+    await pending;
+
+    expect(operation.mutation(harness)).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
+  });
+
+  it.each(destructiveOperations)(
+    "abandons the $name when the connection is replaced while its confirm is open",
+    async (operation) => {
+      const harness = createHarness(destructiveHarness);
+
+      const pending = operation.run(harness);
+      const actions = await waitForConfirmDialogActions();
+      harness.retireScope();
+      answerConfirmDialog(actions, "confirm");
+      await pending;
+
+      expect(operation.mutation(harness)).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a retired scope from navigating when the worktree prompt is cancelled", async () => {
+    const harness = createHarness({
+      ...destructiveHarness,
+      methods: [...destructiveHarness.methods, "worktrees.remove"],
+    });
+    harness.deleteOne.mockResolvedValueOnce({
+      deleted: true,
+      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+    } as never);
+    const active = { ...sessionRow(0), active: true } as SidebarRecentSession;
+
+    const pending = deleteSession(harness.host, active, harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    const worktreeActions = await waitForConfirmDialogActions();
+    harness.retireScope();
+    answerConfirmDialog(worktreeActions, "cancel");
+    await pending;
+
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.replaceCurrentSession).not.toHaveBeenCalled();
+  });
+
+  it("never opens the stop confirm for a reclaim target with an active run", async () => {
+    const harness = createHarness(destructiveHarness);
+
+    await stopCloudWorker(harness.host, cloudWorkerRow(true), harness.scope);
+
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(harness.request).not.toHaveBeenCalled();
   });
 });
