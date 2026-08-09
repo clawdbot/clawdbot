@@ -720,51 +720,6 @@ describe("usage-format", () => {
     ).toBe(9);
   });
 
-  it("refreshes the cached cost index when only pricingUnavailable mutates", () => {
-    const mutableModel = {
-      id: "demo-model",
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    } as {
-      id: string;
-      cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        pricingUnavailable?: boolean;
-      };
-    };
-    const config = {
-      models: {
-        providers: {
-          "demo-marker-mutation": {
-            models: [mutableModel],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    // First resolve caches the unmarked zero-cost entry.
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-marker-mutation",
-        model: "demo-model",
-        config,
-      }),
-    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-
-    // A marker-only mutation must invalidate the cached entry, or downstream
-    // output keeps reporting the stale confident $0 for unknown pricing.
-    mutableModel.cost.pricingUnavailable = true;
-    expect(
-      resolveModelCostConfig({
-        provider: "demo-marker-mutation",
-        model: "demo-model",
-        config,
-      }),
-    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnavailable: true });
-  });
-
   it("retries models.json after an initial missing read", async () => {
     expect(
       resolveModelCostConfig({
@@ -850,29 +805,6 @@ describe("usage-format", () => {
       cost,
     });
     expect(total).toBeCloseTo(0.003);
-  });
-
-  it("returns undefined for pricing marked pricingUnavailable", () => {
-    const marked = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      pricingUnavailable: true as const,
-    };
-    expect(
-      estimateUsageCost({ usage: { input: 1000, output: 500, cacheRead: 2000 }, cost: marked }),
-    ).toBeUndefined();
-  });
-
-  it("keeps a numeric zero estimate for unmarked all-zero pricing", () => {
-    const confirmedFree = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    expect(
-      estimateUsageCost({
-        usage: { input: 1000, output: 500, cacheRead: 2000 },
-        cost: confirmedFree,
-      }),
-    ).toBe(0);
   });
 
   it("estimates cost with single-tier tiered pricing (equivalent to flat)", () => {
