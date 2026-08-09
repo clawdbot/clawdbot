@@ -2,8 +2,10 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getOptionalTelegramRuntime } from "./runtime.js";
-import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import {
+  fingerprintTelegramBotToken,
+  resolveTelegramBotUserIdFromToken,
+} from "./token-fingerprint.js";
 
 const TELEGRAM_MENU_LOCALE_LEDGER_VERSION = 1;
 const TELEGRAM_MENU_LOCALE_LEDGER_NAMESPACE = "telegram.command-menu-locales";
