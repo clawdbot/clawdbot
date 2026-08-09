@@ -1,4 +1,4 @@
-import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 
 function completedBeforeOrAtTimeout(params: {
   completed: AgentRunTerminalOutcome;

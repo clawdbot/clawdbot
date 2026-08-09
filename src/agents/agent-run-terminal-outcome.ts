@@ -6,6 +6,11 @@ import {
   isAbandonedLivenessState,
   isBlockedLivenessState,
 } from "../shared/agent-liveness.js";
+import type {
+  AgentRunTerminalOutcome,
+  AgentRunTerminalReason,
+  AgentRunWaitStatus,
+} from "./agent-run-terminal-outcome.types.js";
 import {
   AGENT_RUN_ABORTED_ERROR,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -21,8 +26,7 @@ import {
   type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
 
-/** Wait status reported by agent run terminal wait paths. */
-type AgentRunWaitStatus = "ok" | "error" | "timeout";
+export type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 
 export type AgentRunAttemptFailureSource =
   | "prompt"
@@ -415,23 +419,10 @@ const AGENT_RUN_TERMINAL_CLASSIFICATION = {
   blocked: "failure",
   abandoned: "failure",
   failed: "failure",
-} as const;
-
-/** Normalized terminal reason for an agent run. */
-type AgentRunTerminalReason = keyof typeof AGENT_RUN_TERMINAL_CLASSIFICATION;
-
-/** Normalized terminal outcome for an agent run. */
-export type AgentRunTerminalOutcome = {
-  reason: AgentRunTerminalReason;
-  status: AgentRunWaitStatus;
-  error?: string;
-  stopReason?: string;
-  livenessState?: string;
-  timeoutPhase?: AgentRunTimeoutPhase;
-  providerStarted?: boolean;
-  startedAt?: number;
-  endedAt?: number;
-};
+} as const satisfies Record<
+  AgentRunTerminalReason,
+  "success" | "timeout" | "cancellation" | "failure"
+>;
 
 export { mergeAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
 
