@@ -25,6 +25,7 @@ import {
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import {
+  clearDiagnostics,
   metadataIsEmpty,
   normalizeEvents,
   normalizeOptionalString,
@@ -560,6 +561,20 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
     );
   }
   return diagnostics;
+}
+
+const PROOF_DIAGNOSTIC_KINDS = [
+  "missing_proof",
+  "stale_proof",
+  "contradictory_proof",
+] as const satisfies readonly WorkboardDiagnosticKind[];
+
+export function clearResolvedProofDiagnostics(card: WorkboardCard, now: number): WorkboardMetadata {
+  const activeKinds = new Set(computeCardDiagnostics(card, now).map((entry) => entry.kind));
+  return clearDiagnostics(
+    card.metadata,
+    PROOF_DIAGNOSTIC_KINDS.filter((kind) => !activeKinds.has(kind)),
+  );
 }
 
 export function capText(value: string | undefined, max: number): string | undefined {

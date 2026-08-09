@@ -18,6 +18,7 @@ import {
   cardParentIds,
   cardRunId,
   cardSessionKey,
+  clearResolvedProofDiagnostics,
   closeRunningAttempts,
   retryBudgetExhausted,
 } from "./store-card-helpers.js";
@@ -47,7 +48,6 @@ import type {
 import {
   appendCompletionProof,
   clearDiagnostics,
-  clearProofDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,
   normalizeAutomation,
@@ -279,22 +279,39 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     if (proofId && !proofInput) {
       throw new Error("proof is required when proofId is provided.");
     }
-    const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
+    const pendingProof = proofId
+      ? existing.metadata?.proof?.find((entry) => entry.id === proofId)
+      : undefined;
+    const proof = proofInput
+      ? normalizeProofInput(proofInput, now, pendingProof?.verification)
+      : undefined;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
           .map((artifact) => normalizeArtifact({ ...artifact, createdAt: now }))
           .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
+    const completedProof = proof
+      ? appendCompletionProof(existing.metadata?.proof, proof, proofId)
+      : existing.metadata?.proof;
+    const evidenceMetadata = {
+      ...existing.metadata,
+      proof: completedProof,
+      artifacts: artifacts.length
+        ? [...(existing.metadata?.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
+        : existing.metadata?.artifacts,
+    };
     const hasCompletionEvidence = Boolean(
-      proof ||
+      completedProof?.length ||
       artifacts.length ||
-      existing.metadata?.proof?.length ||
       existing.metadata?.artifacts?.length ||
       existing.metadata?.attachments?.length,
     );
     const metadata = proof
-      ? clearProofDiagnostics(existing.metadata)
+      ? clearResolvedProofDiagnostics(
+          { ...existing, status: completionStatus, metadata: evidenceMetadata },
+          now,
+        )
       : hasCompletionEvidence
         ? clearDiagnostics(existing.metadata, ["missing_proof"])
         : (existing.metadata ?? {});
@@ -335,10 +352,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: proof ? appendCompletionProof(metadata.proof, proof, proofId) : metadata.proof,
-          artifacts: artifacts.length
-            ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
-            : metadata.artifacts,
+          proof: completedProof,
+          artifacts: evidenceMetadata.artifacts,
           notifications: [...(metadata.notifications ?? []), notification].slice(
             -MAX_CARD_NOTIFICATIONS,
           ),

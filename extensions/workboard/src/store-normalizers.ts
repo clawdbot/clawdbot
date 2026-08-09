@@ -987,7 +987,11 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   };
 }
 
-export function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
+export function normalizeProofInput(
+  input: WorkboardProofInput,
+  now: number,
+  fallbackVerification: WorkboardProofVerification = "worker_reported",
+): WorkboardProof {
   const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
   const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
   const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
@@ -995,7 +999,7 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   return {
     id: randomUUID(),
     status: normalizeProofStatus(input.status, "unknown"),
-    verification: normalizeProofVerification(input.verification, "worker_reported"),
+    verification: normalizeProofVerification(input.verification, fallbackVerification),
     createdAt: now,
     ...(label ? { label } : {}),
     ...(command ? { command } : {}),

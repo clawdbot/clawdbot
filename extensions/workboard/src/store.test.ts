@@ -413,7 +413,7 @@ describe("WorkboardStore", () => {
               "SELECT name, \"notnull\" AS notnull_value, dflt_value FROM pragma_table_info('workboard_card_proof') WHERE name = 'verification'",
             )
             .get(),
-        ).toEqual({ name: "verification", notnull_value: 1, dflt_value: "'worker_reported'" });
+        ).toEqual({ name: "verification", notnull_value: 0, dflt_value: null });
         expect(
           migrated
             .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
@@ -1155,6 +1155,55 @@ describe("WorkboardStore", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("preserves pending proof verification when completion omits it", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Preserve verifier provenance", status: "running" });
+    const pending = await store.addProof(card.id, {
+      status: "unknown",
+      verification: "independently_verified",
+      command: "pnpm test extensions/workboard",
+    });
+    const pendingProof = pending.metadata?.proof?.at(-1);
+
+    const completed = await store.complete(card.id, {
+      proofId: pendingProof?.id,
+      proof: { status: "passed", command: pendingProof?.command },
+    });
+
+    expect(completed.metadata?.proof).toEqual([
+      { ...pendingProof, status: "passed", verification: "independently_verified" },
+    ]);
+  });
+
+  it("rejects an explicit verification rewrite for a correlated proof", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Reject verifier rewrite",
+      metadata: {
+        proof: [
+          {
+            id: "proof-independent",
+            status: "unknown",
+            verification: "independently_verified",
+            command: "pnpm test extensions/workboard",
+            createdAt: 1_000,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      store.complete(card.id, {
+        proofId: "proof-independent",
+        proof: {
+          status: "passed",
+          verification: "worker_reported",
+          command: "pnpm test extensions/workboard",
+        },
+      }),
+    ).rejects.toThrow("completion proof does not match pending proof: proof-independent");
   });
 
   it("retains the correlated proof when metadata budget trimming is required", async () => {
@@ -2618,6 +2667,35 @@ describe("WorkboardStore", () => {
       label: "Current CI",
     });
     expect(updated.metadata?.diagnostics).toBeUndefined();
+  });
+
+  it("retains a contradictory-proof diagnostic when new proof still fails", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Still contradictory",
+      status: "done",
+      metadata: {
+        proof: [{ id: "failed-proof", status: "failed", createdAt: 1 }],
+        diagnostics: [
+          {
+            kind: "contradictory_proof",
+            severity: "error",
+            title: "Done card has failed proof",
+            detail: "The latest proof failed.",
+            firstSeenAt: 1,
+            lastSeenAt: 1,
+            count: 1,
+            actions: [{ kind: "add_proof", label: "Add resolving proof" }],
+          },
+        ],
+      },
+    });
+
+    const updated = await store.addProof(card.id, { status: "failed", label: "Still failing" });
+
+    expect(updated.metadata?.diagnostics).toEqual([
+      expect.objectContaining({ kind: "contradictory_proof" }),
+    ]);
   });
 
   it("does not clear a missing-proof diagnostic when completion adds no evidence", async () => {

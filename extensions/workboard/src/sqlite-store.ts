@@ -254,7 +254,7 @@ const WORKBOARD_SCHEMA_SQL = `
       card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
       ordinal INTEGER NOT NULL,
       status TEXT NOT NULL,
-      verification TEXT NOT NULL DEFAULT 'worker_reported',
+      verification TEXT,
       label TEXT,
       command TEXT,
       url TEXT,
@@ -360,12 +360,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
   );
-  ensureColumn(
-    db,
-    "workboard_card_proof",
-    "verification",
-    "verification TEXT NOT NULL DEFAULT 'worker_reported'",
-  );
+  ensureColumn(db, "workboard_card_proof", "verification", "verification TEXT");
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")

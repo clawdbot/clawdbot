@@ -172,7 +172,10 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       t("workboard.badgeLinks", { count: String(links.length) }),
       detailValues(links, "type", "title", "targetCardId", "url"),
     ],
-    [t("workboard.detailProof"), detailValues(proof, "status", "label", "command", "url", "note")],
+    [
+      t("workboard.detailProof"),
+      detailValues(proof, "status", "verification", "label", "command", "url", "note"),
+    ],
     [
       t("workboard.badgeArtifacts", { count: String(artifacts.length) }),
       detailValues(artifacts, "label", "url", "path", "mimeType"),

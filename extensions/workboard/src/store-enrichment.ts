@@ -11,6 +11,7 @@ import {
   capText,
   cardRunId,
   cardSessionKey,
+  clearResolvedProofDiagnostics,
   closeRunningAttempts,
 } from "./store-card-helpers.js";
 import {
@@ -31,7 +32,6 @@ import type {
 } from "./store-inputs.js";
 import {
   clearDiagnostics,
-  clearProofDiagnostics,
   normalizeArtifact,
   normalizeAttachmentInput,
   normalizeBoundedString,
@@ -50,11 +50,11 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       id,
       (existing) => {
         assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearProofDiagnostics(existing.metadata);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+        const metadata = {
+          ...existing.metadata,
+          proof: [...(existing.metadata?.proof ?? []), proof].slice(-MAX_CARD_PROOF),
         };
+        return clearResolvedProofDiagnostics({ ...existing, metadata }, now);
       },
       { preserveProofId: proof.id },
     );
@@ -76,12 +76,12 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       id,
       (existing) => {
         assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearProofDiagnostics(existing.metadata);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-          artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+        const metadata = {
+          ...existing.metadata,
+          proof: [...(existing.metadata?.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+          artifacts: [...(existing.metadata?.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
         };
+        return clearResolvedProofDiagnostics({ ...existing, metadata }, now);
       },
       { preserveProofId: proof.id },
     );

@@ -148,8 +148,11 @@ including an intentional handoff. If work moves to another session, release or
 reclaim the old lease before continuing.
 
 Use `status=review` when completing work that is awaiting acceptance, and use
-`blocked` for approval, dependency, or execution blockers. Use `done` only after
-acceptance and attach formal proof, an artifact, or an attachment. Keep
+`blocked` for approval, dependency, or execution blockers. An operator may
+manually accept a card as `done` without attached evidence; when proof, an
+artifact, or an attachment is available, add it so the acceptance remains
+auditable. A completed or review card without evidence stays in its accepted
+state and surfaces a non-gating missing-proof diagnostic. Keep
 long-horizon commitments in the system's durable planning record, and keep
 inactive Workboard cards unassigned in `backlog`/`todo` rather than claiming them
 early.

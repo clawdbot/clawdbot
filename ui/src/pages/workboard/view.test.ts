@@ -2026,6 +2026,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
     expect(container.querySelector(".workboard-detail")?.textContent).not.toContain("pnpm test 1");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("worker_reported");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "https://example.com/proof-7",
     );
