@@ -373,8 +373,8 @@ describe("doctor contract registry load-path plugins", () => {
   ])(
     "migrates real $pluginId state through a released external setup-entry contract",
     async ({ pluginId, namespace, sourceFile, stateKey, state }) => {
-      const stateDir = makeTempDir();
-      const pluginRoot = makeTempDir();
+      const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+      const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
       writeLegacyChannelMigrationPlugin({ pluginRoot, pluginId, namespace, sourceFile, stateKey });
       const bundledPluginsDir = path.join(stateDir, "bundled");
       const shadowedBundledRoot = path.join(bundledPluginsDir, pluginId);
@@ -432,8 +432,8 @@ describe("doctor contract registry load-path plugins", () => {
   );
 
   it("reloads a selected legacy setup entry after the plugin metadata lifecycle clears", async () => {
-    const stateDir = makeTempDir();
-    const pluginRoot = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "legacy-refresh";
     const sourceFile = "refresh.json";
     const config = createDoctorPluginConfig(pluginRoot, pluginId);

@@ -32,7 +32,7 @@ describe("archive compression", () => {
     if (encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
       return;
     }
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-archive-zstd-");
     const archivePath = path.join(dir, `removed.jsonl.deleted.2026-07-11${encoded.suffix}`);
     fs.writeFileSync(archivePath, encoded.bytes);
     const cachePath = materializeSessionArchiveForRead(archivePath);
