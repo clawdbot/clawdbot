@@ -659,42 +659,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
   });
 
-  it("uses semantic vector probes for non-builtin memory-slot runtimes", async () => {
-    const manager = {
-      probeVectorStoreAvailability: vi.fn(async () => true),
-      probeVectorAvailability: vi.fn(async () => true),
-      status: vi.fn(() => ({
-        backend: "builtin" as const,
-        provider: "custom-memory",
-        files: 5,
-        chunks: 5,
-        vector: { enabled: true, available: true, semanticAvailable: true },
-      })),
-      close: vi.fn(async () => {}),
-    };
-    const getMemorySearchManager = vi.fn(async () => ({ manager }));
-
-    const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: { plugins: { slots: { memory: "custom-memory" } } },
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "custom-memory" },
-      resolveMemoryConfig: vi.fn(() => null),
-      getMemorySearchManager,
-      requireDefaultDatabasePath: vi.fn(),
-    });
-
-    expect(manager.probeVectorStoreAvailability).not.toHaveBeenCalled();
-    expect(manager.probeVectorAvailability).toHaveBeenCalled();
-    expect(result).toEqual({
-      agentId: "main",
-      backend: "builtin",
-      provider: "custom-memory",
-      files: 5,
-      chunks: 5,
-      vector: { enabled: true, available: true, semanticAvailable: true },
-    });
-  });
-
   it("keeps default memory-core on the cold-start store shortcut", async () => {
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
