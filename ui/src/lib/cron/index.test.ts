@@ -1739,7 +1739,7 @@ describe("cron controller", () => {
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "ping" },
             },
-          ],
+          ] as unknown as CronJob[],
           { snapshotRevision: "malformed-job-page" },
         );
       }
