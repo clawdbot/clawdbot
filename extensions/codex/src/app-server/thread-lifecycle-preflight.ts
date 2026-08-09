@@ -149,6 +149,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroActive,
     ringZeroClientInstanceId,
     ringZeroConfigFingerprint,
+    restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     userMcpServersConfigPatch,
     userMcpServersFingerprint,

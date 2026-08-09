@@ -40,6 +40,17 @@ function startOrResumeThread(
   });
 }
 
+function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
+  };
+}
+
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
 >[0]["appServer"] {
@@ -1153,7 +1164,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         return threadStartResult("thread-ring-zero-1");
       }
       if (method === "mcpServerStatus/list") {
-        return { data: [], nextCursor: null };
+        return {
+          data: [
+            disabledMcpServerStatus("arbitrary.server"),
+            disabledMcpServerStatus("local helper"),
+          ],
+          nextCursor: null,
+        };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1240,7 +1257,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
         return threadStartResult(`thread-message-only-${nextThread++}`);
       }
       if (method === "mcpServerStatus/list") {
-        return { data: [], nextCursor: null };
+        return {
+          data: [
+            disabledMcpServerStatus("arbitrary.server"),
+            disabledMcpServerStatus("local helper"),
+            disabledMcpServerStatus("request-only"),
+          ],
+          nextCursor: null,
+        };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1357,7 +1381,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     for (const threadId of ["thread-message-only-1", "thread-message-only-2"]) {
       expect(request).toHaveBeenCalledWith(
         "mcpServerStatus/list",
-        { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+        { threadId, detail: "toolsAndAuthOnly" },
         expect.anything(),
       );
     }

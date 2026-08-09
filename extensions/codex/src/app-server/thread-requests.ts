@@ -556,14 +556,28 @@ export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
   }
 }
 
-export async function attestCodexRestrictedToolSurfaceHasNoMcpServers(
+export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
   client: Pick<CodexAppServerClient, "request">,
   threadId: string,
+  threadConfig: JsonObject | undefined,
   signal?: AbortSignal,
 ): Promise<void> {
+  const configuredServers = threadConfig?.mcp_servers;
+  if (configuredServers !== undefined && !isJsonObject(configuredServers)) {
+    throw new Error("Codex restricted-tool-surface thread config has invalid mcp_servers");
+  }
+  // Codex reports configured-but-disabled servers as inactive status rows.
+  // Match those rows to the exact per-thread deny patch instead of requiring an empty inventory.
+  const expectedDisabledServerNames = new Set<string>();
+  for (const [name, serverConfig] of Object.entries(configuredServers ?? {})) {
+    if (!isJsonObject(serverConfig) || serverConfig.enabled !== false) {
+      throw new Error(`Codex restricted-tool-surface MCP server ${name} is not disabled`);
+    }
+    expectedDisabledServerNames.add(name);
+  }
   const response = await client.request(
     "mcpServerStatus/list",
-    { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+    { threadId, detail: "toolsAndAuthOnly" },
     { signal },
   );
   if (!isJsonObject(response) || !Array.isArray(response.data)) {
@@ -571,11 +585,32 @@ export async function attestCodexRestrictedToolSurfaceHasNoMcpServers(
       "Codex mcpServerStatus/list returned an invalid restricted-tool-surface attestation",
     );
   }
-  if (response.data.length > 0) {
-    const first = response.data[0];
-    const serverName =
-      isJsonObject(first) && typeof first.name === "string" ? first.name : "unknown";
-    throw new Error(`Codex restricted-tool-surface MCP attestation found server ${serverName}`);
+  for (const status of response.data) {
+    if (!isJsonObject(status) || typeof status.name !== "string" || !isJsonObject(status.tools)) {
+      throw new Error(
+        "Codex mcpServerStatus/list returned an invalid restricted-tool-surface server",
+      );
+    }
+    if (!expectedDisabledServerNames.has(status.name)) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation found unexpected server ${status.name}`,
+      );
+    }
+    if (!Object.hasOwn(status, "serverInfo")) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation returned malformed server ${status.name}`,
+      );
+    }
+    if (status.serverInfo !== null) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation found active server ${status.name}`,
+      );
+    }
+    if (Object.keys(status.tools).length > 0) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation found tools for server ${status.name}`,
+      );
+    }
   }
   if (response.nextCursor !== undefined && response.nextCursor !== null) {
     throw new Error("Codex mcpServerStatus/list returned an invalid empty-page cursor");

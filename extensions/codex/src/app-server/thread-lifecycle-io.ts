@@ -55,7 +55,7 @@ import {
   resolveCodexAppServerThreadModelSelection,
 } from "./thread-model-selection.js";
 import {
-  attestCodexRestrictedToolSurfaceHasNoMcpServers,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildThreadResumeParams,
   buildThreadStartParams,
 } from "./thread-requests.js";
@@ -233,9 +233,10 @@ export async function resumeExistingCodexThread(
     ) {
       try {
         await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-          attestCodexRestrictedToolSurfaceHasNoMcpServers(
+          attestCodexRestrictedToolSurfaceMcpServersDisabled(
             params.client,
             response.thread.id,
+            resumeParams.config,
             params.signal,
           ),
         );
@@ -520,9 +521,10 @@ export async function startFreshCodexThread(
   ) {
     try {
       await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-        attestCodexRestrictedToolSurfaceHasNoMcpServers(
+        attestCodexRestrictedToolSurfaceMcpServersDisabled(
           params.client,
           response.thread.id,
+          startParams.config,
           params.signal,
         ),
       );
