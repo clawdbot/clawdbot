@@ -5,13 +5,13 @@ import { pathToFileURL } from "node:url";
 import {
   createQaBusState,
   createQaChannelTransport,
+  createStaticSshWorkerProvider,
   QA_EVIDENCE_FILENAME,
   startQaBusServer,
   startQaGatewayChild,
   startQaMockOpenAiServer,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
-import { createStaticSshWorkerProvider } from "../../../../extensions/qa-lab/src/static-ssh-worker-provider.js";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createWorkerSessionPlacementStore } from "../../../../src/gateway/worker-environments/placement-store.js";
 import {
