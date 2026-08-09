@@ -27,6 +27,19 @@ type SlackEventScopeResolution =
         | "missing_listener_client";
     };
 
+export function resolveSlackListenerEventScope(
+  params: Parameters<typeof resolveSlackEventScope>[0] & {
+    onDrop?: (reason: Extract<SlackEventScopeResolution, { ok: false }>["reason"]) => void;
+  },
+): SlackEventScope | null | undefined {
+  const resolved = resolveSlackEventScope(params);
+  if (!resolved.ok) {
+    params.onDrop?.(resolved.reason);
+    return null;
+  }
+  return resolved.scope;
+}
+
 export function resolveSlackEventScope(params: {
   identity: SlackInstallationIdentity;
   body: unknown;

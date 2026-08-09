@@ -1,5 +1,5 @@
 // Slack plugin module implements context behavior.
-import type { AllMiddlewareArgs, App } from "@slack/bolt";
+import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -28,7 +28,7 @@ import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
-import { resolveSlackEventScope, type SlackEventScope } from "./event-scope.js";
+import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import {
@@ -157,11 +157,6 @@ export type SlackMonitorContext = {
 
   logger: ReturnType<typeof getChildLogger>;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
-  resolveEventScope: (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) => SlackEventScope | null | undefined;
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
     channelType?: string | null;
@@ -698,20 +693,6 @@ export function createSlackMonitorContext(params: {
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
     shouldDropMismatchedSlackEvent,
-    resolveEventScope: (args) => {
-      const resolved = resolveSlackEventScope({
-        identity: params.installationIdentity,
-        body: args.body,
-        context: args.context,
-        client: args.client,
-        clientOptions: params.app.webClientOptions,
-      });
-      if (!resolved.ok) {
-        logVerbose(`slack: drop event (${resolved.reason})`);
-        return null;
-      }
-      return resolved.scope;
-    },
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,
     resolveChannelName,

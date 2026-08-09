@@ -42,7 +42,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import type { SlackEventScope } from "../event-scope.js";
+import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -1076,7 +1076,14 @@ async function handleSlackBlockAction(params: {
 }): Promise<void> {
   const { ack, body, action, respond } = params.args;
   await ack();
-  const eventScope = params.ctx.resolveEventScope(params.args);
+  const eventScope = resolveSlackListenerEventScope({
+    identity: params.ctx.installationIdentity,
+    body,
+    context: params.args.context,
+    client: params.args.client,
+    clientOptions: params.ctx.app.webClientOptions,
+    onDrop: (reason) => params.ctx.runtime.log?.(`slack:interaction drop action ${reason}`),
+  });
   if (eventScope === null) {
     return;
   }

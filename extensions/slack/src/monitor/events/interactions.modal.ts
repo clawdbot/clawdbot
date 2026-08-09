@@ -7,7 +7,7 @@ import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import type { SlackEventScope } from "../event-scope.js";
+import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 type SlackModalBody = {
@@ -477,7 +477,15 @@ export function registerModalLifecycleHandler(params: {
       return;
     }
     await ack();
-    const eventScope = params.ctx.resolveEventScope(args);
+    const eventScope = resolveSlackListenerEventScope({
+      identity: params.ctx.installationIdentity,
+      body,
+      context: args.context,
+      client: args.client,
+      clientOptions: params.ctx.app.webClientOptions,
+      onDrop: (reason) =>
+        params.ctx.runtime.log?.(`slack:interaction drop ${params.interactionType} ${reason}`),
+    });
     if (eventScope === null) {
       return;
     }

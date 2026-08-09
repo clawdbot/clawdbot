@@ -359,18 +359,6 @@ function createContext(overrides?: {
     kind: "workspace" as const,
     teamId: "T_TEST",
   };
-  const resolveEventScope = vi.fn(
-    (args: { context?: { teamId?: string }; client?: typeof app.client }) => {
-      if (installationIdentity.kind !== "enterprise") {
-        return undefined;
-      }
-      const teamId = args.context?.teamId;
-      if (!teamId) {
-        return null;
-      }
-      return { teamId, client: args.client ?? app.client };
-    },
-  );
   const ctx = {
     app,
     accountId: "default",
@@ -397,7 +385,6 @@ function createContext(overrides?: {
     defaultRequireMention: true,
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
-    resolveEventScope,
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,

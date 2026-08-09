@@ -10,6 +10,7 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
+import { resolveSlackListenerEventScope } from "../event-scope.js";
 
 type SlackShortcutBody = GlobalShortcut | MessageShortcut;
 type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs &
@@ -28,7 +29,14 @@ async function handleSlackShortcut(params: {
 }): Promise<void> {
   const { ack, body } = params.args;
   await ack();
-  const eventScope = params.ctx.resolveEventScope(params.args);
+  const eventScope = resolveSlackListenerEventScope({
+    identity: params.ctx.installationIdentity,
+    body,
+    context: params.args.context,
+    client: params.args.client,
+    clientOptions: params.ctx.app.webClientOptions,
+    onDrop: (reason) => params.ctx.runtime.log?.(`slack:interaction drop shortcut ${reason}`),
+  });
   if (eventScope === null) {
     return;
   }
