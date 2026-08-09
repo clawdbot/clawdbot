@@ -300,8 +300,8 @@ describe("createAcpxRuntimeService", () => {
     delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
-    const probeStarted = createDeferred();
-    const releaseProbe = createDeferred();
+    const probeStarted = createDeferred<void>();
+    const releaseProbe = createDeferred<void>();
     const events: string[] = [];
     const runtime = createMockRuntime({
       probeAvailability: vi.fn(async () => {
