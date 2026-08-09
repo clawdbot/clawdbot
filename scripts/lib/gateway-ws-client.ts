@@ -1,7 +1,7 @@
 // Gateway Ws Client script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket from "ws";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 
 type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
 type GatewayResFrame = {
