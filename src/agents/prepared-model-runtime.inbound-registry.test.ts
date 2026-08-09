@@ -168,6 +168,10 @@ describe("prepared reply dispatch runtime", () => {
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
     dynamicLease.release();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(3);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[2]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/dynamic-auth-workspace",
+      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+    });
     const registryCallsBeforeAuth = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
     const authStorageCallsBeforeAuth = mocks.discoverAuthStorage.mock.calls.length;
     const modelCallsBeforeAuth = mocks.discoverModels.mock.calls.length;
@@ -225,10 +229,10 @@ describe("prepared reply dispatch runtime", () => {
       affectsInheritedStores: false,
     });
 
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
-      defaultRuntime,
-    );
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
+    const defaultRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const workerRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+    await expect(defaultRead).resolves.toBe(defaultRuntime);
+    await expect(workerRead).rejects.toThrow(
       "prepared reply dispatch runtime owner was not published for worker",
     );
 
