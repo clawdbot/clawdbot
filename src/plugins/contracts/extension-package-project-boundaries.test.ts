@@ -45,6 +45,8 @@ type PackageJson = {
   devDependencies?: Record<string, string>;
 };
 const MEMORY_HOST_SDK_EXPORTS = [
+  "./authorization",
+  "./authorization-conformance",
   "./engine-embeddings",
   "./engine-foundation",
   "./engine-sessions",

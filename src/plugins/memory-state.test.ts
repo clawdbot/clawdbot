@@ -1,9 +1,12 @@
 // Covers plugin-backed memory state registration and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+  LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+} from "../plugin-sdk/memory-authorization.js";
+import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
-  getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
@@ -14,6 +17,7 @@ import {
   registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
   registerTestMemoryPromptBuilder,
+  resolveMemoryCapabilityRegistration,
   resolveMemoryFlushPlan,
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
@@ -235,44 +239,75 @@ describe("memory plugin state", () => {
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([]);
   });
 
-  it("preserves sidecar runtime fields when a memory plugin adds public artifacts only", async () => {
+  it("keeps selected core authorization when an artifact sidecar registers later", () => {
     const runtime = createMemoryRuntime();
     const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
+    const publicArtifacts = { listArtifacts: async () => [] };
 
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver,
-      runtime,
-    });
-    registerMemoryCapability("memory-lancedb", {
-      publicArtifacts: {
-        async listArtifacts() {
-          return [
-            {
-              kind: "memory-root",
-              workspaceDir: "/tmp/workspace",
-              relativePath: "MEMORY.md",
-              absolutePath: "/tmp/workspace/MEMORY.md",
-              agentIds: ["main"],
-              contentType: "markdown" as const,
+    expect(
+      resolveMemoryCapabilityRegistration(
+        [
+          {
+            pluginId: "memory-core",
+            capability: {
+              authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+              flushPlanResolver,
+              runtime,
             },
-          ];
-        },
+          },
+          {
+            pluginId: "memory-lancedb",
+            capability: {
+              authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+              publicArtifacts,
+            },
+          },
+        ],
+        "memory-core",
+      ),
+    ).toEqual({
+      pluginId: "memory-core",
+      capability: {
+        authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+        flushPlanResolver,
+        runtime,
+        publicArtifacts,
       },
     });
+  });
 
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
-    expect(getMemoryRuntime()).toBe(runtime);
-    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/workspace",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/workspace/MEMORY.md",
-        agentIds: ["main"],
-        contentType: "markdown",
+  it("keeps runtime-less selected LanceDB authorization while inheriting the core sidecar runtime", () => {
+    const runtime = createMemoryRuntime();
+    const publicArtifacts = { listArtifacts: async () => [] };
+
+    expect(
+      resolveMemoryCapabilityRegistration(
+        [
+          {
+            pluginId: "memory-core",
+            capability: {
+              authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+              runtime,
+            },
+          },
+          {
+            pluginId: "memory-lancedb",
+            capability: {
+              authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+              publicArtifacts,
+            },
+          },
+        ],
+        "memory-lancedb",
+      ),
+    ).toEqual({
+      pluginId: "memory-lancedb",
+      capability: {
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+        runtime,
+        publicArtifacts,
       },
-    ]);
+    });
   });
 
   it("preserves runtime fields when the same plugin adds public artifacts", () => {

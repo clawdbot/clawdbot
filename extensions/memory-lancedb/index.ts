@@ -47,6 +47,7 @@ import {
   resolveAutoCaptureStartIndex,
   shouldCapture,
 } from "./memory-policy.js";
+import { LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-host-core"),
@@ -186,6 +187,7 @@ export default definePluginEntry({
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
     api.registerMemoryCapability?.({
+      authorization: LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES,
       publicArtifacts: {
         async listArtifacts(params) {
           const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();

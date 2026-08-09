@@ -190,7 +190,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (realtime-voice-activation is private-local and not counted here).
       // +1: registry-bound plugin command planning and exact selected execution.
       // +1: canonical Computer Use wire contract and node-host provider seam.
-      145,
+      // +2: versioned multiplayer-memory authorization contract and conformance suite.
+      147,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -274,7 +275,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
       // +11: Computer Use schemas/types plus parsers, compiler, and provider registration.
-      4317,
+      // +56: versioned serializable memory-authorization contract and reusable backend-conformance
+      //      types, capability declarations, and helpers.
+      4373,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -344,7 +347,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
       // +4: Computer Use wire parsers, validator compiler, and provider registration.
-      2574,
+      // +6: capability-declaration validators and pure backend-conformance helpers.
+      2580,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -368,7 +372,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
-      50,
+      // +2: focused authorization-contract and conformance facades.
+      52,
       env,
     ),
   };

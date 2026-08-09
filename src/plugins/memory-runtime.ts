@@ -6,7 +6,7 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
 import {
   getMemoryRuntime,
-  resolveMemoryCapabilityRegistration,
+  resolveSelectedMemoryCapabilityRegistration,
   setStandaloneMemoryManagerActive,
 } from "./memory-state.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
@@ -50,7 +50,7 @@ function resolveMemoryRuntimeWorkspaceDir(
 }
 
 function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
-  return resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.runtime;
+  return resolveSelectedMemoryCapabilityRegistration(registry)?.capability.runtime;
 }
 
 function listCurrentMemoryRuntimeOwners(): MemoryRuntimeOwner[] {
