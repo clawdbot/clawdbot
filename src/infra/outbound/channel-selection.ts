@@ -191,9 +191,7 @@ async function listConfiguredMessageChannelPlugins(cfg: OpenClawConfig): Promise
 }
 
 /** Lists deliverable channels with at least one enabled, configured account. */
-export async function listConfiguredMessageChannels(
-  cfg: OpenClawConfig,
-): Promise<string[]> {
+export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
   return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
 }
 
