@@ -213,7 +213,7 @@ vi.mock("../conversation.runtime.js", () => {
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
-  client?: { chat: { update: ReturnType<typeof vi.fn> } };
+  client?: TestSlackClient;
   context?: TestBoltContext;
   body: {
     user: { id: string; team_id?: string };
@@ -230,7 +230,7 @@ type RegisteredHandler = (args: {
 
 type RegisteredViewHandler = (args: {
   ack: () => Promise<void>;
-  client?: { chat: { update: ReturnType<typeof vi.fn> } };
+  client?: TestSlackClient;
   context?: TestBoltContext;
   body: {
     user?: { id?: string; team_id?: string };
@@ -253,7 +253,7 @@ type RegisteredViewHandler = (args: {
 
 type RegisteredShortcutHandler = (
   args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body"> & {
-    client?: { chat: { update: ReturnType<typeof vi.fn> } };
+    client?: TestSlackClient;
     context?: TestBoltContext;
   },
 ) => Promise<void>;
@@ -262,6 +262,10 @@ type TestBoltContext = {
   teamId?: string;
   isEnterpriseInstall?: boolean;
   enterpriseId?: string;
+};
+
+type TestSlackClient = {
+  chat: { update: (...args: unknown[]) => unknown };
 };
 
 function createContext(overrides?: {
@@ -302,10 +306,10 @@ function createContext(overrides?: {
     },
   };
   const withBoltScope = <
-    Args extends { body: unknown; context?: TestBoltContext; client?: typeof listenerClient },
+    Args extends { body: unknown; context?: TestBoltContext; client?: TestSlackClient },
   >(
     args: Args,
-  ) => {
+  ): Args & { context: TestBoltContext; client: TestSlackClient } => {
     const body = args.body as {
       team?: { id?: string };
       user?: { team_id?: string };
