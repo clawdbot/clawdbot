@@ -342,7 +342,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
         const externalRespond = vi.fn();
         const externalPreflight = prepareAgentRequestPreflight({
-          params,
+          request: params,
           io: createAgentTurnIo(externalRespond),
           context: gatewayContext,
           client: externalCliClient(),
@@ -356,7 +356,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
             })
           : externalCliClient();
         const hostPreflight = prepareAgentRequestPreflight({
-          params,
+          request: params,
           io: createAgentTurnIo(hostRespond),
           context: gatewayContext,
           client,

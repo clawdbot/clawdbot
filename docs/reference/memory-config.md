@@ -384,21 +384,23 @@ auto-injected.
 
 ## Additional memory paths
 
-| Key          | Type       | Description                              |
-| ------------ | ---------- | ---------------------------------------- |
-| `extraPaths` | `string[]` | Additional directories or files to index |
+| Key          | Type                                                  | Description                              |
+| ------------ | ----------------------------------------------------- | ---------------------------------------- |
+| `extraPaths` | `Array<string \| { path: string; pattern?: string }>` | Additional directories or files to index |
 
 ```json5
 {
   memory: {
     search: {
-      extraPaths: ["../team-docs", "/srv/shared-notes"],
+      extraPaths: ["../team-docs", { path: "/srv/shared-notes", pattern: "runbooks/**/*.md" }],
     },
   },
 }
 ```
 
-Paths can be absolute or workspace-relative. Directories are scanned recursively for `.md` files. The builtin engine skips symlinks.
+Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
+files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
+file entries are indexed exactly. The builtin engine skips symlinks.
 
 ---
 

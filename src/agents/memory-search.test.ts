@@ -579,7 +579,11 @@ describe("memory search config", () => {
     const cfg = asConfig({
       memory: {
         search: {
-          extraPaths: ["/shared/notes", " docs "],
+          extraPaths: [
+            "/shared/notes",
+            " docs ",
+            { path: "../team-notes", pattern: "runbooks/**/*.md" },
+          ],
         },
       },
 
@@ -591,7 +595,11 @@ describe("memory search config", () => {
             default: true,
             memory: {
               search: {
-                extraPaths: ["/shared/notes", "../team-notes"],
+                extraPaths: [
+                  "/shared/notes",
+                  { path: "../team-notes", pattern: "runbooks/**/*.md" },
+                  { path: "../team-notes", pattern: "decisions/**/*.md" },
+                ],
               },
             },
           },
@@ -599,7 +607,12 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
+    expect(resolved?.extraPaths).toEqual([
+      "/shared/notes",
+      "docs",
+      { path: "../team-notes", pattern: "runbooks/**/*.md" },
+      { path: "../team-notes", pattern: "decisions/**/*.md" },
+    ]);
   });
 
   it("normalizes multimodal settings", () => {

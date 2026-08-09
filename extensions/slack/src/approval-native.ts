@@ -9,7 +9,7 @@ import {
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listSlackAccountIds, resolveSlackAccount } from "./accounts.js";
+import { listSlackAccountIds } from "./accounts.js";
 import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
   hasSlackPluginApprovers,
@@ -28,12 +28,10 @@ import {
 } from "./approval-native-gates.js";
 import {
   getSlackExecApprovalApprovers,
-  getSlackTeamApprovers,
   isSlackExecApprovalAuthorizedSender,
   isSlackExecApprovalClientEnabled,
   resolveSlackExecApprovalTarget,
 } from "./exec-approvals.js";
-import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 
 type ApprovalRequest = SlackNativeApprovalRequest;
 type ApprovalKind = SlackApprovalKind;
@@ -103,28 +101,11 @@ function resolveSlackApproverDmTargets(params: {
   ) {
     return [];
   }
-  const enterpriseOrgInstall = resolveSlackAccount(params).config.enterpriseOrgInstall === true;
-  const originTarget = resolveSlackOriginTarget(params);
-  const teamId = originTarget
-    ? parseSlackTarget(originTarget.to, { defaultKind: "channel" })?.teamId
-    : undefined;
-  if (enterpriseOrgInstall) {
-    if (!teamId) {
-      return [];
-    }
-    return getSlackTeamApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      teamId,
-    }).map((approver) => ({ to: approver }));
-  }
   const approvers =
     params.approvalKind === "plugin"
       ? getSlackApprovalApprovers(params)
       : getSlackExecApprovalApprovers(params);
-  return approvers.map((approver) => ({
-    to: teamId ? formatSlackTarget({ teamId, kind: "user", id: approver }) : `user:${approver}`,
-  }));
+  return approvers.map((approver) => ({ to: `user:${approver}` }));
 }
 
 const shouldSuppressSlackForwardingFallback =
@@ -150,7 +131,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
       accountId && accountId !== "default"
         ? `channels.slack.accounts.${accountId}`
         : "channels.slack";
-    return `Approve it from the Web UI or terminal UI for now. Slack supports native exec approvals for this account. Workspace installs configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; Enterprise Grid accounts require explicit \`team:<team-id>:user:<user-id>\` entries in \`${prefix}.execApprovals.approvers\`. Leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+    return `Approve it from the Web UI or terminal UI for now. Slack supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
   },
   listAccountIds: listSlackAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
@@ -158,7 +139,6 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
     isSlackExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
   isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    resolveSlackAccount({ cfg, accountId }).config.enterpriseOrgInstall !== true &&
     isSlackApprovalAuthorizedSender({ cfg, accountId, senderId }),
   isNativeDeliveryEnabled: ({ cfg, accountId }) =>
     isSlackExecApprovalClientEnabled({ cfg, accountId }),

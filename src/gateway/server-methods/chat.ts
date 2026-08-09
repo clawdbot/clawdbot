@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
@@ -19,7 +20,6 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
@@ -100,7 +100,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     respond(true, { titles });
   },
-  "chat.abort": handleChatAbortRequest,
+  "chat.abort": async (options) => {
+    await createAgentTurnService(options).abortTurn(options);
+  },
   "chat.send": handleDirectExternalChatSend,
   "chat.inject": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
