@@ -60,10 +60,7 @@ function createTestContext(params?: {
 
 function createEnterpriseEventScope(teamId: string): SlackEventScope {
   return {
-    apiAppId: "A_EXPECTED",
-    enterpriseId: "E_EXPECTED",
     teamId,
-    isEnterpriseInstall: true,
     client: {} as SlackEventScope["client"],
   };
 }
