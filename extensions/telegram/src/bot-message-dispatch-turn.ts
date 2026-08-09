@@ -158,7 +158,11 @@ export async function runTelegramDispatchTurn(params: {
                     const queued = params.draft.enqueueEvent(async () => {
                       await params.draft.ingestDraftLaneSegments(payload);
                     });
-                    return queued.then(() => false);
+                    // Queue settlement records draft intent; a numeric provider message ID
+                    // proves operator visibility for terminal recovery.
+                    return queued.then(
+                      () => typeof params.draft.answerLane.stream?.messageId() === "number",
+                    );
                   }
                 : undefined,
             onBlockReplyQueued: params.draft.answerLane.stream
