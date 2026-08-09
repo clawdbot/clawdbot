@@ -437,7 +437,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
       commandsToRegister: [{ command: "skip_test", description: "Skip test command" }],
       accountId,
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommands).toHaveBeenCalledTimes(2);
