@@ -354,7 +354,7 @@ describe("package-openclaw-for-docker", () => {
     );
   });
 
-  it("uses build-all with declaration generation for package artifacts", async () => {
+  it("uses the source package build entrypoint with declaration generation", async () => {
     const calls: Array<{
       command: string;
       args: string[];
@@ -429,8 +429,8 @@ describe("package-openclaw-for-docker", () => {
 
     expect(calls).toEqual([
       {
-        command: "node",
-        args: ["--import", "tsx", "scripts/build-all.mts", "full"],
+        command: "pnpm",
+        args: ["run", "build"],
         cwd: "/repo",
         dockerBuildExtensions: undefined,
         internalDockerBuildPluginIds: undefined,

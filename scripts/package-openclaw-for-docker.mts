@@ -450,11 +450,10 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
 const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
-    command: "node",
-    // The full profile keeps canonical declaration emission; ciArtifacts is a
-    // PR-CI-only profile whose step env forces dts off and would clobber the
-    // OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 this packaging path requires.
-    args: ["--import", "tsx", "scripts/build-all.mts", "full"],
+    command: "pnpm",
+    // Let the frozen source own its build entrypoint while the packaging env
+    // keeps canonical declaration emission enabled.
+    args: ["run", "build"],
   },
 ];
 
