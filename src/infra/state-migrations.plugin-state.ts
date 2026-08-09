@@ -7,7 +7,7 @@ import {
   registerMigratedPluginStateEntry,
   resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
-import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,

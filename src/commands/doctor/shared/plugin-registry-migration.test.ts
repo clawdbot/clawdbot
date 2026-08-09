@@ -180,7 +180,7 @@ describe("plugin registry install migration", () => {
 
   it("rejects invalid SQLite install records without rewriting the row", async () => {
     const stateDir = makeTempDir();
-    const installRecordsJson = '{"demo":{"source":"bogus"}}';
+    const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
     insertStalePersistedIndexRow(stateDir, installRecordsJson);
 
     await expect(
@@ -189,7 +189,9 @@ describe("plugin registry install migration", () => {
         readConfig: async () => ({}),
         env: hermeticEnv(),
       }),
-    ).rejects.toThrow("Persisted plugin install records are invalid");
+    ).rejects.toThrow(
+      "delete only the installed_plugin_index row with index_key='installed-plugin-index'",
+    );
 
     const row = runOpenClawStateWriteTransaction(
       ({ db }) =>
@@ -215,9 +217,9 @@ describe("plugin registry install migration", () => {
 
   it("rejects invalid config install records before recovery or persistence", async () => {
     const stateDir = makeTempDir();
-    const invalidConfig = {
-      plugins: { installs: { demo: { source: "bogus" } } },
-    } as unknown as OpenClawConfig;
+    const invalidConfig = JSON.parse(
+      '{"plugins":{"installs":{"constructor":{"source":"bogus"}}}}',
+    ) as OpenClawConfig;
 
     await expect(
       migratePluginRegistryForInstall({
@@ -225,7 +227,9 @@ describe("plugin registry install migration", () => {
         readConfig: async () => invalidConfig,
         env: hermeticEnv(),
       }),
-    ).rejects.toThrow("plugins.installs contains invalid records");
+    ).rejects.toThrow(
+      "Back up openclaw.json, correct or remove the invalid retired plugins.installs record",
+    );
     expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
   });
 

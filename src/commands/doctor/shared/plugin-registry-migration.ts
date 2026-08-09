@@ -6,11 +6,13 @@ import {
   inspectShippedPluginInstallConfigRecords,
   stripShippedPluginInstallConfigRecords,
 } from "../../../config/plugin-install-config-migration.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  inspectPersistedInstalledPluginIndexInstallRecordsSync,
-  loadInstalledPluginIndexInstallRecords,
-} from "../../../plugins/installed-plugin-index-records.js";
+  copyPluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../../config/plugin-install-record-map.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -62,6 +64,16 @@ type PluginRegistryInstallMigrationResult =
 
 export class InvalidPluginInstallRecordStateError extends Error {}
 
+function invalidPersistedInstallRecordMessage(filePath: string): string {
+  return [
+    `Persisted plugin install records are invalid at ${filePath}.`,
+    "Stop the Gateway, back up this database, delete only the installed_plugin_index row with index_key='installed-plugin-index' using SQLite tooling, then rerun `openclaw doctor --fix` to rebuild it.",
+  ].join(" ");
+}
+
+const INVALID_CONFIG_INSTALL_RECORD_MESSAGE =
+  "plugins.installs contains invalid records. Back up openclaw.json, correct or remove the invalid retired plugins.installs record, then rerun `openclaw doctor --fix`.";
+
 export type PluginRegistryInstallMigrationParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     dryRun?: boolean;
@@ -76,17 +88,13 @@ export function preflightPluginRegistryInstallMigration(
   const filePath = resolveInstalledPluginIndexStorePath(params);
   const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
   if (persistedState.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(
-      `Persisted plugin install records are invalid at ${filePath}. Repair the state before rebuilding the plugin registry.`,
-    );
+    throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
   }
   if (
     params.config &&
     inspectShippedPluginInstallConfigRecords(params.config).status === "invalid"
   ) {
-    throw new InvalidPluginInstallRecordStateError(
-      "plugins.installs contains invalid records. Repair the config before rebuilding the plugin registry.",
-    );
+    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   const pathExists = params.existsSync ?? fs.existsSync;
   if (pathExists(filePath)) {
@@ -297,17 +305,17 @@ export async function migratePluginRegistryForInstall(
 
   const rawConfig = await readMigrationConfig(params);
   if (inspectShippedPluginInstallConfigRecords(rawConfig).status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(
-      "plugins.installs contains invalid records. Repair the config before rebuilding the plugin registry.",
-    );
+    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
   const durableInstallRecords =
     params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
-  const installRecords = {
-    ...extractShippedPluginInstallConfigRecords(rawConfig),
-    ...durableInstallRecords,
-  };
+  const installRecords = copyPluginInstallRecordMap(
+    extractShippedPluginInstallConfigRecords(rawConfig),
+  );
+  for (const [pluginId, record] of Object.entries(durableInstallRecords)) {
+    setPluginInstallRecordMapEntry(installRecords, pluginId, record);
+  }
   const migrationParams = {
     ...params,
     config,

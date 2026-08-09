@@ -1,18 +1,18 @@
 /** Reads installed-index records back into manifest registry records. */
 import fs from "node:fs";
 import path from "node:path";
-import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  inspectPluginInstallRecordMap,
-  type PluginInstallRecordMapState,
+  copyPluginInstallRecordMap,
+  createPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
+  setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { compareValidSemver } from "../infra/semver.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   resolveDefaultPluginNpmDir,
   resolvePluginNpmProjectsDir,
@@ -23,8 +23,8 @@ import {
   getInstalledPluginIndexInstallRecordsCacheGeneration,
   setInstalledPluginIndexInstallRecordsCache,
 } from "./installed-plugin-index-record-cache.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-state.js";
 import {
-  resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
@@ -36,10 +36,10 @@ import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 
-function cloneInstallRecords(
+function copyInstallRecords(
   records: Record<string, PluginInstallRecord> | undefined,
 ): Record<string, PluginInstallRecord> {
-  return structuredClone(records ?? {});
+  return copyPluginInstallRecordMap(records);
 }
 
 const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -262,7 +262,7 @@ function buildRecoveredManagedNpmInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
-  const records: Record<string, PluginInstallRecord> = {};
+  const records = createPluginInstallRecordMap<PluginInstallRecord>();
   const candidatesByPluginId = new Map<string, RecoveredManagedNpmInstallCandidate[]>();
   for (const candidate of listRecoveredManagedNpmInstallCandidates(options)) {
     const candidates = candidatesByPluginId.get(candidate.pluginId) ?? [];
@@ -272,12 +272,12 @@ function buildRecoveredManagedNpmInstallRecords(
   for (const [pluginId, candidates] of candidatesByPluginId) {
     // The install ledger is the active-generation authority. Directory order,
     // version, and recency may only break ties when that authority is absent.
-    const persistedRecord = persisted?.[pluginId];
+    const persistedRecord = getPluginInstallRecordMapEntry(persisted ?? undefined, pluginId);
     const authoritative = candidates.find((candidate) =>
       recordsShareInstallPath(persistedRecord, candidate.installRecord),
     );
     const selected = authoritative ?? pickMostRecentRecoveredManagedNpmCandidate(candidates);
-    records[pluginId] = selected.installRecord;
+    setPluginInstallRecordMapEntry(records, pluginId, selected.installRecord);
     const recoversUnavailableManagedPath = isUnavailableManagedNpmInstallRecord({
       npmRoot,
       persisted: persistedRecord,
@@ -395,58 +395,19 @@ function mergeRecoveredManagedNpmInstallRecords(
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
   const recovered = buildRecoveredManagedNpmInstallRecords(persisted, options);
-  const merged: Record<string, PluginInstallRecord> = { ...persisted };
+  const merged = copyPluginInstallRecordMap(persisted ?? undefined);
   for (const [pluginId, record] of Object.entries(recovered)) {
-    merged[pluginId] = mergeRecoveredManagedNpmRecord({
-      npmRoot,
-      persisted: merged[pluginId],
-      recovered: record,
-    });
+    setPluginInstallRecordMapEntry(
+      merged,
+      pluginId,
+      mergeRecoveredManagedNpmRecord({
+        npmRoot,
+        persisted: getPluginInstallRecordMapEntry(merged, pluginId),
+        recovered: record,
+      }),
+    );
   }
   return merged;
-}
-
-type InstalledPluginIndexRecordRow = {
-  install_records_json: string;
-};
-
-export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
-  options: InstalledPluginIndexStoreOptions = {},
-): PluginInstallRecordMapState {
-  const storePath = resolveInstalledPluginIndexStorePath(options);
-  if (!fs.existsSync(storePath) || options.filePath?.endsWith(".json")) {
-    return { status: "missing" };
-  }
-  try {
-    return withOpenClawStateDatabaseReadOnly(({ db }) => {
-      const hasTable = db
-        .prepare(
-          `SELECT 1
-             FROM sqlite_master
-            WHERE type = 'table' AND name = 'installed_plugin_index'`,
-        )
-        .get();
-      if (!hasTable) {
-        return { status: "missing" };
-      }
-      const row = db
-        .prepare(
-          `
-            SELECT install_records_json
-              FROM installed_plugin_index
-             WHERE index_key = ?
-          `,
-        )
-        .get("installed-plugin-index") as InstalledPluginIndexRecordRow | undefined;
-      if (!row) {
-        return { status: "missing" };
-      }
-      const parsed = safeParseJson(row.install_records_json);
-      return parsed === undefined ? { status: "invalid" } : inspectPluginInstallRecordMap(parsed);
-    }, resolveInstalledPluginIndexStateDatabaseOptions(options));
-  } catch {
-    return { status: "invalid" };
-  }
 }
 
 /** Reads install records from the persisted installed plugin index. */
@@ -491,7 +452,7 @@ export async function loadInstalledPluginIndexInstallRecords(
   const cacheKey = resolveInstallRecordsCacheKey(params);
   const cached = getInstalledPluginIndexInstallRecordsCache(cacheKey);
   if (cached) {
-    return cloneInstallRecords(cached.records);
+    return copyInstallRecords(cached.records);
   }
   const cacheGeneration = getInstalledPluginIndexInstallRecordsCacheGeneration();
   const records = mergeRecoveredManagedNpmInstallRecords(
@@ -503,7 +464,7 @@ export async function loadInstalledPluginIndexInstallRecords(
     return await loadInstalledPluginIndexInstallRecords(params);
   }
   setInstalledPluginIndexInstallRecordsCache(cacheKey, { records });
-  return cloneInstallRecords(records);
+  return copyInstallRecords(records);
 }
 
 /** Synchronously loads installed plugin records, recovering managed npm installs and caching them. */
@@ -513,12 +474,12 @@ export function loadInstalledPluginIndexInstallRecordsSync(
   const cacheKey = resolveInstallRecordsCacheKey(params);
   const cached = getInstalledPluginIndexInstallRecordsCache(cacheKey);
   if (cached) {
-    return cloneInstallRecords(cached.records);
+    return copyInstallRecords(cached.records);
   }
   const records = mergeRecoveredManagedNpmInstallRecords(
     requireLoadablePluginInstallRecordState(params),
     params,
   );
   setInstalledPluginIndexInstallRecordsCache(cacheKey, { records });
-  return cloneInstallRecords(records);
+  return copyInstallRecords(records);
 }

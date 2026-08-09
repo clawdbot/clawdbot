@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { z } from "zod";
 import {
+  createPluginInstallRecordMap,
   inspectPluginInstallRecordMap,
   parsePluginInstallRecord,
   parsePluginInstallRecordMap,
@@ -12,7 +13,6 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
@@ -238,13 +238,10 @@ function parseInstalledPluginIndexSqliteRow(
 }
 
 function preparePersistedInstalledPluginIndex(index: InstalledPluginIndex): InstalledPluginIndex {
-  const installRecords: Record<string, PluginInstallRecord> = {};
+  const installRecords = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, rawRecord] of Object.entries(index.installRecords)) {
     const record = parsePluginInstallRecord(rawRecord);
     if (!record) {
-      if (isBlockedObjectKey(pluginId)) {
-        continue;
-      }
       throw new Error("Invalid plugin install record");
     }
     setPluginInstallRecordMapEntry(installRecords, pluginId, record);

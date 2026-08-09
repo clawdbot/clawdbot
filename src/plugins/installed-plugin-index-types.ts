@@ -49,7 +49,48 @@ export type InstalledPluginContributionInfo = {
   contracts: Readonly<Record<string, readonly string[]>>;
 };
 
-export type InstalledPluginInstallRecordInfo = PluginInstallRecord;
+export type InstalledPluginInstallRecordInfo = Pick<
+  PluginInstallRecord,
+  | "source"
+  | "spec"
+  | "sourcePath"
+  | "installPath"
+  | "version"
+  | "resolvedName"
+  | "resolvedVersion"
+  | "resolvedSpec"
+  | "integrity"
+  | "shasum"
+  | "resolvedAt"
+  | "installedAt"
+  | "clawhubUrl"
+  | "clawhubPackage"
+  | "clawhubFamily"
+  | "clawhubChannel"
+  | "clawhubTrustDisposition"
+  | "clawhubTrustScanStatus"
+  | "clawhubTrustModerationState"
+  | "clawhubTrustReasons"
+  | "clawhubTrustPending"
+  | "clawhubTrustStale"
+  | "clawhubTrustCheckedAt"
+  | "clawhubTrustAcknowledgedAt"
+  | "artifactKind"
+  | "artifactFormat"
+  | "npmIntegrity"
+  | "npmShasum"
+  | "npmTarballName"
+  | "clawpackSha256"
+  | "clawpackSpecVersion"
+  | "clawpackManifestSha256"
+  | "clawpackSize"
+  | "gitUrl"
+  | "gitRef"
+  | "gitCommit"
+  | "marketplaceName"
+  | "marketplaceSource"
+  | "marketplacePlugin"
+>;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 

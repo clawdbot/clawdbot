@@ -3,8 +3,12 @@ import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  copyPluginInstallRecordMap,
+  createPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
   parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
@@ -282,7 +286,7 @@ function readLegacyEmbeddedInstallRecords(
   if (!Array.isArray(plugins)) {
     return null;
   }
-  const records: Record<string, unknown> = {};
+  const records = createPluginInstallRecordMap<unknown>();
   let found = false;
   for (const plugin of plugins) {
     if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
@@ -296,7 +300,7 @@ function readLegacyEmbeddedInstallRecords(
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       return null;
     }
-    records[pluginId] = installRecord;
+    setPluginInstallRecordMapEntry(records, pluginId, installRecord);
     found = true;
   }
   return found ? parsePluginInstallRecordMap(records) : null;
@@ -414,13 +418,13 @@ export function mergeLegacyInstalledPluginIndexRecords(
   current: InstalledPluginIndex,
   legacy: InstalledPluginIndex,
 ): { merged: InstalledPluginIndex; addedCount: number; conflicts: string[] } {
-  const installRecords = { ...current.installRecords };
+  const installRecords = copyPluginInstallRecordMap(current.installRecords);
   const conflicts: string[] = [];
   let addedCount = 0;
   for (const [pluginId, legacyRecord] of Object.entries(legacy.installRecords)) {
-    const currentRecord = installRecords[pluginId];
+    const currentRecord = getPluginInstallRecordMapEntry(installRecords, pluginId);
     if (!currentRecord) {
-      installRecords[pluginId] = legacyRecord;
+      setPluginInstallRecordMapEntry(installRecords, pluginId, legacyRecord);
       addedCount += 1;
       continue;
     }

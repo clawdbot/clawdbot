@@ -11,7 +11,11 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
-import { serializePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
+import {
+  createPluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
@@ -462,18 +466,18 @@ export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
     return params.records;
   }
   let changed = false;
-  const next: Record<string, PluginInstallRecord> = {};
+  const next = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, record] of Object.entries(params.records)) {
     const installedVersion = record.resolvedVersion ?? record.version;
     const comparison = installedVersion
       ? compareSemverStrings(installedVersion, params.targetVersion)
       : null;
     if (record.source !== "npm" || comparison === null || comparison <= 0) {
-      next[pluginId] = record;
+      setPluginInstallRecordMapEntry(next, pluginId, record);
       continue;
     }
     const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
-    next[pluginId] = rest;
+    setPluginInstallRecordMapEntry(next, pluginId, rest);
     changed = true;
   }
   return changed ? next : params.records;

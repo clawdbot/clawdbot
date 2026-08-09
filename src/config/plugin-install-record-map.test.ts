@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  createPluginInstallRecordMap,
   inspectPluginInstallRecordMap,
   parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
 } from "./plugin-install-record-map.js";
 
 describe("plugin install record maps", () => {
@@ -24,6 +26,7 @@ describe("plugin install record maps", () => {
         futureMetadata: { retained: true },
       },
     });
+    expect(Object.getPrototypeOf(records)).toBeNull();
   });
 
   it("distinguishes missing maps from invalid maps", () => {
@@ -31,7 +34,12 @@ describe("plugin install record maps", () => {
     expect(inspectPluginInstallRecordMap({ demo: { source: "bogus" } })).toEqual({
       status: "invalid",
     });
-    expect(inspectPluginInstallRecordMap({})).toEqual({ status: "valid", records: {} });
+    const empty = inspectPluginInstallRecordMap({});
+    expect(empty.status).toBe("valid");
+    if (empty.status === "valid") {
+      expect(Object.keys(empty.records)).toEqual([]);
+      expect(Object.getPrototypeOf(empty.records)).toBeNull();
+    }
   });
 
   it("rejects invalid records atomically", () => {
@@ -43,32 +51,45 @@ describe("plugin install record maps", () => {
     ).toBeNull();
   });
 
+  it.each(["constructor", "toString", "__proto__"])(
+    "rejects an invalid %s record atomically",
+    (pluginId) => {
+      const records = createPluginInstallRecordMap<unknown>();
+      setPluginInstallRecordMapEntry(records, "valid", { source: "npm" });
+      setPluginInstallRecordMapEntry(records, pluginId, { source: "bogus" });
+
+      expect(parsePluginInstallRecordMap(records)).toBeNull();
+    },
+  );
+
   it("preserves prototype-named plugin ids as inert own properties", () => {
     const records = parsePluginInstallRecordMap(
       JSON.parse(
-        '{"__proto__":{"source":"npm"},"constructor":{"source":"path"},"prototype":{"source":"git"}}',
+        '{"__proto__":{"source":"npm"},"constructor":{"source":"path"},"toString":{"source":"git"}}',
       ) as Record<string, unknown>,
     );
 
-    expect(Object.keys(records ?? {})).toEqual(["__proto__", "constructor", "prototype"]);
+    expect(Object.getPrototypeOf(records)).toBeNull();
+    expect(Object.keys(records ?? {})).toEqual(["__proto__", "constructor", "toString"]);
     expect(Object.hasOwn(records ?? {}, "__proto__")).toBe(true);
+    expect(Object.hasOwn(records ?? {}, "constructor")).toBe(true);
+    expect(Object.hasOwn(records ?? {}, "toString")).toBe(true);
     expect(Object.getOwnPropertyDescriptor(records, "__proto__")?.value).toEqual({
       source: "npm",
     });
     expect(({} as Record<string, unknown>).source).toBeUndefined();
   });
 
-  it("serializes numeric-looking keys in canonical lexical order", () => {
-    const records = {
-      2: { source: "npm" as const },
-      10: { source: "path" as const },
-      alpha: { source: "git" as const },
-      1: { source: "archive" as const },
-    };
+  it("serializes numeric-looking and Unicode keys in UTF-8 byte order", () => {
+    const records = createPluginInstallRecordMap<{ source: "npm" | "path" | "git" | "archive" }>();
+    setPluginInstallRecordMapEntry(records, "\u{10000}", { source: "git" });
+    setPluginInstallRecordMapEntry(records, "2", { source: "npm" });
+    setPluginInstallRecordMapEntry(records, "\uE000", { source: "path" });
+    setPluginInstallRecordMapEntry(records, "10", { source: "path" });
+    setPluginInstallRecordMapEntry(records, "1", { source: "archive" });
 
-    expect(Object.keys(records)).toEqual(["1", "2", "10", "alpha"]);
     expect(serializePluginInstallRecordMap(records)).toBe(
-      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm"},"alpha":{"source":"git"}}',
+      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}',
     );
   });
 });

@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
+  setPluginInstallRecordMapEntry,
+} from "../../config/plugin-install-record-map.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import {
   preparePostCorePluginInstallRecordsForFreshProcess,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
@@ -37,30 +43,29 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     await expect(readPostCorePluginInstallRecordsFile(missing)).resolves.toBeUndefined();
   });
 
-  it("loads a valid install-records handoff", async () => {
+  it("loads a prototype-safe install-records handoff with legal special ids", async () => {
     const dir = await withTempDir();
     const filePath = path.join(dir, "plugin-install-records.json");
     await fs.writeFile(
       filePath,
-      `${JSON.stringify({
-        demo: {
-          source: "npm",
-          spec: "@openclaw/demo@1.0.0",
-          installPath: "/tmp/demo-plugin",
-          futureMetadata: { retained: true },
-        },
-      })}\n`,
+      '{"demo":{"source":"npm","spec":"@openclaw/demo@1.0.0","installPath":"/tmp/demo-plugin","futureMetadata":{"retained":true}},"constructor":{"source":"path"},"toString":{"source":"git"},"__proto__":{"source":"archive"}}\n',
       "utf-8",
     );
 
-    await expect(readPostCorePluginInstallRecordsFile(filePath)).resolves.toEqual({
-      demo: {
-        source: "npm",
-        spec: "@openclaw/demo@1.0.0",
-        installPath: "/tmp/demo-plugin",
-        futureMetadata: { retained: true },
-      },
+    const records = await readPostCorePluginInstallRecordsFile(filePath);
+    if (!records) {
+      throw new Error("Expected plugin install records handoff");
+    }
+    expect(Object.getPrototypeOf(records)).toBeNull();
+    expect(getPluginInstallRecordMapEntry(records, "demo")).toEqual({
+      source: "npm",
+      spec: "@openclaw/demo@1.0.0",
+      installPath: "/tmp/demo-plugin",
+      futureMetadata: { retained: true },
     });
+    expect(getPluginInstallRecordMapEntry(records, "constructor")).toEqual({ source: "path" });
+    expect(getPluginInstallRecordMapEntry(records, "toString")).toEqual({ source: "git" });
+    expect(getPluginInstallRecordMapEntry(records, "__proto__")).toEqual({ source: "archive" });
   });
 
   it("fails closed on structurally invalid handoff records", async () => {
@@ -73,21 +78,36 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     );
   });
 
-  it("writes canonical numeric-key order and preserves passthrough fields", async () => {
+  it("writes UTF-8 byte order and preserves special ids and passthrough fields", async () => {
     const dir = await withTempDir();
     const filePath = path.join(dir, "plugin-install-records.json");
-    await writePostCorePluginInstallRecordsFile(filePath, {
-      2: { source: "npm", futureMetadata: { retained: true } },
-      10: { source: "path" },
-      1: { source: "archive" },
-    } as never);
+    const records = createPluginInstallRecordMap<PluginInstallRecord>();
+    setPluginInstallRecordMapEntry(records, "\u{10000}", { source: "git" });
+    setPluginInstallRecordMapEntry(records, "__proto__", { source: "archive" });
+    setPluginInstallRecordMapEntry(records, "2", {
+      source: "npm",
+      futureMetadata: { retained: true },
+    } as PluginInstallRecord);
+    setPluginInstallRecordMapEntry(records, "toString", { source: "git" });
+    setPluginInstallRecordMapEntry(records, "\uE000", { source: "path" });
+    setPluginInstallRecordMapEntry(records, "constructor", { source: "path" });
+    setPluginInstallRecordMapEntry(records, "10", { source: "path" });
+    setPluginInstallRecordMapEntry(records, "1", { source: "archive" });
+    await writePostCorePluginInstallRecordsFile(filePath, records);
 
     expect(await fs.readFile(filePath, "utf-8")).toBe(
-      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","futureMetadata":{"retained":true}}}\n',
+      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","futureMetadata":{"retained":true}},"__proto__":{"source":"archive"},"constructor":{"source":"path"},"toString":{"source":"git"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}\n',
     );
-    await expect(readPostCorePluginInstallRecordsFile(filePath)).resolves.toMatchObject({
-      2: { source: "npm", futureMetadata: { retained: true } },
+    const loaded = await readPostCorePluginInstallRecordsFile(filePath);
+    if (!loaded) {
+      throw new Error("Expected plugin install records handoff");
+    }
+    expect(Object.getPrototypeOf(loaded)).toBeNull();
+    expect(getPluginInstallRecordMapEntry(loaded, "2")).toEqual({
+      source: "npm",
+      futureMetadata: { retained: true },
     });
+    expect(getPluginInstallRecordMapEntry(loaded, "__proto__")).toEqual({ source: "archive" });
   });
 
   it("fails closed on malformed handoff JSON with a path-labelled error", async () => {
@@ -126,16 +146,21 @@ describe("readPostCorePluginInstallRecordsFile", () => {
 
 describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {
   it("preserves passthrough fields and untouched record identity across a downgrade handoff", () => {
+    const records = createPluginInstallRecordMap<PluginInstallRecord>();
     const untouched = { source: "path" as const, sourcePath: "/tmp/local" };
-    const records = {
-      newer: {
-        source: "npm" as const,
-        resolvedVersion: "9999.0.0",
-        resolvedSpec: "newer@9999.0.0",
-        futureMetadata: { retained: true },
-      },
-      untouched,
-    };
+    const constructorRecord = { source: "git" as const };
+    const toStringRecord = { source: "archive" as const };
+    const protoRecord = { source: "path" as const, sourcePath: "/tmp/proto" };
+    setPluginInstallRecordMapEntry(records, "newer", {
+      source: "npm",
+      resolvedVersion: "9999.0.0",
+      resolvedSpec: "newer@9999.0.0",
+      futureMetadata: { retained: true },
+    } as PluginInstallRecord);
+    setPluginInstallRecordMapEntry(records, "untouched", untouched);
+    setPluginInstallRecordMapEntry(records, "constructor", constructorRecord);
+    setPluginInstallRecordMapEntry(records, "toString", toStringRecord);
+    setPluginInstallRecordMapEntry(records, "__proto__", protoRecord);
 
     const prepared = preparePostCorePluginInstallRecordsForFreshProcess({
       records,
@@ -143,8 +168,12 @@ describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {
     });
 
     expect(prepared).not.toBe(records);
-    expect(prepared.untouched).toBe(untouched);
-    expect(prepared.newer).toEqual({
+    expect(Object.getPrototypeOf(prepared)).toBeNull();
+    expect(getPluginInstallRecordMapEntry(prepared, "untouched")).toBe(untouched);
+    expect(getPluginInstallRecordMapEntry(prepared, "constructor")).toBe(constructorRecord);
+    expect(getPluginInstallRecordMapEntry(prepared, "toString")).toBe(toStringRecord);
+    expect(getPluginInstallRecordMapEntry(prepared, "__proto__")).toBe(protoRecord);
+    expect(getPluginInstallRecordMapEntry(prepared, "newer")).toEqual({
       source: "npm",
       futureMetadata: { retained: true },
     });

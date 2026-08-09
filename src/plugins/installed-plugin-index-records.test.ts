@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
+  setPluginInstallRecordMapEntry,
+} from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -205,7 +210,7 @@ describe("plugin index install records store", () => {
     });
   });
 
-  it("returns cloned cached records", async () => {
+  it("returns prototype-safe map copies without cloning cached records", async () => {
     const stateDir = makeStateDir();
     const candidate = createPluginCandidate(stateDir, "cached");
     await writePersistedInstalledPluginIndexInstallRecords(
@@ -219,14 +224,14 @@ describe("plugin index install records store", () => {
     );
 
     const first = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
-    expectDefined(first.cached, "first.cached test invariant").spec = "mutated@1.0.0";
+    const second = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
 
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      cached: {
-        source: "npm",
-        spec: "cached@1.0.0",
-      },
-    });
+    expect(first).not.toBe(second);
+    expect(Object.getPrototypeOf(first)).toBeNull();
+    expect(Object.getPrototypeOf(second)).toBeNull();
+    expect(expectDefined(first.cached, "first.cached test invariant")).toBe(
+      expectDefined(second.cached, "second.cached test invariant"),
+    );
   });
 
   it("invalidates cached records when the persisted index is rewritten", () => {
@@ -873,20 +878,21 @@ describe("plugin index install records store", () => {
   it("returns an empty record map when no plugin index exists", () => {
     const stateDir = makeStateDir();
 
-    expect(
-      loadInstalledPluginIndexInstallRecordsSync({
-        stateDir,
-      }),
-    ).toStrictEqual({});
+    const records = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
+    expect(Object.keys(records)).toEqual([]);
+    expect(Object.getPrototypeOf(records)).toBeNull();
   });
 
   it("updates and removes records without mutating caller state", () => {
-    const records: Record<string, PluginInstallRecord> = {
-      keep: {
-        source: "npm" as const,
-        spec: "keep@1.0.0",
-      },
-    } satisfies Record<string, PluginInstallRecord>;
+    const records = createPluginInstallRecordMap<PluginInstallRecord>();
+    const keep = { source: "npm" as const, spec: "keep@1.0.0" };
+    const constructorRecord = { source: "path" as const };
+    const toStringRecord = { source: "git" as const };
+    const protoRecord = { source: "archive" as const };
+    setPluginInstallRecordMapEntry(records, "keep", keep);
+    setPluginInstallRecordMapEntry(records, "constructor", constructorRecord);
+    setPluginInstallRecordMapEntry(records, "toString", toStringRecord);
+    setPluginInstallRecordMapEntry(records, "__proto__", protoRecord);
     const withInstall = recordPluginInstallInRecords(records, {
       pluginId: "demo",
       source: "npm",
@@ -894,21 +900,28 @@ describe("plugin index install records store", () => {
       installedAt: "2026-04-25T00:00:00.000Z",
     });
 
-    expect(records).toEqual({
-      keep: {
-        source: "npm",
-        spec: "keep@1.0.0",
-      },
-    });
+    expect(Object.getPrototypeOf(withInstall)).toBeNull();
+    expect(Object.keys(records)).toEqual(["keep", "constructor", "toString", "__proto__"]);
     expectRecordFields(withInstall.demo, {
       source: "npm",
       spec: "demo@latest",
       installedAt: "2026-04-25T00:00:00.000Z",
     });
-    expect(withInstall.keep).toBe(records.keep);
+    expect(withInstall.keep).toBe(keep);
+    expect(getPluginInstallRecordMapEntry(withInstall, "constructor")).toBe(constructorRecord);
+    expect(getPluginInstallRecordMapEntry(withInstall, "toString")).toBe(toStringRecord);
+    expect(getPluginInstallRecordMapEntry(withInstall, "__proto__")).toBe(protoRecord);
     const removed = removePluginInstallRecordFromRecords(withInstall, "demo");
     expect(removed).toEqual(records);
-    expect(removed.keep).toBe(records.keep);
+    expect(Object.getPrototypeOf(removed)).toBeNull();
+    expect(removed.keep).toBe(keep);
+    expect(getPluginInstallRecordMapEntry(removed, "constructor")).toBe(constructorRecord);
+    expect(getPluginInstallRecordMapEntry(removed, "toString")).toBe(toStringRecord);
+    expect(getPluginInstallRecordMapEntry(removed, "__proto__")).toBe(protoRecord);
+    const withoutProto = removePluginInstallRecordFromRecords(removed, "__proto__");
+    expect(Object.hasOwn(withoutProto, "__proto__")).toBe(false);
+    expect(getPluginInstallRecordMapEntry(withoutProto, "constructor")).toBe(constructorRecord);
+    expect(getPluginInstallRecordMapEntry(withoutProto, "toString")).toBe(toStringRecord);
   });
 
   it("strips transient install records from config writes", () => {
@@ -951,10 +964,8 @@ describe("plugin index install records store", () => {
     const stateDir = makeStateDir();
 
     await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toBeNull();
-    await expect(
-      loadInstalledPluginIndexInstallRecords({
-        stateDir,
-      }),
-    ).resolves.toStrictEqual({});
+    const records = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expect(Object.keys(records)).toEqual([]);
+    expect(Object.getPrototypeOf(records)).toBeNull();
   });
 });

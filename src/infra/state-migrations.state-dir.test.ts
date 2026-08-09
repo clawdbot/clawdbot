@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import { hashJson } from "../plugins/installed-plugin-index-hash.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -81,14 +82,7 @@ describe("legacy state dir auto-migration", () => {
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(
         sourcePath,
-        JSON.stringify({
-          records: {
-            demo: {
-              source: "npm",
-              spec: "demo@1.0.0",
-            },
-          },
-        }),
+        '{"records":{"demo":{"source":"npm","spec":"demo@1.0.0"},"constructor":{"source":"path"},"toString":{"source":"git"},"__proto__":{"source":"archive"}}}',
         "utf8",
       );
 
@@ -100,12 +94,27 @@ describe("legacy state dir auto-migration", () => {
       expect(result.migrated).toBe(true);
       expect(result.skipped).toBe(false);
       expect(result.changes).toContain(
-        "Migrated plugin install index 1 record → shared SQLite state",
+        "Migrated plugin install index 4 records → shared SQLite state",
       );
       expect(fs.existsSync(legacyDir)).toBe(true);
       expect(fs.existsSync(sourcePath)).toBe(false);
-      await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
-        installRecords: { demo: { source: "npm", spec: "demo@1.0.0" } },
+      const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+      if (!persisted) {
+        throw new Error("Expected migrated plugin install index");
+      }
+      expect(Object.getPrototypeOf(persisted.installRecords)).toBeNull();
+      expect(getPluginInstallRecordMapEntry(persisted.installRecords, "demo")).toEqual({
+        source: "npm",
+        spec: "demo@1.0.0",
+      });
+      expect(getPluginInstallRecordMapEntry(persisted.installRecords, "constructor")).toEqual({
+        source: "path",
+      });
+      expect(getPluginInstallRecordMapEntry(persisted.installRecords, "toString")).toEqual({
+        source: "git",
+      });
+      expect(getPluginInstallRecordMapEntry(persisted.installRecords, "__proto__")).toEqual({
+        source: "archive",
       });
     });
   });
@@ -127,7 +136,7 @@ describe("legacy state dir auto-migration", () => {
           generatedAtMs: 0,
           plugins: [
             {
-              pluginId: "demo",
+              pluginId: "__proto__",
               installRecord: { source: "bogus", passthrough: { retained: true } },
               manifestPath: "/plugins/demo/openclaw.plugin.json",
               manifestHash: "legacy",
@@ -169,7 +178,7 @@ describe("legacy state dir auto-migration", () => {
         JSON.stringify({ records: { demo: { source: "npm", spec: "demo@1.0.0" } } }),
         "utf8",
       );
-      const installRecordsJson = '{"demo":{"source":"bogus"}}';
+      const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           db.prepare(

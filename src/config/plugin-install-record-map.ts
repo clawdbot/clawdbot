@@ -46,8 +46,23 @@ export type PluginInstallRecordMapState =
   | { status: "invalid" }
   | { status: "valid"; records: Record<string, PluginInstallRecord> };
 
+const utf8Encoder = new TextEncoder();
+
 function comparePluginIds(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  const leftBytes = utf8Encoder.encode(left);
+  const rightBytes = utf8Encoder.encode(right);
+  const sharedLength = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+export function createPluginInstallRecordMap<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
 }
 
 export function setPluginInstallRecordMapEntry<T>(
@@ -61,6 +76,23 @@ export function setPluginInstallRecordMapEntry<T>(
     value: record,
     writable: true,
   });
+}
+
+export function getPluginInstallRecordMapEntry<T>(
+  records: Readonly<Record<string, T>> | undefined,
+  pluginId: string,
+): T | undefined {
+  return records && Object.hasOwn(records, pluginId) ? records[pluginId] : undefined;
+}
+
+export function copyPluginInstallRecordMap<T>(
+  records: Readonly<Record<string, T>> | undefined,
+): Record<string, T> {
+  const copied = createPluginInstallRecordMap<T>();
+  for (const [pluginId, record] of Object.entries(records ?? {})) {
+    setPluginInstallRecordMapEntry(copied, pluginId, record);
+  }
+  return copied;
 }
 
 export function parsePluginInstallRecord(value: unknown): PluginInstallRecord | null {
@@ -98,7 +130,7 @@ export function parsePluginInstallRecordMap(
   if (!isRecord(value)) {
     return null;
   }
-  const records: Record<string, PluginInstallRecord> = {};
+  const records = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, rawRecord] of Object.entries(value)) {
     const record = parsePluginInstallRecord(rawRecord);
     if (!record) {

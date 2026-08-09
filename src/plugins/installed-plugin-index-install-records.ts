@@ -1,5 +1,6 @@
 /** Normalizes durable plugin install records into installed-index metadata and back. */
 import {
+  createPluginInstallRecordMap,
   parsePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
@@ -37,7 +38,7 @@ export function extractPluginInstallRecordsFromInstalledPluginIndex(
   if (index && Object.hasOwn(index, "installRecords")) {
     return restoreInstallRecordMap(index.installRecords);
   }
-  const records: Record<string, PluginInstallRecord> = {};
+  const records = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const plugin of index?.plugins ?? []) {
     if (plugin.installRecord) {
       setPluginInstallRecordMapEntry(records, plugin.pluginId, plugin.installRecord);
