@@ -4300,7 +4300,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it("hydrates reply chains from cached Telegram messages", async () => {
+  it("reuses resolved media when hydrating cached Telegram reply chains", async () => {
     const mediaFetch = vi.fn(
       async () =>
         new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
@@ -4323,7 +4323,7 @@ describe("createTelegramBot", () => {
           message_id: 9000,
           date: 1736380700,
           from: { id: 1, first_name: "Kesava" },
-          photo: [{ file_id: "root-photo-1" }],
+          photo: [{ file_id: "root-photo-1", file_unique_id: "root-photo-unique-1" }],
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "media/root.jpg" }),
@@ -4338,7 +4338,7 @@ describe("createTelegramBot", () => {
           from: { id: 2, first_name: "Ada" },
           reply_to_message: {
             message_id: 9000,
-            photo: [{ file_id: "root-photo-1" }],
+            photo: [{ file_id: "root-photo-1", file_unique_id: "root-photo-unique-1" }],
             from: { id: 1, first_name: "Kesava" },
           },
         },
@@ -4392,8 +4392,9 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyChain?.[0]?.replyToId).toBe("9000");
     expect(payload.ReplyChain?.[1]?.messageId).toBe("9000");
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+    expect(payload.ReplyChain?.[1]?.mediaPath).toMatch(/^media:\/\/inbound\//);
     expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
+    expect(payload.ReplyChain?.[1]).not.toHaveProperty("resolvedMedia");
     const [conversationContext] = requireArray(
       payload.ChannelStructuredContext,
       "structured context",
@@ -4408,10 +4409,10 @@ describe("createTelegramBot", () => {
       sender: "Kesava",
     });
     expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
-    expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
+    expect(messagesById.get("9000")?.media_path).toBe(payload.ReplyChain?.[1]?.mediaPath);
     expect(messagesById.get("9000")?.media_ref).toBeUndefined();
-    expect(getFileSpy).toHaveBeenCalledWith("root-photo-1", expect.any(AbortSignal));
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -4470,6 +4471,9 @@ describe("createTelegramBot", () => {
         },
       });
 
+      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1", expect.any(AbortSignal));
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+
       replySpy.mockClear();
       getFileSpy.mockClear();
       mediaFetch.mockClear();
@@ -4518,7 +4522,7 @@ describe("createTelegramBot", () => {
     });
     if (expectHydrated) {
       expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-      expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+      expect(payload.ReplyChain?.[1]?.mediaPath).toMatch(/^media:\/\/inbound\//);
       expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
     } else {
       expect(payload.ReplyChain?.[1]?.mediaPath).toBeUndefined();
@@ -4552,13 +4556,8 @@ describe("createTelegramBot", () => {
       reply_to_id: "101",
       is_reply_target: true,
     });
-    if (expectHydrated) {
-      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1", expect.any(AbortSignal));
-      expect(mediaFetch).toHaveBeenCalledTimes(1);
-    } else {
-      expect(getFileSpy).not.toHaveBeenCalled();
-      expect(mediaFetch).not.toHaveBeenCalled();
-    }
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
   });
 
   it("does not hydrate reply media denied by General forum topic visibility", async () => {
@@ -5065,6 +5064,59 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
     expect((payload as Record<string, unknown>).ReplyToIsExternal).toBe(true);
+  });
+
+  it("keeps fetched media for uncached external replies", async () => {
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "What is in this image?",
+          date: 1736380800,
+          external_reply: {
+            origin: {
+              type: "user",
+              sender_user: { id: 22, is_bot: false, first_name: "Ada" },
+              date: 1736380700,
+            },
+            chat: { id: -10022, type: "supergroup", title: "Source" },
+            message_id: 9003,
+            photo: [{ file_id: "external-photo-1" }],
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      0,
+      0,
+      "replySpy call",
+    ) as { ReplyChain?: Array<{ messageId?: string; mediaPath?: string }> };
+    expect(payload.ReplyChain?.[0]).toMatchObject({ messageId: "9003" });
+    expect(payload.ReplyChain?.[0]?.mediaPath).toBeTypeOf("string");
+    expect(getFileSpy).toHaveBeenCalledWith("external-photo-1", expect.any(AbortSignal));
+    expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
   it("propagates forwarded origin from external_reply targets", async () => {

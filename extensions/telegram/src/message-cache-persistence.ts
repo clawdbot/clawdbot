@@ -2,6 +2,8 @@
 import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { TelegramMediaKind } from "./bot/body-helpers.js";
+import type { StickerMetadata } from "./bot/types.js";
 import type {
   TelegramPromptContextProjection,
   TelegramPromptContextSource,
@@ -18,14 +20,77 @@ export type TelegramMessageThreadBinding = {
   threadId: string;
 };
 
+export type TelegramResolvedMedia = {
+  id: string;
+  fileUniqueId: string;
+  size: number;
+  savedAt: number;
+  kind: TelegramMediaKind;
+  contentType?: string;
+  stickerMetadata?: StickerMetadata;
+};
+
 export type PersistedTelegramMessageCacheValue = {
   version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
   sourceMessage: Message;
   botUserId?: number;
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
+  resolvedMedia?: TelegramResolvedMedia;
   threadBinding?: TelegramMessageThreadBinding;
   threadId?: string;
 };
+
+const TELEGRAM_MEDIA_KINDS = new Set<string>(["audio", "document", "image", "sticker", "video"]);
+
+function isTelegramMediaKind(value: unknown): value is TelegramMediaKind {
+  return typeof value === "string" && TELEGRAM_MEDIA_KINDS.has(value);
+}
+
+function parseStickerMetadata(value: unknown): StickerMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return {
+    ...(typeof value.emoji === "string" ? { emoji: value.emoji } : {}),
+    ...(typeof value.setName === "string" ? { setName: value.setName } : {}),
+    ...(typeof value.fileId === "string" ? { fileId: value.fileId } : {}),
+    ...(typeof value.fileUniqueId === "string" ? { fileUniqueId: value.fileUniqueId } : {}),
+    ...(typeof value.cachedDescription === "string"
+      ? { cachedDescription: value.cachedDescription }
+      : {}),
+  };
+}
+
+export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedia | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    value.id.includes("/") ||
+    value.id.includes("\\") ||
+    value.id.includes("\0") ||
+    typeof value.fileUniqueId !== "string" ||
+    !value.fileUniqueId ||
+    typeof value.size !== "number" ||
+    !Number.isFinite(value.size) ||
+    value.size < 0 ||
+    typeof value.savedAt !== "number" ||
+    !Number.isFinite(value.savedAt) ||
+    !isTelegramMediaKind(value.kind)
+  ) {
+    return undefined;
+  }
+  const stickerMetadata = parseStickerMetadata(value.stickerMetadata);
+  return {
+    id: value.id,
+    fileUniqueId: value.fileUniqueId,
+    size: value.size,
+    savedAt: value.savedAt,
+    kind: value.kind,
+    ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
+    ...(stickerMetadata ? { stickerMetadata } : {}),
+  };
+}
 
 export function resolveTelegramMessageCachePath(storePath: string): string {
   return `${storePath}.telegram-messages.json`;

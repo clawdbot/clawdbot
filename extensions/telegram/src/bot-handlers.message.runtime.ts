@@ -30,9 +30,40 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import type { TelegramResolvedMedia } from "./message-cache-persistence.js";
 import type { TelegramCachedMessageNode, TelegramReplyChainEntry } from "./message-cache.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
-import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
+import {
+  resolveTelegramInboundMediaUri,
+  resolveTelegramPromptMediaPath,
+} from "./prompt-media-path.js";
+
+const HOUR_MS = 60 * 60_000;
+
+function resolveRetainedTelegramMedia(params: {
+  media?: TelegramResolvedMedia;
+  maxBytes: number;
+  ttlHours?: number;
+}): TelegramMediaRef | undefined {
+  const media = params.media;
+  if (!media || media.size > params.maxBytes) {
+    return undefined;
+  }
+  // The gateway's configured retention sweep owns file expiry. Mirror that
+  // deadline here so reply hydration never polls the filesystem for freshness.
+  if (params.ttlHours !== undefined && media.savedAt + params.ttlHours * HOUR_MS <= Date.now()) {
+    return undefined;
+  }
+  const path = resolveTelegramInboundMediaUri(media.id);
+  return path
+    ? {
+        path,
+        kind: media.kind,
+        ...(media.contentType ? { contentType: media.contentType } : {}),
+        ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+      }
+    : undefined;
+}
 
 export function createTelegramHandlerMessageRuntime({
   cfg,
@@ -77,6 +108,8 @@ export function createTelegramHandlerMessageRuntime({
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
   const {
     recordMessageForReplyChain,
+    recordMessageResolvedMedia,
+    recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadId,
     buildReplyChainForMessage,
     toReplyChainEntry,
@@ -126,23 +159,37 @@ export function createTelegramHandlerMessageRuntime({
         (await shouldHydrateMedia(node, index))
       ) {
         try {
-          const media = await resolveMedia({
-            ctx: {
-              message: node.sourceMessage,
-              me: ctx.me,
-              getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
-            },
+          mediaRuntime.abortSignal?.throwIfAborted();
+          mediaRef = resolveRetainedTelegramMedia({
+            media: node.resolvedMedia,
             maxBytes: mediaMaxBytes,
-            ...mediaRuntime,
+            ttlHours: cfg.attachments?.ttlHours,
           });
-          mediaRef = media
-            ? {
+          if (!mediaRef) {
+            const media = await resolveMedia({
+              ctx: {
+                message: node.sourceMessage,
+                me: ctx.me,
+                getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
+              },
+              maxBytes: mediaMaxBytes,
+              ...mediaRuntime,
+            });
+            if (media) {
+              mediaRef = {
                 path: media.path,
                 kind: media.kind,
                 ...(media.contentType ? { contentType: media.contentType } : {}),
                 ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
-              }
-            : undefined;
+              };
+              await recordReplyMessageResolvedMedia({
+                chatId: ctx.message.chat.id,
+                messageId: node.messageId,
+                media,
+                botUserId: ctx.me?.id,
+              });
+            }
+          }
         } catch (err) {
           // Only durable ingress can replay a reply-media abort. Live polling must
           // preserve the current text instead of acknowledging it without dispatch.
@@ -430,6 +477,7 @@ export function createTelegramHandlerMessageRuntime({
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
+    recordMessageResolvedMedia,
     resolveCachedMessageThreadId,
     processMessageWithReplyChain,
   };
