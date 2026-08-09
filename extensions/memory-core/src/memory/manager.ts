@@ -87,11 +87,7 @@ import {
   resolveInitialMemoryDirty,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
-import {
-  enqueueMemoryTargetedSessionSync,
-  runMemorySyncWithReadonlyRecovery,
-  type MemoryReadonlyRecoveryState,
-} from "./manager-sync-control.js";
+import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
@@ -495,10 +491,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private queuedForce = false;
   private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
-  private readonlyRecoveryAttempts = 0;
-  private readonlyRecoverySuccesses = 0;
-  private readonlyRecoveryFailures = 0;
-  private readonlyRecoveryLastError?: string;
   private indexIdentityState: MemoryIndexIdentityState = {
     status: "missing",
     reason: "index metadata is missing",
@@ -1997,7 +1989,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const runGeneration = async (keywordOnly: boolean) => {
         this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
         try {
-          await this.runSyncWithReadonlyRecovery(params);
+          await this.runSync(params);
         } finally {
           this.endSyncProviderGeneration();
         }
@@ -2058,73 +2050,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       targets,
     );
-  }
-
-  private async runSyncWithReadonlyRecovery(params?: MemorySyncParams): Promise<void> {
-    const getClosed = () => this.closed;
-    const getDb = () => this.db;
-    const setDb = (value: DatabaseSync) => {
-      this.db = value;
-    };
-    const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
-    const setReadonlyRecoveryAttempts = (value: number) => {
-      this.readonlyRecoveryAttempts = value;
-    };
-    const getReadonlyRecoverySuccesses = () => this.readonlyRecoverySuccesses;
-    const setReadonlyRecoverySuccesses = (value: number) => {
-      this.readonlyRecoverySuccesses = value;
-    };
-    const getReadonlyRecoveryFailures = () => this.readonlyRecoveryFailures;
-    const setReadonlyRecoveryFailures = (value: number) => {
-      this.readonlyRecoveryFailures = value;
-    };
-    const getReadonlyRecoveryLastError = () => this.readonlyRecoveryLastError;
-    const setReadonlyRecoveryLastError = (value: string | undefined) => {
-      this.readonlyRecoveryLastError = value;
-    };
-    const state: MemoryReadonlyRecoveryState = {
-      get closed() {
-        return getClosed();
-      },
-      get db() {
-        return getDb();
-      },
-      set db(value) {
-        setDb(value);
-      },
-      vector: this.vector,
-      get readonlyRecoveryAttempts() {
-        return getReadonlyRecoveryAttempts();
-      },
-      set readonlyRecoveryAttempts(value) {
-        setReadonlyRecoveryAttempts(value);
-      },
-      get readonlyRecoverySuccesses() {
-        return getReadonlyRecoverySuccesses();
-      },
-      set readonlyRecoverySuccesses(value) {
-        setReadonlyRecoverySuccesses(value);
-      },
-      get readonlyRecoveryFailures() {
-        return getReadonlyRecoveryFailures();
-      },
-      set readonlyRecoveryFailures(value) {
-        setReadonlyRecoveryFailures(value);
-      },
-      get readonlyRecoveryLastError() {
-        return getReadonlyRecoveryLastError();
-      },
-      set readonlyRecoveryLastError(value) {
-        setReadonlyRecoveryLastError(value);
-      },
-      runSync: (nextParams) => this.runSync(nextParams),
-      openDatabase: () => this.openDatabase(),
-      closeDatabase: (db) => closeMemoryDatabase(db),
-      resetVectorState: () => this.resetVectorState(),
-      ensureSchema: () => this.ensureSchema(),
-      readMeta: () => this.readMeta() ?? undefined,
-    };
-    await runMemorySyncWithReadonlyRecovery(state, params);
   }
 
   async readFile(params: {
@@ -2241,12 +2166,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
         indexIdentity: this.indexIdentityState,
-        readonlyRecovery: {
-          attempts: this.readonlyRecoveryAttempts,
-          successes: this.readonlyRecoverySuccesses,
-          failures: this.readonlyRecoveryFailures,
-          lastError: this.readonlyRecoveryLastError,
-        },
       },
     };
   }

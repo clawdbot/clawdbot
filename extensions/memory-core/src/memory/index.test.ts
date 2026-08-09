@@ -1916,15 +1916,15 @@ describe("memory index", () => {
       syncing: Promise<void> | null;
       queuedSessions: Map<string, MemorySessionSyncTarget>;
       queuedSessionSync: Promise<void> | null;
-      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
     };
-    const runSyncWithReadonlyRecovery = owner.runSyncWithReadonlyRecovery.bind(owner);
-    const runSync = vi
-      .spyOn(owner, "runSyncWithReadonlyRecovery")
-      .mockImplementationOnce(async (params) => await runSyncWithReadonlyRecovery(params))
+    const originalRunSync = owner.runSync.bind(owner);
+    const runSyncSpy = vi
+      .spyOn(owner, "runSync")
+      .mockImplementationOnce(async (params) => await originalRunSync(params))
       .mockImplementationOnce(async () => await activeSyncGate)
       .mockImplementationOnce(async () => await queuedSyncGate)
-      .mockImplementation(async (params) => await runSyncWithReadonlyRecovery(params));
+      .mockImplementation(async (params) => await originalRunSync(params));
     const queuedError = new Error("controlled queued rejection");
     try {
       await manager.sync({ reason: "test-live-rejection-baseline", force: true });
@@ -1968,7 +1968,7 @@ describe("memory index", () => {
       const failuresPromise = Promise.allSettled([active, failedQueued]);
       resolveActiveSync?.();
       await vi.waitFor(() => {
-        expect(runSync).toHaveBeenCalledTimes(3);
+        expect(runSyncSpy).toHaveBeenCalledTimes(3);
         expect(owner.syncing).not.toBeNull();
         expect(owner.queuedSessionSync).not.toBeNull();
       });
@@ -2074,7 +2074,7 @@ describe("memory index", () => {
       resolveActiveSync?.();
       rejectQueuedSync?.(queuedError);
       await manager.close?.();
-      runSync.mockRestore();
+      runSyncSpy.mockRestore();
     }
   });
 
@@ -2097,12 +2097,10 @@ describe("memory index", () => {
       queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
       queuedForce: boolean;
       syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
-      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
     };
     const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
-    const runSyncWithReadonlyRecovery = vi
-      .spyOn(owner, "runSyncWithReadonlyRecovery")
-      .mockReturnValueOnce(fullSyncGate);
+    const runSyncSpy = vi.spyOn(owner, "runSync").mockReturnValueOnce(fullSyncGate);
     const progress = vi.fn();
     owner.queuedSessions.set("retained", {
       agentId: "main",
@@ -2137,7 +2135,7 @@ describe("memory index", () => {
         undefined,
         undefined,
       ]);
-      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(1);
+      expect(runSyncSpy).toHaveBeenCalledTimes(1);
       expect(syncAdmitted).toHaveBeenCalledTimes(2);
       expect(owner.closed).toBe(true);
       expect(owner.queuedSessions.size).toBe(0);
@@ -2147,7 +2145,7 @@ describe("memory index", () => {
     } finally {
       resolveFullSync?.();
       await manager.close?.();
-      runSyncWithReadonlyRecovery.mockRestore();
+      runSyncSpy.mockRestore();
       syncAdmitted.mockRestore();
     }
   });
@@ -2171,10 +2169,10 @@ describe("memory index", () => {
       queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
       queuedForce: boolean;
       queuedSessionSync: Promise<void> | null;
-      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
     };
-    const runSyncWithReadonlyRecovery = vi
-      .spyOn(owner, "runSyncWithReadonlyRecovery")
+    const runSyncSpy = vi
+      .spyOn(owner, "runSync")
       .mockReturnValueOnce(activeSyncGate)
       .mockRejectedValueOnce(new Error("test queued failure"));
     const progress = vi.fn();
@@ -2209,7 +2207,7 @@ describe("memory index", () => {
       await active;
       await queuedRejection;
 
-      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(2);
+      expect(runSyncSpy).toHaveBeenCalledTimes(2);
       expect(owner.queuedArchiveFiles).toEqual(
         new Set(["/tmp/retained-close-after-failure.jsonl"]),
       );
@@ -2234,7 +2232,7 @@ describe("memory index", () => {
     } finally {
       resolveActiveSync?.();
       await manager.close?.();
-      runSyncWithReadonlyRecovery.mockRestore();
+      runSyncSpy.mockRestore();
     }
   });
 
@@ -2423,26 +2421,26 @@ describe("memory index", () => {
     const manager = await getFreshManager(cfg);
     let releaseSync: () => void = () => {};
     const syncStarted = new Promise<void>((resolve) => {
-      const originalRunSyncWithReadonlyRecovery = (
+      const originalRunSync = (
         manager as unknown as {
-          runSyncWithReadonlyRecovery: (params?: {
+          runSync: (params?: {
             reason?: string;
             force?: boolean;
             archiveFiles?: string[];
             progress?: (update: unknown) => void;
           }) => Promise<void>;
         }
-      ).runSyncWithReadonlyRecovery.bind(manager);
+      ).runSync.bind(manager);
       (
         manager as unknown as {
-          runSyncWithReadonlyRecovery: typeof originalRunSyncWithReadonlyRecovery;
+          runSync: typeof originalRunSync;
         }
-      ).runSyncWithReadonlyRecovery = async (params) => {
+      ).runSync = async (params) => {
         resolve();
         await new Promise<void>((syncResolve) => {
           releaseSync = syncResolve;
         });
-        await originalRunSyncWithReadonlyRecovery(params);
+        await originalRunSync(params);
       };
     });
 
