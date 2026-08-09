@@ -1,7 +1,7 @@
 import { hasCloudSessionRecovery } from "../lib/sessions/cloud-recovery-storage-key.ts";
 import type { CloudSessionRecovery } from "../lib/sessions/cloud-recovery.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 
 export type ApplicationCloudStartupStatus = {
@@ -43,6 +43,7 @@ export type ApplicationCloudStartupRuntime = {
 
 export type ApplicationCloudStartup = Omit<ApplicationCloudStartupRuntime, "start"> & {
   start: (input: CloudStartupInput) => Promise<void>;
+  resumeRecovery: () => void;
 };
 
 type CloudStartupRuntimeModule = typeof import("./cloud-session-startup.runtime.ts");
@@ -92,45 +93,39 @@ export function createApplicationCloudStartup(
     return runtimeLoad;
   };
 
-  const maybeLoadRecovery = (snapshot: ApplicationGatewaySnapshot) => {
-    const recoveryScope = snapshot.client?.recoveryScope;
-    if (
-      runtime ||
-      runtimeLoad ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client?.recoveryScopeReady ||
-      !recoveryScope ||
-      !hasCloudSessionRecovery(dependencies.gateway.connection.gatewayUrl, recoveryScope)
-    ) {
-      return;
-    }
-    void ensureRuntime().catch(() => {
-      // Keep the durable recovery for New Session, whose next user-triggered submit retries the
-      // import and surfaces any load error without spinning in the background.
-    });
-  };
-
-  const stopGateway = dependencies.gateway.subscribe(maybeLoadRecovery);
-  maybeLoadRecovery(dependencies.gateway.snapshot);
-
-  const start: ApplicationCloudStartup["start"] = async (input) => {
-    const target = await ensureRuntime(false);
-    if (!target || disposed) {
-      return;
-    }
-    target.start(input);
-  };
-
-  const retry: ApplicationCloudStartup["retry"] = (sessionKey) => {
-    runtime?.retry(sessionKey);
-  };
-
   return {
     get(sessionKey) {
       return runtime?.get(sessionKey) ?? null;
     },
-    start,
-    retry,
+    async start(input) {
+      const target = await ensureRuntime(false);
+      if (!target || disposed) {
+        return;
+      }
+      target.start(input);
+    },
+    retry(sessionKey) {
+      runtime?.retry(sessionKey);
+    },
+    resumeRecovery() {
+      const snapshot = dependencies.gateway.snapshot;
+      const recoveryScope = snapshot.client?.recoveryScope;
+      if (
+        disposed ||
+        runtime ||
+        runtimeLoad ||
+        snapshot.phase !== "connected" ||
+        !snapshot.client?.recoveryScopeReady ||
+        !recoveryScope ||
+        !hasCloudSessionRecovery(dependencies.gateway.connection.gatewayUrl, recoveryScope)
+      ) {
+        return;
+      }
+      void ensureRuntime().catch(() => {
+        // Keep the durable recovery for New Session, whose next user-triggered submit retries the
+        // import and surfaces any load error without spinning in the background.
+      });
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -140,7 +135,6 @@ export function createApplicationCloudStartup(
         return;
       }
       disposed = true;
-      stopGateway();
       runtime?.dispose();
       runtime = null;
       runtimeLoad = null;

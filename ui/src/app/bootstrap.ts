@@ -374,6 +374,7 @@ export function bootstrapApplication(
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
   const stopPostConnect = gateway.subscribe((snapshot) => {
+    cloudStartup.resumeRecovery();
     if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
       return;
@@ -394,6 +395,7 @@ export function bootstrapApplication(
       loadChatObserverDisplayPreference() !== "off",
     ).catch(() => undefined);
   });
+  cloudStartup.resumeRecovery();
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
     const activeMatch = router.getState().matches[0];

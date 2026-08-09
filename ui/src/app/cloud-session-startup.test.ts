@@ -49,14 +49,10 @@ function harness(
     recoveryScope: "principal-a",
     recoveryScopeReady: true,
   };
-  const gatewayListeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
   const gateway = {
     connection: { gatewayUrl: "ws://gateway.example" },
     snapshot: { phase: "connected", client, hello: {} },
-    subscribe(listener: (snapshot: ApplicationGateway["snapshot"]) => void) {
-      gatewayListeners.add(listener);
-      return () => gatewayListeners.delete(listener);
-    },
+    subscribe: vi.fn(() => () => undefined),
   } as unknown as ApplicationGateway;
   const row = { key: sessionKey, placement: placement("requested", 1) } as GatewaySessionRow;
   const state = { result: { sessions: [row] } as SessionsListResult };
@@ -201,11 +197,59 @@ describe("application cloud startup", () => {
 
   it("keeps get and retry inert before any runtime load", async () => {
     const loader = vi.fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>();
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input, gateway } = harness(vi.fn(), { loadRuntime: loader });
 
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     startup.retry(input.recovery.sessionKey);
     expect(loader).not.toHaveBeenCalled();
+    expect(gateway.subscribe).not.toHaveBeenCalled();
+    startup.dispose();
+  });
+
+  it("resumes recovery only for the current connected recovery scope", async () => {
+    const fake = createFakeRuntime();
+    const factory = vi.fn(() => fake.runtime);
+    const loader = vi.fn(async () => ({ createApplicationCloudStartupRuntime: factory }));
+    const { startup, gateway, client } = harness(vi.fn(), { loadRuntime: loader });
+    const snapshot = gateway.snapshot as { phase: string; client: typeof client };
+
+    snapshot.phase = "connecting";
+    startup.resumeRecovery();
+    client.recoveryScopeReady = false;
+    snapshot.phase = "connected";
+    startup.resumeRecovery();
+    client.recoveryScopeReady = true;
+    client.recoveryScope = "principal-b";
+    startup.resumeRecovery();
+    expect(loader).not.toHaveBeenCalled();
+
+    client.recoveryScope = "principal-a";
+    startup.resumeRecovery();
+    await flush();
+    expect(loader).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledWith(expect.anything(), {
+      reconcileCurrentSnapshot: true,
+    });
+    startup.dispose();
+  });
+
+  it("keeps durable recovery available after a background load rejection", async () => {
+    const fake = createFakeRuntime();
+    const factory = vi.fn(() => fake.runtime);
+    const loader = vi
+      .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
+      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
+      .mockResolvedValueOnce({ createApplicationCloudStartupRuntime: factory });
+    const { startup } = harness(vi.fn(), { loadRuntime: loader });
+
+    startup.resumeRecovery();
+    await flush();
+    expect(loader).toHaveBeenCalledOnce();
+
+    startup.resumeRecovery();
+    await flush();
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledOnce();
     startup.dispose();
   });
 
@@ -235,7 +279,7 @@ describe("application cloud startup", () => {
     startup.dispose();
   });
 
-  it("loads and reconciles recovery when constructed on an existing connection", async () => {
+  it("loads and reconciles recovery when resumed on an existing connection", async () => {
     const activePlacement = placement("active", 2);
     const request = vi.fn((method: string) => {
       if (method === "sessions.describe") {
@@ -251,6 +295,7 @@ describe("application cloud startup", () => {
       loadRuntime: loader,
       recoveryBeforeStartup: true,
     });
+    startup.resumeRecovery();
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(

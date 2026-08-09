@@ -14,7 +14,6 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationCloudStartupStatus } from "../../app/cloud-session-startup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
@@ -36,7 +35,7 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
-import { renderChatViewNotices } from "./chat-view-notices.ts";
+import { type ChatCloudStartupNoticeProps, renderChatViewNotices } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
@@ -67,7 +66,6 @@ import {
   renderChatThread,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
-import { renderCloudStartupStatus } from "./components/chat-working-indicator.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
@@ -85,7 +83,7 @@ type ChatReplyTarget = {
   sourceMessageId?: string | null;
 };
 
-export type ChatProps = ChatTaskSuggestionTrayProps & {
+export type ChatProps = ChatTaskSuggestionTrayProps & ChatCloudStartupNoticeProps & {
   transcript: ChatTranscriptController;
   backgroundTaskTranscript?: ChatTranscriptController;
   paneId: string;
@@ -98,8 +96,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps & {
   persistCommentary?: boolean;
   loading: boolean;
   sending: boolean;
-  cloudStartup?: ApplicationCloudStartupStatus | null;
-  onRetryCloudStartup?: () => void;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
   startupStatus?: ChatRunStartupStatus | null;
@@ -577,9 +573,7 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${renderChatViewNotices(props)}
-      ${renderCloudStartupStatus(props.cloudStartup, props.onRetryCloudStartup)}
-      ${renderChatSearchBar(props.paneId, requestUpdate)}
+      ${renderChatViewNotices(props)} ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
           paneId: props.paneId,

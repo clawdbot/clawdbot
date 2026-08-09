@@ -48,6 +48,7 @@ import {
   NEW_SESSION_CREATE_FAILED_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
 } from "./chat-pane-shared.ts";
+import { subscribeChatPaneStartup } from "./chat-pane-startup-subscriptions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -619,15 +620,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
     this.applySessionsState(this.context.sessions.state);
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
-    chatState.addCleanup(
-      this.context.initialUserMessage.subscribe(() =>
-        this.state &&
-        admitInitialMessage(this.state.initialUserMessage, this.state, this.state.sessionKey)
-          ? this.state.requestUpdate?.()
-          : undefined,
-      ),
-    );
-    chatState.addCleanup(this.context.cloudStartup.subscribe(() => this.state?.requestUpdate?.()));
+    chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
 
