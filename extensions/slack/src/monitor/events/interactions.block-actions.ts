@@ -1,5 +1,5 @@
 // Slack plugin module implements interactions.block actions behavior.
-import type { SlackActionMiddlewareArgs } from "@slack/bolt";
+import type { AllMiddlewareArgs, SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -1042,7 +1042,7 @@ async function updateSlackLegacyBlockAction(params: {
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
-  args: SlackActionMiddlewareArgs;
+  args: SlackActionMiddlewareArgs & AllMiddlewareArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { ack, body, action, respond, context, client } = params.args;
@@ -1188,14 +1188,17 @@ function registerSlackBlockActionHandlerForMatcher(params: {
   if (typeof params.ctx.app.action !== "function") {
     return;
   }
-  params.ctx.app.action(params.matcher, async (args: SlackActionMiddlewareArgs) => {
-    await handleSlackBlockAction({
-      ctx: params.ctx,
-      trackEvent: params.trackEvent,
-      args,
-      formatSystemEvent: params.formatSystemEvent,
-    });
-  });
+  params.ctx.app.action(
+    params.matcher,
+    async (args: SlackActionMiddlewareArgs & AllMiddlewareArgs) => {
+      await handleSlackBlockAction({
+        ctx: params.ctx,
+        trackEvent: params.trackEvent,
+        args,
+        formatSystemEvent: params.formatSystemEvent,
+      });
+    },
+  );
 }
 
 export function registerSlackBlockActionHandler(params: {
