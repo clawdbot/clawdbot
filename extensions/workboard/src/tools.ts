@@ -1,6 +1,6 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements tools behavior.
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
+import { jsonResult, optionalStringEnum, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -473,12 +473,10 @@ export function createWorkboardTools(params: {
           status: Type.Optional(
             Type.String({ description: "passed, failed, skipped, or unknown." }),
           ),
-          verification: Type.Optional(
-            Type.Union([Type.Literal("worker_reported"), Type.Literal("independently_verified")], {
-              description:
-                "Proof provenance; defaults to worker_reported and is caller-reported, not an attestation.",
-            }),
-          ),
+          verification: optionalStringEnum(["worker_reported", "independently_verified"] as const, {
+            description:
+              "Proof provenance; defaults to worker_reported and is caller-reported, not an attestation.",
+          }),
           label: Type.Optional(Type.String({ description: "Proof label." })),
           command: Type.Optional(Type.String({ description: "Command or exact step run." })),
           url: Type.Optional(Type.String({ description: "Proof or artifact URL." })),
@@ -519,11 +517,9 @@ export function createWorkboardTools(params: {
         {
           id: cardIdField(),
           token: claimTokenField(),
-          status: Type.Optional(
-            Type.Union([Type.Literal("review"), Type.Literal("done")], {
-              description: "Use review when acceptance is still pending; defaults to done.",
-            }),
-          ),
+          status: optionalStringEnum(["review", "done"] as const, {
+            description: "Use review when acceptance is still pending; defaults to done.",
+          }),
           summary: Type.Optional(Type.String({ description: "Completion summary." })),
           proofId: Type.Optional(
             Type.String({
@@ -537,14 +533,12 @@ export function createWorkboardTools(params: {
                 status: Type.Optional(
                   Type.String({ description: "passed, failed, skipped, or unknown." }),
                 ),
-                verification: Type.Optional(
-                  Type.Union(
-                    [Type.Literal("worker_reported"), Type.Literal("independently_verified")],
-                    {
-                      description:
-                        "Proof provenance; defaults to worker_reported and is caller-reported, not an attestation.",
-                    },
-                  ),
+                verification: optionalStringEnum(
+                  ["worker_reported", "independently_verified"] as const,
+                  {
+                    description:
+                      "Proof provenance; defaults to worker_reported and is caller-reported, not an attestation.",
+                  },
                 ),
                 label: Type.Optional(Type.String({ description: "Proof label." })),
                 command: Type.Optional(Type.String({ description: "Command or step run." })),

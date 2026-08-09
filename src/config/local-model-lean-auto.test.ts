@@ -151,4 +151,27 @@ describe("local model lean onboarding defaults", () => {
     expect(result.config.agents?.defaults?.experimental?.localModelLean).toBe(true);
     expect(result.config.wizard?.localModelLeanAutoModel).toBeUndefined();
   });
+
+  it("accepts explicit previous-model ownership after provider setup replaces the default", () => {
+    const previousModelRef = "ollama/qwen3:8b";
+    const selectedModelRef = "openai/gpt-5.6-luna";
+    const result = applyAutoLocalModelLean({
+      config: {
+        wizard: { localModelLeanAutoModel: previousModelRef },
+        agents: {
+          defaults: {
+            model: { primary: selectedModelRef },
+            experimental: { localModelLean: true },
+          },
+        },
+      },
+      providerId: "openai",
+      modelRef: selectedModelRef,
+      previousModelRef,
+    });
+
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: selectedModelRef });
+    expect(result.config.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+    expect(result.config.wizard?.localModelLeanAutoModel).toBeUndefined();
+  });
 });

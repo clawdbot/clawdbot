@@ -83,7 +83,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(replyTexts(onBlockReply)).toEqual(["Hello", "[["]);
+    expect(replyTexts(onBlockReply)).toEqual(["Hello", " [["]);
+    expect(replyTexts(onBlockReply).join("")).toBe("Hello [[");
   });
 
   it("streams partial replies past reply_to tags split across chunks", () => {

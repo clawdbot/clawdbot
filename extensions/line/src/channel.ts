@@ -22,7 +22,7 @@ import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messagi
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
-import { lineSetupAdapter, lineSetupContract } from "./setup-core.js";
+import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
 
@@ -114,7 +114,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       },
     },
     directory: createEmptyChannelDirectoryAdapter(),
-    setup: lineSetupAdapter,
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,

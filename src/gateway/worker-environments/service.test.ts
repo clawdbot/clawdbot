@@ -14,13 +14,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
+import { writeSessionStore } from "../test-helpers.js";
+import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -72,6 +78,10 @@ const LIVE_EVENT = {
 };
 
 type WorkerLifecycleLease = Parameters<WorkerProvider["inspect"]>[0];
+type TranscriptRequest = Parameters<WorkerEnvironmentService["commitTranscript"]>[1];
+type TranscriptOverrides = Partial<Pick<TranscriptRequest, "baseLeafId" | "runEpoch" | "seq">>;
+type LiveEventRequest = Parameters<WorkerEnvironmentService["pushLiveEvent"]>[1];
+type LiveOpts = Partial<Pick<LiveEventRequest, "lastAckedSeq" | "runEpoch" | "runId" | "seq">>;
 
 describe("worker environment service", () => {
   let root: string;
@@ -190,6 +200,7 @@ describe("worker environment service", () => {
   function seedBootstrapping(
     environmentId: string,
     install?: WorkerInstallationArtifact["install"],
+    sharedHost = false,
   ) {
     const intent = store.createIntent({
       environmentId,
@@ -207,12 +218,16 @@ describe("worker environment service", () => {
       environmentId,
       from: provisioning.state,
       to: "bootstrapping",
-      patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT },
+      patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
     });
   }
 
-  function seedReady(environmentId: string, install?: WorkerInstallationArtifact["install"]) {
-    const bootstrapping = seedBootstrapping(environmentId, install);
+  function seedReady(
+    environmentId: string,
+    install?: WorkerInstallationArtifact["install"],
+    sharedHost = false,
+  ) {
+    const bootstrapping = seedBootstrapping(environmentId, install, sharedHost);
     return store.transition({
       environmentId,
       from: bootstrapping.state,
@@ -297,6 +312,91 @@ describe("worker environment service", () => {
       context: { messages: [] },
       options: {},
     };
+  }
+
+  function transcriptRequest(
+    identity: WorkerConnectionIdentity,
+    text: string,
+    overrides: TranscriptOverrides = {},
+  ): TranscriptRequest {
+    return {
+      runEpoch: identity.ownerEpoch,
+      seq: 1,
+      baseLeafId: null,
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text }],
+          timestamp: 1,
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  function liveEventRequest(
+    identity: WorkerConnectionIdentity,
+    event: LiveEventRequest["event"],
+    overrides: LiveOpts = {},
+  ): LiveEventRequest {
+    return {
+      runEpoch: identity.ownerEpoch,
+      lastAckedSeq: 0,
+      seq: 1,
+      runId: identity.runId ?? "run-missing",
+      event,
+      ...overrides,
+    };
+  }
+
+  function assistantEvent(identity: WorkerConnectionIdentity, text: string, extra: LiveOpts = {}) {
+    return liveEventRequest(identity, { kind: "assistant", payload: { text, delta: text } }, extra);
+  }
+
+  function terminalEvent(identity: WorkerConnectionIdentity, overrides: LiveOpts = {}) {
+    return liveEventRequest(
+      identity,
+      { kind: "lifecycle", payload: { phase: "end", endedAt: 2 } },
+      overrides,
+    );
+  }
+
+  function successfulTranscriptCommit(entryId: string, beforeCommit?: () => Promise<unknown>) {
+    return vi.fn(async () => {
+      await beforeCommit?.();
+      return { ok: true as const, result: { entryIds: [entryId], newLeafId: entryId } };
+    });
+  }
+
+  function sequencedLiveEvents(ackedSeq = (seq: number) => seq) {
+    const apply = vi.fn(({ request }: { request: LiveEventRequest }) => ({
+      ok: true as const,
+      result: { ackedSeq: ackedSeq(request.seq) },
+    }));
+    return { apply, liveEvents: createLiveEvents({ apply }) };
+  }
+
+  function placementBinding(identity: WorkerConnectionIdentity) {
+    return {
+      sessionId: identity.sessionId ?? "session-missing",
+      environmentId: identity.environmentId,
+      ownerEpoch: identity.ownerEpoch,
+      runId: identity.runId ?? "run-missing",
+    };
+  }
+
+  function placementHarness(
+    environmentId: string,
+    sessionId: string,
+    serviceOptions: Parameters<typeof createService>[1] = {},
+  ) {
+    const identity = seedAttachedIdentity(environmentId, sessionId);
+    const placementStore = {
+      validateWorkerTurn: vi.fn(() => true),
+      updateAckCursors: vi.fn(),
+    };
+    const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
+    return { identity, placementStore, workerService };
   }
 
   it("persists intent and an immutable profile snapshot before provisioning", async () => {
@@ -404,23 +504,9 @@ describe("worker environment service", () => {
     const environmentId = "worker-transcript-fence";
     const sessionId = "session-transcript-fence";
     const identity = seedAttachedIdentity(environmentId, sessionId);
-    const applyTranscriptCommit = vi.fn(async () => ({
-      ok: true as const,
-      result: { entryIds: ["entry-1"], newLeafId: "entry-1" },
-    }));
+    const applyTranscriptCommit = successfulTranscriptCommit("entry-1");
     const workerService = createService(createProvider(), { applyTranscriptCommit });
-    const request = {
-      runEpoch: identity.ownerEpoch,
-      seq: 1,
-      baseLeafId: null,
-      messages: [
-        {
-          role: "user" as const,
-          content: [{ type: "text" as const, text: "hello" }],
-          timestamp: 1,
-        },
-      ],
-    };
+    const request = transcriptRequest(identity, "hello");
 
     await expect(workerService.commitTranscript(identity, request)).resolves.toMatchObject({
       ok: true,
@@ -446,12 +532,7 @@ describe("worker environment service", () => {
   it("admits only a gateway-preclaimed worker placement and fences later requests", async () => {
     const environmentId = "worker-placement-fence";
     const sessionId = "session-placement-fence";
-    const identity = seedAttachedIdentity(environmentId, sessionId);
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
-    const workerService = createService(createProvider(), { placementStore });
+    const { identity, placementStore, workerService } = placementHarness(environmentId, sessionId);
     const admission = {
       environmentId,
       credential: [CREDENTIAL, environmentId, sessionId].join("-"),
@@ -502,81 +583,35 @@ describe("worker environment service", () => {
     placementStore.validateWorkerTurn.mockReturnValue(false);
     expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
     await expect(
-      workerService.commitTranscript(identity, {
-        runEpoch: identity.ownerEpoch,
-        seq: 1,
-        baseLeafId: null,
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "fenced" }],
-            timestamp: 1,
-          },
-        ],
-      }),
+      workerService.commitTranscript(identity, transcriptRequest(identity, "fenced")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
   });
 
   it("persists worker transcript and terminal live ACK cursors", async () => {
-    const identity = seedAttachedIdentity("worker-placement-ack", "session-placement-ack");
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
-    const applyTranscriptCommit = vi.fn(async () => ({
-      ok: true as const,
-      result: { entryIds: ["entry-placement"], newLeafId: "entry-placement" },
-    }));
-    const liveEvents = createLiveEvents({
-      apply: vi.fn(
-        ({
-          request,
-        }: Parameters<NonNullable<WorkerEnvironmentServiceOptions["liveEvents"]>["apply"]>[0]) => ({
-          ok: true as const,
-          result: { ackedSeq: request.seq },
-        }),
-      ),
-    });
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      liveEvents,
-      placementStore,
-    });
-    const binding = {
-      sessionId: identity.sessionId ?? "session-missing",
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.ownerEpoch,
-      runId: identity.runId ?? "run-missing",
-    };
+    const applyTranscriptCommit = successfulTranscriptCommit("entry-placement");
+    const { liveEvents } = sequencedLiveEvents();
+    const { identity, placementStore, workerService } = placementHarness(
+      "worker-placement-ack",
+      "session-placement-ack",
+      {
+        applyTranscriptCommit,
+        liveEvents,
+      },
+    );
+    const binding = placementBinding(identity);
 
     await expect(
-      workerService.commitTranscript(identity, {
-        runEpoch: identity.ownerEpoch,
-        seq: 7,
-        baseLeafId: null,
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "commit" }],
-            timestamp: 1,
-          },
-        ],
-      }),
+      workerService.commitTranscript(identity, transcriptRequest(identity, "commit", { seq: 7 })),
     ).resolves.toMatchObject({ ok: true });
     expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
       ...binding,
       transcriptSeq: 7,
     });
 
-    await expect(
-      workerService.pushLiveEvent(identity, {
-        runEpoch: identity.ownerEpoch,
-        lastAckedSeq: 0,
-        seq: 1,
-        runId: binding.runId,
-        event: { kind: "lifecycle", payload: { phase: "end", endedAt: 2 } },
-      }),
-    ).resolves.toEqual({ ok: true, result: { ackedSeq: 1 } });
+    await expect(workerService.pushLiveEvent(identity, terminalEvent(identity))).resolves.toEqual({
+      ok: true,
+      result: { ackedSeq: 1 },
+    });
     expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
       ...binding,
       liveSeq: 1,
@@ -585,39 +620,24 @@ describe("worker environment service", () => {
   });
 
   it("does not ACK a transcript commit after its worker claim is fenced", async () => {
-    const identity = seedAttachedIdentity("worker-placement-race", "session-placement-race");
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
     let finishCommit: (() => void) | undefined;
     const commitBlocked = new Promise<void>((resolve) => {
       finishCommit = resolve;
     });
-    const applyTranscriptCommit = vi.fn(async () => {
-      await commitBlocked;
-      return {
-        ok: true as const,
-        result: { entryIds: ["entry-placement-race"], newLeafId: "entry-placement-race" },
-      };
-    });
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      placementStore,
-    });
+    const applyTranscriptCommit = successfulTranscriptCommit(
+      "entry-placement-race",
+      () => commitBlocked,
+    );
+    const { identity, placementStore, workerService } = placementHarness(
+      "worker-placement-race",
+      "session-placement-race",
+      { applyTranscriptCommit },
+    );
 
-    const commit = workerService.commitTranscript(identity, {
-      runEpoch: identity.ownerEpoch,
-      seq: 1,
-      baseLeafId: null,
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "commit before claim fence" }],
-          timestamp: 1,
-        },
-      ],
-    });
+    const commit = workerService.commitTranscript(
+      identity,
+      transcriptRequest(identity, "commit before claim fence"),
+    );
     await waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
     placementStore.validateWorkerTurn.mockReturnValue(false);
     finishCommit?.();
@@ -628,41 +648,26 @@ describe("worker environment service", () => {
   });
 
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {
-    const identity = seedAttachedIdentity("worker-placement-stale", "session-placement-stale");
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
     const applyTranscriptCommit = vi
       .fn<NonNullable<WorkerEnvironmentServiceOptions["applyTranscriptCommit"]>>()
       .mockResolvedValueOnce({ ok: false, reason: "stale-base-leaf" })
       .mockResolvedValueOnce({ ok: false, reason: "invalid-batch" });
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      placementStore,
-    });
-    const request = {
-      runEpoch: identity.ownerEpoch,
+    const { identity, placementStore, workerService } = placementHarness(
+      "worker-placement-stale",
+      "session-placement-stale",
+      { applyTranscriptCommit },
+    );
+    const request = transcriptRequest(identity, "stale commit", {
       seq: 11,
       baseLeafId: "stale-leaf",
-      messages: [
-        {
-          role: "user" as const,
-          content: [{ type: "text" as const, text: "stale commit" }],
-          timestamp: 1,
-        },
-      ],
-    };
+    });
 
     await expect(workerService.commitTranscript(identity, request)).resolves.toEqual({
       ok: false,
       reason: "stale-base-leaf",
     });
     expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      sessionId: identity.sessionId,
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.ownerEpoch,
-      runId: identity.runId,
+      ...placementBinding(identity),
       transcriptSeq: 11,
     });
 
@@ -673,134 +678,61 @@ describe("worker environment service", () => {
   });
 
   it("fences after a buffered terminal event becomes acknowledged by a gap fill", async () => {
-    const identity = seedAttachedIdentity("worker-placement-gap", "session-placement-gap");
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
-    const applyTranscriptCommit = vi.fn(async () => ({
-      ok: true as const,
-      result: { entryIds: ["entry-after-terminal-gap"], newLeafId: "entry-after-terminal-gap" },
-    }));
-    const liveApply = vi.fn(
-      ({
-        request,
-      }: Parameters<NonNullable<WorkerEnvironmentServiceOptions["liveEvents"]>["apply"]>[0]) => ({
-        ok: true as const,
-        result: { ackedSeq: request.seq === 1 ? 2 : 0 },
-      }),
+    const applyTranscriptCommit = successfulTranscriptCommit("entry-after-terminal-gap");
+    const { apply: liveApply, liveEvents } = sequencedLiveEvents((seq) => (seq === 1 ? 2 : 0));
+    const { identity, placementStore, workerService } = placementHarness(
+      "worker-placement-gap",
+      "session-placement-gap",
+      {
+        applyTranscriptCommit,
+        liveEvents,
+      },
     );
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      liveEvents: createLiveEvents({ apply: liveApply }),
-      placementStore,
-    });
 
     await expect(
-      workerService.pushLiveEvent(identity, {
-        runEpoch: identity.ownerEpoch,
-        lastAckedSeq: 0,
-        seq: 2,
-        runId: identity.runId ?? "run-missing",
-        event: { kind: "lifecycle", payload: { phase: "end", endedAt: 2 } },
-      }),
+      workerService.pushLiveEvent(identity, terminalEvent(identity, { seq: 2 })),
     ).resolves.toEqual({ ok: true, result: { ackedSeq: 0 } });
     expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      sessionId: identity.sessionId,
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.ownerEpoch,
-      runId: identity.runId,
+      ...placementBinding(identity),
       liveSeq: 0,
       workspaceResultPending: true,
     });
 
     await expect(
-      workerService.pushLiveEvent(identity, {
-        runEpoch: identity.ownerEpoch,
-        lastAckedSeq: 0,
-        seq: 1,
-        runId: identity.runId ?? "run-missing",
-        event: { kind: "assistant", payload: { text: "fills gap", delta: "fills gap" } },
-      }),
+      workerService.pushLiveEvent(identity, assistantEvent(identity, "fills gap")),
     ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
     await expect(
-      workerService.commitTranscript(identity, {
-        runEpoch: identity.ownerEpoch,
-        seq: 1,
-        baseLeafId: null,
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "late transcript" }],
-            timestamp: 1,
-          },
-        ],
-      }),
+      workerService.commitTranscript(identity, transcriptRequest(identity, "late transcript")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
     await expect(
-      workerService.pushLiveEvent(identity, {
-        runEpoch: identity.ownerEpoch,
-        lastAckedSeq: 2,
-        seq: 3,
-        runId: identity.runId ?? "run-missing",
-        event: { kind: "assistant", payload: { text: "late", delta: "late" } },
-      }),
+      workerService.pushLiveEvent(
+        identity,
+        assistantEvent(identity, "late", { lastAckedSeq: 2, seq: 3 }),
+      ),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
     expect(applyTranscriptCommit).not.toHaveBeenCalled();
     expect(liveApply).toHaveBeenCalledTimes(2);
   });
 
   it("applies a terminal ACK only after its transcript commit finishes", async () => {
-    const identity = seedAttachedIdentity("worker-placement-order", "session-placement-order");
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
     let finishCommit: (() => void) | undefined;
     const commitBlocked = new Promise<void>((resolve) => {
       finishCommit = resolve;
     });
-    const applyTranscriptCommit = vi.fn(async () => {
-      await commitBlocked;
-      return {
-        ok: true as const,
-        result: { entryIds: ["entry-order"], newLeafId: "entry-order" },
-      };
-    });
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      liveEvents: createLiveEvents({
-        apply: vi.fn(
-          ({
-            request,
-          }: Parameters<
-            NonNullable<WorkerEnvironmentServiceOptions["liveEvents"]>["apply"]
-          >[0]) => ({ ok: true as const, result: { ackedSeq: request.seq } }),
-        ),
-      }),
-      placementStore,
-    });
+    const applyTranscriptCommit = successfulTranscriptCommit("entry-order", () => commitBlocked);
+    const { liveEvents } = sequencedLiveEvents();
+    const { identity, placementStore, workerService } = placementHarness(
+      "worker-placement-order",
+      "session-placement-order",
+      { applyTranscriptCommit, liveEvents },
+    );
 
-    const commit = workerService.commitTranscript(identity, {
-      runEpoch: identity.ownerEpoch,
-      seq: 1,
-      baseLeafId: null,
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "commit before terminal" }],
-          timestamp: 1,
-        },
-      ],
-    });
+    const commit = workerService.commitTranscript(
+      identity,
+      transcriptRequest(identity, "commit before terminal"),
+    );
     await waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
-    const terminal = workerService.pushLiveEvent(identity, {
-      runEpoch: identity.ownerEpoch,
-      lastAckedSeq: 0,
-      seq: 1,
-      runId: identity.runId ?? "run-missing",
-      event: { kind: "lifecycle", payload: { phase: "end", endedAt: 2 } },
-    });
+    const terminal = workerService.pushLiveEvent(identity, terminalEvent(identity));
     await Promise.resolve();
     expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
 
@@ -810,19 +742,13 @@ describe("worker environment service", () => {
     expect(placementStore.updateAckCursors.mock.calls).toEqual([
       [
         {
-          sessionId: identity.sessionId,
-          environmentId: identity.environmentId,
-          ownerEpoch: identity.ownerEpoch,
-          runId: identity.runId,
+          ...placementBinding(identity),
           transcriptSeq: 1,
         },
       ],
       [
         {
-          sessionId: identity.sessionId,
-          environmentId: identity.environmentId,
-          ownerEpoch: identity.ownerEpoch,
-          runId: identity.runId,
+          ...placementBinding(identity),
           liveSeq: 1,
           workspaceResultPending: true,
         },
@@ -831,23 +757,8 @@ describe("worker environment service", () => {
   });
 
   it("fences post-terminal mutations while preserving sequenced replays", async () => {
-    const identity = seedAttachedIdentity("worker-terminal-fence", "session-terminal-fence");
-    const placementStore = {
-      validateWorkerTurn: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-    };
-    const applyTranscriptCommit = vi.fn(async () => ({
-      ok: true as const,
-      result: { entryIds: ["entry-terminal"], newLeafId: "entry-terminal" },
-    }));
-    const liveApply = vi.fn(
-      ({
-        request,
-      }: Parameters<NonNullable<WorkerEnvironmentServiceOptions["liveEvents"]>["apply"]>[0]) => ({
-        ok: true as const,
-        result: { ackedSeq: request.seq },
-      }),
-    );
+    const applyTranscriptCommit = successfulTranscriptCommit("entry-terminal");
+    const { apply: liveApply, liveEvents } = sequencedLiveEvents();
     const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>(
       async () => ({
         type: "error",
@@ -855,31 +766,13 @@ describe("worker environment service", () => {
         message: "Provider request failed",
       }),
     );
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      executeInference,
-      liveEvents: createLiveEvents({ apply: liveApply }),
-      placementStore,
-    });
-    const transcript = {
-      runEpoch: identity.ownerEpoch,
-      seq: 1,
-      baseLeafId: null,
-      messages: [
-        {
-          role: "user" as const,
-          content: [{ type: "text" as const, text: "terminal fence" }],
-          timestamp: 1,
-        },
-      ],
-    };
-    const terminal = {
-      runEpoch: identity.ownerEpoch,
-      lastAckedSeq: 0,
-      seq: 1,
-      runId: identity.runId ?? "run-missing",
-      event: { kind: "lifecycle" as const, payload: { phase: "end" as const, endedAt: 2 } },
-    };
+    const { identity, workerService } = placementHarness(
+      "worker-terminal-fence",
+      "session-terminal-fence",
+      { applyTranscriptCommit, executeInference, liveEvents },
+    );
+    const transcript = transcriptRequest(identity, "terminal fence");
+    const terminal = terminalEvent(identity);
 
     await expect(workerService.commitTranscript(identity, transcript)).resolves.toMatchObject({
       ok: true,
@@ -902,11 +795,7 @@ describe("worker environment service", () => {
       result: { ackedSeq: 1 },
     });
     await expect(
-      workerService.pushLiveEvent(identity, {
-        ...terminal,
-        seq: 2,
-        event: { kind: "assistant", payload: { text: "late", delta: "late" } },
-      }),
+      workerService.pushLiveEvent(identity, assistantEvent(identity, "late", { seq: 2 })),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
     expect(liveApply).toHaveBeenCalledTimes(2);
 
@@ -938,55 +827,21 @@ describe("worker environment service", () => {
   });
 
   it("does not treat a terminal event on an already ACKed sequence as authoritative", async () => {
-    const identity = seedAttachedIdentity("worker-terminal-reuse", "session-terminal-reuse");
-    const applyTranscriptCommit = vi.fn(async () => ({
-      ok: true as const,
-      result: { entryIds: ["entry-after-reuse"], newLeafId: "entry-after-reuse" },
-    }));
-    const workerService = createService(createProvider(), {
-      applyTranscriptCommit,
-      liveEvents: createLiveEvents({
-        apply: vi.fn(
-          ({
-            request,
-          }: Parameters<
-            NonNullable<WorkerEnvironmentServiceOptions["liveEvents"]>["apply"]
-          >[0]) => ({ ok: true as const, result: { ackedSeq: request.seq } }),
-        ),
-      }),
-      placementStore: {
-        validateWorkerTurn: vi.fn(() => true),
-        updateAckCursors: vi.fn(),
-      },
-    });
-    const event = {
-      runEpoch: identity.ownerEpoch,
-      lastAckedSeq: 0,
-      seq: 1,
-      runId: identity.runId ?? "run-missing",
-      event: { kind: "assistant" as const, payload: { text: "first", delta: "first" } },
-    };
+    const applyTranscriptCommit = successfulTranscriptCommit("entry-after-reuse");
+    const { liveEvents } = sequencedLiveEvents();
+    const { identity, workerService } = placementHarness(
+      "worker-terminal-reuse",
+      "session-terminal-reuse",
+      { applyTranscriptCommit, liveEvents },
+    );
+    const event = assistantEvent(identity, "first");
 
     await expect(workerService.pushLiveEvent(identity, event)).resolves.toMatchObject({ ok: true });
     await expect(
-      workerService.pushLiveEvent(identity, {
-        ...event,
-        event: { kind: "lifecycle", payload: { phase: "end", endedAt: 2 } },
-      }),
+      workerService.pushLiveEvent(identity, terminalEvent(identity)),
     ).resolves.toMatchObject({ ok: true });
     await expect(
-      workerService.commitTranscript(identity, {
-        runEpoch: identity.ownerEpoch,
-        seq: 1,
-        baseLeafId: null,
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "still mutable" }],
-            timestamp: 1,
-          },
-        ],
-      }),
+      workerService.commitTranscript(identity, transcriptRequest(identity, "still mutable")),
     ).resolves.toMatchObject({ ok: true });
     expect(applyTranscriptCommit).toHaveBeenCalledOnce();
   });
@@ -1314,6 +1169,7 @@ describe("worker environment service", () => {
       workerService.create("development", "request-preparation-failure"),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("npm install requires a released gateway package"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
 
     expect(provision).not.toHaveBeenCalled();
@@ -1321,6 +1177,10 @@ describe("worker environment service", () => {
       state: "failed",
       leaseId: null,
       lastError: "npm install requires a released gateway package",
+    });
+    expect(workerService.list()[0]).toMatchObject({
+      state: "failed",
+      error: "npm install requires a released gateway package",
     });
   });
 
@@ -1360,11 +1220,12 @@ describe("worker environment service", () => {
     const destroy = vi.fn(async () => {});
     const workerService = createService(createProvider({ destroy }));
 
-    await expect(
-      workerService.create("development", "request-bootstrap-failure"),
-    ).rejects.toMatchObject({
+    const creation = workerService.create("development", "request-bootstrap-failure");
+    await expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("Worker bootstrap failed: remote bootstrap rejected"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
+    await expect(creation).rejects.not.toThrow(secret);
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(store.list()[0]).toMatchObject({
@@ -1375,6 +1236,67 @@ describe("worker environment service", () => {
       lastError: expect.stringContaining("remote bootstrap rejected"),
     });
     expect(store.list()[0]?.lastError).not.toContain(secret);
+  });
+
+  it("projects bounded bootstrap detail through sessions.describe after failed dispatch", async () => {
+    // Assembled at runtime so review-bundle secret scanners do not flag a key-shaped literal.
+    const secret = ["sk", "proj", "placement", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    bootstrapWorker = vi.fn(async () => {
+      throw new Error(`remote bootstrap rejected ${secret} ${"failure ".repeat(200)}`);
+    });
+    const workerService = createService(createProvider());
+    const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    const dispatch = createWorkerPlacementDispatchService({
+      placements,
+      environments: workerService,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runActivationBarrier: async ({ activate }) => activate(),
+      runReclaimBarrier: async ({ reclaim }) => await reclaim("/gateway/workspace"),
+      resolveWorkspacePath: async () => "/gateway/workspace",
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+    });
+
+    await expect(
+      dispatch.dispatch({
+        sessionId: "session-bootstrap-failure",
+        sessionKey: "agent:main:session-bootstrap-failure",
+        agentId: "main",
+        profileId: "development",
+      }),
+    ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
+
+    const persisted = expectDefined(
+      placements.get("session-bootstrap-failure"),
+      "failed worker placement",
+    );
+    const sessionStorePath = path.join(root, "sessions.json");
+    await writeSessionStore({
+      entries: { main: { sessionId: persisted.sessionId, updatedAt: nowMs } },
+      storePath: sessionStorePath,
+    });
+    const described = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: {
+          getRuntimeConfig: () => ({ session: { store: sessionStorePath } }),
+          workerSessionPlacementService: placements,
+        },
+      },
+    );
+    const describedPlacement = described.payload?.session?.placement;
+    expect(described).toMatchObject({ ok: true });
+    expect(describedPlacement).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("remote bootstrap rejected"),
+    });
+    if (describedPlacement?.state !== "failed") {
+      throw new Error("sessions.describe did not project the failed worker placement");
+    }
+    expect(describedPlacement.recoveryError).not.toContain(secret);
+    expect(describedPlacement.recoveryError.length).toBeLessThanOrEqual(1_024);
   });
 
   it("keeps an indeterminate bootstrap teardown retryable", async () => {
@@ -1396,6 +1318,7 @@ describe("worker environment service", () => {
       workerService.create("development", "request-bootstrap-cleanup"),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: "Worker bootstrap failed; teardown is pending: remote bootstrap failed",
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(store.list()[0]).toMatchObject({
       state: "destroying",
@@ -1416,7 +1339,13 @@ describe("worker environment service", () => {
   });
 
   it("bounds worker identity resolution as a provider operation", async () => {
-    bootstrapWorker = vi.fn(async ({ installation, resolveIdentity }) => {
+    const events: string[] = [];
+    let finishIdentity: (() => void) | undefined;
+    const identityPending = new Promise<void>((resolve) => {
+      finishIdentity = resolve;
+    });
+    bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
+      signal.addEventListener("abort", () => void events.push("abort"), { once: true });
       await resolveIdentity(SSH_ENDPOINT.keyRef);
       return {
         bundleHash: installation.bundleHash,
@@ -1424,18 +1353,34 @@ describe("worker environment service", () => {
         protocolFeatures: [...installation.protocolFeatures],
       };
     });
-    const destroy = vi.fn(async () => {});
+    const destroy = vi.fn(async () => {
+      events.push("destroy");
+    });
     const workerService = createService(createProvider({ destroy }), {
       providerCallTimeoutMs: 5,
-      resolveSshIdentity: async () => await new Promise<never>(() => {}),
+      resolveSshIdentity: async () => {
+        events.push("identity:start");
+        await identityPending;
+        events.push("identity:end");
+        return { kind: "path", path: "/keys/worker" };
+      },
     });
 
-    await expect(
-      workerService.create("development", "request-identity-timeout"),
-    ).rejects.toMatchObject({
+    const creation = workerService.create("development", "request-identity-timeout");
+    const creationResult = expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
+    try {
+      await waitForFast(() => expect(store.list()[0]).toMatchObject({ state: "destroying" }));
+      expect(events).toEqual(["identity:start", "abort"]);
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      finishIdentity?.();
+    }
+
+    await creationResult;
     expect(destroy).toHaveBeenCalledOnce();
+    expect(events).toEqual(["identity:start", "abort", "identity:end", "destroy"]);
     expect(store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
   });
 
@@ -1509,6 +1454,83 @@ describe("worker environment service", () => {
     expect(new Set(calls).size).toBe(1);
   });
 
+  it("serializes destroy and provision replay behind a timed-out provider operation", async () => {
+    const events: string[] = [];
+    const operationIds: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    let originalProvisionCalls = 0;
+    let finishFirstProvision: (() => void) | undefined;
+    const firstProvisionPending = new Promise<void>((resolve) => {
+      finishFirstProvision = resolve;
+    });
+    const destroy = vi.fn(async () => {
+      events.push("destroy:start");
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      active -= 1;
+      events.push("destroy:end");
+    });
+    const provider = createProvider({
+      provision: async (_profile, operationId) => {
+        originalProvisionCalls += 1;
+        const call = originalProvisionCalls;
+        operationIds.push(operationId);
+        events.push(`provision:${call}:start`);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (call === 1) {
+          await firstProvisionPending;
+        }
+        active -= 1;
+        events.push(`provision:${call}:end`);
+        return { leaseId: "lease-timeout-replay", ssh: SSH_ENDPOINT };
+      },
+      destroy,
+    });
+    const workerService = createService(provider, { providerCallTimeoutMs: 20 });
+    const creation = workerService.create("development", "request-provider-timeout-race");
+    const creationResult = expect(creation).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    let environmentId: string | undefined;
+    let teardownResult: Promise<void> | undefined;
+    try {
+      await waitForFast(() => expect(events).toEqual(["provision:1:start"]));
+      const queuedEnvironmentId = expectDefined(
+        store.list()[0],
+        "timed-out provision row",
+      ).environmentId;
+      environmentId = queuedEnvironmentId;
+      const teardown = workerService.destroy(queuedEnvironmentId);
+      teardownResult = expect(teardown).resolves.toMatchObject({ state: "destroyed" });
+      await creationResult;
+      await waitForFast(() =>
+        expect(store.get(queuedEnvironmentId)?.destroyRequestedAtMs).not.toBeNull(),
+      );
+      expect(originalProvisionCalls).toBe(1);
+      expect(destroy).not.toHaveBeenCalled();
+      expect(maxActive).toBe(1);
+    } finally {
+      finishFirstProvision?.();
+    }
+
+    await teardownResult;
+    const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
+    expect(operationIds).toHaveLength(2);
+    expect(new Set(operationIds).size).toBe(1);
+    expect(maxActive).toBe(1);
+    expect(events).toEqual([
+      "provision:1:start",
+      "provision:1:end",
+      "provision:2:start",
+      "provision:2:end",
+      "destroy:start",
+      "destroy:end",
+    ]);
+    expect(store.get(finalEnvironmentId)).toMatchObject({ state: "destroyed" });
+  });
+
   it("adopts an indeterminate allocation before a replay preparation failure", async () => {
     const events: string[] = [];
     let preparationFails = false;
@@ -1561,11 +1583,28 @@ describe("worker environment service", () => {
       { leaseId: "lease-invalid", ssh: { ...SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },
       "SSH key must be a canonical SecretRef",
     ],
+    [
+      "excessive SSH fallback ports",
+      {
+        leaseId: "lease-invalid",
+        ssh: {
+          ...SSH_ENDPOINT,
+          fallbackPorts: Array.from({ length: 11 }, (_, index) => 2300 + index),
+        },
+      },
+      "SSH fallback ports cannot exceed 10",
+    ],
+    [
+      "invalid shared-host declaration",
+      { leaseId: "lease-invalid", ssh: SSH_ENDPOINT, sharedHost: "yes" },
+      "invalid provision result",
+    ],
   ])("keeps %s from a provider retryable", async (_name, result, error) => {
     const workerService = createService(createProvider({ provision: async () => result as never }));
 
     await expect(workerService.create("development", "request-malformed")).rejects.toMatchObject({
       code: "provider_failure",
+      message: expect.stringContaining(error),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(store.list()[0]).toMatchObject({
       state: "provisioning",
@@ -1598,6 +1637,7 @@ describe("worker environment service", () => {
 
     await expect(workerService.create("development", "request-invalid")).rejects.toMatchObject({
       code: "invalid_profile",
+      message: expect.stringContaining("region is required"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     const record = expectDefined(store.list()[0], "store.list()[0] test invariant");
     expect(record).toMatchObject({ state: "failed", lastError: "region is required" });
@@ -1930,6 +1970,7 @@ describe("worker environment service", () => {
     });
     expect(prepareInstallation).toHaveBeenCalledWith("npm");
     expect(bootstrapWorker).toHaveBeenCalledWith({
+      operationId: result.provisionOperationId,
       sshEndpoint: SSH_ENDPOINT,
       installation: NPM_ARTIFACT,
       resolveIdentity: expect.any(Function),
@@ -1993,20 +2034,22 @@ describe("worker environment service", () => {
     expect(store.get("worker-destroyed-unknown")).toMatchObject({ state: "destroyed" });
   });
 
-  it.each([null, { status: "future" }])(
-    "retains retryable state for malformed inspection result %#",
-    async (inspection) => {
-      seedReady("worker-malformed");
-      const provider = createProvider({ inspect: async () => inspection as never });
+  it.each([
+    null,
+    { status: "future" },
+    { status: "active", sharedHost: "yes" },
+    { status: "unknown", sharedHost: true },
+  ])("retains retryable state for malformed inspection result %#", async (inspection) => {
+    seedReady("worker-malformed");
+    const provider = createProvider({ inspect: async () => inspection as never });
 
-      await createService(provider).reconcileOnce();
+    await createService(provider).reconcileOnce();
 
-      expect(store.get("worker-malformed")).toMatchObject({
-        state: "ready",
-        lastError: expect.stringContaining("invalid inspection"),
-      });
-    },
-  );
+    expect(store.get("worker-malformed")).toMatchObject({
+      state: "ready",
+      lastError: expect.stringContaining("invalid inspection"),
+    });
+  });
 
   it("adopts provider-proven teardown through legal terminal transitions", async () => {
     seedReady("worker-destroyed-ready");
@@ -2125,7 +2168,7 @@ describe("worker environment service", () => {
   });
 
   it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
-    seedReady("worker-tunnel");
+    seedReady("worker-tunnel", undefined, true);
     const order: string[] = [];
     let tunnelStatus: "stopped" | "connected" = "stopped";
     const tunnelManager = {
@@ -2164,7 +2207,11 @@ describe("worker environment service", () => {
       ownerEpoch: 1,
     });
     expect(tunnelManager.start).toHaveBeenCalledWith(
-      expect.objectContaining({ gateway: { host: "127.0.0.1", port: 18_789 } }),
+      expect.objectContaining({
+        bundleHash: BUNDLE_HASH,
+        gateway: { host: "127.0.0.1", port: 18_789 },
+        sharedHost: true,
+      }),
     );
     expect(workerService.get("worker-tunnel")).toMatchObject({ tunnelStatus: "connected" });
 
@@ -2174,6 +2221,72 @@ describe("worker environment service", () => {
       state: "destroyed",
       tunnelStatus: "stopped",
     });
+  });
+
+  it("reconciles shared-host isolation for a persisted lease before tunnel startup", async () => {
+    seedReady("worker-legacy-shared");
+    database.db
+      .prepare("UPDATE worker_environments SET shared_host = NULL WHERE environment_id = ?")
+      .run("worker-legacy-shared");
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
+        remoteSocketPath: "/tmp/worker/gateway.sock",
+        runWorkspaceCommand: vi.fn(),
+        syncWorkspace: vi.fn(),
+        stop: async () => {},
+      })),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    let inspectionFails = true;
+    const provider = createProvider({
+      inspect: async () => {
+        if (inspectionFails) {
+          throw new Error("provider unavailable");
+        }
+        return { status: "active", sharedHost: true };
+      },
+    });
+    const workerService = createService(provider, { tunnelManager });
+
+    expect(store.get("worker-legacy-shared")?.sharedHost).toBeNull();
+    await workerService.reconcileOnce();
+    await expect(
+      workerService.startTunnel({ environmentId: "worker-legacy-shared", ownerEpoch: 1 }),
+    ).rejects.toThrow("isolation is not reconciled");
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+    inspectionFails = false;
+    await workerService.reconcileOnce();
+    expect(store.get("worker-legacy-shared")?.sharedHost).toBe(true);
+    await workerService.startTunnel({ environmentId: "worker-legacy-shared", ownerEpoch: 1 });
+    expect(tunnelManager.start).toHaveBeenCalledWith(expect.objectContaining({ sharedHost: true }));
+  });
+
+  it("fences an existing tunnel before changing its shared-host isolation", async () => {
+    seedReady("worker-isolation-change");
+    const stop = vi.fn(async () => {
+      expect(store.get("worker-isolation-change")?.sharedHost).toBe(false);
+    });
+    const tunnelManager = {
+      status: () => "connected" as const,
+      start: vi.fn(),
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const provider = createProvider({
+      inspect: async () => ({ status: "active", sharedHost: true }),
+    });
+
+    await createService(provider, { tunnelManager }).reconcileOnce();
+
+    expect(stop).toHaveBeenCalledWith("worker-isolation-change");
+    expect(store.get("worker-isolation-change")?.sharedHost).toBe(true);
   });
 
   it("fences a draining tunnel before reporting an unavailable provider", async () => {
@@ -2232,6 +2345,45 @@ describe("worker environment service", () => {
 
     await rejectedStart;
     expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
+  });
+
+  it("stops a poisoned tunnel start and returns a typed deadline error", async () => {
+    vi.useFakeTimers();
+    seedReady("worker-tunnel-timeout");
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let rejectStart!: (error: Error) => void;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const tunnelManager = {
+      status: () => "connecting" as const,
+      start: vi.fn(() => {
+        signalStarted();
+        return pendingStart;
+      }),
+      stop: vi.fn(async () => {
+        rejectStart(new Error("tunnel stopped"));
+      }),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider(), { tunnelManager });
+
+    const starting = workerService.startTunnel({
+      environmentId: "worker-tunnel-timeout",
+      ownerEpoch: 1,
+    });
+    const rejected = expect(starting).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining("did not connect within 3 minutes"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    await started;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    await rejected;
+    expect(tunnelManager.stop).toHaveBeenCalledWith("worker-tunnel-timeout", 1);
   });
 
   it("adopts an unpersisted provision result before destroying", async () => {
@@ -2340,6 +2492,47 @@ describe("worker environment service", () => {
     expect(new Set(inspected.map(({ leaseId }) => leaseId))).toEqual(
       new Set(["lease:worker-concurrent-a", "lease:worker-concurrent-b"]),
     );
+  });
+
+  it("waits for timed-out provider work during shutdown", async () => {
+    let finishProvision: (() => void) | undefined;
+    const provisionPending = new Promise<void>((resolve) => {
+      finishProvision = resolve;
+    });
+    const provision = vi.fn(async () => {
+      await provisionPending;
+      return { leaseId: "lease-stop-timeout", ssh: SSH_ENDPOINT };
+    });
+    const stopAll = vi.fn(async () => {});
+    const tunnelManager = {
+      stopAll,
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider({ provision }), {
+      providerCallTimeoutMs: 5,
+      tunnelManager,
+    });
+    const creation = workerService.create("development", "request-stop-provider-timeout");
+    const creationResult = expect(creation).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    let stopped = false;
+    let stopping: Promise<void> | undefined;
+
+    try {
+      await waitForFast(() => expect(provision).toHaveBeenCalledOnce());
+      await creationResult;
+      stopping = workerService.stop().then(() => {
+        stopped = true;
+      });
+      await waitForFast(() => expect(stopAll).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+    } finally {
+      finishProvision?.();
+    }
+
+    await stopping;
+    expect(stopped).toBe(true);
   });
 
   it("owns and clears one periodic reconciliation timer", async () => {

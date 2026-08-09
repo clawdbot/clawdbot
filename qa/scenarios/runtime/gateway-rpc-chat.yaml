@@ -1,0 +1,25 @@
+title: Gateway chat RPC lifecycle
+
+scenario:
+  id: gateway-rpc-chat
+  surface: gateway
+  category: gateway.gateway-rpc-apis-and-events
+  coverage:
+    primary:
+      - gateway.chat-apis
+  objective: Verify the Gateway chat RPC lifecycle through a real WebSocket while only the downstream model provider is mocked.
+  successCriteria:
+    - "chat.send accepts a user turn and returns its run identifier."
+    - "agent.wait observes the same run reaching terminal success."
+    - "chat.history returns the persisted user turn and downstream assistant reply."
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/server-methods/chat.ts
+    - src/gateway/server-methods/agent.ts
+    - test/e2e/qa-lab/runtime/gateway-rpc-chat.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-rpc-chat.e2e.test.ts
+    summary: Run chat.send, agent.wait, and chat.history across a real Gateway WebSocket with deterministic downstream model output.

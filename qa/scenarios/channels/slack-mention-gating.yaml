@@ -6,14 +6,14 @@ scenario:
     primary:
       - slack.channel-allowlists
   execution:
-    profiles: { "slack:default": 1 }
     kind: flow
     channel: slack
     timeoutMs: 8000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-mention-gating }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackMentionGatingScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaMentionGatingScenario }

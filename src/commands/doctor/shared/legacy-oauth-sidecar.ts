@@ -11,6 +11,7 @@ import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import { loadJsonFile } from "../../../infra/json-file.js";
+import { isPathInside } from "../../../infra/path-safety.js";
 
 export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
@@ -144,13 +145,6 @@ function encryptLegacyOAuthMaterialForTest(params: {
   };
 }
 
-function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean {
-  const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function uniquePaths(paths: Array<string | undefined>): string[] {
   return uniqueStrings(paths.filter((entry): entry is string => Boolean(entry)));
 }
@@ -198,7 +192,7 @@ function resolveLegacyOAuthSecretKeyFileCandidates(env: NodeJS.ProcessEnv): stri
 function resolveLegacyOAuthSecretKeyFilePath(env: NodeJS.ProcessEnv): string | undefined {
   const stateDir = resolveStateDir(env);
   return resolveLegacyOAuthSecretKeyFileCandidates(env).find(
-    (candidate) => !isPathInsideOrEqual(stateDir, candidate),
+    (candidate) => !isPathInside(stateDir, candidate),
   );
 }
 

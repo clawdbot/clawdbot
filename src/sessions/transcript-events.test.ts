@@ -122,6 +122,97 @@ describe("transcript events", () => {
     });
   });
 
+  it("keeps normalized committed lifecycle and store ownership on internal events only", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: "  /tmp/custom-sessions.json  ",
+      },
+      lifecycleRevision: "  committed-revision  ",
+      messageId: "msg-1",
+    });
+
+    expect(internalListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/custom-sessions.json",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      lifecycleRevision: "committed-revision",
+      messageId: "msg-1",
+    });
+    expect(publicListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      messageId: "msg-1",
+    });
+  });
+
+  it("omits provider replay only from the shallow public message projection", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const content = [{ type: "text", text: "visible" }];
+    const metadata = { nested: true };
+    const providerReplay = { type: "opaque", data: "private" };
+    const message = {
+      role: "assistant",
+      content,
+      metadata,
+      providerReplay,
+    };
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      message,
+      messageId: "msg-1",
+    });
+
+    const publicUpdate = publicListener.mock.calls[0]?.[0];
+    const internalUpdate = internalListener.mock.calls[0]?.[0];
+    expect(publicUpdate?.message).toEqual({ role: "assistant", content, metadata });
+    expect(publicUpdate?.message).not.toBe(message);
+    expect(publicUpdate?.message.content).toBe(content);
+    expect(publicUpdate?.message.metadata).toBe(metadata);
+    expect(internalUpdate?.message).toBe(message);
+    expect(internalUpdate?.message.providerReplay).toBe(providerReplay);
+    expect(message.providerReplay).toBe(providerReplay);
+  });
+
+  it("discards blank lifecycle ownership without changing legacy events", () => {
+    const listener = vi.fn();
+    cleanup.push(onInternalSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      lifecycleRevision: "  ",
+    });
+
+    expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
+  });
+
   it("derives public target identity from legacy-shaped internal updates", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));

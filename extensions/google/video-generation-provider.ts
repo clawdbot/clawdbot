@@ -4,6 +4,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
@@ -16,6 +17,7 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { parseGeminiAuth, resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -237,6 +239,9 @@ async function downloadGeneratedVideoFromUri(params: {
       });
       try {
         if (!response.ok) {
+          // A debug-capture clone can keep the tee open, so waiting for cancel
+          // would hang before the HTTP error and dispatcher can be released.
+          void response.body?.cancel().catch(() => undefined);
           throw new Error(
             `Failed to download Google generated video: ${response.status} ${response.statusText}`,
           );
@@ -343,16 +348,13 @@ async function requestGoogleVideoJson(params: {
           signal: controller.signal,
         });
         try {
-          const buffer = await readResponseWithLimit(
-            response,
-            GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
-            {
-              onOverflow: ({ maxBytes }) =>
-                new Error(`Google video operation response exceeds ${maxBytes} bytes`),
-            },
-          );
-          const text = new TextDecoder().decode(buffer);
           if (!response.ok) {
+            const text = new TextDecoder().decode(
+              await readResponseWithLimit(response, GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES, {
+                onOverflow: ({ maxBytes }) =>
+                  new Error(`Google video operation response exceeds ${maxBytes} bytes`),
+              }),
+            );
             let detail: unknown = text;
             if (text) {
               try {
@@ -363,8 +365,9 @@ async function requestGoogleVideoJson(params: {
             }
             throw createHttpError(response, detail);
           }
-          const payload = text ? (JSON.parse(text) as unknown) : {};
-          return payload;
+          return await readProviderJsonResponse(response, "Google video operation response", {
+            maxBytes: GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
+          });
         } finally {
           await release();
         }
@@ -564,7 +567,11 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             | { videoBytes?: string; uri?: string; mimeType?: string }
             | undefined;
           if (inline?.videoBytes) {
-            const buffer = Buffer.from(inline.videoBytes, "base64");
+            const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);
+            if (!canonicalVideo) {
+              throw new Error("Google video generation returned malformed base64 video data");
+            }
+            const buffer = Buffer.from(canonicalVideo, "base64");
             assertGeneratedVideoBufferWithinLimit(buffer, maxVideoBytes);
             return {
               buffer,

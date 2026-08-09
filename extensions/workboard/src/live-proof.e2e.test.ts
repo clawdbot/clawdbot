@@ -1,33 +1,53 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolFactory,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { describe, expect, it, vi } from "vitest";
+import plugin from "../index.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
-import { createWorkboardTools } from "./tools.js";
 
-type Payload = Record<string, any>;
+type Payload = Record<string, unknown>;
+
+function asPayload(value: unknown): Payload {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Payload) : {};
+}
 
 function payload(result: unknown): Payload {
-  return (result as { details?: Payload }).details ?? {};
+  return asPayload(asPayload(result).details);
+}
+
+function cards(result: Payload): Payload[] {
+  return Array.isArray(result.cards) ? result.cards.map(asPayload) : [];
 }
 
 function compact(card: Payload) {
+  const latestProof = asPayload(card.latestProof);
+  const diagnostics = Array.isArray(card.diagnostics)
+    ? card.diagnostics
+        .map((entry) => asPayload(entry).kind)
+        .filter((kind): kind is string => typeof kind === "string")
+    : [];
   return {
     status: card.status,
     acceptance: card.acceptance,
-    diagnostics: (card.diagnostics ?? []).map((entry: Payload) => entry.kind),
+    diagnostics,
     latestProof: card.latestProof
       ? {
-          status: card.latestProof.status,
-          verification: card.latestProof.verification,
+          status: latestProof.status,
+          verification: latestProof.verification,
         }
       : undefined,
   };
 }
 
 describe("Workboard live proof evidence", () => {
-  it("runs claim through review and done on a real temporary sqlite store", async () => {
+  it("runs registered plugin tools through claim, review, and done on temporary SQLite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-live-proof-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const stores = createWorkboardSqliteStores({ dbPath });
@@ -36,22 +56,42 @@ describe("Workboard live proof evidence", () => {
       subscriptions: stores.subscriptions,
       attachments: stores.attachments,
     });
-    const tools = new Map(
-      createWorkboardTools({
-        api: { runtime: {} } as never,
-        store,
-        context: { agentId: "proof-agent", sessionKey: "redacted-session" } as never,
-      }).map((tool) => [tool.name, tool]),
-    );
+    let registeredTool: AnyAgentTool | OpenClawPluginToolFactory | undefined;
+    const api = createTestPluginApi({
+      id: "workboard",
+      name: "Workboard",
+      runtime: {
+        sandbox: {
+          resolveWorkspaceAuthority() {
+            return { sandboxed: false, workspaceAccess: "rw" };
+          },
+        },
+      } as unknown as OpenClawPluginApi["runtime"],
+      registerTool(tool) {
+        registeredTool = tool;
+      },
+    });
+    const openSqlite = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValue(store);
 
     try {
+      plugin.register(api);
+      if (typeof registeredTool !== "function") {
+        throw new Error("Workboard plugin did not register its tool factory.");
+      }
+      const registered = registeredTool({
+        agentId: "proof-agent",
+        sessionKey: "redacted-session",
+      });
+      const toolList = Array.isArray(registered) ? registered : registered ? [registered] : [];
+      const tools = new Map(toolList.map((tool) => [tool.name, tool]));
+
       const created = payload(
         await tools.get("workboard_create")?.execute("live-create", {
           title: "Live proof flow",
           status: "todo",
         }),
       );
-      const cardId = created.card.id as string;
+      const cardId = asPayload(created.card).id as string;
       const claimed = payload(
         await tools.get("workboard_claim")?.execute("live-claim", { id: cardId }),
       );
@@ -66,7 +106,7 @@ describe("Workboard live proof evidence", () => {
           refreshDiagnostics: true,
         }),
       );
-      const reviewedCard = reviewed.cards.find((card: Payload) => card.status === "review");
+      const reviewedCard = cards(reviewed).find((card) => card.status === "review") ?? {};
       const reClaimed = payload(
         await tools.get("workboard_claim")?.execute("live-reclaim", { id: cardId }),
       );
@@ -102,40 +142,45 @@ describe("Workboard live proof evidence", () => {
           refreshDiagnostics: true,
         }),
       );
-      const doneCard = done.cards.find((card: Payload) => card.status === "done");
+      const doneCard = cards(done).find((card) => card.status === "done") ?? {};
       const evidence = {
+        path: ["activated-plugin", "registered-tool-factory", "sqlite"],
         database: "temporary sqlite database",
         stages: [
-          { stage: "claim", ...compact(claimed.card) },
+          { stage: "claim", ...compact(asPayload(claimed.card)) },
           { stage: "review_without_proof", ...compact(reviewedCard) },
           {
             stage: "proof_added",
-            ...compact(proofAdded.cards.find((card: Payload) => card.status === "review")),
+            ...compact(cards(proofAdded).find((card) => card.status === "review") ?? {}),
           },
           { stage: "done", ...compact(doneCard) },
         ],
       };
-      expect(evidence.stages).toMatchObject([
-        { stage: "claim", status: "running" },
-        { stage: "review_without_proof", status: "review", diagnostics: ["missing_proof"] },
-        {
-          stage: "proof_added",
-          status: "review",
-          diagnostics: [],
-          latestProof: { status: "passed" },
-        },
-        {
-          stage: "done",
-          status: "done",
-          acceptance: "manual_operator_acceptance",
-          latestProof: { verification: "worker_reported" },
-        },
-      ]);
+      expect(evidence).toMatchObject({
+        path: ["activated-plugin", "registered-tool-factory", "sqlite"],
+        stages: [
+          { stage: "claim", status: "running" },
+          { stage: "review_without_proof", status: "review", diagnostics: ["missing_proof"] },
+          {
+            stage: "proof_added",
+            status: "review",
+            diagnostics: [],
+            latestProof: { status: "passed" },
+          },
+          {
+            stage: "done",
+            status: "done",
+            acceptance: "manual_operator_acceptance",
+            latestProof: { verification: "worker_reported" },
+          },
+        ],
+      });
       const outputPath = process.env.WORKBOARD_LIVE_PROOF_OUTPUT;
       if (outputPath) {
         fs.writeFileSync(outputPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
       }
     } finally {
+      openSqlite.mockRestore();
       stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }

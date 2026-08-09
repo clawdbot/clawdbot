@@ -1,10 +1,7 @@
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  buildGoogleMeetCalendarDayWindow,
-  findGoogleMeetCalendarEvent,
-  type GoogleMeetCalendarLookupResult,
-} from "./calendar.js";
+import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
+import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { registerGoogleMeetArtifactCommands } from "./cli-artifact-commands.js";
 import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import { registerGoogleMeetDoctorCommand } from "./cli-doctor.js";
@@ -33,8 +30,6 @@ import {
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
 import {
   buildGoogleMeetAuthUrl,
-  createGoogleMeetOAuthState,
-  createGoogleMeetPkce,
   exchangeGoogleMeetAuthCode,
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
@@ -57,123 +52,23 @@ function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
   return meeting;
 }
 
-function resolveOAuthTokenOptions(
-  config: GoogleMeetConfig,
-  options: ResolveSpaceOptions,
-): {
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  accessToken?: string;
-  expiresAt?: number;
-} {
-  return {
-    clientId: options.clientId?.trim() || config.oauth.clientId,
-    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
-    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
-    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
-    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
-  };
-}
-
-function resolveTokenOptions(
-  config: GoogleMeetConfig,
-  options: ResolveSpaceOptions,
-): {
-  meeting: string;
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  accessToken?: string;
-  expiresAt?: number;
-} {
-  return {
-    meeting: resolveMeetingInput(config, options.meeting),
-    ...resolveOAuthTokenOptions(config, options),
-  };
-}
-
 function hasCalendarLookupOptions(options: ResolveSpaceOptions): boolean {
   return Boolean(options.today || options.event?.trim());
 }
 
-async function resolveCalendarMeetingInput(params: {
-  accessToken: string;
-  options: ResolveSpaceOptions;
-}): Promise<{ meeting?: string; calendarEvent?: GoogleMeetCalendarLookupResult }> {
-  if (!hasCalendarLookupOptions(params.options)) {
-    return {};
-  }
-  const window = params.options.today ? buildGoogleMeetCalendarDayWindow() : {};
-  const calendarEvent = await findGoogleMeetCalendarEvent({
-    accessToken: params.accessToken,
-    calendarId: params.options.calendar,
-    eventQuery: params.options.event,
-    ...window,
-  });
-  return { meeting: calendarEvent.meetingUri, calendarEvent };
-}
-
-async function resolveMeetingForToken(params: {
-  config: GoogleMeetConfig;
-  options: ResolveSpaceOptions;
-  accessToken: string;
-  configuredMeeting?: string;
-}): Promise<{ meeting: string; calendarEvent?: GoogleMeetCalendarLookupResult }> {
-  const calendarMeeting = await resolveCalendarMeetingInput({
-    accessToken: params.accessToken,
-    options: params.options,
-  });
-  const meeting =
-    calendarMeeting.meeting ?? params.configuredMeeting ?? params.config.defaults.meeting;
-  if (!meeting) {
-    throw new Error(
-      "Meeting input is required. Pass --meeting, --today, --event, or configure defaults.meeting.",
-    );
-  }
-  return calendarMeeting.calendarEvent
-    ? { meeting, calendarEvent: calendarMeeting.calendarEvent }
-    : { meeting };
-}
-
-function resolveCreateTokenOptions(
-  config: GoogleMeetConfig,
-  options: CreateOptions,
-): {
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  accessToken?: string;
-  expiresAt?: number;
-} {
+function resolveCliParams(options: ResolveSpaceOptions): Record<string, unknown> {
+  const { calendar, expiresAt, ...raw } = options;
   return {
-    clientId: options.clientId?.trim() || config.oauth.clientId,
-    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
-    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
-    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
-    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
+    ...raw,
+    calendarId: calendar,
+    expiresAt: parseOptionalNumber(expiresAt),
   };
 }
 
-function resolveArtifactTokenOptions(
+function resolveCliArtifactParams(
   config: GoogleMeetConfig,
   options: MeetArtifactOptions,
-): {
-  meeting?: string;
-  conferenceRecord?: string;
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  accessToken?: string;
-  expiresAt?: number;
-  pageSize?: number;
-  includeTranscriptEntries?: boolean;
-  allConferenceRecords?: boolean;
-  includeDocumentBodies?: boolean;
-  mergeDuplicateParticipants?: boolean;
-  lateAfterMinutes?: number;
-  earlyBeforeMinutes?: number;
-} {
+): Record<string, unknown> {
   const meeting = options.meeting?.trim() || config.defaults.meeting;
   const conferenceRecord = options.conferenceRecord?.trim();
   if (!meeting && !conferenceRecord && !hasCalendarLookupOptions(options)) {
@@ -182,18 +77,14 @@ function resolveArtifactTokenOptions(
     );
   }
   return {
+    ...resolveCliParams(options),
     meeting,
     conferenceRecord,
-    clientId: options.clientId?.trim() || config.oauth.clientId,
-    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
-    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
-    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
-    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
     pageSize: parsePositiveIntegerOption(options.pageSize, "page-size"),
-    includeTranscriptEntries: options.transcriptEntries !== false,
-    allConferenceRecords: Boolean(options.allConferenceRecords),
-    includeDocumentBodies: Boolean(options.includeDocBodies),
-    mergeDuplicateParticipants: options.mergeDuplicates !== false,
+    includeTranscriptEntries: options.transcriptEntries,
+    includeAllConferenceRecords: options.allConferenceRecords,
+    includeDocumentBodies: options.includeDocBodies,
+    mergeDuplicateParticipants: options.mergeDuplicates,
     lateAfterMinutes: parseOptionalNumber(options.lateAfterMinutes),
     earlyBeforeMinutes: parseOptionalNumber(options.earlyBeforeMinutes),
   };
@@ -239,8 +130,8 @@ export function registerGoogleMeetCli(params: {
           "Missing Google Meet OAuth client id. Configure oauth.clientId or pass --client-id.",
         );
       }
-      const { verifier, challenge } = createGoogleMeetPkce();
-      const state = createGoogleMeetOAuthState();
+      const { verifier, challenge } = generateHexPkceVerifierChallenge();
+      const state = generateOAuthState();
       const authUrl = buildGoogleMeetAuthUrl({
         clientId,
         challenge,
@@ -288,11 +179,8 @@ export function registerGoogleMeetCli(params: {
     callGateway,
     operationTimeoutMs,
     resolveMeetingInput,
-    resolveOAuthTokenOptions,
-    resolveTokenOptions,
-    resolveMeetingForToken,
-    resolveCreateTokenOptions,
-    resolveArtifactTokenOptions,
+    resolveCliParams,
+    resolveCliArtifactParams: (options) => resolveCliArtifactParams(params.config, options),
     hasCreateOAuth,
   };
 

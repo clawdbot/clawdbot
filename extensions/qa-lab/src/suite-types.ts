@@ -26,6 +26,7 @@ export type QaSuiteScenarioResult = {
 
 export type QaSuiteEnvironment = {
   lab: QaLabServerHandle;
+  runtimeId: RuntimeId;
   webSessionIds: Set<string>;
 } & QaSuiteRuntimeEnv;
 
@@ -74,6 +75,7 @@ export type QaSuiteResult = {
   summaryPath: string;
   report: string;
   scenarios: QaSuiteScenarioResult[];
+  startedScenarioIds: string[];
   watchUrl: string;
   runtimeParityCell?: RuntimeParityCell;
 };

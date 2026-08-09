@@ -196,4 +196,36 @@ describe("legacy config machine-state migration", () => {
 
     expect(readControlUiDeviceAuthMigrationState({ env })).toBeUndefined();
   });
+
+  it("does not re-report inferred bundledDiscovery on second pass with beta version", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-config-machine-state-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+    // First pass: infer compat and write to SQLite
+    const firstResult = migrateLegacyConfigMachineState({
+      env,
+      config: {
+        meta: { lastTouchedVersion: "2026.7.2-beta.5" },
+        plugins: { allow: ["telegram"] },
+      },
+    });
+    expect(firstResult.changes).toContain(
+      "Migrated plugins.bundledDiscovery → shared SQLite state",
+    );
+    expect(readConfigMachineState("plugins.bundledDiscovery", { env })).toBe("compat");
+
+    // Second pass (simulating a new CLI process): should not report kept
+    const secondResult = migrateLegacyConfigMachineState({
+      env,
+      config: {
+        meta: { lastTouchedVersion: "2026.7.2-beta.5" },
+        plugins: { allow: ["telegram"] },
+      },
+    });
+    expect(secondResult.changes).not.toContain(
+      "Kept existing shared SQLite plugins.bundledDiscovery state",
+    );
+    // Canonical value is preserved
+    expect(readConfigMachineState("plugins.bundledDiscovery", { env })).toBe("compat");
+  });
 });

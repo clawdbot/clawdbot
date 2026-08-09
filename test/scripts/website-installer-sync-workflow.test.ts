@@ -2,12 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const { detectInstallSmokeScope } = (await import("../../scripts/ci-changed-scope.mjs")) as {
-  detectInstallSmokeScope: (paths: string[]) => {
-    runFastInstallSmoke: boolean;
-    runFullInstallSmoke: boolean;
-  };
-};
+const { detectInstallSmokeScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 const WORKFLOW_PATH = ".github/workflows/website-installer-sync.yml";
 

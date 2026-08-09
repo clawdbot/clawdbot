@@ -6,6 +6,7 @@ import {
   isAbandonedLivenessState,
   isBlockedLivenessState,
 } from "../shared/agent-liveness.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -20,7 +21,7 @@ export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
@@ -68,12 +69,11 @@ export function createSubagentRegistryListener(config: {
           const startedAt =
             typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
-            entry.startedAt = startedAt;
             if (typeof entry.sessionStartedAt !== "number") {
               entry.sessionStartedAt = startedAt;
             }
             entry.execution = { ...entry.execution, status: "running", startedAt };
-            persist();
+            persist(entry.runId);
           }
           return;
         }
@@ -87,6 +87,7 @@ export function createSubagentRegistryListener(config: {
           typeof evt.data?.livenessState === "string" ? evt.data.livenessState : undefined;
         const stopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+        const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
         // sessions_yield ends the turn by aborting the run signal, so a yielded
         // terminal can also look aborted. An explicit yield is authoritative — pause,
         // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
@@ -98,10 +99,10 @@ export function createSubagentRegistryListener(config: {
             markSubagentRunPausedAfterYield({
               entry,
               endedAt,
-              startedAt: startedAt ?? entry.startedAt,
+              startedAt: startedAt ?? entry.execution.startedAt,
             })
           ) {
-            persist();
+            persist(entry.runId);
           }
           return;
         }
@@ -120,6 +121,7 @@ export function createSubagentRegistryListener(config: {
               accountId: entry.requesterOrigin?.accountId,
               triggerCleanup: true,
               startedAt,
+              terminalReply,
             },
             "lifecycle-killed-event",
           );
@@ -130,6 +132,7 @@ export function createSubagentRegistryListener(config: {
             runId: evt.runId,
             endedAt,
             startedAt,
+            terminalReply,
             error,
           });
           return;
@@ -152,6 +155,7 @@ export function createSubagentRegistryListener(config: {
             accountId: entry.requesterOrigin?.accountId,
             triggerCleanup: true,
             startedAt,
+            terminalReply,
           };
           await completeSubagentRunWithRecovery(
             blockedParams,
@@ -164,6 +168,7 @@ export function createSubagentRegistryListener(config: {
             runId: evt.runId,
             endedAt,
             startedAt,
+            terminalReply,
           });
           return;
         }
@@ -177,6 +182,7 @@ export function createSubagentRegistryListener(config: {
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,
           startedAt,
+          terminalReply,
         };
         await completeSubagentRunWithRecovery(completionParams, "lifecycle-ok-event");
       })().catch((err: unknown) => {

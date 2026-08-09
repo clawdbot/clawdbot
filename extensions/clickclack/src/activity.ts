@@ -139,7 +139,7 @@ type ToolRow = {
 
 /** Publisher wired into one agent turn via `replyOptions.onItemEvent`. */
 export type ClickClackActivityPublisher = {
-  onItemEvent: (payload: ClickClackItemEventPayload) => void;
+  onItemEvent: (payload: ClickClackItemEventPayload) => false;
   /**
    * Records the resolved model/thinking for this turn (from
    * `replyOptions.onModelSelected`); stamped onto subsequent activity rows.
@@ -300,12 +300,14 @@ export function createClickClackActivityPublisher(params: {
       const kind = normalizedItemKind(payload);
       if (STREAMING_COMMENTARY_ITEM_KINDS.has(kind)) {
         handleCommentary(payload);
-        return;
+        return false;
       }
       if (SKIPPED_ITEM_KINDS.has(kind)) {
-        return;
+        return false;
       }
       handleDiscreteItem(payload);
+      // Activity transport is serialized in the background; queueing is not visibility.
+      return false;
     },
     setProvenance: (next) => {
       provenance = next;

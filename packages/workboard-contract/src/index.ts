@@ -74,6 +74,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "stale_proof",
   "contradictory_proof",
   "orphaned_session",
+  "archived_but_active",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;

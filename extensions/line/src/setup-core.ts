@@ -78,46 +78,28 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     // Shipped alias: `--token` writes channelAccessToken; the explicit switch wins.
     const accessToken = typedInput.channelAccessToken ?? typedInput.token;
     const normalizedAccountId = normalizeAccountId(accountId);
-    if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
-      return patchLineAccountConfig({
-        cfg,
-        accountId: normalizedAccountId,
-        enabled: true,
-        clearFields: typedInput.useEnv
-          ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
-          : undefined,
-        patch: typedInput.useEnv
-          ? {}
-          : {
-              ...(typedInput.tokenFile
-                ? { tokenFile: typedInput.tokenFile }
-                : accessToken
-                  ? { channelAccessToken: accessToken }
-                  : {}),
-              ...(typedInput.secretFile
-                ? { secretFile: typedInput.secretFile }
-                : typedInput.channelSecret
-                  ? { channelSecret: typedInput.channelSecret }
-                  : {}),
-            },
-      });
-    }
+    const useEnv = normalizedAccountId === DEFAULT_ACCOUNT_ID && Boolean(typedInput.useEnv);
     return patchLineAccountConfig({
       cfg,
       accountId: normalizedAccountId,
       enabled: true,
-      patch: {
-        ...(typedInput.tokenFile
-          ? { tokenFile: typedInput.tokenFile }
-          : accessToken
-            ? { channelAccessToken: accessToken }
-            : {}),
-        ...(typedInput.secretFile
-          ? { secretFile: typedInput.secretFile }
-          : typedInput.channelSecret
-            ? { channelSecret: typedInput.channelSecret }
-            : {}),
-      },
+      clearFields: useEnv
+        ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
+        : undefined,
+      patch: useEnv
+        ? {}
+        : {
+            ...(typedInput.tokenFile
+              ? { tokenFile: typedInput.tokenFile }
+              : accessToken
+                ? { channelAccessToken: accessToken }
+                : {}),
+            ...(typedInput.secretFile
+              ? { secretFile: typedInput.secretFile }
+              : typedInput.channelSecret
+                ? { channelSecret: typedInput.channelSecret }
+                : {}),
+          },
     });
   },
 };

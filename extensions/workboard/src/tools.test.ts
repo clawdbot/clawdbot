@@ -30,6 +30,42 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("publishes flat provider-compatible enums for proof and completion inputs", () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({ api, store, context: { agentId: "main" } as never }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const proofSchema = tools.get("workboard_proof")?.parameters as {
+      properties?: { verification?: Record<string, unknown> };
+    };
+    const completionSchema = tools.get("workboard_complete")?.parameters as {
+      properties?: {
+        status?: Record<string, unknown>;
+        proof?: { properties?: { verification?: Record<string, unknown> } };
+      };
+    };
+
+    for (const schema of [
+      proofSchema.properties?.verification,
+      completionSchema.properties?.proof?.properties?.verification,
+    ]) {
+      expect(schema).toMatchObject({
+        type: "string",
+        enum: ["worker_reported", "independently_verified"],
+      });
+      expect(schema).not.toHaveProperty("anyOf");
+    }
+    expect(completionSchema.properties?.status).toMatchObject({
+      type: "string",
+      enum: ["review", "done"],
+    });
+    expect(completionSchema.properties?.status).not.toHaveProperty("anyOf");
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = { runtime: {} } as unknown as OpenClawPluginApi;

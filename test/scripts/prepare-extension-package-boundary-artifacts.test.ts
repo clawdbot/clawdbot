@@ -9,6 +9,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   createPrefixedOutputWriter,
@@ -21,7 +25,7 @@ import {
   runNodeSteps,
   runNodeStepsInParallel,
   signalNodeStep,
-} from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
@@ -438,9 +442,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       tempRoots.add(rootDir);
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
-      let runnerPid = 0;
       const moduleHref = pathToFileURL(
-        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
+        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
       ).href;
       const descendantScript = [
         "const fs = require('node:fs');",
@@ -461,7 +464,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
         stdio: "ignore",
       });
-      runnerPid = runner.pid ?? 0;
+      const runnerPid = runner.pid ?? 0;
 
       try {
         descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
@@ -626,10 +629,26 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
 
+    expect(productionOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs().toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(privateQaOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs(pluginSdkEntrypoints).toSorted((a, b) => a.localeCompare(b)),
+    );
+
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    for (const entry of [
+      "channel-contract-testing",
+      "plugin-state-test-runtime",
+      "plugin-test-runtime",
+    ]) {
+      expect(productionOutputs).not.toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`);
+    }
   });
 
   it("parses prep mode and rejects unknown values", () => {

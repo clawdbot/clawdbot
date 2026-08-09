@@ -15,6 +15,7 @@ import {
   callGatewayFromCli,
   type GatewayRpcOpts,
 } from "../gateway-rpc.js";
+import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
@@ -23,17 +24,15 @@ import {
   resolveCronEditScheduleRequest,
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
-import {
-  getCronChannelOptions,
-  parsePositiveCronDurationMs,
-  warnIfCronSchedulerDisabled,
-} from "./shared.js";
+import { getCronChannelOptions, warnIfCronSchedulerDisabled } from "./shared.js";
 import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
-async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJob> {
+type CronJobForEdit = CronJob & { configRevision?: string };
+
+async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;
@@ -47,7 +46,7 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
     );
     const existing = inventory.jobs.find((job) => job.id === id);
     if (!existing) {
-      throw new Error(`unknown cron job id: ${id}`, { cause: error });
+      throw new Error(`unknown automation id: ${id}`, { cause: error });
     }
     return existing;
   }
@@ -57,7 +56,7 @@ export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("edit")
-      .description("Edit a cron job (patch fields)")
+      .description("Edit an automation (patch fields)")
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")
       .option("--description <text>", "Set description")
@@ -165,6 +164,18 @@ export function registerCronEditCommand(cron: Command) {
       )
       .action(async (id, opts) => {
         try {
+          if (opts.clearTools && opts.tools !== undefined) {
+            throw new Error("Use --tools or --clear-tools, not both");
+          }
+          let existingJobPromise: Promise<CronJobForEdit> | undefined;
+          let expectedConfigRevision: string | undefined;
+          const readExistingCronJob = async (): Promise<CronJobForEdit> => {
+            const existing = await (existingJobPromise ??= readCronJobForEdit(opts, String(id)));
+            if (typeof existing.configRevision === "string") {
+              expectedConfigRevision = existing.configRevision;
+            }
+            return existing;
+          };
           const sessionTarget =
             typeof opts.session === "string"
               ? normalizeCronSessionTargetOption(opts.session)
@@ -216,6 +227,18 @@ export function registerCronEditCommand(cron: Command) {
           if (deliveryModeFlagCount > 1) {
             throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
+          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+          if (typeof opts.triggerScript === "string" && !triggerScriptPath) {
+            throw new Error("--trigger-script must not be blank");
+          }
+          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
+            throw new Error("Use --clear-trigger or trigger options, not both");
+          }
+          // Local input errors must not depend on Gateway availability, even when
+          // another edit field needs the existing job.
+          const triggerScript = triggerScriptPath
+            ? await readCronTriggerScript(triggerScriptPath)
+            : undefined;
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
             patch.name = opts.name;
@@ -251,20 +274,28 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.wakeMode = wakeMode;
           }
-          if (opts.agent && opts.clearAgent) {
+          const agentId = normalizeOptionalString(opts.agent);
+          if (typeof opts.agent === "string" && !agentId) {
+            throw new Error("--agent must not be blank");
+          }
+          if (agentId && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");
           }
-          if (typeof opts.agent === "string" && opts.agent.trim()) {
-            patch.agentId = sanitizeAgentId(opts.agent.trim());
+          if (agentId) {
+            patch.agentId = sanitizeAgentId(agentId);
           }
           if (opts.clearAgent) {
             patch.agentId = null;
           }
-          if (opts.sessionKey && opts.clearSessionKey) {
+          const sessionKey = normalizeOptionalString(opts.sessionKey);
+          if (typeof opts.sessionKey === "string" && !sessionKey) {
+            throw new Error("--session-key must not be blank");
+          }
+          if (sessionKey && opts.clearSessionKey) {
             throw new Error("Use --session-key or --clear-session-key, not both");
           }
-          if (typeof opts.sessionKey === "string" && opts.sessionKey.trim()) {
-            patch.sessionKey = opts.sessionKey.trim();
+          if (sessionKey) {
+            patch.sessionKey = sessionKey;
           }
           if (opts.clearSessionKey) {
             patch.sessionKey = null;
@@ -286,27 +317,24 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearPacing) {
             patch.pacing = null;
           } else if (hasPacingMin || hasPacingMax) {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             patch.pacing = {
               ...existing.pacing,
               ...(pacingMin ? { min: pacingMin } : {}),
               ...(pacingMax ? { max: pacingMax } : {}),
             };
           }
-
-          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
-          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
-            throw new Error("Use --clear-trigger or trigger options, not both");
-          }
           if (opts.clearTrigger) {
             patch.trigger = null;
-          } else if (triggerScriptPath) {
+          } else if (triggerScript !== undefined) {
+            const existing = await readExistingCronJob();
             patch.trigger = {
-              script: await readCronTriggerScript(triggerScriptPath),
+              ...existing.trigger,
+              script: triggerScript,
               ...(opts.triggerOnce ? { once: true } : {}),
             };
           } else if (opts.triggerOnce) {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             if (!existing.trigger) {
               throw new Error("--trigger-once requires an existing trigger or --trigger-script");
             }
@@ -329,7 +357,7 @@ export function registerCronEditCommand(cron: Command) {
           });
           if (scheduleRequest.kind === "direct") {
             if (scheduleRequest.schedule.kind === "stream") {
-              const existing = await readCronJobForEdit(opts, String(id));
+              const existing = await readExistingCronJob();
               if (existing.schedule.kind === "stream") {
                 const metadataRequest = resolveCronEditScheduleRequest({
                   streamCwd: opts.streamCwd,
@@ -351,7 +379,7 @@ export function registerCronEditCommand(cron: Command) {
               scheduleRequest.schedule.kind === "cron" &&
               scheduleRequest.schedule.tz === undefined
             ) {
-              const existing = await readCronJobForEdit(opts, String(id));
+              const existing = await readExistingCronJob();
               patch.schedule =
                 existing.schedule.kind === "cron" && existing.schedule.tz !== undefined
                   ? { ...scheduleRequest.schedule, tz: existing.schedule.tz }
@@ -360,18 +388,16 @@ export function registerCronEditCommand(cron: Command) {
               patch.schedule = scheduleRequest.schedule;
             }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
           } else if (scheduleRequest.kind === "patch-existing-stream") {
-            const existing = await readCronJobForEdit(opts, String(id));
+            const existing = await readExistingCronJob();
             patch.schedule = applyExistingStreamSchedulePatch(existing.schedule, scheduleRequest);
           }
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, () =>
-              readCronJobForEdit(opts, String(id)),
-            ),
+            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
@@ -422,8 +448,10 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
-              const cooldownMs = parsePositiveCronDurationMs(String(opts.failureAlertCooldown));
-              if (!cooldownMs && cooldownMs !== 0) {
+              let cooldownMs: number;
+              try {
+                cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              } catch {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;
@@ -448,6 +476,7 @@ export function registerCronEditCommand(cron: Command) {
           const res = await callGatewayFromCli("cron.update", opts, {
             id,
             patch,
+            ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);

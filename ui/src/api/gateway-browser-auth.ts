@@ -1,5 +1,4 @@
 import type { GatewayConnectAuthSelection } from "@openclaw/gateway-client/browser";
-import { loadDeviceAuthToken, peekStoredDeviceIdentityId } from "../lib/nodes/index.ts";
 
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 
@@ -9,33 +8,6 @@ export function storedDeviceTokenScopesAllowRead(role: string, scopes: readonly 
     scopes.includes("operator.read") ||
     scopes.includes("operator.write") ||
     scopes.includes("operator.admin")
-  );
-}
-
-/** True when the next browser connect would present a usable stored credential. */
-export function hasStoredGatewayAuth(params: {
-  gatewayUrl: string;
-  token?: string;
-  password?: string;
-}): boolean {
-  if (params.token?.trim() || params.password?.trim()) {
-    return true;
-  }
-  // Insecure contexts skip device identity, so their stored token is unusable.
-  if (typeof crypto === "undefined" || !crypto.subtle) {
-    return false;
-  }
-  const deviceId = peekStoredDeviceIdentityId();
-  if (!deviceId) {
-    return false;
-  }
-  const storedEntry = loadDeviceAuthToken({
-    deviceId,
-    gatewayUrl: params.gatewayUrl,
-    role: CONTROL_UI_OPERATOR_ROLE,
-  });
-  return Boolean(
-    storedEntry && storedDeviceTokenScopesAllowRead(CONTROL_UI_OPERATOR_ROLE, storedEntry.scopes),
   );
 }
 

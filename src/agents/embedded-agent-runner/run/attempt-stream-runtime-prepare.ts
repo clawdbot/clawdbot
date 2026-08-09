@@ -81,7 +81,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
 }) {
   const { activeSession, attempt, sessionManager } = input;
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheToolNames } = installEmbeddedAttemptStreamGuards({
+  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards({
     ...input.guards,
     attempt,
     session: activeSession,
@@ -137,9 +137,14 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     prompt: string,
     options?: Parameters<typeof activeSession.prompt>[1],
   ): Promise<void> =>
-    withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, async () =>
-      abortable(input.trackPromptSettlePromise(activeSession.prompt(prompt, options))),
-    );
+    withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, async () => {
+      // Prompting starts its own agent loop; reject before creating a loop that
+      // an already-aborted attempt can no longer cancel.
+      if (input.runAbortController.signal.aborted) {
+        return abortable(Promise.resolve());
+      }
+      return abortable(input.trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+    });
   const onBlockReply = attempt.onBlockReply
     ? bindOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, attempt.onBlockReply)
     : undefined;
@@ -171,7 +176,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     compactionTimeoutMs: input.compactionTimeoutMs,
     isProbeSession,
     abortRun,
-    markExternalAbort: input.lifecycle.markExternalAbort,
     markTimedOutDuringCompaction: input.lifecycle.markTimedOutDuringCompaction,
     markTimedOutByRunBudget: input.lifecycle.markTimedOutByRunBudget,
   });
@@ -180,7 +184,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     abortable,
     cache: {
       observabilityEnabled: cacheObservabilityEnabled,
-      promptToolNames: promptCacheToolNames,
+      promptTools: promptCacheTools,
     },
     history: preparedHistory,
     isProbeSession,

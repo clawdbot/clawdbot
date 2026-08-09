@@ -98,6 +98,22 @@ describe("base config schema", () => {
     ).toEqual(BASE_CONFIG_SCHEMA);
   });
 
+  it.each([
+    {
+      scope: "global",
+      path: ["tools", "exec", "approvalRunningNoticeMs"],
+    },
+    {
+      scope: "per-agent",
+      path: ["agents", "entries", "*", "tools", "exec", "approvalRunningNoticeMs"],
+    },
+  ])("publishes the $scope exec approval running notice contract", ({ path }) => {
+    expect(schemaAt(BASE_SCHEMA, path), path.join(".")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
+  });
+
   it("includes explicit URL-secret tags for sensitive URL fields", () => {
     expect(BASE_CONFIG_SCHEMA.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(BASE_CONFIG_SCHEMA.uiHints["models.providers.*.baseUrl"]?.tags).toContain(

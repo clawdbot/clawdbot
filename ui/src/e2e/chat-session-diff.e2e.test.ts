@@ -189,7 +189,7 @@ describeControlUiE2e("session diff panel", () => {
 
     const toggle = page.locator(".chat-session-diff-toggle").first();
     await expect.poll(() => toggle.isDisabled()).toBe(true);
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Show thread changes");
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Show session changes");
     await expect
       .poll(() =>
         toggle.evaluate(
@@ -198,7 +198,7 @@ describeControlUiE2e("session diff panel", () => {
               ?.content,
         ),
       )
-      .toBe("This thread's workspace is not a git checkout.");
+      .toBe("This session's workspace is not a git checkout.");
     await expect.poll(() => page.locator(".session-diff").count()).toBe(0);
   });
 

@@ -26,4 +26,27 @@ describe("board widget manifest codec", () => {
       parseManifest(JSON.stringify({ presentation: "floating", heightMode: "elastic" })),
     ).toEqual({});
   });
+
+  it("round-trips explicit and generated name identity metadata", () => {
+    const serialized = serializeManifest(undefined, "none", undefined, undefined, {
+      kind: "generated",
+      source: "show_widget",
+      key: "a".repeat(64),
+    });
+    expect(parseManifest(serialized)).toMatchObject({
+      nameIdentity: { kind: "generated", source: "show_widget", key: "a".repeat(64) },
+    });
+    expect(
+      parseManifest(
+        serializeManifest(undefined, "none", undefined, undefined, { kind: "explicit" }),
+      ),
+    ).toMatchObject({ nameIdentity: { kind: "explicit" } });
+    expect(
+      parseManifest(
+        JSON.stringify({
+          nameIdentity: { kind: "generated", source: "show_widget", key: "short" },
+        }),
+      ),
+    ).toEqual({ nameIdentityInvalid: true });
+  });
 });

@@ -1,5 +1,19 @@
 {
   "id": "codex",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "providerIds": ["codex", "codex-cli", "openai-codex"],
+      "runtimeIds": ["codex", "codex-cli"],
+      "cliSessionKeys": ["codex-cli"],
+      "authProfilePrefixes": ["codex:", "codex-cli:", "openai-codex:"]
+    }
+  ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
   "contracts": {
@@ -28,6 +42,7 @@
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [
+      "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
       "plugins.entries.codex.config.supervision.enabled"
     ]
@@ -235,8 +250,7 @@
           },
           "homeScope": {
             "type": "string",
-            "enum": ["agent", "user"],
-            "default": "agent"
+            "enum": ["agent", "user"]
           },
           "command": { "type": "string" },
           "args": {

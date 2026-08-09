@@ -5,12 +5,12 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
   it("accepts the current global and agent schemas", () => {
@@ -144,6 +144,40 @@ describe("OpenClaw database maintenance schema validation", () => {
           pathname: "global.sqlite",
         }),
       ).toThrow("unexpected unique index idx_task_runs_unexpected_owner");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("allows the lazy worker SSH fallback table to be absent but rejects drift", () => {
+    const database = createGlobalDatabase();
+    try {
+      const canonicalTable = database
+        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports") as { sql?: unknown } | undefined;
+      if (typeof canonicalTable?.sql !== "string") {
+        throw new Error("missing canonical worker SSH fallback port table");
+      }
+      database.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+
+      const driftedTableSql = canonicalTable.sql.replace(
+        "  PRIMARY KEY (environment_id, position)",
+        "  unexpected TEXT,\n  PRIMARY KEY (environment_id, position)",
+      );
+      expect(driftedTableSql).not.toBe(canonicalTable.sql);
+      database.exec(driftedTableSql);
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow("column definitions differ for worker_environment_ssh_fallback_ports");
     } finally {
       database.close();
     }

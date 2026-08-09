@@ -21,11 +21,14 @@ import {
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
+import { resolveSupportedThinkingLevel } from "../thinking.js";
+import type { ThinkingCatalogEntry } from "../thinking.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
 import {
@@ -38,6 +41,7 @@ import {
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { ThinkLevel } from "./directives.js";
 
 function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
   return auth.label === "missing" && auth.source === "missing";
@@ -380,6 +384,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
   policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: ReadonlySet<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
+  currentThinkLevel: ThinkLevel;
+  thinkingCatalog?: ThinkingCatalogEntry[];
+  runtimePolicySessionKey?: string;
   resetModelOverride: boolean;
   workspaceDir?: string;
   surface?: string;
@@ -392,15 +399,22 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
   const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
-  const wantsStatus = directive === "status";
-  const wantsSummary = !rawDirective;
-  const wantsLegacyList = directive === "list";
+  const isLiteralModelDirective = params.directives.modelDirectiveSource !== "alias";
+  const wantsStatus = isLiteralModelDirective && directive === "status";
+  const wantsSummary = isLiteralModelDirective && !rawDirective;
+  const wantsLegacyList = isLiteralModelDirective && directive === "list";
   if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
     return undefined;
   }
 
   if (params.directives.rawModelProfile) {
-    return { text: "Auth profile override requires a model selection." };
+    return { text: "Auth profile override requires a model selection.", isError: true };
+  }
+  if (params.directives.rawModelRuntime) {
+    return { text: "Runtime override requires a model selection.", isError: true };
+  }
+  if (params.directives.modelSessionOnly) {
+    return { text: "Session-only scope requires a model selection.", isError: true };
   }
 
   const pickerCatalog = buildModelPickerCatalog({
@@ -435,6 +449,22 @@ export async function maybeHandleModelDirectiveInfo(params: {
       sessionEntry: params.sessionEntry,
     });
     const current = modelRefs.selected.label;
+    const thinkingRuntime = resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.model,
+      agentId: params.activeAgentId,
+      sessionKey: params.runtimePolicySessionKey,
+      sessionEntry: params.sessionEntry,
+    });
+    const effectiveThinkLevel = resolveSupportedThinkingLevel({
+      provider: params.provider,
+      model: params.model,
+      level: params.currentThinkLevel,
+      catalog: params.thinkingCatalog,
+      agentRuntime: thinkingRuntime,
+    });
+    const thinkingLine = `Think: ${effectiveThinkLevel} (change with /think <level>)`;
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
@@ -445,10 +475,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
         text: [
           `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
           activeRuntimeLine,
+          thinkingLine,
           "",
-          "Tap below to browse models, or use:",
-          "/model <provider/model> to switch",
-          "/model <provider/model> --runtime <runtime> to switch harnesses",
+          "Tap below to switch this session only, or use:",
+          "/model <provider/model> for session + owner/admin default update",
+          "/model <provider/model> -s for this session only",
+          "/model <provider/model> --runtime <runtime> -s to switch harnesses",
           "/model status for details",
         ]
           .filter(Boolean)
@@ -461,9 +493,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
       text: [
         `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
         activeRuntimeLine,
+        thinkingLine,
         "",
-        "Switch: /model <provider/model>",
-        "Runtime: /model <provider/model> --runtime <runtime>",
+        "Direct: /model <provider/model> (owner/admin requests a default update)",
+        "Session only: /model <provider/model> -s",
+        "Runtime: /model <provider/model> --runtime <runtime> -s",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ]

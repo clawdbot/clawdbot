@@ -82,6 +82,20 @@ describe("TuiStreamAssembler", () => {
     expect(output).toBe("Visible");
   });
 
+  it("tracks literal placeholder text as real displayable content until finalization", () => {
+    const assembler = new TuiStreamAssembler();
+
+    expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
+
+    assembler.ingestDelta("run-literal-output", messageWithContent([text("(no output)")]), false);
+
+    expect(assembler.hasDisplayText("run-literal-output")).toBe(true);
+    expect(
+      assembler.finalize("run-literal-output", { role: "assistant", content: [] }, false),
+    ).toBe("(no output)");
+    expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
+  });
+
   it("falls back to streamed text on empty final payload", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);
@@ -115,6 +129,63 @@ describe("TuiStreamAssembler", () => {
     );
     expect(finalText).toContain("HTTP 401");
     expect(finalText).toContain("Missing scopes: model.request");
+  });
+
+  it("renders attachment-only assistant finals without exposing media fields", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-media-only",
+      messageWithContent([
+        {
+          type: "image",
+          data: "secret-image",
+          url: "file:///Users/operator/private/image.png",
+          artifactId: "secret-artifact",
+        },
+      ]),
+      false,
+    );
+    expect(finalText).toBe("Attached image");
+  });
+
+  it("keeps visible thinking ahead of an attachment-only final", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-media-thinking",
+      messageWithContent([
+        thinking("Preparing the attachment"),
+        { type: "image", data: "secret-image" },
+      ]),
+      true,
+    );
+    expect(finalText).toBe("[thinking]\nPreparing the attachment\n\nAttached image");
+  });
+
+  it("keeps a streamed caption ahead of an attachment-only final", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta(
+      "run-media-caption",
+      messageWithContent([text("Generated chart")]),
+      false,
+    );
+    const finalText = assembler.finalize(
+      "run-media-caption",
+      messageWithContent([{ type: "image", data: "secret-image" }]),
+      false,
+    );
+    expect(finalText).toBe("Generated chart");
+  });
+
+  it("keeps an error ahead of an attachment summary", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-media-error",
+      messageWithContent([{ type: "video", url: "file:///private/clip.mp4" }]),
+      false,
+      "media generation failed",
+    );
+    expect(finalText).toContain("media generation failed");
+    expect(finalText).not.toContain("Attached video");
   });
 
   it("returns null when delta text is unchanged", () => {
@@ -178,6 +249,54 @@ describe("TuiStreamAssembler", () => {
     );
     expect(assembler.finalize("run-orphan-1999", { role: "assistant", content: [] }, false)).toBe(
       "Draft 1999",
+    );
+  });
+
+  it("protects a paused live stream across thousands of orphaned updates", () => {
+    const assembler = new TuiStreamAssembler((runId) => runId === "run-live");
+    assembler.ingestDelta("run-live", messageWithContent([text("Before the tool call")]), false);
+
+    for (let index = 0; index < 2_000; index += 1) {
+      assembler.ingestDelta(
+        `run-orphan-${index}`,
+        messageWithContent([text(`Draft ${index}`)]),
+        false,
+      );
+    }
+
+    expect(assembler.finalize("run-live", { role: "assistant", content: [] }, false)).toBe(
+      "Before the tool call",
+    );
+    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
+    );
+    expect(assembler.finalize("run-orphan-1999", { role: "assistant", content: [] }, false)).toBe(
+      "Draft 1999",
+    );
+  });
+
+  it("protects concurrent live streams without retaining abandoned runs", () => {
+    const protectedRuns = new Set(["run-first", "run-second"]);
+    const assembler = new TuiStreamAssembler((runId) => protectedRuns.has(runId));
+    assembler.ingestDelta("run-first", messageWithContent([text("First live response")]), false);
+    assembler.ingestDelta("run-second", messageWithContent([text("Second live response")]), false);
+
+    for (let index = 0; index < 500; index += 1) {
+      assembler.ingestDelta(
+        `run-orphan-${index}`,
+        messageWithContent([text(`Draft ${index}`)]),
+        false,
+      );
+    }
+
+    expect(assembler.finalize("run-first", { role: "assistant", content: [] }, false)).toBe(
+      "First live response",
+    );
+    expect(assembler.finalize("run-second", { role: "assistant", content: [] }, false)).toBe(
+      "Second live response",
+    );
+    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
     );
   });
 

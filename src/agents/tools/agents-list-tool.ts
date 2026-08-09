@@ -81,7 +81,8 @@ export function createAgentsListTool(opts?: {
   return {
     label: "Agents",
     name: "agents_list",
-    description: 'List ids allowed for `sessions_spawn(runtime:"subagent")`.',
+    description:
+      'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.',
     parameters: AgentsListToolSchema,
     outputSchema: AgentsListOutputSchema,
     execute: async () => {

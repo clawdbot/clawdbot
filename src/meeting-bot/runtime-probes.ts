@@ -1,26 +1,21 @@
 import { sleep } from "../utils/sleep.js";
-import type { MeetingBrowserHealth } from "./session-types.js";
+import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
-type MeetingProbeHealth = MeetingBrowserHealth & {
-  audioOutputActive?: boolean;
-  captioning?: boolean;
-  captionsEnabledAttempted?: boolean;
-  lastCaptionAt?: string;
-  lastCaptionSpeaker?: string;
-  lastCaptionText?: string;
-  lastOutputBytes?: number;
-  lastOutputLoopbackAt?: string;
-  lastOutputLoopbackCorrelation?: number;
-  lastOutputLoopbackPeak?: number;
-  lastOutputLoopbackRms?: number;
-  outputGeneration?: number;
-  outputLoopbackSignalBytes?: number;
-  recentTranscript?: Array<{ at?: string; speaker?: string; text: string }>;
-  transcriptLines?: number;
-  verifiedOutputGeneration?: number;
-};
+export function resolveMeetingProbeTimeoutMs(
+  input: number | undefined,
+  fallback: number,
+  invalidRequest: (message: string) => Error = (message) => new Error(message),
+): number {
+  if (input === undefined) {
+    return Math.min(Math.max(fallback, 1), 120_000);
+  }
+  if (!Number.isFinite(input) || input <= 0) {
+    throw invalidRequest("timeoutMs must be a positive number");
+  }
+  return Math.min(Math.trunc(input), 120_000);
+}
 
-type MeetingProbeSession<Health extends MeetingProbeHealth> = {
+type MeetingProbeSession<Health extends MeetingPluginProbeHealth> = {
   id: string;
   chrome?: {
     launched: boolean;
@@ -29,14 +24,7 @@ type MeetingProbeSession<Health extends MeetingProbeHealth> = {
   };
 };
 
-type MeetingProbeRequest<Transport extends string> = {
-  agentId?: string;
-  message?: string;
-  mode?: string;
-  timeoutMs?: number;
-  transport?: Transport;
-  url: string;
-};
+type MeetingProbeRequest<Transport extends string> = MeetingPluginJoinRequest<Transport, string>;
 
 type MeetingProbeConfig<Mode extends string> = {
   defaultMode: Mode;
@@ -44,11 +32,11 @@ type MeetingProbeConfig<Mode extends string> = {
   chromeNode: { node?: string };
 };
 
-type MeetingProbeContext<
+export type MeetingProbeContext<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
   Transport extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Transport>,
 > = {
@@ -67,7 +55,7 @@ type MeetingProbeContext<
 
 type MeetingRuntimeProbeOptions<
   Mode extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
 > = {
   defaultSpeechMessage: string;
@@ -81,7 +69,7 @@ export function createMeetingRuntimeProbes<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
   Transport extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Transport>,
 >(

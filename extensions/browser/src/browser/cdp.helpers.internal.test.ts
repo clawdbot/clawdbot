@@ -1,15 +1,32 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { toErrorObject } from "../infra/errors.js";
 import { rawDataToString } from "../infra/ws.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const sleepWithAbortMock = vi.hoisted(() =>
+  vi.fn<(delayMs: number, signal?: AbortSignal, options?: { ref?: boolean }) => void>(),
+);
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
     () => undefined,
   ),
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    sleepWithAbort: (...args: Parameters<typeof actual.sleepWithAbort>) => {
+      const pending = actual.sleepWithAbort(...args);
+      sleepWithAbortMock(...args);
+      return pending;
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -56,6 +73,7 @@ describe("cdp.helpers internal", () => {
 
   afterEach(async () => {
     fetchWithSsrFGuardMock.mockReset();
+    sleepWithAbortMock.mockClear();
     registerManagedProxyBrowserCdpBypassMock.mockReset();
     registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
     if (wss) {
@@ -131,6 +149,36 @@ describe("cdp.helpers internal", () => {
       await guardedRelease();
       // The underlying release must be invoked exactly once.
       expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases the guarded fetch even when cancelling the unread response fails", async () => {
+      const cancel = vi.fn(async () => {
+        throw new Error("fixture response cancellation failed");
+      });
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          bodyUsed: false,
+          body: { cancel },
+        } as unknown as Response,
+        release,
+      });
+
+      const { release: guardedRelease } = await fetchCdpChecked(
+        "http://127.0.0.1:9222/json/version",
+        250,
+        undefined,
+        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      );
+
+      await expect(guardedRelease()).resolves.toBeUndefined();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(
+        release.mock.invocationCallOrder[0]!,
+      );
     });
 
     it("registers a managed-proxy bypass for the exact sanitized fetch URL", async () => {
@@ -337,6 +385,116 @@ describe("cdp.helpers internal", () => {
       expect(result.echoed).toBe("Test.afterOpen");
       expect(rejectedHandshakes).toBe(1);
       expect(callbackCount).toBe(1);
+    });
+
+    it("aborts an authenticated 503 handshake retry before opening another socket", async () => {
+      const controller = new AbortController();
+      const expectedAuthorization = `Basic ${Buffer.from("openclaw:cdp-abort-test").toString("base64")}`;
+      let rejectedHandshakes = 0;
+      wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (info, callback) => {
+          if (info.req.headers.authorization !== expectedAuthorization) {
+            callback(false, 401, "authentication required");
+            return;
+          }
+          rejectedHandshakes += 1;
+          callback(false, 503, "try later");
+        },
+      });
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", resolve);
+      });
+      const port = (wss.address() as { port: number }).port;
+      const pending = withCdpSocket(
+        `ws://openclaw:cdp-abort-test@127.0.0.1:${port}/devtools/browser/TEST`,
+        async () => "unexpected command",
+        {
+          handshakeRetries: 3,
+          handshakeRetryDelayMs: 2_000,
+          handshakeMaxRetryDelayMs: 2_000,
+          signal: controller.signal,
+        },
+      );
+      await vi.waitFor(() =>
+        expect(sleepWithAbortMock).toHaveBeenCalledWith(expect.any(Number), controller.signal),
+      );
+      controller.abort(new Error("browser request cancelled"));
+
+      await expect(
+        Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            const timeout = setTimeout(
+              () => reject(new Error("CDP cancellation did not stop handshake retry backoff")),
+              300,
+            );
+            timeout.unref?.();
+          }),
+        ]),
+      ).rejects.toThrow("browser request cancelled");
+      expect(rejectedHandshakes).toBe(1);
+    });
+
+    it("closes an authenticated CDP socket when its opening handshake is aborted", async () => {
+      const controller = new AbortController();
+      const server = createServer();
+      const sockets = new Set<Socket>();
+      const expectedAuthorization = `Basic ${Buffer.from("openclaw:cdp-abort-test").toString("base64")}`;
+      let resolveUpgrade: (() => void) | undefined;
+      const upgradeStarted = new Promise<void>((resolve) => {
+        resolveUpgrade = resolve;
+      });
+      server.on("connection", (socket) => {
+        sockets.add(socket);
+        socket.once("end", () => socket.destroy());
+        socket.once("close", () => sockets.delete(socket));
+      });
+      server.on("upgrade", (request, socket) => {
+        if (request.headers.authorization !== expectedAuthorization) {
+          socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+          return;
+        }
+        // Keep the authenticated TCP socket open without sending an upgrade.
+        socket.resume();
+        resolveUpgrade?.();
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const port = (server.address() as { port: number }).port;
+
+      try {
+        const pending = withCdpSocket(
+          `ws://openclaw:cdp-abort-test@127.0.0.1:${port}/devtools/browser/TEST`,
+          async () => "unexpected command",
+          { handshakeTimeoutMs: 2_000, handshakeRetries: 0, signal: controller.signal },
+        );
+        await upgradeStarted;
+        controller.abort(new Error("browser request cancelled"));
+
+        await expect(
+          Promise.race([
+            pending,
+            new Promise<never>((_resolve, reject) => {
+              const timeout = setTimeout(
+                () => reject(new Error("CDP cancellation did not stop the opening handshake")),
+                300,
+              );
+              timeout.unref?.();
+            }),
+          ]),
+        ).rejects.toThrow("browser request cancelled");
+        await vi.waitFor(() => expect(sockets.size).toBe(0));
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
     });
 
     it("does not retry rate-limited websocket handshakes", async () => {

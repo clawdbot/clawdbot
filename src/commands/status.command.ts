@@ -37,26 +37,6 @@ const statusCommandTextRuntimeLoader = createLazyImportLoader(
 );
 const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
-function loadStatusScanModule() {
-  return statusScanModuleLoader.load();
-}
-
-function loadStatusScanFastJsonModule() {
-  return statusScanFastJsonModuleLoader.load();
-}
-
-function loadStatusAllModule() {
-  return statusAllModuleLoader.load();
-}
-
-function loadStatusCommandTextRuntime() {
-  return statusCommandTextRuntimeLoader.load();
-}
-
-function loadStatusNodeModeModule() {
-  return statusNodeModeModuleLoader.load();
-}
-
 /** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
 function resolvePairingRecoveryContext(params: {
   error?: string | null;
@@ -131,9 +111,9 @@ export async function statusCommand(
 ) {
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
-    await loadStatusAllModule().then(({ statusAllCommand }) =>
-      statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
-    );
+    await statusAllModuleLoader
+      .load()
+      .then(({ statusAllCommand }) => statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }));
     return;
   }
 
@@ -141,20 +121,25 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts,
       runtime,
-      includeSecurityAudit: opts.all === true,
-      includePluginCompatibility: true,
+      includeSecurityAudit: opts.all === true || opts.deep === true,
+      includePluginCompatibility: opts.all === true,
       suppressHealthErrors: true,
       scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
-        await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
-          scanStatusJsonFast(scanOpts, runtimeForScan),
-        ),
+        await statusScanFastJsonModuleLoader
+          .load()
+          .then(({ scanStatusJsonFast }) => scanStatusJsonFast(scanOpts, runtimeForScan)),
     });
     return;
   }
 
-  const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
-  );
+  const scan = await statusScanModuleLoader
+    .load()
+    .then(({ scanStatus }) =>
+      scanStatus(
+        { json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep },
+        runtime,
+      ),
+    );
 
   const {
     cfg,
@@ -226,6 +211,11 @@ export async function statusCommand(
       ),
   });
 
+  // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
+  if (health && "error" in health) {
+    throw new Error(health.error);
+  }
+
   const rich = true;
   const {
     buildStatusUpdateSurface,
@@ -245,7 +235,7 @@ export async function statusCommand(
     resolveMemoryVectorState,
     shortenText,
     theme,
-  } = await loadStatusCommandTextRuntime();
+  } = await statusCommandTextRuntimeLoader.load();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
   const ok = (value: string) => (rich ? theme.success(value) : value);
   const warn = (value: string) => (rich ? theme.warn(value) : value);
@@ -284,12 +274,14 @@ export async function statusCommand(
     runtime.log("");
   }
 
-  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
-    resolveNodeOnlyGatewayInfo({
-      daemon,
-      node: nodeDaemon,
-    }),
-  );
+  const nodeOnlyGateway = await statusNodeModeModuleLoader
+    .load()
+    .then(({ resolveNodeOnlyGatewayInfo }) =>
+      resolveNodeOnlyGatewayInfo({
+        daemon,
+        node: nodeDaemon,
+      }),
+    );
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,

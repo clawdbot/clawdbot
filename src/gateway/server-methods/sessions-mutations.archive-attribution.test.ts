@@ -226,7 +226,7 @@ describe("sessions.patch archive attribution", () => {
       let stateAtFailure: ReturnType<typeof readCandidateState> | undefined;
       let changesAtFailure: number | undefined;
       const append = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
+        .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {
           stateAtFailure = readCandidateState();
           changesAtFailure = readTotalChanges();

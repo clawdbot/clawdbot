@@ -37,31 +37,23 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, { worktrees: await service.list() }, undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(true, { worktrees: await service.list() }, undefined);
     },
     "worktrees.create": async ({ params, respond }) => {
       if (!validateWorktreesCreateParams(params)) {
         invalidParams(respond);
         return;
       }
-      try {
-        respond(
-          true,
-          await service.create({
-            repoRoot: params.repoRoot,
-            name: params.name,
-            baseRef: params.baseRef,
-            ownerKind: "manual",
-          }),
-          undefined,
-        );
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(
+        true,
+        await service.create({
+          repoRoot: params.repoRoot,
+          name: params.name,
+          baseRef: params.baseRef,
+          ownerKind: "manual",
+        }),
+        undefined,
+      );
     },
     "worktrees.remove": async ({ params, respond }) => {
       if (!validateWorktreesRemoveParams(params)) {
@@ -98,11 +90,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      try {
-        respond(true, await service.restore({ id: params.id }), undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      respond(true, await service.restore({ id: params.id }), undefined);
     },
     "worktrees.branches": async ({ params, respond, context, client }) => {
       if (!validateWorktreesBranchesParams(params)) {
@@ -136,36 +124,28 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           return;
         }
       }
-      try {
-        const result = params.includeRepositoryStatus
-          ? await service.listRepositoryBranches(params.repoRoot, {
-              includeRepositoryStatus: true,
-            })
-          : await service.listRepositoryBranches(params.repoRoot);
-        respond(true, result, undefined);
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      const result = params.includeRepositoryStatus
+        ? await service.listRepositoryBranches(params.repoRoot, {
+            includeRepositoryStatus: true,
+          })
+        : await service.listRepositoryBranches(params.repoRoot);
+      respond(true, result, undefined);
     },
     "worktrees.gc": async ({ params, respond, context }) => {
       if (!validateWorktreesGcParams(params)) {
         invalidParams(respond);
         return;
       }
-      try {
-        const cfg = context.getRuntimeConfig();
-        const limits = resolveWorktreeCleanupLimits();
-        respond(
-          true,
-          await service.gc({
-            limits,
-            shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
-          }),
-          undefined,
-        );
-      } catch (error) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
+      const cfg = context.getRuntimeConfig();
+      const limits = resolveWorktreeCleanupLimits();
+      respond(
+        true,
+        await service.gc({
+          limits,
+          shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+        }),
+        undefined,
+      );
     },
   };
 }

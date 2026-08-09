@@ -1,5 +1,7 @@
 // Mattermost plugin module implements client behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -26,7 +28,6 @@ const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // Non-JSON success bodies are a rare fallback (the API is JSON-first); keep a
 // generous text budget but still bound it instead of buffering the whole stream.
 const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
@@ -75,12 +76,35 @@ export const MattermostPostSchema = z
 
 export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
+const MattermostPostListSchema = z
+  .object({
+    order: z.array(z.string()),
+    posts: z.record(z.string(), MattermostPostSchema),
+    next_post_id: z.string().nullable().optional(),
+    prev_post_id: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 type MattermostFileInfo = {
   id: string;
   name?: string | null;
   mime_type?: string | null;
   size?: number | null;
 };
+
+export function parseMattermostApiStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  // Read only the provider's status prefix; upstream details can mention other HTTP statuses.
+  const match = /Mattermost API (\d{3})\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : undefined;
+}
 
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
@@ -135,56 +159,6 @@ export async function readMattermostError(res: Response): Promise<string> {
     }
   }
   return text;
-}
-
-function responseWithRelease(response: Response, release: () => Promise<void>): Response {
-  let released = false;
-  const releaseOnce = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release();
-  };
-
-  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void releaseOnce();
-    return new Response(null, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read();
-        if (done) {
-          await releaseOnce();
-          controller.close();
-          return;
-        }
-        if (value) {
-          controller.enqueue(value);
-        }
-      } catch (error) {
-        await releaseOnce();
-        throw error;
-      }
-    },
-    async cancel(reason) {
-      await reader.cancel(reason).catch(() => undefined);
-      await releaseOnce();
-    },
-  });
-
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
 }
 
 export function createMattermostClient(params: {
@@ -278,11 +252,19 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
+    try {
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
+      }
+      return (await readMattermostSuccessText(res, path)) as T;
+    } catch (error) {
+      if (path === "/posts" && init?.method?.toUpperCase() === "POST") {
+        // POST already succeeded; a lost/unreadable receipt must never schedule another visible post.
+        throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
+      }
+      throw error;
     }
-    return (await readMattermostSuccessText(res, path)) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
@@ -310,7 +292,50 @@ export async function fetchMattermostChannel(
   client: MattermostClient,
   channelId: string,
 ): Promise<MattermostChannel> {
-  return await client.request<MattermostChannel>(`/channels/${channelId}`);
+  return await client.request<MattermostChannel>(`/channels/${encodeURIComponent(channelId)}`);
+}
+
+export async function fetchMattermostChannelPosts(
+  client: MattermostClient,
+  channelId: string,
+  options: {
+    limit?: number;
+    before?: string;
+    after?: string;
+  } = {},
+): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
+  const before = normalizeOptionalString(options.before);
+  const after = normalizeOptionalString(options.after);
+  if (before && after) {
+    throw new Error("Mattermost read accepts either before or after, not both.");
+  }
+
+  if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit <= 0)) {
+    throw new Error("Mattermost read limit must be a positive integer.");
+  }
+  const perPage = Math.min(options.limit ?? 60, 200);
+  const query = new URLSearchParams({ per_page: String(perPage) });
+  if (before) {
+    query.set("before", before);
+  }
+  if (after) {
+    query.set("after", after);
+  }
+  const response = await client.request<unknown>(
+    `/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,
+  );
+  const parsed = MattermostPostListSchema.safeParse(response);
+  if (!parsed.success || parsed.data.order.some((postId) => !parsed.data.posts[postId])) {
+    throw new Error("Unexpected Mattermost channel posts response.");
+  }
+
+  return {
+    messages: parsed.data.order.map((postId) => parsed.data.posts[postId] as MattermostPost),
+    // Mattermost returns the cursor for the opposite direction as well. For
+    // descending/default and `before` reads, `prev_post_id` points to older
+    // posts; for `after` reads, `next_post_id` points to newer posts.
+    hasMore: Boolean(after ? parsed.data.next_post_id : parsed.data.prev_post_id),
+  };
 }
 
 export async function fetchMattermostChannelByName(
@@ -657,10 +682,19 @@ export async function createMattermostPost(
   if (params.props) {
     payload.props = params.props;
   }
-  return await client.request<MattermostPost>("/posts", {
+  const post = await client.request<MattermostPost>("/posts", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  const postId = post && typeof post === "object" ? normalizeOptionalString(post.id) : undefined;
+  if (!postId) {
+    // Successful POST may already be visible; retrying because its receipt is malformed duplicates it.
+    throw createChannelPartialDeliveryError(
+      new Error("Mattermost post creation response did not include a post id"),
+      { messageIds: [], visibleReplySent: true },
+    );
+  }
+  return postId === post.id ? post : { ...post, id: postId };
 }
 
 type MattermostTeam = {

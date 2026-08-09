@@ -61,6 +61,21 @@ export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+/** Returns whether a final monthly release belongs to the extended-stable line. */
+function isExtendedStableReleaseVersion(version: string): boolean {
+  const parsed = parseSemver(version.trim());
+  return (
+    parsed !== null &&
+    parsed.build.length === 0 &&
+    parsed.prerelease.length === 0 &&
+    parsed.major >= 1000 &&
+    parsed.major <= 9999 &&
+    parsed.minor >= 1 &&
+    parsed.minor <= 12 &&
+    parsed.patch >= 33
+  );
+}
+
 /** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
 function isPrereleaseTag(tag: string): boolean {
   const parsed = parseSemver(normalizeLegacyDotBetaVersion(tag));
@@ -115,6 +130,12 @@ export function resolveEffectiveUpdateChannel(params: {
     return { channel: params.configChannel, source: "config" };
   }
 
+  if (params.installKind === "package" && params.currentVersion) {
+    if (isExtendedStableReleaseVersion(params.currentVersion)) {
+      return { channel: "extended-stable", source: "installed-version" };
+    }
+  }
+
   if (params.installKind === "git") {
     const tag = params.git?.tag;
     if (tag) {
@@ -156,7 +177,7 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   if (params.source === "installed-version") {
-    return "beta (installed version)";
+    return `${params.channel} (installed version)`;
   }
   return `${params.channel} (default)`;
 }

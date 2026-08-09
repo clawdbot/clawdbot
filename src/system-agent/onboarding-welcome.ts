@@ -95,12 +95,26 @@ export async function loadAuthoredSetupConfig(params: {
 export async function buildOnboardingWelcome(params: {
   engine: SystemAgentChatEngine;
   workspace?: string;
+  /** Only the local terminal can finish the machine-owned Gateway installation. */
+  localRecovery?: true;
 }): Promise<OnboardingWelcome> {
   const overview = await params.engine.loadOverview();
   const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
     configExists: overview.config.exists,
     configValid: overview.config.valid,
   });
+  const localSetup =
+    params.localRecovery === true &&
+    overview.config.exists &&
+    overview.config.valid &&
+    authoredConfig !== undefined &&
+    authoredConfig?.gateway?.mode !== "remote"
+      ? (await import("../state/local-onboarding-state.js")).readLocalOnboardingStateForConfig(
+          overview.config.path,
+          authoredConfig,
+        )
+      : undefined;
+  const pendingSetup = localSetup?.status === "pending" ? localSetup : undefined;
   const defaultModel = overview.defaultModel?.trim();
   const requestedWorkspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace.trim())
@@ -110,6 +124,7 @@ export async function buildOnboardingWelcome(params: {
     : undefined;
   if (
     hasAuthoredSetup &&
+    !pendingSetup &&
     defaultModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
@@ -119,12 +134,16 @@ export async function buildOnboardingWelcome(params: {
   }
   if (!defaultModel) {
     throw new Error(
-      "OpenClaw onboarding requires working inference first. Run `openclaw onboard` to configure and verify a default model.",
+      "OpenClaw onboarding requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model.",
     );
   }
 
   const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  const workspace = resolveUserPath(requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE);
+  // A durable receipt owns recovery even after partial config writes; using its
+  // workspace prevents the fallback chat from resuming a different installation.
+  const workspace = resolveUserPath(
+    pendingSetup?.workspace || requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE,
+  );
 
   params.engine.propose({ kind: "setup", workspace });
   const welcome = [

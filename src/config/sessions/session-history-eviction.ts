@@ -346,13 +346,13 @@ async function enforceSessionHistoryMaintenanceSerialized(
     const eviction = await runExclusiveSessionLifecycleMutation({
       scope: params.storePath,
       identities: [sessionId],
-      run: async () =>
-        await runExclusiveSqliteSessionWrite(resolved, async () => {
+      run: async () => {
+        const plan = await runExclusiveSqliteSessionWrite(resolved, async () => {
           const protectedBeforeArchive = collectProtectedHistoricalSessionIds({
             database,
             storePath: params.storePath,
           });
-          const plan = planSqliteSessionStateDeleteIfUnreferenced({
+          const candidate = planSqliteSessionStateDeleteIfUnreferenced({
             archiveDirectory,
             archiveTranscript: true,
             database,
@@ -360,13 +360,18 @@ async function enforceSessionHistoryMaintenanceSerialized(
             referencedSessionIds: protectedBeforeArchive,
             sessionId,
           });
-          if (!plan) {
+          if (!candidate) {
             return null;
           }
-
-          // Extract-before-delete is the retention invariant. Admission is fenced across archive
-          // creation, then rechecked inside the write transaction before any rows are reclaimed.
-          const materialized = materializeSqliteSessionStateDeletePlans([plan]);
+          return candidate;
+        });
+        if (!plan) {
+          return null;
+        }
+        // Extract-before-delete is the retention invariant. The lifecycle hold
+        // fences admission while the store writer is released for archive I/O.
+        const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+        const committedArchives = await runExclusiveSqliteSessionWrite(resolved, async () => {
           let deleted = false;
           let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
             [];
@@ -401,11 +406,16 @@ async function enforceSessionHistoryMaintenanceSerialized(
           } catch {
             // Best-effort reclamation only.
           }
-          return {
-            archivedTranscripts,
-            usage: await measureSessionPhysicalDiskUsage(params.storePath),
-          };
-        }),
+          return archivedTranscripts;
+        });
+        if (!committedArchives) {
+          return null;
+        }
+        return {
+          archivedTranscripts: committedArchives,
+          usage: await measureSessionPhysicalDiskUsage(params.storePath),
+        };
+      },
     });
     if (!eviction) {
       continue;

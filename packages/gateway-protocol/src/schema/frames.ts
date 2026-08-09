@@ -72,7 +72,7 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with negotiated protocol and initial state. */
+/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),
@@ -138,6 +138,17 @@ export const HelloOkSchema = closedObject({
     maxPayload: Type.Integer({ minimum: 1 }),
     maxBufferedBytes: Type.Integer({ minimum: 1 }),
     tickIntervalMs: Type.Integer({ minimum: 1 }),
+    // Additive: unconditional decoded-size ceilings for chat attachments, so
+    // clients can validate a file before sending instead of hardcoding guesses.
+    // Per attachment, not per frame: the encoded request must still fit
+    // `maxPayload`. MIME acceptance and per-message counts stay server-side
+    // because they depend on the entrypoint, resolved model, and payload sniffing.
+    attachments: Type.Optional(
+      closedObject({
+        maxBytes: Type.Integer({ minimum: 1 }),
+        maxImageBytes: Type.Integer({ minimum: 1 }),
+      }),
+    ),
     allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
     hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),
@@ -158,6 +169,7 @@ export const RequestFrameSchema = closedObject({
   id: NonEmptyString,
   method: NonEmptyString,
   params: Type.Optional(Type.Unknown()),
+  traceparent: Type.Optional(Type.String({ maxLength: 128 })),
 });
 
 /** Server response frame envelope paired with a prior request id. */

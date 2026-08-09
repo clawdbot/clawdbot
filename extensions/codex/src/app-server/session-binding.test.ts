@@ -97,6 +97,70 @@ describe("Codex app-server binding store", () => {
     });
   });
 
+  it("replaces only the exact ordinary thread owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-cas" };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-stale",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("rejects same-thread and supervision ownership through replacement CAS", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-cas-boundary",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: { threadId: "thread-old", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: {
+          threadId: "thread-private",
+          cwd: "/repo",
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-private",
+          preserveNativeModel: true,
+        },
+      }),
+    ).resolves.toBe(false);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
+  });
+
   it("does not report the exact session or conversation binding owner as another owner", async () => {
     const { state } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
@@ -389,16 +453,19 @@ describe("Codex app-server binding store", () => {
     const rawUserMcpServersFingerprint = JSON.stringify({
       mcp_servers: { legacy: { command: "node" } },
     });
+    const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
     const imported = createStoredCodexAppServerBinding({
       schemaVersion: 2,
       threadId: "thread-legacy-fingerprints",
       cwd: "/repo",
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint: rawUserMcpServersFingerprint,
     });
     expect(imported?.binding).toMatchObject({
       dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
     });
 

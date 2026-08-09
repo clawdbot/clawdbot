@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
+import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexPluginConfig,
@@ -87,6 +88,8 @@ const bundleMcpThreadConfig = {
   diagnostics: [],
   evaluated: false,
   fingerprint: undefined,
+  staticServerNames: [],
+  userStaticServerNames: [],
 } satisfies CodexBundleMcpThreadConfig;
 
 const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
@@ -176,7 +179,7 @@ async function captureExpectedRuntimeArtifact(
     before,
     startOptions: appServer.start,
     spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.143.0", userAgent: "openclaw/0.143.0 (macOS; test)" },
+    runtimeIdentity: { serverVersion: "0.147.0", userAgent: "openclaw/0.147.0 (macOS; test)" },
   });
 }
 
@@ -186,7 +189,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.143.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.147.0 (macOS; test)" } });
 }
 
 async function waitForRequest(
@@ -212,38 +215,7 @@ async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number
 }
 
 function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/repo",
-      cliVersion: "0.143.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/repo",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  return createThreadStartResult(threadId, "/repo");
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -288,6 +260,29 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("Invalid bearer token");
     expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("carries the session agent id into the startup client factory", async () => {
+    const clientFactory = vi.fn(
+      async (options: Parameters<CodexAppServerClientFactory>[0]) =>
+        await getLeasedSharedCodexAppServerClient(options),
+    );
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      attemptClientFactory: () => clientFactory,
+    });
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({
+      id: threadStart.id,
+      error: { code: -32000, message: "stop after startup" },
+    });
+
+    await expect(run).rejects.toThrow("stop after startup");
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+      }),
+    );
   });
 
   it("rejects an expected artifact mismatch before any native thread request", async () => {
@@ -597,6 +592,7 @@ describe("startCodexAttemptThread", () => {
         'import readline from "node:readline";',
         "const [requestLogPath, pidPath] = process.argv.slice(2);",
         'fs.writeFileSync(pidPath, String(process.pid), "utf8");',
+        'process.stderr.write("Error: failed to initialize sqlite state runtime token=secret-value\\n");',
         "const lines = readline.createInterface({ input: process.stdin });",
         'lines.on("line", (line) => {',
         "  const message = JSON.parse(line);",
@@ -623,7 +619,9 @@ describe("startCodexAttemptThread", () => {
         skipStartSpy: true,
       });
 
-      await expect(run).rejects.toThrow("codex app-server initialize timed out");
+      await expect(run).rejects.toThrow(
+        'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"',
+      );
 
       const requestMethods = (await fs.readFile(requestLogPath, "utf8")).trim().split(/\r?\n/u);
       expect(requestMethods).toEqual(["initialize"]);
@@ -763,6 +761,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("continues with a deny-all apps patch when plugin discovery exceeds its shared deadline", async () => {
+    vi.useFakeTimers();
     const deadlinePluginConfig = {
       appServer: { command: "codex", requestTimeoutMs: 400 },
       codexPlugins: {
@@ -779,10 +778,8 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
-    const pluginList = await waitForRequest(harness, "plugin/list");
-    expect(
-      readHarnessMessages(harness.writes).find((message) => message.id === pluginList.id),
-    ).toMatchObject({ method: "plugin/list", params: {} });
+    await waitForRequest(harness, "plugin/installed");
+    await vi.advanceTimersByTimeAsync(100);
 
     const threadStart = await waitForThreadStart(harness);
     const startMessage = readHarnessMessages(harness.writes).find(
@@ -822,6 +819,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(error).toMatchObject({ scope: "harness" });
     const cause = (error as Error).cause;
     expect(isCodexAppServerRequestTimeoutError(cause)).toBe(true);
     expect((cause as Error).message).toBe("plugin/list timed out");

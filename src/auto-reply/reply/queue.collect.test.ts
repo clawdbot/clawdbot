@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -20,7 +20,6 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
@@ -49,7 +48,7 @@ function enqueueTestRun(
 
 function createDrainRecorder(expectedCalls = 1) {
   const calls: FollowupRun[] = [];
-  const done = createDeferred<void>();
+  const done = createDeferred();
   const runFollowup = async (run: FollowupRun) => {
     calls.push(run);
     if (calls.length >= expectedCalls) {
@@ -60,6 +59,54 @@ function createDrainRecorder(expectedCalls = 1) {
 }
 
 describe("followup queue collect routing", () => {
+  it("carries queued local cron-authority unavailability through a followup drain", async () => {
+    const key = `test-followup-cron-authority-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const run = createRun({ prompt: "queued local operator turn" });
+    run.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gateway:local",
+      cronCreatorAuthorityUnavailable: "queued-local-operator",
+      onAdopted: async () => {},
+    };
+    enqueueFollowupRun(key, run, { ...createQueueSettings(), mode: "followup" });
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable).toBe(
+      "queued-local-operator",
+    );
+  });
+
+  it("carries queued local cron-authority unavailability through a collect batch", async () => {
+    const key = `test-collect-cron-authority-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const first = createRun({ prompt: "first queued turn" });
+    first.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gateway:local",
+      cronCreatorAuthorityUnavailable: "queued-local-operator",
+      onAdopted: async () => {},
+    };
+    const second = createRun({ prompt: "second queued turn" });
+    second.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gateway:local",
+      onAdopted: async () => {},
+    };
+    const settings = createQueueSettings();
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable).toBe(
+      "queued-local-operator",
+    );
+  });
+
   it("marks exclusive admission without onAbandoned and isolates collect identity", () => {
     // Failure window: cancel-only used to be inferred from missing onAbandoned,
     // so exclusive admission without onAbandoned shared collect identity.
@@ -115,8 +162,8 @@ describe("followup queue collect routing", () => {
   });
 
   it("serializes completion behind rejected admission and blocks later admission", async () => {
-    const admissionStarted = createDeferred<void>();
-    const releaseAdmission = createDeferred<void>();
+    const admissionStarted = createDeferred();
+    const releaseAdmission = createDeferred();
     const admissionError = new Error("admission failed");
     const events: string[] = [];
     const onAdmitted = vi.fn(async () => {
@@ -619,13 +666,61 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).not.toContain("older public content");
-    expect(calls[0]?.prompt).not.toContain("private direct content");
+    expect(calls[0]?.prompt).toContain("- private direct content");
     expect(calls[0]?.originatingTo).toBe("direct:A");
     expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[1]?.prompt).toContain("- older public content");
     expect(calls[1]?.prompt).not.toContain("private direct content");
     expect(calls[1]?.originatingTo).toBe("channel:B");
     expect(calls[2]?.prompt).toContain("newer public content");
+  });
+
+  it("keeps content in every context-isolated overflow summary", async () => {
+    const key = `test-collect-overflow-all-context-lines-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder(6);
+    const settings = createQueueSettings({ cap: 3 });
+    const queued = [
+      ["dropped A", "A"],
+      ["dropped B", "B"],
+      ["dropped C1", "C"],
+      ["dropped C2", "C"],
+      ["dropped D", "D"],
+      ["dropped E", "E"],
+      ["survivor 1", "survivor"],
+      ["survivor 2", "survivor"],
+      ["survivor 3", "survivor"],
+    ] as const;
+
+    for (const [prompt, target] of queued) {
+      enqueueTestRun(
+        key,
+        {
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: `channel:${target}`,
+          originatingChatType: "channel",
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(6);
+    const overflowPrompts = calls.slice(0, 5).map((run) => run.prompt);
+    expect(overflowPrompts).toEqual([
+      expect.stringContaining("- dropped A"),
+      expect.stringContaining("- dropped B"),
+      expect.stringMatching(/- dropped C1[\s\S]*- dropped C2/),
+      expect.stringContaining("- dropped D"),
+      expect.stringContaining("- dropped E"),
+    ]);
+    expect(overflowPrompts[2]).toContain("Dropped 2 messages");
+    expect(overflowPrompts.every((prompt) => prompt.includes("Summary:\n- "))).toBe(true);
+    expect(calls[5]?.prompt).toContain("survivor 1");
+    expect(calls[5]?.prompt).toContain("survivor 2");
+    expect(calls[5]?.prompt).toContain("survivor 3");
   });
 
   it("evicts oldest overflow context metadata when the item cap is reached", () => {
@@ -696,6 +791,8 @@ describe("followup queue collect routing", () => {
   it("does not register a drop:new source that the full queue rejects", () => {
     const key = `test-drop-new-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn();
+    const onAbandoned = vi.fn();
+    const onDisposition = vi.fn();
     const onComplete = vi.fn();
     const settings = createQueueSettings({ mode: "followup", cap: 1, dropPolicy: "new" });
 
@@ -705,9 +802,11 @@ describe("followup queue collect routing", () => {
         key,
         {
           ...createRun({ prompt: "rejected" }),
+          onQueueDisposition: onDisposition,
           turnAdoptionLifecycle: {
             onAdopted: async () => {},
             onDeferred: onEnqueued,
+            onAbandoned,
             onSettled: onComplete,
           },
         },
@@ -716,6 +815,8 @@ describe("followup queue collect routing", () => {
     ).toBe(false);
 
     expect(onEnqueued).not.toHaveBeenCalled();
+    expect(onDisposition).toHaveBeenCalledWith("queue-cap-new");
+    expect(onAbandoned).toHaveBeenCalledOnce();
     expect(onComplete).toHaveBeenCalledOnce();
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(["existing"]);
     clearFollowupQueue(key);
@@ -750,7 +851,7 @@ describe("followup queue collect routing", () => {
       "channel:D",
     ]);
     expect(calls[0]?.prompt).toContain("Dropped 1 message");
-    expect(calls[0]?.prompt).not.toContain("content B");
+    expect(calls[0]?.prompt).toContain("- content B");
     expect(calls[1]?.prompt).toContain("- content C");
     expect(calls[2]?.prompt).toContain("content D");
     expect(calls.every((call) => !call.prompt.includes("content A"))).toBe(true);
@@ -1015,6 +1116,7 @@ describe("followup queue collect routing", () => {
     await done.promise;
 
     expect(calls[0]?.prompt).toContain("Dropped 1 message");
+    expect(calls[0]?.prompt).toContain("- second");
     expect(calls[0]?.run.model).toBe("model-b");
     expect(calls[0]?.run.authProfileId).toBe("auth-b");
     expect(calls[1]?.prompt).toContain("- retained");
@@ -1260,9 +1362,9 @@ describe("followup queue collect routing", () => {
   it("removes a delivered split summary by source identity after concurrent enqueue", async () => {
     const key = `test-collect-overflow-concurrent-source-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
-    const done = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const done = createDeferred();
     const settings = createQueueSettings({ cap: 1 });
 
     enqueueTestRun(
@@ -1326,8 +1428,8 @@ describe("followup queue collect routing", () => {
   it("does not deliver a context group again after concurrent overflow summarizes it", async () => {
     const key = `test-collect-overflow-stale-context-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
     const settings = createQueueSettings({ cap: 2 });
     const createContextRun = (prompt: string, chatType: "direct" | "channel") =>
       createRun({
@@ -1363,7 +1465,7 @@ describe("followup queue collect routing", () => {
   it("retries split overflow summaries after transient failure", async () => {
     const key = `test-collect-overflow-split-retry-${Date.now()}`;
     const prompts: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const onComplete = vi.fn();
     let attempt = 0;
     const settings = createQueueSettings({ cap: 1 });
@@ -2483,7 +2585,7 @@ describe("followup queue collect routing", () => {
     const key = `test-collect-partial-retry-${Date.now()}`;
     const attempts: FollowupRun[] = [];
     const successfulCalls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -2609,13 +2711,7 @@ describe("followup queue collect routing", () => {
       const recorder = calls[0]?.userTurnTranscriptRecorder;
       expect(recorder).toBeDefined();
       const persisted = await recorder?.persistFallback();
-      expect(persisted?.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "agent",
-          sessionId: "new-session",
-          storePath,
-        }),
-      );
+      expect(persisted?.sessionFile).toBe("agent:agent:main");
       await expect(
         loadTranscriptEvents({
           agentId: "agent",
@@ -3044,7 +3140,7 @@ describe("followup queue collect routing", () => {
   it("admits one lifecycle-owned overflow source before delivery", async () => {
     const key = `test-overflow-summary-single-admission-${Date.now()}`;
     const events: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const sourceComplete = vi.fn(() => {
       events.push("source-complete");
     });
@@ -3094,9 +3190,9 @@ describe("followup queue collect routing", () => {
   it("keeps one onComplete-only overflow source retryable after delivery fails", async () => {
     const key = `test-overflow-summary-lifecycle-failure-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstAttempt = createDeferred<void>();
-    const releaseRetry = createDeferred<void>();
-    const done = createDeferred<void>();
+    const firstAttempt = createDeferred();
+    const releaseRetry = createDeferred();
+    const done = createDeferred();
     const onComplete = vi.fn();
     let attempts = 0;
     const runFollowup = async (run: FollowupRun) => {
@@ -3194,7 +3290,7 @@ describe("followup queue collect routing", () => {
   it("runs distinct collected admission lifecycles independently when one retries", async () => {
     const key = `test-collect-admission-isolation-${Date.now()}`;
     const events: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const secondAdmissionError = new Error("second admission failed");
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
@@ -3419,7 +3515,7 @@ describe("followup queue collect routing", () => {
 
   it("keeps queue cancellation connected after collect admission", async () => {
     const key = `test-collect-queue-cancel-${Date.now()}`;
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
@@ -3617,7 +3713,7 @@ describe("followup queue collect routing", () => {
   it("runs distinct overflow admission lifecycles independently when one retries", async () => {
     const key = `test-overflow-admission-isolation-${Date.now()}`;
     const events: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const secondAdmissionError = new Error("second overflow admission failed");
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 

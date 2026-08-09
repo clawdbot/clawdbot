@@ -1,7 +1,7 @@
 import {
-  isNodePairingBindingCurrent,
-  resolveCurrentNodePairingBinding,
-} from "../infra/node-pairing-state.js";
+  isPairedDeviceNodeBindingCurrent,
+  resolveCurrentPairedDeviceNodeBinding,
+} from "../infra/device-pairing-node-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
@@ -38,8 +38,8 @@ export function createGatewayNodeSessionRuntime(params: {
     nodePluginToolsEnabled: params.nodePluginToolsEnabled,
     nodeSkillsEnabled: params.nodeSkillsEnabled,
     resolveCurrentPairingState:
-      params.resolveCurrentPairingState ?? resolveCurrentNodePairingBinding,
-    isPairingStateCurrent: params.isPairingStateCurrent ?? isNodePairingBindingCurrent,
+      params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
+    isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
     onPairingInvalidated: params.onPairingInvalidated,
     onPairingGenerationChanged: (change) => {
       nodeSubscriptions.updatePairingGeneration({

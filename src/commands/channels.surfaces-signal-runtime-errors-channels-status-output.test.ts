@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+import { formatGatewayChannelsStatusLines } from "./channels/status.runtime.js";
 
 const now = 1_700_000_000_000;
 
@@ -94,6 +94,7 @@ describe("channels command", () => {
     const lines = formatGatewayChannelsStatusLines({
       eventLoop: {
         degraded: true,
+        degradedSinceMs: 180_000,
         reasons: ["event_loop_delay", "cpu"],
         intervalMs: 62_000,
         delayP99Ms: 61_000,
@@ -106,6 +107,7 @@ describe("channels command", () => {
     });
 
     expect(lines.join("\n")).toMatch(/Gateway event loop degraded/);
+    expect(lines.join("\n")).toMatch(/for 3m \(p99 61000ms\)/);
     expect(lines.join("\n")).toMatch(/eventLoopDelayMaxMs=62000/);
   });
 

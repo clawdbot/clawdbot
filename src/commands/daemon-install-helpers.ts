@@ -43,6 +43,7 @@ import {
   resolveSecretProviderIntegrationConfig,
 } from "../secrets/provider-integrations.js";
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
+import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-auth-surfaces.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -61,6 +62,8 @@ type GatewayInstallPlan = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
+// Gateway ingress secrets must never be newly materialized into supervisor metadata.
+// Existing active file-backed values are retained separately during regeneration.
 const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
@@ -192,11 +195,13 @@ function collectConfigSecretRefServiceEnvSources(params: {
   if (!params.config || !params.configContainsSecretRef) {
     return { keys: [], environment };
   }
+  const gatewayAuthSurfaceStates = evaluateGatewayAuthSurfaceStates({
+    config: params.config,
+    env: params.env as NodeJS.ProcessEnv,
+    defaults: params.config.secrets?.defaults,
+  });
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInPlan) {
-      continue;
-    }
-    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
       continue;
     }
     const { ref } = resolveSecretInputRef({
@@ -220,6 +225,14 @@ function collectConfigSecretRefServiceEnvSources(params: {
         `Config SecretRef env ref "${key}" blocked by host-env security policy`,
         "Config SecretRef",
       );
+      continue;
+    }
+    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
+      const surface =
+        gatewayAuthSurfaceStates[target.entry.id as keyof typeof gatewayAuthSurfaceStates];
+      if (surface?.active) {
+        keys.add(key.toUpperCase());
+      }
       continue;
     }
     keys.add(key.toUpperCase());

@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   createTalkSessionController,
@@ -107,7 +108,10 @@ type TalkHandoffRoomState = {
   talk: TalkSessionController;
 };
 
-const handoffs = new Map<string, TalkHandoffRecord>();
+const handoffs = resolveGlobalMap<string, TalkHandoffRecord>(
+  Symbol.for("openclaw.talkHandoffs"),
+  "close-and-restart",
+);
 
 /** Creates a short-lived Talk room and returns the only plaintext join token. */
 export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffCreateResult {

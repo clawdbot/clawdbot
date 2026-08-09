@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
+import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
@@ -92,7 +93,7 @@ export async function cancelTaskById(params: {
             reason: params.reason?.trim() || "Cancelled by operator.",
           })
         ) {
-          if (childSessionKey) {
+          if (task.taskKind === CRON_TASK_KIND || childSessionKey) {
             return {
               found: true,
               cancelled: false,
@@ -100,8 +101,8 @@ export async function cancelTaskById(params: {
               task: cloneTaskRecord(task),
             };
           }
-          // Childless cron rows are stale legacy ledger records; with no live
-          // runner handle and no child session to cancel, clear the task row.
+          // Current rows carry taskKind before their runner publishes a child
+          // session. Only an unmarked childless row is legacy cleanup state.
         }
       } else if (!childSessionKey) {
         if (!isHarnessOwnedSubagentTask(task)) {

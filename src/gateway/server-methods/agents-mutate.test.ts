@@ -3014,6 +3014,75 @@ describe("agents.files.list", () => {
     expect(names).toContain("BOOTSTRAP.md");
   });
 
+  // The editor renders a missing-file fault only when absence is unexpected; the
+  // optional profile files and MEMORY.md are normal to be absent and are offered
+  // for creation instead.
+  it("marks normally-absent bootstrap files as expected", async () => {
+    const rootStat = vi.fn(async () => {
+      throw createEnoentError();
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const result = firstRespondResult(respond);
+    const files = (
+      result as { files: Array<{ name: string; missing: boolean; expectedAbsent?: boolean }> }
+    ).files;
+    const expectedAbsentNames = files
+      .filter((file) => file.expectedAbsent === true)
+      .map((file) => file.name);
+    expect(files.every((file) => file.missing)).toBe(true);
+    expect(expectedAbsentNames).toStrictEqual(["SOUL.md", "USER.md", "MEMORY.md"]);
+  });
+
+  it("omits expectedAbsent for files that exist", async () => {
+    const rootStat = vi.fn(async ({ relativePath }: Record<string, unknown>) => {
+      if (relativePath === "SOUL.md") {
+        return { isFile: true, isSymbolicLink: false, mtimeMs: 1234, nlink: 1, size: 9 };
+      }
+      throw createEnoentError();
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const result = firstRespondResult(respond);
+    const files = (
+      result as { files: Array<{ name: string; missing: boolean; expectedAbsent?: boolean }> }
+    ).files;
+    const soul = files.find((file) => file.name === "SOUL.md");
+    expectRecordFields(soul, { name: "SOUL.md", missing: false });
+    expect(soul).not.toHaveProperty("expectedAbsent");
+  });
+
+  // Clients merge the get response over the listed entry, so dropping the flag here
+  // made a picked optional file re-render as a fault in the Control UI.
+  it("carries expectedAbsent through agents.files.get for a missing file", async () => {
+    agentsTesting.setDepsForTests({
+      root: makeRootForTest({
+        read: async () => {
+          throw new FsSafeError("not-found", "no such file");
+        },
+      }),
+    });
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "SOUL.md",
+    });
+    await promise;
+
+    const result = firstRespondResult(respond);
+    expectRecordFields((result as { file: unknown }).file, {
+      name: "SOUL.md",
+      missing: true,
+      expectedAbsent: true,
+    });
+  });
+
   it("reports unreadable workspace files as present in list responses", async () => {
     const rootOpen = vi.fn(async () => {
       throw createErrnoError("EACCES");

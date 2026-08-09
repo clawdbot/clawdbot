@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import {
@@ -5,7 +6,6 @@ import {
   endGoogleMeetActiveConference,
   fetchGoogleMeetSpace,
   fetchLatestGoogleMeetConferenceRecord,
-  getErrorMessage,
   listGoogleMeetParticipants,
   listGoogleMeetParticipantSessions,
   listGoogleMeetRecordings,
@@ -82,7 +82,7 @@ async function attachDocumentText<T extends { docsDestination?: Record<string, u
   } catch (error) {
     return {
       ...params.resource,
-      documentTextError: getErrorMessage(error),
+      documentTextError: formatErrorMessage(error),
     };
   }
 }
@@ -278,7 +278,7 @@ export async function fetchGoogleMeetArtifacts(params: {
           .then<GoogleMeetSmartNotesListResult>((smartNotes) => ({ smartNotes }))
           .catch((error: unknown) => ({
             smartNotes: [],
-            smartNotesError: getErrorMessage(error),
+            smartNotesError: formatErrorMessage(error),
           })),
       ]);
       const transcriptEntries =
@@ -299,7 +299,7 @@ export async function fetchGoogleMeetArtifacts(params: {
                   return {
                     transcript: transcript.name,
                     entries: [],
-                    entriesError: getErrorMessage(error),
+                    entriesError: formatErrorMessage(error),
                   };
                 }
               }),

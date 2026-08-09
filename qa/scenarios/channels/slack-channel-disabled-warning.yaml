@@ -11,8 +11,9 @@ scenario:
     timeoutMs: 8000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-channel-disabled-warning }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackChannelDisabledWarningScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaChannelDisabledWarningScenario }

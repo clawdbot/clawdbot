@@ -9,19 +9,14 @@ import {
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Builds the session write-lock timing for a live embedded attempt. The lock is
- * capped by compaction time because cleanup may keep writing after model abort,
- * but should not inherit the much larger full run timeout.
- */
+/** Builds the session write-lock timing for a live embedded attempt. */
 export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   config?: OpenClawConfig;
   compactionTimeoutMs: number;
   env?: NodeJS.ProcessEnv;
 }): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
-  // Bound embedded-attempt lock holds to the compaction window, not the full run timeout.
-  // With defaults this permits roughly 180s compaction time plus the shared 120s
-  // timeout grace before the watchdog releases a stuck live-process lock.
+  // maxHoldMs is the SQLite lease TTL for dead-process reclamation, not a live-owner watchdog.
+  // A live process renews the lease until teardown releases it.
   return resolveSessionWriteLockOptions(params.config, {
     env: params.env,
     maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({

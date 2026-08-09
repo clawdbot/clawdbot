@@ -527,6 +527,7 @@ function collectOutputFiles(params: {
   history: ComfyHistoryEntry;
   outputNodeId?: string;
   outputKinds: readonly ComfyOutputKind[];
+  capability: ComfyCapability;
 }): Array<{ nodeId: string; file: ComfyOutputFile }> {
   const outputs = params.history.outputs;
   if (!outputs) {
@@ -546,6 +547,15 @@ function collectOutputFiles(params: {
         continue;
       }
       for (const file of bucket) {
+        if (params.capability === "video" && kind === "images") {
+          // Comfy SaveVideo shares the images bucket with real image outputs.
+          // Filter before download so mixed workflows cannot return images as videos.
+          const fileName =
+            normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
+          if (!fileName || !/\.(?:mp4|webm)$/i.test(fileName)) {
+            continue;
+          }
+        }
         files.push({ nodeId, file });
       }
     }
@@ -637,6 +647,7 @@ export function isComfyCapabilityConfigured(params: {
   }
   return isProviderApiKeyConfigured({
     provider: "comfy",
+    cfg: params.cfg,
     agentDir: params.agentDir,
   });
 }
@@ -827,6 +838,7 @@ export async function runComfyWorkflow(params: {
     history: historyEntry,
     outputNodeId,
     outputKinds: params.outputKinds,
+    capability: params.capability,
   });
   if (outputFiles.length === 0) {
     throw new Error(`Comfy workflow ${promptId} completed without ${params.capability} outputs`);

@@ -31,6 +31,23 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
+
+export function clawManifestWorkspaceConflictsWithPath(
+  manifest: ClawManifest,
+  path: string,
+): boolean {
+  const targets = new Set<string>();
+  for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
+    if (manifest.workspace.bootstrapFiles[name]) {
+      targets.add(portableClawPathKey(name));
+    }
+  }
+  for (const file of manifest.workspace.files) {
+    targets.add(portableClawPathKey(file.path));
+  }
+  return conflictsWithClawPath(targets, portableClawPathKey(path));
+}
+
 const agentId = nonEmptyString.regex(
   /^[a-z][a-z0-9_-]{0,63}$/,
   "Agent id must start with a lowercase letter and contain only lowercase letters, digits, underscores, or hyphens.",
@@ -45,9 +62,11 @@ const clawHubPackageName = nonEmptyString.refine(
 );
 const portableEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const packageRelativePath = nonEmptyString.refine(isSafeClawRelativePath, {
-  message: "Path must be package-relative and must not contain traversal segments.",
-});
+const packageRelativePath = nonEmptyString
+  .refine(isSafeClawRelativePath, {
+    message: "Path must be package-relative and must not contain traversal segments.",
+  })
+  .transform((value) => value.replaceAll("\\", "/"));
 
 const identitySchema = z
   .object({
@@ -69,6 +88,17 @@ const agentSchema = z
     name: optionalString,
     description: optionalString,
     identity: identitySchema.optional(),
+  })
+  .strict();
+
+const openClawExtensionSchema = z
+  .object({
+    id: agentId,
+    kind: z.literal("plugin"),
+    format: z.enum(["openclaw", "claude", "codex", "cursor"]),
+    source: z.literal("clawhub"),
+    ref: clawHubPackageName,
+    version: exactVersion,
   })
   .strict();
 
@@ -184,8 +214,32 @@ const openClawProfileSchema = z
           .optional(),
       })
       .strict(),
+    extensions: z.array(openClawExtensionSchema).optional().default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((profile, ctx) => {
+    const ids = new Set<string>();
+    const refs = new Set<string>();
+    profile.extensions.forEach((extension, index) => {
+      if (ids.has(extension.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["extensions", index, "id"],
+          message: `Extension id ${JSON.stringify(extension.id)} is declared more than once.`,
+        });
+      }
+      ids.add(extension.id);
+      const ref = extension.ref.toLowerCase();
+      if (refs.has(ref)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["extensions", index, "ref"],
+          message: `Extension ${JSON.stringify(extension.ref)} is declared more than once.`,
+        });
+      }
+      refs.add(ref);
+    });
+  });
 
 const workspaceSourceSchema = z.object({ source: packageRelativePath }).strict();
 const bootstrapFilesSchema = z
@@ -397,6 +451,14 @@ const manifestSchema = z
     }
     manifest.workspace.files.forEach((file, index) => {
       const destinationKey = portableClawPathKey(file.path);
+      if (destinationKey === portableClawPathKey("BOOTSTRAP.md")) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["workspace", "files", index, "path"],
+          message:
+            "Package-root BOOTSTRAP.md uses the native seed-once lifecycle and cannot be a managed workspace destination.",
+        });
+      }
       if (conflictsWithClawPath(workspaceTargets, destinationKey)) {
         ctx.addIssue({
           code: "custom",

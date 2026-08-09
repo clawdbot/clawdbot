@@ -81,7 +81,7 @@ export async function requestSessionCreate(
       key,
       initialRun: {
         status: "rejected",
-        error: message || "The thread was created, but its first message could not be sent.",
+        error: message || "The session was created, but its first message could not be sent.",
       },
     };
   }

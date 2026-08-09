@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "OpenClaw",
-  "version": "2.1.0",
-  "description": "Let OpenClaw agents browse with you. Tabs shared with OpenClaw live in a colored tab group; drag a tab out to revoke access.",
+  "version": "2.2.0",
+  "description": "Let OpenClaw agents use eligible tabs in your signed-in Chrome, with All tabs or Selected tabs access and per-tab pause controls.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",

@@ -6,7 +6,7 @@
  */
 
 import { TwitchClientManager } from "./twitch-client.js";
-import type { ChannelLogSink } from "./types.js";
+import type { ChannelAccountSnapshot, ChannelLogSink } from "./types.js";
 
 /**
  * Registry entry tracking a client manager and its associated account.
@@ -38,13 +38,15 @@ const registry = new Map<string, RegistryEntry>();
 export function getOrCreateClientManager(
   accountId: string,
   logger: ChannelLogSink,
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void,
 ): TwitchClientManager {
   const existing = registry.get(accountId);
   if (existing) {
+    existing.manager.setStatusSink(statusSink);
     return existing.manager;
   }
 
-  const manager = new TwitchClientManager(logger);
+  const manager = new TwitchClientManager(logger, statusSink);
   registry.set(accountId, {
     manager,
     accountId,

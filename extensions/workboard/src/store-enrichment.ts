@@ -31,6 +31,7 @@ import type {
 } from "./store-inputs.js";
 import {
   clearDiagnostics,
+  clearProofDiagnostics,
   normalizeArtifact,
   normalizeAttachmentInput,
   normalizeBoundedString,
@@ -49,7 +50,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       id,
       (existing) => {
         assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+        const metadata = clearProofDiagnostics(existing.metadata);
         return {
           ...metadata,
           proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
@@ -75,7 +76,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       id,
       (existing) => {
         assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+        const metadata = clearProofDiagnostics(existing.metadata);
         return {
           ...metadata,
           proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),

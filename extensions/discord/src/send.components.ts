@@ -220,7 +220,7 @@ async function buildDiscordComponentPayload(params: {
     const filenameOverride = params.opts.filename?.trim();
     resolvedFileName = filenameOverride || media.fileName || "upload";
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    files = [{ data: media.buffer, name: resolvedFileName }];
+    files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);

@@ -121,21 +121,38 @@ describe("typing persistence bug fix", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("clamps oversized typing interval and TTL timers", async () => {
+  it("preserves the explicit zero TTL disable sentinel", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const unboundedController = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 121,
+      typingTtlMs: 0,
+      log: vi.fn(),
+    });
+
+    await unboundedController.startTypingLoop();
+    unboundedController.refreshTypingTtl();
+
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    unboundedController.cleanup();
+  });
+
+  it("clamps an oversized typing interval and derives a longer TTL", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const boundedController = createTypingController({
       onReplyStart: onReplyStartSpy,
       onCleanup: onCleanupSpy,
       typingIntervalSeconds: Number.MAX_SAFE_INTEGER,
-      typingTtlMs: Number.MAX_SAFE_INTEGER,
       log: vi.fn(),
     });
 
     await boundedController.startTypingLoop();
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    const maxTypingIntervalMs = Math.floor(MAX_TIMER_TIMEOUT_MS / 2);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), maxTypingIntervalMs);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), maxTypingIntervalMs * 2);
     boundedController.cleanup();
   });
 });

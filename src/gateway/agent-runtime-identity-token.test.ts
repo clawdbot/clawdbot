@@ -84,6 +84,37 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips a signed visible-session spawn policy", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: [" read ", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
@@ -104,6 +135,47 @@ describe("agent runtime identity token", () => {
       runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
     ).resolves.toBeUndefined();
     nowSpy.mockRestore();
+  });
+
+  it("round-trips final cron-cap capture provenance", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+    });
+  });
+
+  it("round-trips a signed private cron creator grant only with final provenance", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const cronCreatorAuthorityGrant = { runId: "run-1", token: "opaque-grant" };
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+      cronCreatorAuthorityGrant,
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      cronToolsAllowCapture: "final-executable-surface",
+      cronCreatorAuthorityGrant,
+    });
+    await expect(
+      runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        cronCreatorAuthorityGrant,
+      }),
+    ).rejects.toThrow("require final tool-surface provenance");
   });
 
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
@@ -159,6 +231,7 @@ describe("agent runtime identity token", () => {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
@@ -179,6 +252,7 @@ describe("agent runtime identity token", () => {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",

@@ -320,7 +320,7 @@ export async function patchPluginSessionExtension(params: {
     { cfg: params.cfg, sessionKey: params.sessionKey },
     (entry, context) => {
       params.assertCurrent?.();
-      const entryRecord = entry as Record<string, unknown>;
+      const entryRecord = entry as unknown as Record<string, unknown>;
       const pluginExtensions = { ...entry.pluginExtensions };
       const pluginState = { ...pluginExtensions[pluginId] };
       if (params.unset === true) {

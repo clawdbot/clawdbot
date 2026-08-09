@@ -19,8 +19,8 @@ const PANEL_PORT = "openclaw-copilot-panel";
 export function createCopilotController({
   chromeApi = chrome,
   getConfig,
-  isTabShared,
-  addTabToOpenClawGroup,
+  isTabAccessible,
+  grantTabAccess,
   attachDebugger,
   revokeDebugger,
   restoreDebugger,
@@ -121,7 +121,7 @@ export function createCopilotController({
     isConfigTransitioning: () => configTransitioning,
     currentReadyEpoch,
     readyEpochIsCurrent,
-    isTabShared,
+    isTabAccessible,
     attachDebugger,
     revokeDebugger,
     restoreDebuggerIfReleased,
@@ -328,7 +328,12 @@ export function createCopilotController({
 
   async function refreshPanelState(
     tabId,
-    { shared: knownShared, ensureSetup = false, hydrateHistory = false, suspended = false } = {},
+    {
+      accessible: knownAccessible,
+      ensureSetup = false,
+      hydrateHistory = false,
+      suspended = false,
+    } = {},
   ) {
     let tab;
     try {
@@ -336,12 +341,13 @@ export function createCopilotController({
     } catch {
       return;
     }
-    const shared = typeof knownShared === "boolean" ? knownShared : await isTabShared(tabId);
+    const accessible =
+      typeof knownAccessible === "boolean" ? knownAccessible : await isTabAccessible(tabId);
     const entry = registry.get(tabId, currentGatewayScope());
     const panelStatus = currentPanelStatus();
     const state = selectCopilotPanelState({
       paired: Boolean(currentConfig?.relayUrl),
-      shared,
+      accessible,
       abortPending: Boolean(entry?.abortPending),
       gatewayState: panelStatus.state,
     });
@@ -350,7 +356,7 @@ export function createCopilotController({
       state,
       label:
         state === "needs-sharing"
-          ? "Share this tab before the copilot can act"
+          ? "Allow OpenClaw on this tab before the copilot can act"
           : state === "reconciling"
             ? "Stopping the previous tab run"
             : panelStatus.label,
@@ -362,7 +368,7 @@ export function createCopilotController({
       },
       sessionKey: entry?.sessionKey,
     };
-    if (!shared) {
+    if (!accessible) {
       broadcastTab(tabId, panelState);
       if (!suspended) {
         await suspendTab(tabId, { detachInactive: true });
@@ -387,7 +393,7 @@ export function createCopilotController({
     try {
       const prepared = await ensureSession(tabId, { hydrateHistory });
       if (prepared) {
-        await refreshPanelState(tabId, { shared: await isTabShared(tabId) });
+        await refreshPanelState(tabId, { accessible: await isTabAccessible(tabId) });
       }
     } catch (error) {
       broadcastTab(tabId, {
@@ -481,8 +487,8 @@ export function createCopilotController({
     );
   }
 
-  async function shareTab(tabId) {
-    await addTabToOpenClawGroup(tabId);
+  async function grantAccess(tabId) {
+    await grantTabAccess(tabId);
     scheduleTabsSync();
     await refreshPanelState(tabId);
   }
@@ -527,37 +533,37 @@ export function createCopilotController({
           .catch(() => undefined)
           .then(async () => {
             // Event-time revocation is sticky even if a later update observes
-            // the tab re-shared. CDP must detach for the revoked interval.
+            // access restored. CDP must detach for the revoked interval.
             if (revoked) {
               await suspendTab(tabId, { detachInactive: true });
             }
             if (consentRevisions.get(tabId) !== revision) {
               return;
             }
-            let shared = false;
+            let accessible = false;
             try {
-              shared = await isTabShared(tabId);
+              accessible = await isTabAccessible(tabId);
             } catch {
               // Missing tab state is treated as revoked consent.
             }
-            if (!shared) {
+            if (!accessible) {
               await suspendTab(tabId, { detachInactive: true });
             }
             if (consentRevisions.get(tabId) !== revision) {
               return;
             }
             try {
-              shared = await isTabShared(tabId);
+              accessible = await isTabAccessible(tabId);
             } catch {
-              shared = false;
+              accessible = false;
             }
             if (consentRevisions.get(tabId) !== revision) {
               return;
             }
-            if (shared) {
+            if (accessible) {
               await restoreDebuggerIfReleased(tabId);
             }
-            await refreshPanelState(tabId, { shared, suspended: !shared });
+            await refreshPanelState(tabId, { accessible, suspended: !accessible });
           })
           .finally(() => {
             if (consentByTab.get(tabId) === pending) {
@@ -600,7 +606,7 @@ export function createCopilotController({
           if (message?.type === "panel.send") {
             await sendMessage(tabId, port, portRevision, message.message);
           } else if (message?.type === "panel.share") {
-            await shareTab(tabId);
+            await grantAccess(tabId);
           } else if (message?.type === "panel.refresh") {
             await refreshPanelState(tabId);
           }

@@ -1,12 +1,27 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  errorMessage,
-  type CodeModeFailureCode,
-  type CodeModeWorkerResult,
-} from "./code-mode-runtime.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
+
+let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
+
+function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
+  quickJsWasmModulePromise ??= Promise.resolve()
+    .then(() => createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm"))
+    .then((wasmPath) => readFile(wasmPath))
+    .then((bytes) => WebAssembly.compile(bytes))
+    .catch((error: unknown) => {
+      // Failed initialization is transient host state, not a process-wide
+      // verdict; later runs must retry without bypassing their watchdog.
+      quickJsWasmModulePromise = undefined;
+      throw error;
+    });
+  return quickJsWasmModulePromise;
+}
 
 export function resolveCodeModeWorkerUrl(currentModuleUrl: string): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
@@ -30,8 +45,10 @@ function failedCodeModeWorkerResult(
 ): Extract<CodeModeWorkerResult, { status: "failed" }> {
   return {
     status: "failed",
-    error: errorMessage(error),
+    error: formatErrorMessage(error),
     code,
+    failurePhase: "host",
+    bridgeDispatchStarted: false,
     output: [],
   };
 }
@@ -66,15 +83,7 @@ export async function runCodeModeWorker(
   const sourceWorkerExecArgv = resolvedWorkerUrl.pathname.endsWith(".ts")
     ? ["--import", "tsx"]
     : undefined;
-  let worker: Worker;
-  try {
-    worker = new Worker(resolvedWorkerUrl, {
-      workerData,
-      execArgv: sourceWorkerExecArgv,
-    });
-  } catch (error) {
-    return failedCodeModeWorkerResult(error, "runtime_unavailable");
-  }
+  let worker: Worker | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
@@ -88,16 +97,16 @@ export async function runCodeModeWorker(
         resolve(result);
       };
       timer = setTimeout(() => {
-        void worker.terminate();
         finish({
           status: "failed",
           error: "code mode worker timeout exceeded",
           code: "timeout",
+          failurePhase: "host",
+          bridgeDispatchStarted: false,
           output: [],
         });
       }, timeoutMs);
       onAbort = () => {
-        void worker.terminate();
         const abortReason = signal?.reason;
         finish({
           status: "failed",
@@ -106,38 +115,65 @@ export async function runCodeModeWorker(
               ? "code mode timeout exceeded"
               : "code mode execution aborted",
           code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
+          failurePhase: "host",
+          bridgeDispatchStarted: false,
           output: [],
         });
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) {
         onAbort();
+        return;
       }
-      worker.once("message", (message: unknown) => {
-        void worker.terminate();
-        const result = isRecord(message)
-          ? (message as CodeModeWorkerResult)
-          : ({
-              status: "failed",
-              error: "invalid code mode worker response",
-              code: "internal_error",
-              output: [],
-            } satisfies CodeModeWorkerResult);
-        finish(normalizeCodeModeWorkerResult(result));
-      });
-      worker.once("error", (error) => {
-        finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
-      });
-      worker.once("exit", (code) => {
-        if (code !== 0) {
-          finish(
-            failedCodeModeWorkerResult(
-              new Error(`code mode worker exited with code ${code}`),
-              "runtime_unavailable",
-            ),
-          );
-        }
-      });
+
+      // Compilation is part of the same execution deadline. A timed-out or
+      // aborted initialization must never create a worker after settlement.
+      void getQuickJsWasmModule().then(
+        (wasmModule) => {
+          if (settled) {
+            return;
+          }
+          try {
+            worker = new Worker(resolvedWorkerUrl, {
+              workerData: isRecord(workerData) ? { ...workerData, wasmModule } : workerData,
+              execArgv: sourceWorkerExecArgv,
+            });
+          } catch (error) {
+            finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
+            return;
+          }
+
+          worker.once("message", (message: unknown) => {
+            const result = isRecord(message)
+              ? (message as CodeModeWorkerResult)
+              : ({
+                  status: "failed",
+                  error: "invalid code mode worker response",
+                  code: "internal_error",
+                  failurePhase: "host",
+                  bridgeDispatchStarted: false,
+                  output: [],
+                } satisfies CodeModeWorkerResult);
+            finish(normalizeCodeModeWorkerResult(result));
+          });
+          worker.once("error", (error) => {
+            finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
+          });
+          worker.once("exit", (code) => {
+            // A clean exit without a response is still unavailable; `finish`
+            // prevents normal message-then-exit from replacing a real result.
+            finish(
+              failedCodeModeWorkerResult(
+                new Error(`code mode worker exited with code ${code} before returning a result`),
+                "runtime_unavailable",
+              ),
+            );
+          });
+        },
+        (error: unknown) => {
+          finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
+        },
+      );
     });
   } finally {
     if (timer) {
@@ -146,6 +182,7 @@ export async function runCodeModeWorker(
     if (onAbort) {
       signal?.removeEventListener("abort", onAbort);
     }
+    await worker?.terminate();
   }
 }
 

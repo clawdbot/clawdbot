@@ -20,7 +20,19 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
 }));
 
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import {
+  consumeCronCreatorAuthorityGrant,
+  createCronCreatorAuthorityRunScope,
+  mintCronCreatorAuthorityGrant,
+  revokeCronCreatorAuthorityRunScope,
+  type CronCreatorAuthorityGrant,
+} from "../../gateway/cron-creator-authority-grant.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
+import {
+  bindActiveCronCreatorAuthorityResolver,
+  runWithCronCreatorAuthority,
+  runWithCronCreatorAuthorityResolver,
+} from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -59,6 +71,17 @@ describe("cron tool", () => {
         return result;
       },
     });
+  }
+
+  function resolvedCreatorAuthority(
+    tools: readonly (string | { name: string; pluginId?: string })[],
+    grant: CronCreatorAuthorityGrant = { runId: "run-test", token: "grant-test" },
+  ) {
+    return {
+      tools,
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+      grant,
+    };
   }
 
   function readGatewayCall(index = 0): { method?: string; params?: Record<string, unknown> } {
@@ -220,7 +243,7 @@ describe("cron tool", () => {
         action: "remove",
         jobId: "job-other",
       }),
-    ).rejects.toThrow("Cron tool is restricted to the current cron job.");
+    ).rejects.toThrow("Automations tool is restricted to the current automation.");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -266,7 +289,7 @@ describe("cron tool", () => {
     });
 
     await expect(tool.execute("call-runs-denied", args)).rejects.toThrow(
-      "Cron tool is restricted to the current cron job.",
+      "Automations tool is restricted to the current automation.",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -328,7 +351,7 @@ describe("cron tool", () => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await expect(tool.execute("call-get-denied", args)).rejects.toThrow(
-      "Cron tool is restricted to the current cron job.",
+      "Automations tool is restricted to the current automation.",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -450,6 +473,41 @@ describe("cron tool", () => {
     });
   });
 
+  it("does not let requested pagination bypass the scoped current-job scan", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-scoped-list-requested-pagination", {
+      action: "list",
+      limit: 1,
+      offset: 200,
+    });
+
+    expectSingleGatewayCallMethod("cron.list");
+    expect(readGatewayCall().params).toEqual({
+      includeDisabled: false,
+      compact: true,
+      agentId: "agent-123",
+      limit: 200,
+      offset: 0,
+    });
+    expect(result.details).toMatchObject({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
   it.each([
     ["add", { action: "add", job: buildReminderAgentTurnJob() }],
     ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
@@ -459,7 +517,7 @@ describe("cron tool", () => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await expect(tool.execute("call-denied", args)).rejects.toThrow(
-      "Cron tool is restricted to the current cron job.",
+      "Automations tool is restricted to the current automation.",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -513,6 +571,87 @@ describe("cron tool", () => {
       compact: true,
       agentId: "worker",
     });
+  });
+
+  it("loads cron jobs beyond the first bounded page", async () => {
+    const firstPage = {
+      jobs: Array.from({ length: 200 }, (_, index) => ({
+        id: `job-${index}`,
+        name: `job ${index}`,
+      })),
+      total: 201,
+      offset: 0,
+      limit: 200,
+      hasMore: true,
+      nextOffset: 200,
+    };
+    const secondPage = {
+      jobs: [{ id: "job-200", name: "job 200" }],
+      total: 201,
+      offset: 200,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    };
+    callGatewayMock.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    const firstResult = await tool.execute("call-list-first-page", {
+      action: "list",
+      limit: 200,
+      offset: 0,
+    });
+    const secondResult = await tool.execute("call-list-second-page", {
+      action: "list",
+      limit: 200,
+      offset: firstPage.nextOffset,
+    });
+
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 0,
+      },
+    });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 200,
+      },
+    });
+    expect(firstResult.details).toEqual(firstPage);
+    expect(secondResult.details).toEqual(secondPage);
+  });
+
+  it.each([
+    ["zero limit", { limit: 0 }],
+    ["negative limit", { limit: -1 }],
+    ["fractional limit", { limit: 1.5 }],
+    ["oversized limit", { limit: 201 }],
+    ["unsafe limit", { limit: Number.MAX_SAFE_INTEGER + 1 }],
+    ["malformed limit", { limit: "1x" }],
+    ["negative offset", { offset: -1 }],
+    ["fractional offset", { offset: 1.5 }],
+    ["unsafe offset", { offset: Number.MAX_SAFE_INTEGER + 1 }],
+    ["malformed offset", { offset: "1x" }],
+  ])("rejects a %s before calling the cron gateway", async (_label, pagination) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-invalid-list-pagination", { action: "list", ...pagination }),
+    ).rejects.toThrow(/(?:limit|offset) must be a (?:positive|non-negative) integer/);
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("retries cron.list without compact for older gateways", async () => {
@@ -578,7 +717,7 @@ describe("cron tool", () => {
           text: "follow up",
           sessionKey: "agent:agent-456:discord:thread-xyz",
         }),
-      ).rejects.toThrow("cron sessionKey must match the calling agent");
+      ).rejects.toThrow("automations sessionKey must match the calling agent");
       expect(callGatewayMock).not.toHaveBeenCalled();
     });
 
@@ -692,6 +831,9 @@ describe("cron tool", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain("reminders, delayed self-wakeups, loops, recurring work");
     expect(tool.description).toContain("Never exec sleep/poll as timer.");
+    expect(tool.description).toContain(
+      "Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.",
+    );
   });
 
   it("documents the event-trigger authoring contract", () => {
@@ -972,7 +1114,7 @@ describe("cron tool", () => {
           agentId: null,
         },
       }),
-    ).rejects.toThrow("cron job agentId must match the calling agent");
+    ).rejects.toThrow("automation agentId must match the calling agent");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -1045,7 +1187,7 @@ describe("cron tool", () => {
           agentId: "worker",
         },
       }),
-    ).rejects.toThrow("cron job agentId must match the calling agent");
+    ).rejects.toThrow("automation agentId must match the calling agent");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1064,7 +1206,7 @@ describe("cron tool", () => {
           sessionTarget: "session:agent:worker:telegram:direct:alice",
         },
       }),
-    ).rejects.toThrow("cron sessionTarget must match the calling agent");
+    ).rejects.toThrow("automations sessionTarget must match the calling agent");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1118,7 +1260,7 @@ describe("cron tool", () => {
           payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1162,7 +1304,7 @@ describe("cron tool", () => {
           payload: { kind: "agentTurn", message: "done" },
         },
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1298,7 +1440,366 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.add") as
       | { payload?: { toolsAllow?: string[] } }
       | undefined;
-    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+    expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
+  });
+
+  it("lazily snapshots configured MCP authority for a default agentTurn add", async () => {
+    const identities: unknown[] = [];
+    callGatewayMock.mockImplementation(async () => {
+      identities.push(getGatewayToolCallerIdentity());
+      return { ok: true };
+    });
+    const resolveCreatorToolAuthority = vi.fn(async () =>
+      resolvedCreatorAuthority(["read", "cron", "configured__lookup"]),
+    );
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-default-configured-mcp", {
+      action: "add",
+      job: buildReminderAgentTurnJob(),
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall().params).toMatchObject({
+      payload: {
+        toolsAllow: ["read", "automations", "configured__lookup"],
+        toolsAllowIsDefault: true,
+      },
+    });
+    expect(identities).toEqual([
+      expect.objectContaining({ cronToolsAllowCapture: "final-executable-surface" }),
+    ]);
+  });
+
+  it("does not write when the admitted run aborts while lazy authority resolves", async () => {
+    let finishResolution!: () => void;
+    const resolution = new Promise<void>((resolve) => {
+      finishResolution = resolve;
+    });
+    const abortController = new AbortController();
+    const run = runWithCronCreatorAuthority(
+      "run-timeout",
+      () => {
+        const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
+          runId: "run-timeout",
+          resolve: async () => {
+            await resolution;
+            return {
+              tools: ["read", "configured__lookup"],
+              provenance: { version: 1, source: "final-executable-surface" },
+            };
+          },
+          run: () => bindActiveCronCreatorAuthorityResolver("run-timeout"),
+        });
+        const tool = createTestCronTool({
+          agentSessionKey: "agent:main:main",
+          resolveCreatorToolAuthority,
+        });
+        return tool.execute("call-late-authority-timeout", {
+          action: "add",
+          job: buildReminderAgentTurnJob(),
+        });
+      },
+      abortController.signal,
+    );
+
+    abortController.abort(new Error("run timed out"));
+    finishResolution();
+    await expect(run).rejects.toThrow();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("does not mint or write when the exact cron tool call aborts during discovery", async () => {
+    let finishResolution!: () => void;
+    let discoverySignal: AbortSignal | undefined;
+    const resolution = new Promise<void>((resolve) => {
+      finishResolution = resolve;
+    });
+    const operation = new AbortController();
+    const run = runWithCronCreatorAuthority("run-operation-timeout", () => {
+      const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
+        runId: "run-operation-timeout",
+        resolve: async (options) => {
+          discoverySignal = options?.signal;
+          await resolution;
+          return {
+            tools: ["read", "configured__lookup"],
+            provenance: { version: 1, source: "final-executable-surface" },
+          };
+        },
+        run: () => bindActiveCronCreatorAuthorityResolver("run-operation-timeout"),
+      });
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:main:main",
+        resolveCreatorToolAuthority,
+      });
+      return tool.execute(
+        "call-operation-authority-timeout",
+        { action: "add", job: buildReminderAgentTurnJob() },
+        operation.signal,
+      );
+    });
+
+    operation.abort(new Error("cron tool call timed out"));
+    finishResolution();
+
+    await expect(run).rejects.toThrow("cron tool call timed out");
+    expect(discoverySignal?.aborted).toBe(true);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a later cron operation rematerialize after an earlier operation abort", async () => {
+    let finishFirstResolution!: () => void;
+    const firstResolution = new Promise<void>((resolve) => {
+      finishFirstResolution = resolve;
+    });
+    let materializations = 0;
+    callGatewayMock.mockImplementation(async () => {
+      const grant = getGatewayToolCallerIdentity()?.cronCreatorAuthorityGrant;
+      expect(grant).toBeDefined();
+      consumeCronCreatorAuthorityGrant(grant!);
+      return { ok: true };
+    });
+
+    await runWithCronCreatorAuthority("run-operation-retry", async () => {
+      const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
+        runId: "run-operation-retry",
+        resolve: async () => {
+          materializations += 1;
+          if (materializations === 1) {
+            await firstResolution;
+          }
+          return {
+            tools: ["read", "configured__lookup"],
+            provenance: { version: 1, source: "final-executable-surface" },
+          };
+        },
+        run: () => bindActiveCronCreatorAuthorityResolver("run-operation-retry"),
+      });
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:main:main",
+        resolveCreatorToolAuthority,
+      });
+      const firstOperation = new AbortController();
+      const firstWrite = tool.execute(
+        "call-operation-retry-first",
+        { action: "add", job: buildReminderAgentTurnJob() },
+        firstOperation.signal,
+      );
+      firstOperation.abort(new Error("first cron call timed out"));
+      finishFirstResolution();
+      await expect(firstWrite).rejects.toThrow("first cron call timed out");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+
+      await tool.execute(
+        "call-operation-retry-second",
+        { action: "add", job: buildReminderAgentTurnJob() },
+        new AbortController().signal,
+      );
+    });
+
+    expect(materializations).toBe(2);
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not commit when the exact cron tool call aborts after grant mint", async () => {
+    const operation = new AbortController();
+    let committedWrites = 0;
+    callGatewayMock.mockImplementation(async () => {
+      const grant = getGatewayToolCallerIdentity()?.cronCreatorAuthorityGrant;
+      expect(grant).toBeDefined();
+      operation.abort(new Error("cron tool call timed out before commit"));
+      consumeCronCreatorAuthorityGrant(grant!);
+      committedWrites += 1;
+      return { ok: true };
+    });
+    const run = runWithCronCreatorAuthority("run-abort-before-commit", () => {
+      const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
+        runId: "run-abort-before-commit",
+        resolve: async () => ({
+          tools: ["read", "configured__lookup"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () => bindActiveCronCreatorAuthorityResolver("run-abort-before-commit"),
+      });
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:main:main",
+        resolveCreatorToolAuthority,
+      });
+      return tool.execute(
+        "call-abort-before-commit",
+        { action: "add", job: buildReminderAgentTurnJob() },
+        operation.signal,
+      );
+    });
+
+    await expect(run).rejects.toThrow("Configured MCP cron authority is no longer active");
+    expect(committedWrites).toBe(0);
+  });
+
+  it("fails a queued configured-MCP default add visibly without writing", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      creatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp",
+    });
+
+    await expect(
+      tool.execute("call-queued-configured-mcp-add", {
+        action: "add",
+        job: buildReminderAgentTurnJob(),
+      }),
+    ).rejects.toThrow("fresh authenticated direct-local operator turn");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["finite", ["read"]],
+    ["empty", []],
+  ])("keeps an explicit %s add offline and exact", async (_label, toolsAllow) => {
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("must stay offline");
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-explicit-configured-mcp", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow },
+      },
+    });
+
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow } });
+  });
+
+  it("resolves an unknown finite add name and cannot pre-authorize a future tool", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => resolvedCreatorAuthority(["read"]));
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-future-configured-mcp", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+      },
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+  });
+
+  it("keeps future-tool prevention for complete runtimes without a capture marker", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read"],
+    });
+
+    await tool.execute("call-future-no-capture-marker", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+      },
+    });
+
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+  });
+
+  it("resolves symbolic groups before persisting an add cap", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () =>
+      resolvedCreatorAuthority(["read", { name: "configured__lookup", pluginId: "bundle-mcp" }]),
+    );
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-symbolic-configured-mcp", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["group:plugins"] },
+      },
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall().params).toMatchObject({
+      payload: { toolsAllow: ["configured__lookup"] },
+    });
+  });
+
+  it("does not write a default add when configured MCP authentication fails", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority: async () => {
+        throw new Error("Sign in to configured MCP, then retry; no automation changes were saved.");
+      },
+    });
+
+    await expect(
+      tool.execute("call-default-auth-failure", {
+        action: "add",
+        job: buildReminderAgentTurnJob(),
+      }),
+    ).rejects.toThrow("no automation changes were saved");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("fails incomplete inherited and unknown finite adds while preserving known finite tools", async () => {
+    const captureRef = {};
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+      creatorToolAllowlistCaptureRef: captureRef,
+    });
+
+    await expect(
+      tool.execute("call-default-capture-unavailable", {
+        action: "add",
+        job: buildReminderAgentTurnJob(),
+      }),
+    ).rejects.toThrow("fresh authenticated direct-local operator turn");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+
+    await expect(
+      tool.execute("call-unknown-finite-capture-unavailable", {
+        action: "add",
+        job: {
+          ...buildReminderAgentTurnJob(),
+          payload: {
+            kind: "agentTurn",
+            message: "hello",
+            toolsAllow: ["future__tool"],
+          },
+        },
+      }),
+    ).rejects.toThrow("CLI or Gateway with an explicit finite toolsAllow list");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+
+    await tool.execute("call-explicit-capture-unavailable", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      },
+    });
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      payload: { toolsAllow: ["read"] },
+    });
   });
 
   it("caps trigger-script systemEvent adds to the creator tool surface", async () => {
@@ -1321,7 +1822,7 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.add") as
       | { payload?: { toolsAllow?: string[] } }
       | undefined;
-    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+    expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
   it("infers systemEvent for implicit text payloads with toolsAllow", async () => {
@@ -1376,7 +1877,7 @@ describe("cron tool", () => {
           trigger: { script: "return { fire: false }" },
           payload: {
             kind: "systemEvent",
-            toolsAllow: ["read", "cron"],
+            toolsAllow: ["read", "automations"],
             toolsAllowIsDefault: true,
           },
         },
@@ -1460,7 +1961,7 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual([
       "active_memory_search",
       "active_memory_store",
-      "cron",
+      "automations",
     ]);
   });
 
@@ -1729,7 +2230,7 @@ describe("cron tool", () => {
           payload: { kind: "systemEvent", text: "Reminder: the thing." },
         },
       }),
-    ).rejects.toThrow("cron job agentId must match the calling agent");
+    ).rejects.toThrow("automation agentId must match the calling agent");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -2287,7 +2788,7 @@ describe("cron tool", () => {
         id: "job-1",
         patch: { agentId: "worker" },
       }),
-    ).rejects.toThrow("cron patch agentId cannot be changed");
+    ).rejects.toThrow("automation patch agentId cannot be changed");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2321,7 +2822,7 @@ describe("cron tool", () => {
         id: "job-1",
         patch: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
       }),
-    ).rejects.toThrow("cron sessionTarget must match the calling agent");
+    ).rejects.toThrow("automations sessionTarget must match the calling agent");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2380,7 +2881,7 @@ describe("cron tool", () => {
           payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2400,7 +2901,7 @@ describe("cron tool", () => {
           payload: { argv: ["sh", "-lc", "echo bypass"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
 
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(readGatewayCall()).toEqual({
@@ -2440,7 +2941,7 @@ describe("cron tool", () => {
           schedule: { kind: "on-exit", command: "make" },
         },
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2485,7 +2986,13 @@ describe("cron tool", () => {
   });
 
   it("recovers flattened model-only payload patch params for update action", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-5",
+        configRevision: "sha256:model-only",
+        payload: { kind: "agentTurn", message: "before" },
+      })
+      .mockResolvedValueOnce({ ok: true });
 
     const tool = createTestCronTool();
     await tool.execute("call-update-flat-model-only", {
@@ -2496,7 +3003,7 @@ describe("cron tool", () => {
       toolsAllow: [" exec ", " read "],
     });
 
-    const params = expectSingleGatewayCallMethod("cron.update") as
+    const params = readGatewayCall(1).params as
       | {
           id?: string;
           patch?: {
@@ -2857,7 +3364,7 @@ describe("cron tool", () => {
       | undefined;
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
-      toolsAllow: ["read", "cron"],
+      toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
   });
@@ -2883,6 +3390,245 @@ describe("cron tool", () => {
         patch: { enabled: false },
       },
     });
+  });
+
+  it("keeps payload metadata updates offline and preserves the stored cap", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-metadata",
+        configRevision: "sha256:metadata",
+        payload: {
+          kind: "agentTurn",
+          message: "before",
+          toolsAllow: ["read", "configured__lookup"],
+          toolsAllowIsDefault: true,
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("metadata update must stay offline");
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-update-metadata-offline", {
+      action: "update",
+      id: "job-metadata",
+      patch: { payload: { kind: "agentTurn", message: "after" } },
+    });
+
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-metadata",
+        expectedConfigRevision: "sha256:metadata",
+        patch: { payload: { kind: "agentTurn", message: "after" } },
+      },
+    });
+  });
+
+  it("intersects a visible finite update offline without opening configured MCP", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("visible finite update must stay offline");
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-update-finite-offline", {
+      action: "update",
+      id: "job-finite",
+      patch: { payload: { kind: "agentTurn", toolsAllow: ["read"] } },
+    });
+
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall().params).toMatchObject({
+      patch: { payload: { kind: "agentTurn", toolsAllow: ["read"] } },
+    });
+  });
+
+  it("reuses one resolved snapshot across a conflicting wildcard reauthorization", async () => {
+    const conflict = Object.assign(new Error("changed"), {
+      name: "GatewayClientRequestError",
+      details: { code: "CRON_JOB_CHANGED" },
+    });
+    const writeIdentities: unknown[] = [];
+    const authorityScope = createCronCreatorAuthorityRunScope("run-update-race");
+    const operation = new AbortController();
+    const authorityGrant = mintCronCreatorAuthorityGrant(authorityScope, operation.signal);
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-resolve-race",
+        configRevision: "sha256:first",
+        payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+      })
+      .mockImplementationOnce(async () => {
+        writeIdentities.push(getGatewayToolCallerIdentity());
+        throw conflict;
+      })
+      .mockResolvedValueOnce({
+        id: "job-resolve-race",
+        configRevision: "sha256:second",
+        payload: { kind: "agentTurn", message: "before", toolsAllow: [] },
+      })
+      .mockImplementationOnce(async () => {
+        const identity = getGatewayToolCallerIdentity();
+        writeIdentities.push(identity);
+        consumeCronCreatorAuthorityGrant(identity!.cronCreatorAuthorityGrant!);
+        return { ok: true };
+      });
+    const resolveCreatorToolAuthority = vi.fn(async () =>
+      resolvedCreatorAuthority(["read", "configured__lookup"], authorityGrant),
+    );
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute(
+      "call-update-resolve-race",
+      {
+        action: "update",
+        id: "job-resolve-race",
+        patch: { payload: { toolsAllow: ["*"] } },
+      },
+      operation.signal,
+    );
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall(1).params).toMatchObject({
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          toolsAllow: ["read", "configured__lookup"],
+          toolsAllowIsDefault: true,
+        },
+      },
+    });
+    expect(readGatewayCall(3).params).toMatchObject({
+      expectedConfigRevision: "sha256:second",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          toolsAllow: ["read", "configured__lookup"],
+          toolsAllowIsDefault: true,
+        },
+      },
+    });
+    expect(writeIdentities).toEqual([
+      expect.objectContaining({
+        cronToolsAllowCapture: "final-executable-surface",
+        cronCreatorAuthorityGrant: authorityGrant,
+      }),
+      expect.objectContaining({
+        cronToolsAllowCapture: "final-executable-surface",
+        cronCreatorAuthorityGrant: authorityGrant,
+      }),
+    ]);
+    expect(() => consumeCronCreatorAuthorityGrant(authorityGrant)).toThrow(
+      "Configured MCP cron authority is no longer active",
+    );
+    revokeCronCreatorAuthorityRunScope(authorityScope);
+  });
+
+  it("does not write a freshly resolved update without authenticated grant transport", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-no-caller-identity",
+      configRevision: "sha256:no-caller-identity",
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const tool = createTestCronTool({
+      resolveCreatorToolAuthority: async () =>
+        resolvedCreatorAuthority(["read", "configured__lookup"]),
+    });
+
+    await expect(
+      tool.execute("call-update-no-caller-identity", {
+        action: "update",
+        id: "job-no-caller-identity",
+        patch: { payload: { toolsAllow: ["*"] } },
+      }),
+    ).rejects.toThrow("requires an authenticated local agent run");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall().method).toBe("cron.get");
+  });
+
+  it("fails a queued configured-MCP wildcard update visibly without writing", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-queued-authority",
+      configRevision: "sha256:queued-authority",
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      creatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp",
+    });
+
+    await expect(
+      tool.execute("call-queued-configured-mcp-update", {
+        action: "update",
+        id: "job-queued-authority",
+        patch: { payload: { toolsAllow: ["*"] } },
+      }),
+    ).rejects.toThrow("no automation changes were saved");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall().method).toBe("cron.get");
+  });
+
+  it("rejects an unknown finite update when configured-MCP capture is incomplete", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-incomplete-authority",
+      configRevision: "sha256:incomplete-authority",
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+      creatorToolAllowlistCaptureRef: {},
+    });
+
+    await expect(
+      tool.execute("call-incomplete-authority-update", {
+        action: "update",
+        id: "job-incomplete-authority",
+        patch: { payload: { kind: "agentTurn", toolsAllow: ["future__tool"] } },
+      }),
+    ).rejects.toThrow("fresh authenticated direct-local operator turn");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall()).toEqual({
+      method: "cron.get",
+      params: { id: "job-incomplete-authority" },
+    });
+  });
+
+  it("does not write an update when configured MCP authentication fails", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-auth-failure",
+      configRevision: "sha256:auth-failure",
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority: async () => {
+        throw new Error("Sign in to configured MCP, then retry; no automation changes were saved.");
+      },
+    });
+
+    await expect(
+      tool.execute("call-update-auth-failure", {
+        action: "update",
+        id: "job-auth-failure",
+        patch: { payload: { toolsAllow: ["*"] } },
+      }),
+    ).rejects.toThrow("no automation changes were saved");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall().method).toBe("cron.get");
   });
 
   it("leaves a stored narrower cap untouched when updating without a policy patch", async () => {
@@ -2949,7 +3695,7 @@ describe("cron tool", () => {
       params: {
         id: "job-race",
         expectedConfigRevision: "sha256:first",
-        patch: { payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] } },
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
       },
     });
     expect(readGatewayCall(3)).toEqual({
@@ -2957,7 +3703,7 @@ describe("cron tool", () => {
       params: {
         id: "job-race",
         expectedConfigRevision: "sha256:second",
-        patch: { payload: { kind: "agentTurn", message: "updated", toolsAllow: [] } },
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
       },
     });
   });
@@ -3010,7 +3756,6 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             model: "openai/gpt-5.5",
-            toolsAllow: ["read"],
           },
         },
       },
@@ -3072,7 +3817,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             message: "run later",
-            toolsAllow: ["read", "cron"],
+            toolsAllow: ["read", "automations"],
             toolsAllowIsDefault: true,
           },
         },

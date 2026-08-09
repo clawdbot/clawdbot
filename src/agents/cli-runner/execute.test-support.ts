@@ -54,53 +54,59 @@ export const enqueueSystemEventMock: UnknownMock = vi.fn();
 export const requestHeartbeatMock: UnknownMock = vi.fn();
 
 setCliRunnerExecuteTestDeps({
-  getProcessSupervisor: () => ({
-    spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
-      let stdoutDelivered = false;
-      let stderrDelivered = false;
-      // Supervisor tests sometimes return captured output even when streaming
-      // was requested; replay it through callbacks once to match production.
-      const wrappedParams = {
-        ...params,
-        onStdout: params.onStdout
-          ? (chunk: string) => {
-              stdoutDelivered = true;
-              params.onStdout?.(chunk);
+  getProcessSupervisor: () => {
+    const activeRuns = new Map<string, Awaited<ReturnType<SupervisorSpawnFn>>>();
+    return {
+      spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
+        let stdoutDelivered = false;
+        let stderrDelivered = false;
+        // Supervisor tests sometimes return captured output even when streaming
+        // was requested; replay it through callbacks once to match production.
+        const wrappedParams = {
+          ...params,
+          onStdout: params.onStdout
+            ? (chunk: string) => {
+                stdoutDelivered = true;
+                params.onStdout?.(chunk);
+              }
+            : undefined,
+          onStderr: params.onStderr
+            ? (chunk: string) => {
+                stderrDelivered = true;
+                params.onStderr?.(chunk);
+              }
+            : undefined,
+        };
+        const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
+          ReturnType<SupervisorSpawnFn>
+        >;
+        activeRuns.set(params.runId ?? managedRun.runId, managedRun);
+        const wait = managedRun.wait;
+        return {
+          ...managedRun,
+          wait: async () => {
+            const exit = await wait();
+            if (params.captureOutput === false) {
+              // Production streams stdout/stderr through callbacks; replay captured
+              // output once so tests cover streaming and captured-output paths.
+              if (!stdoutDelivered && exit.stdout) {
+                params.onStdout?.(exit.stdout);
+              }
+              if (!stderrDelivered && exit.stderr) {
+                params.onStderr?.(exit.stderr);
+              }
             }
-          : undefined,
-        onStderr: params.onStderr
-          ? (chunk: string) => {
-              stderrDelivered = true;
-              params.onStderr?.(chunk);
-            }
-          : undefined,
-      };
-      const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
-        ReturnType<SupervisorSpawnFn>
-      >;
-      const wait = managedRun.wait;
-      return {
-        ...managedRun,
-        wait: async () => {
-          const exit = await wait();
-          if (params.captureOutput === false) {
-            // Production streams stdout/stderr through callbacks; replay captured
-            // output once so tests cover streaming and captured-output paths.
-            if (!stdoutDelivered && exit.stdout) {
-              params.onStdout?.(exit.stdout);
-            }
-            if (!stderrDelivered && exit.stderr) {
-              params.onStderr?.(exit.stderr);
-            }
-          }
-          return exit;
-        },
-      };
-    },
-    cancel: vi.fn(),
-    cancelScope: vi.fn(),
-    getRecord: vi.fn(),
-  }),
+            return exit;
+          },
+        };
+      },
+      cancel: vi.fn((runId: string, reason?: Parameters<ProcessSupervisor["cancel"]>[1]) => {
+        activeRuns.get(runId)?.cancel(reason);
+      }),
+      cancelScope: vi.fn(),
+      getRecord: vi.fn(),
+    };
+  },
   enqueueSystemEvent: (
     text: Parameters<EnqueueSystemEventFn>[0],
     options: Parameters<EnqueueSystemEventFn>[1],

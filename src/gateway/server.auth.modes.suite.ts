@@ -16,6 +16,14 @@ import {
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
 
+async function requestModels(port: number, secret: string): Promise<Response> {
+  return await fetch(`http://127.0.0.1:${port}/v1/models`, {
+    headers: {
+      authorization: `Bearer ${secret}`,
+    },
+  });
+}
+
 export function registerAuthModesSuite(): void {
   describe("password auth", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
@@ -24,7 +32,7 @@ export function registerAuthModesSuite(): void {
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
       port = await getFreePort();
-      server = await startGatewayServer(port);
+      server = await startGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
     beforeEach(() => {
@@ -49,6 +57,27 @@ export function registerAuthModesSuite(): void {
       expect(res.error?.message ?? "").toContain("unauthorized");
       ws.close();
     });
+
+    test("rejects token credentials in password mode", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        token: "secret",
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("unauthorized");
+      ws.close();
+    });
+
+    test("authorizes the models HTTP endpoint with only the configured password", async () => {
+      const authorized = await requestModels(port, "secret");
+      expect(authorized.status).toBe(200);
+      await authorized.body?.cancel();
+
+      const unauthorized = await requestModels(port, "wrong");
+      expect(unauthorized.status).toBe(401);
+      await unauthorized.body?.cancel();
+    });
   });
 
   describe("token auth", () => {
@@ -61,7 +90,7 @@ export function registerAuthModesSuite(): void {
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       testState.gatewayAuth = { mode: "token", token: "secret" };
       port = await getFreePort();
-      server = await startGatewayServer(port);
+      server = await startGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
     beforeEach(() => {
@@ -74,12 +103,40 @@ export function registerAuthModesSuite(): void {
       restoreGatewayToken(prevToken);
     });
 
+    test("accepts token auth when configured", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, { token: "secret" });
+      expect(res.ok).toBe(true);
+      ws.close();
+    });
+
     test("rejects invalid token", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, { token: "wrong" });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("unauthorized");
       ws.close();
+    });
+
+    test("rejects password credentials in token mode", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        password: "secret", // pragma: allowlist secret
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("unauthorized");
+      ws.close();
+    });
+
+    test("authorizes the models HTTP endpoint with only the configured token", async () => {
+      const authorized = await requestModels(port, "secret");
+      expect(authorized.status).toBe(200);
+      await authorized.body?.cancel();
+
+      const unauthorized = await requestModels(port, "wrong");
+      expect(unauthorized.status).toBe(401);
+      await unauthorized.body?.cancel();
     });
 
     test("returns control ui hint when token is missing", async () => {
@@ -141,6 +198,59 @@ export function registerAuthModesSuite(): void {
       const res = await connectReq(ws, { skipDefaultAuth: true });
       expect(res.ok).toBe(true);
       ws.close();
+    });
+  });
+
+  describe("startup auth validation", () => {
+    test.each([
+      {
+        mode: "token" as const,
+        envKey: "OPENCLAW_GATEWAY_TOKEN" as const,
+        expected:
+          "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      },
+      {
+        mode: "password" as const,
+        envKey: "OPENCLAW_GATEWAY_PASSWORD" as const,
+        expected: "gateway auth mode is password, but no password was configured",
+      },
+    ])("rejects $mode mode before startup when its credential is missing", async (testCase) => {
+      const previous = process.env[testCase.envKey];
+      delete process.env[testCase.envKey];
+      // Use an explicit empty override so suite-level credentials cannot satisfy
+      // the mode under test before runtime validation runs.
+      const auth =
+        testCase.mode === "token"
+          ? { mode: "token" as const, token: "", allowTailscale: false }
+          : { mode: "password" as const, password: "", allowTailscale: false };
+      testState.gatewayAuth = auth;
+      const port = await getFreePort();
+
+      try {
+        await expect(startGatewayServer(port, { auth })).rejects.toThrow(testCase.expected);
+      } finally {
+        if (previous === undefined) {
+          delete process.env[testCase.envKey];
+        } else {
+          process.env[testCase.envKey] = previous;
+        }
+      }
+    });
+
+    test("rejects non-loopback exposure without effective auth before listening", async () => {
+      testState.gatewayAuth = { mode: "none" };
+      const port = await getFreePort();
+
+      await expect(
+        startGatewayServer(port, {
+          bind: "lan",
+          host: "0.0.0.0",
+          auth: { mode: "none" },
+          controlUiEnabled: false,
+        }),
+      ).rejects.toThrow(
+        "without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD",
+      );
     });
   });
 

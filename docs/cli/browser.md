@@ -118,6 +118,34 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+## Chrome extension relay
+
+```bash
+openclaw browser extension path
+openclaw browser extension pair
+openclaw browser extension pair --gateway-url wss://gateway.example.com
+openclaw browser extension cdp
+openclaw browser extension cdp --json
+```
+
+- `extension path` prints the unpacked extension directory for Chrome's **Load
+  unpacked** flow.
+- `extension pair` creates the host-local relay key when needed and prints the
+  pairing string. `--gateway-url` creates a direct remote-Gateway pairing URL;
+  non-loopback URLs must use `wss://`.
+- `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
+  the loopback browser/CDP endpoints, protocol version, key ID, and fixed
+  challenge/complete binding. It never prints the relay key or an authorization
+  header by default.
+
+`extension cdp --legacy-bearer` is a temporary migration escape hatch. It
+prints the old Bearer header with a warning only while
+`browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
+without printing a credential. Use `--json` for machine output; warnings remain
+on stderr so stdout stays valid JSON.
+
+Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
+
 ## Tabs
 
 ```bash
@@ -135,25 +163,7 @@ openclaw browser close t1
 
 Raw target ids are volatile diagnostic handles, not durable agent memory: when Chromium replaces the underlying raw target during a navigation or form submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab when it can prove the match. Prefer `suggestedTargetId`.
 
-## Extract / snapshot / screenshot / actions
-
-Answer a question from the current page without printing the page content:
-
-```bash
-openclaw browser extract "What is the main conclusion?"
-openclaw browser extract "Which deadline is listed?" --target-id docs --timeout-ms 90000
-openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
-```
-
-`extract` uses the selected agent model, returns only the wrapped answer, and
-reports `NOT_FOUND` when the answer is absent. Its overall timeout defaults to
-60 seconds and is clamped to 5–120 seconds. It requires a Playwright-backed
-profile; use `snapshot` when you need refs or when extraction is unavailable.
-Use `--selector <css>` to limit large pages to matching subtrees and repeat
-`--ignore-selector <css>` to remove navigation, footers, ads, or banners before
-conversion. `--schema <json>` requests validated structured output in
-`details.json`; invalid structured output is retried once, then fails with
-guidance to retry without the schema.
+## Snapshot / screenshot / actions
 
 Snapshot:
 
@@ -293,7 +303,7 @@ Current existing-session limits:
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
-- `extract`, `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
+- `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
 
 ## Remote browser control (node host proxy)
 

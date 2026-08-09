@@ -1,8 +1,8 @@
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import {
   appendTaskEvent,
-  buildTaskLifecycleTerminalOutcome,
   mapAgentRunTerminalOutcomeToTaskStatus,
   resolveTaskLifecycleTerminalError,
 } from "./task-registry-common.js";
@@ -55,7 +55,7 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          const terminal = buildTaskLifecycleTerminalOutcome({
+          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
             phase,
             data: evt.data,
             startedAt,
@@ -66,13 +66,14 @@ function ensureListener() {
           const error = resolveTaskLifecycleTerminalError({
             runtime: current.runtime,
             status: patch.status,
+            terminalReason: terminal.reason,
             error: terminal.error,
           });
           if (error) {
             patch.error = error;
           }
         } else if (phase === "error") {
-          const terminal = buildTaskLifecycleTerminalOutcome({
+          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
             phase,
             data: evt.data,
             startedAt,
@@ -84,6 +85,7 @@ function ensureListener() {
             resolveTaskLifecycleTerminalError({
               runtime: current.runtime,
               status: patch.status,
+              terminalReason: terminal.reason,
               error: terminal.error,
             }) ?? current.error;
         }

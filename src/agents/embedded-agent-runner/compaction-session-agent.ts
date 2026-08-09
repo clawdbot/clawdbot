@@ -106,9 +106,11 @@ export async function prepareCompactionSessionAgent(params: {
     {
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
       nativeWebSearchPolicyContext: {
-        // Compaction rebuilds the stream wrapper, so preserve the session policy
-        // inputs that can suppress provider-native search.
+        // Summaries have no tool loop; provider-hosted tools must not inherit
+        // the originating conversation's broader web-search authority.
         sessionKey: params.sessionKey,
+        webSearchEnabled: false,
+        runtimeToolAllowlist: [],
         sandboxToolPolicy: params.sandboxToolPolicy,
         messageProvider: params.messageProvider,
         agentAccountId: params.agentAccountId,

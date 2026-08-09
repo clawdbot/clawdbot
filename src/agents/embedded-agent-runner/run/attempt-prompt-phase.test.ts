@@ -164,9 +164,7 @@ function createFixture() {
     appendCustomEntry: vi.fn(),
     getEntries: vi.fn(() => []),
   };
-  const sessionLockController = {
-    waitForSessionEvents: vi.fn(async () => undefined),
-  };
+  const sessionLockController = {};
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },

@@ -10,11 +10,11 @@ import {
 } from "../infra/session-cost-usage.js";
 import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 
-export function buildStatusUptimeLine(): string {
+export function buildStatusUptimeValue(): string {
   const format = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
   const gatewayMs = Math.max(0, Math.round(process.uptime() * 1000));
   const systemMs = Math.max(0, Math.round(os.uptime() * 1000));
-  return `⏱️ Uptime: gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
+  return `gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
 }
 
 async function resolveSessionCostLine(params: {

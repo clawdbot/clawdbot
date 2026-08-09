@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 const FAILURE_REPLY_PREFIXES = [
   "⚠️ something went wrong while processing your request.",
+  "⚠️ agent couldn't generate a response",
   "⚠️ session history got out of sync.",
   "⚠️ session history was corrupted.",
   "⚠️ context overflow",

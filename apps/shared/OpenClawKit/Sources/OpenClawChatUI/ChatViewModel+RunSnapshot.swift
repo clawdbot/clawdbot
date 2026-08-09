@@ -12,10 +12,16 @@ extension OpenClawChatViewModel {
             return
         }
         self.latestAppliedRunSnapshotRequestID = request.id
+        if let activeRunIDs = payload.sessionInfo?.activeRunIds {
+            self.updateActiveSessionRunIDs(activeRunIDs)
+        } else if payload.sessionInfo?.hasActiveRun == false {
+            self.updateActiveSessionRunIDs([])
+        }
         // Plan reconciliation shares run adoption: rejected history cannot clobber newer live state.
         // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
         guard let snapshot = payload.inFlightRun,
-              let runId = Self.normalizedRunID(snapshot.runId)
+              let runId = Self.normalizedRunID(snapshot.runId),
+              self.liveRunStateByRunID[runId]?.terminal != true
         else {
             guard let retainedRunId = self.planRunId else { return }
             let activeRunIds = payload.sessionInfo?.activeRunIds
@@ -46,8 +52,10 @@ extension OpenClawChatViewModel {
     }
 
     private func adoptRunState(runId: String, bufferedText: String, preservePlan: Bool) {
-        let canonicalPendingRuns = Set([runId])
-        let replacedRun = self.pendingRuns != canonicalPendingRuns
+        // A terminal ID stays retired until an authoritative session snapshot
+        // explicitly removes it; late deltas/history cannot resurrect the run.
+        guard self.liveRunStateByRunID[runId]?.terminal != true else { return }
+        let replacedRun = self.pendingRuns.count != 1 || !self.pendingRuns.contains(runId)
         if replacedRun {
             // Gateway snapshots and live deltas are canonical for this session.
             // Replace stale local ownership so only that run consumes later events.

@@ -9,7 +9,7 @@ import {
   authorizeIncognitoSessionTarget,
   resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
-  filterDraftSessionsForClient,
+  createSessionListEntryFilter,
   resolveSessionSharingRole,
   resolveSessionVisibility,
 } from "./session-sharing.js";
@@ -17,6 +17,14 @@ import {
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 type SharingTarget = Parameters<typeof resolveSessionSharingRole>[0]["target"];
+
+function isListed(
+  requestClient: GatewayClient,
+  sessionKey: string,
+  entry: SharingTarget["entry"],
+): boolean {
+  return createSessionListEntryFilter({ client: requestClient })?.(sessionKey, entry) ?? true;
+}
 
 function client(params: {
   user?: string;
@@ -138,10 +146,8 @@ describe("session sharing policy", () => {
       visibility: "draft" as const,
       createdActor: { type: "human" as const, id: "owner@example.com", label: "Owner" },
     };
-    expect(filterDraftSessionsForClient({ client: owner, store: { main: entry } })).toHaveProperty(
-      "main",
-    );
-    expect(filterDraftSessionsForClient({ client: viewer, store: { main: entry } })).toEqual({});
+    expect(isListed(owner, "main", entry)).toBe(true);
+    expect(isListed(viewer, "main", entry)).toBe(false);
   });
 
   it("keeps incognito admin-only while treating identityless connections as owner-equivalent", async () => {
@@ -163,9 +169,7 @@ describe("session sharing policy", () => {
       const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
 
       for (const visibleClient of [admin, solo]) {
-        expect(
-          filterDraftSessionsForClient({ client: visibleClient, store: { [sessionKey]: entry } }),
-        ).toHaveProperty(sessionKey);
+        expect(isListed(visibleClient, sessionKey, entry)).toBe(true);
         expect(
           canReceiveSessionEvent({
             cfg,
@@ -184,9 +188,7 @@ describe("session sharing policy", () => {
       }
 
       for (const hiddenClient of [owner, viewer]) {
-        expect(
-          filterDraftSessionsForClient({ client: hiddenClient, store: { [sessionKey]: entry } }),
-        ).toEqual({});
+        expect(isListed(hiddenClient, sessionKey, entry)).toBe(false);
         expect(
           canReceiveSessionEvent({
             cfg,

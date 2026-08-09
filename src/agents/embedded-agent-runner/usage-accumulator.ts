@@ -10,6 +10,21 @@ export type UsageAccumulator = {
   cacheWrite: number;
   reasoningTokens: number;
   total: number;
+  /**
+   * Completed assistant round trips across every model attempt of the run.
+   * Kept beside token totals so retried attempts stay counted like their usage.
+   */
+  assistantTurns: number;
+  /**
+   * Cumulative inner bridge calls across attempts. Present only once an
+   * attempt reported a tool-search/code-mode catalog, so catalog-less runs
+   * omit the field instead of publishing zero sentinels.
+   */
+  bridgeCalls?: {
+    search: number;
+    describe: number;
+    call: number;
+  };
 };
 
 export const createUsageAccumulator = (): UsageAccumulator => ({
@@ -19,6 +34,7 @@ export const createUsageAccumulator = (): UsageAccumulator => ({
   cacheWrite: 0,
   reasoningTokens: 0,
   total: 0,
+  assistantTurns: 0,
 });
 
 type MaybeUsage = NormalizedUsage | undefined;
@@ -55,6 +71,29 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
   target.cacheWrite += usage.cacheWrite ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
+};
+
+/**
+ * Folds one attempt's run stats into the accumulator. Attempt cleanup clears
+ * the per-attempt tool-search catalog, so retries would otherwise discard
+ * earlier bridge counts and undercount the documented cumulative run totals.
+ */
+export const mergeAttemptRunStatsIntoAccumulator = (
+  target: UsageAccumulator,
+  attempt: {
+    assistantTurns?: number;
+    bridgeCalls?: { search: number; describe: number; call: number };
+  },
+) => {
+  target.assistantTurns += attempt.assistantTurns ?? 0;
+  if (!attempt.bridgeCalls) {
+    return;
+  }
+  const bridgeCalls = target.bridgeCalls ?? { search: 0, describe: 0, call: 0 };
+  bridgeCalls.search += attempt.bridgeCalls.search;
+  bridgeCalls.describe += attempt.bridgeCalls.describe;
+  bridgeCalls.call += attempt.bridgeCalls.call;
+  target.bridgeCalls = bridgeCalls;
 };
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {

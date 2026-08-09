@@ -1,34 +1,49 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
+import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred, type Deferred } from "../shared/deferred.js";
 import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-type WizardStepOption = {
-  value: unknown;
-  label: string;
-  hint?: string;
-};
+export type WizardStep = ProtocolWizardStep;
 
-export type WizardStep = {
-  id: string;
-  type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
-  title?: string;
-  message?: string;
-  format?: "plain";
-  options?: WizardStepOption[];
-  initialValue?: unknown;
-  placeholder?: string;
-  sensitive?: boolean;
-  executor?: "gateway" | "client";
-  externalUrl?: string;
-  deviceCode?: {
-    code: string;
-    expiresInMinutes?: number;
-    message?: string;
-  };
-};
+type WizardStepInputRequirement = "always" | "never" | "client-executor";
+
+const WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE = {
+  note: "never",
+  select: "always",
+  text: "always",
+  confirm: "always",
+  multiselect: "always",
+  progress: "never",
+  action: "client-executor",
+} as const satisfies Record<WizardStep["type"], WizardStepInputRequirement>;
+
+/** Whether a step needs a user answer instead of client or gateway acknowledgement. */
+export function wizardStepAwaitsInput(step: WizardStep): boolean {
+  const requirement = WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE[step.type];
+  switch (requirement) {
+    case "always":
+      return true;
+    case "never":
+      return false;
+    case "client-executor":
+      return step.executor === "client";
+  }
+  const unhandledRequirement: never = requirement;
+  return unhandledRequirement;
+}
+
+/** Remove secret prefill before a wizard step crosses a client boundary. */
+export function sanitizeWizardStepForClient(step: WizardStep): WizardStep {
+  if (step.sensitive !== true || step.initialValue === undefined) {
+    return step;
+  }
+  const safe = { ...step };
+  delete safe.initialValue;
+  return safe;
+}
 
 type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
 
@@ -39,6 +54,7 @@ type WizardNextResult = {
   error?: string;
   channels?: string[];
   accounts?: Array<{ channel: string; accountId: string }>;
+  preparedModelRef?: string;
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -76,7 +92,12 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   async note(message: string, title?: string): Promise<void> {
-    await this.prompt({ type: "note", title, message, executor: "client" });
+    await this.prompt({
+      type: "note",
+      title,
+      message,
+      executor: "client",
+    });
   }
 
   async deviceCode(params: {
@@ -106,7 +127,12 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   async plain(message: string): Promise<void> {
-    await this.prompt({ type: "note", message, format: "plain", executor: "client" });
+    await this.prompt({
+      type: "note",
+      message,
+      format: "plain",
+      executor: "client",
+    });
   }
 
   async select<T>(params: {
@@ -231,12 +257,14 @@ class WizardSessionPrompter implements WizardPrompter {
 export class WizardSession {
   private readonly abortController = new AbortController();
   private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly runnerPromise: Promise<void>;
   private currentStep: WizardStep | null = null;
   private progressSteps: WizardStep[] = [];
   private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
   private cancellationLocked = false;
+  private settled = false;
   private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
     string,
@@ -249,6 +277,7 @@ export class WizardSession {
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
+  private preparedModelRef: string | undefined;
 
   constructor(
     private runner: (
@@ -263,7 +292,7 @@ export class WizardSession {
       this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
       this.expiryTimer.unref?.();
     }
-    void this.run(prompter);
+    this.runnerPromise = this.run(prompter);
   }
 
   async next(): Promise<WizardNextResult> {
@@ -293,21 +322,30 @@ export class WizardSession {
   }
 
   private terminalResult(): WizardNextResult {
-    if (!this.configuredAccounts) {
-      return { done: true, status: this.status, error: this.error };
-    }
     return {
       done: true,
       status: this.status,
       error: this.error,
-      channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
-      accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+      ...(this.configuredAccounts
+        ? {
+            channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
+            accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+          }
+        : {}),
+      ...(this.status === "done" && this.preparedModelRef
+        ? { preparedModelRef: this.preparedModelRef }
+        : {}),
     };
   }
 
   /** Record what the channels flow actually configured (channels flow only). */
   setConfiguredAccounts(accounts: ReadonlyArray<{ channel: string; accountId: string }>) {
     this.configuredAccounts = accounts.map((entry) => ({ ...entry }));
+  }
+
+  /** Record the exact provider-owned model prepared by a setup flow. */
+  setPreparedModelRef(modelRef: string) {
+    this.preparedModelRef = modelRef;
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
@@ -432,6 +470,7 @@ export class WizardSession {
         this.error = String(err);
       }
     } finally {
+      this.settled = true;
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }
@@ -468,6 +507,16 @@ export class WizardSession {
 
   getStatus(): WizardSessionStatus {
     return this.status;
+  }
+
+  /** Whether the runner has stopped and can no longer mutate setup state. */
+  isSettled(): boolean {
+    return this.settled;
+  }
+
+  /** Resolves after the runner can no longer mutate setup state. */
+  whenSettled(): Promise<void> {
+    return this.runnerPromise;
   }
 
   getError(): string | undefined {

@@ -321,7 +321,7 @@ describe("qa-bus client", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("bounds message responses that stall after headers", async () => {
@@ -360,7 +360,7 @@ describe("qa-bus client", () => {
     timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
     await rejection;
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("keeps long polls within the server wait window plus response grace", async () => {

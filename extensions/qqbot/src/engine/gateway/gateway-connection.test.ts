@@ -9,7 +9,7 @@ import { flushKnownUsers } from "../session/known-users.js";
 import { GatewayEvent, GatewayOp, MAX_RECONNECT_ATTEMPTS } from "./constants.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { QQBotIngressAdmissionError, type QQBotIngressMonitor } from "./ingress.js";
-import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
+import type { EngineLogger, GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const createQQWSClientMock = vi.hoisted(() => vi.fn());
 
@@ -71,6 +71,7 @@ function makeAccount(): GatewayAccount {
 }
 
 async function startConnection(params: {
+  log?: EngineLogger;
   onDisconnected?: (info: unknown) => void;
   onError?: (error: Error) => void;
   createIngressMonitor?: () => QQBotIngressMonitor;
@@ -84,6 +85,7 @@ async function startConnection(params: {
     cfg: {},
     runtime: {} as GatewayPluginRuntime,
     adapters: {} as EngineAdapters,
+    log: params.log,
     handleMessage: async () => {},
     createIngressMonitor: createNoopIngressMonitor,
     ...(params.createIngressMonitor ? { createIngressMonitor: params.createIngressMonitor } : {}),
@@ -396,6 +398,171 @@ describe("GatewayConnection disconnect status", () => {
     await Promise.resolve();
     expect(receive).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith(admissionError);
+    controller.abort();
+    await started;
+  });
+});
+
+describe("GatewayConnection heartbeat liveness", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    createQQWSClientMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("does not terminate when heartbeats are ACKed within the interval", async () => {
+    const { ws, controller, started } = await startConnection({});
+    ws.readyState = 1; // OPEN so the heartbeat sender fires
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: { heartbeat_interval: 10_000 } }));
+
+    // Advance one interval, then deliver the ACK for that heartbeat.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HEARTBEAT_ACK }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HEARTBEAT_ACK }));
+
+    expect(ws.terminate).not.toHaveBeenCalled();
+    controller.abort();
+    await started;
+  });
+
+  it("terminates a half-open connection whose heartbeats receive no ACK", async () => {
+    // A connection that sends heartbeats but never receives Op 11 must be torn
+    // down so handleClose → scheduleReconnect re-establishes delivery.
+    const { ws, controller, started } = await startConnection({});
+    ws.readyState = 1; // OPEN so the heartbeat sender fires
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: { heartbeat_interval: 10_000 } }));
+
+    // tick 1: sends heartbeat 1 (outstanding=1), no ACK.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    // tick 2: sends heartbeat 2 (outstanding=2), no ACK.
+    await vi.advanceTimersByTimeAsync(10_000);
+    // tick 3: two unanswered sends → terminate.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(ws.terminate).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await started;
+  });
+
+  it("clears an ACK that arrives while socketMessageTail is blocked by ingress", async () => {
+    // Guards the pre-tail ACK path: even with a DISPATCH holding the serialized
+    // queue open inside ingress.receive(), an Op 11 must still reset the counter.
+    let releaseIngress!: () => void;
+    const receive = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseIngress = resolve;
+        }),
+    );
+    const { ws, controller, started } = await startConnection({
+      createIngressMonitor: () => ({
+        receive,
+        stop: vi.fn(async () => {}),
+        waitForIdle: vi.fn(async () => {}),
+      }),
+    });
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: { heartbeat_interval: 10_000 } }));
+
+    // tick 1: send heartbeat 1.
+    await vi.advanceTimersByTimeAsync(10_000);
+    // A DISPATCH enters ingress.receive() and blocks the serialized queue.
+    ws.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOp.DISPATCH,
+        t: GatewayEvent.C2C_MESSAGE_CREATE,
+        d: {
+          id: "m1",
+          content: "hi",
+          timestamp: "2026-07-18T12:00:00Z",
+          author: { user_openid: "u1" },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(receive).toHaveBeenCalled());
+    // tick 2: send heartbeat 2 while the queue is still blocked.
+    await vi.advanceTimersByTimeAsync(10_000);
+    // The ACK for heartbeat 1 arrives now — it must reset the counter despite the
+    // blocked queue, or the next tick would falsely terminate a live socket.
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HEARTBEAT_ACK }));
+    // tick 3: counter was reset, so this sends heartbeat 3 instead of terminating.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(ws.terminate).not.toHaveBeenCalled();
+    releaseIngress();
+    controller.abort();
+    await started;
+  });
+
+  it("does not throw on a malformed null frame and keeps handling later frames", async () => {
+    // A syntactically valid but non-object frame (JSON null) must not escape the
+    // synchronous message listener as an uncaught exception.
+    const { ws, controller, started } = await startConnection({});
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: { heartbeat_interval: 10_000 } }));
+    // tick 1: send heartbeat 1 (outstanding=1).
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+
+    // A syntactically valid but non-object frame (JSON null) must not escape the
+    // synchronous message listener as an uncaught exception or terminate the socket.
+    ws.emit("message", "null");
+    await Promise.resolve();
+    expect(ws.terminate).not.toHaveBeenCalled();
+
+    // The ACK for heartbeat 1 still resets the counter after the malformed frame.
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HEARTBEAT_ACK }));
+    await vi.advanceTimersByTimeAsync(10_000); // tick 2: pre-send 0 < 2 → send (outstanding=1)
+    await vi.advanceTimersByTimeAsync(10_000); // tick 3: pre-send 1 < 2 → send (outstanding=2)
+    expect(ws.terminate).not.toHaveBeenCalled();
+    controller.abort();
+    await started;
+  });
+
+  it.each([
+    ["missing", { op: GatewayOp.HELLO }],
+    ["null", { op: GatewayOp.HELLO, d: null }],
+    ["array", { op: GatewayOp.HELLO, d: [] }],
+    ["object", { op: GatewayOp.HELLO, d: {} }],
+    [
+      "non-stringifiable interval",
+      {
+        op: GatewayOp.HELLO,
+        d: { heartbeat_interval: { toString: null, valueOf: null } },
+      },
+    ],
+  ])("uses the fallback heartbeat for a %s HELLO body", async (_case, payload) => {
+    const error = vi.fn();
+    const { ws, controller, started } = await startConnection({
+      log: { info: vi.fn(), error },
+    });
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+
+    ws.emit("message", JSON.stringify(payload));
+    await vi.advanceTimersByTimeAsync(44_999);
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    expect(ws.terminate).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      "Invalid QQ gateway HELLO heartbeat interval; using default 45000ms",
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    expect(ws.terminate).not.toHaveBeenCalled();
     controller.abort();
     await started;
   });

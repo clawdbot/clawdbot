@@ -1,6 +1,10 @@
 // Codex tests cover attempt steering plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexSteeringQueue } from "./attempt-steering.js";
+import {
+  CodexSteeringAcceptedUnconfirmedError,
+  createCodexSteeringQueue,
+} from "./attempt-steering.js";
+import { createClientHarness } from "./test-support.js";
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0V8AAAAASUVORK5CYII=";
@@ -27,10 +31,13 @@ describe("Codex app-server steering queue", () => {
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
+      requestTimeoutMs: 60_000,
       claimPendingUserInput: options.claimPendingUserInput ?? (() => undefined),
       signal: options.signal ?? new AbortController().signal,
     });
   }
+
+  const steerRequestOptions = { timeoutMs: 60_000, signal: expect.any(AbortSignal) };
 
   it("resolves only after the matching Codex user message completes", async () => {
     const request = vi.fn(async (_method: string, _params: unknown) => ({ turnId: "turn-1" }));
@@ -49,12 +56,76 @@ describe("Codex app-server steering queue", () => {
     expect(queue.confirmConsumed("unrelated-user-message")).toBe(false);
     expect(queue.confirmConsumed(requestParams.clientUserMessageId ?? "")).toBe(true);
     await queued;
-    expect(request).toHaveBeenCalledWith("turn/steer", {
+    expect(request).toHaveBeenCalledWith(
+      "turn/steer",
+      {
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "accepted", text_elements: [] }],
+        clientUserMessageId: "openclaw:turn-1:steer:1",
+      },
+      steerRequestOptions,
+    );
+  });
+
+  it("fails the steer when the app-server never answers turn/steer", async () => {
+    // Real client over an in-memory transport: only the app-server process is faked,
+    // so this exercises the production request deadline rather than a stub.
+    const harness = createClientHarness();
+    const queue = createCodexSteeringQueue({
+      client: harness.client,
       threadId: "thread-1",
-      expectedTurnId: "turn-1",
-      input: [{ type: "text", text: "accepted", text_elements: [] }],
-      clientUserMessageId: "openclaw:turn-1:steer:1",
+      turnId: "turn-1",
+      requestTimeoutMs: 1_000,
+      claimPendingUserInput: () => undefined,
+      signal: new AbortController().signal,
     });
+
+    const outcomes: unknown[] = [];
+    void queue.queue("steer me", { debounceMs: 0 }).then(
+      () => outcomes.push("resolved"),
+      (error: unknown) => outcomes.push(error),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect((JSON.parse(harness.writes[0] ?? "{}") as { method?: string }).method).toBe(
+      "turn/steer",
+    );
+
+    // Codex accepted the frame but never responds: the caller must not wait forever.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    expect((outcomes[0] as Error & { cause?: unknown }).cause).toMatchObject({
+      message: "turn/steer timed out",
+    });
+    harness.client.close();
+  });
+
+  it("aborts the in-flight steer request and removes its client pending entry", async () => {
+    const harness = createClientHarness();
+    const controller = new AbortController();
+    const queue = createCodexSteeringQueue({
+      client: harness.client,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestTimeoutMs: 60_000,
+      claimPendingUserInput: () => undefined,
+      signal: controller.signal,
+    });
+    const pendingRequests = (
+      harness.client as unknown as { pending: Map<number | string, unknown> }
+    ).pending;
+
+    const queued = queue.queue("steer me", { debounceMs: 0 });
+    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pendingRequests.size).toBe(1);
+
+    controller.abort();
+
+    await rejected;
+    expect(pendingRequests.size).toBe(0);
+    harness.client.close();
   });
 
   it("handles user-message completion before the steer response", async () => {
@@ -93,17 +164,21 @@ describe("Codex app-server steering queue", () => {
 
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
     await Promise.all([first, second]);
-    expect(request).toHaveBeenCalledWith("turn/steer", {
-      threadId: "thread-1",
-      expectedTurnId: "turn-1",
-      input: [
-        { type: "text", text: "first", text_elements: [] },
-        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-        { type: "text", text: "second", text_elements: [] },
-        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-      ],
-      clientUserMessageId: "openclaw:turn-1:steer:1",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "turn/steer",
+      {
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [
+          { type: "text", text: "first", text_elements: [] },
+          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+          { type: "text", text: "second", text_elements: [] },
+          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+        ],
+        clientUserMessageId: "openclaw:turn-1:steer:1",
+      },
+      steerRequestOptions,
+    );
   });
 
   it("rejects the batch when Codex rejects turn/steer", async () => {
@@ -152,7 +227,7 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request);
 
     const queued = queue.queue("completion wake", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue cancelled");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -170,7 +245,7 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request, { signal: controller.signal });
 
     const queued = queue.queue("completion wake", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -245,16 +320,20 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(answerPendingUserInput).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith("turn/steer", {
-      threadId: "thread-1",
-      expectedTurnId: "turn-1",
-      input: [
-        { type: "text", text: "compare these", text_elements: [] },
-        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-      ],
-      clientUserMessageId: "openclaw:turn-1:steer:1",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "turn/steer",
+      {
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [
+          { type: "text", text: "compare these", text_elements: [] },
+          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+        ],
+        clientUserMessageId: "openclaw:turn-1:steer:1",
+      },
+      steerRequestOptions,
+    );
     expect(cancelPendingUserInput).toHaveBeenCalledOnce();
     expect(request.mock.invocationCallOrder[0]!).toBeLessThan(
       cancelPendingUserInput.mock.invocationCallOrder[0]!,

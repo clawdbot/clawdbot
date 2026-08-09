@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
   hasSessionPresenceViewers,
@@ -20,6 +22,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
+  const user: PresenceViewer = {
+    id: "profile-riley",
+    name: "Riley",
+    email: "riley@example.test",
+    watchedSessions: [],
+  };
+  const viewerAvatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
+  viewerAvatar.user = user;
+  document.body.append(viewerAvatar);
+
+  const chat = document.createElement("div");
+  document.body.append(chat);
+  render(renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }), chat);
+
+  const expected = resolveAvatarInitials({
+    id: user.id,
+    name: user.name,
+    username: user.email,
+  });
+  await vi.waitFor(async () => {
+    await viewerAvatar.updateComplete;
+    const rosterInitials = viewerAvatar.querySelector(".viewer-avatar > span");
+    const chatInitials = chat.querySelector(".chat-author-avatar__initials");
+    expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
+    expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
+    expect(rosterInitials?.getAttribute("style")).toContain(
+      `hsl(${expected.colorSeed % 360} 48% 42%)`,
+    );
+    expect(chatInitials?.getAttribute("style")).toContain(
+      `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+    );
+  });
+});
+
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
   const avatar = document.createElement("openclaw-viewer-avatar") as ViewerAvatarElement;
   avatar.user = {
@@ -33,7 +70,7 @@ it("uses the shared resolver and rejects cross-origin presence avatar metadata",
   await vi.waitFor(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
-    expect(avatar.textContent?.trim()).toBe("MA");
+    expect(avatar.textContent?.trim()).toBe("M");
   });
 });
 
@@ -113,7 +150,9 @@ it("shares an authenticated avatar blob between the same user in the roster and 
 
 type ViewerFacepileElement = HTMLElement & {
   presencePayload: unknown;
+  selfUserId?: string;
   selfInstanceId?: string;
+  sessionKey?: string;
   variant: "session" | "footer";
   buildInfo: ControlUiBuildInfo;
   gatewayVersion: string | null;
@@ -127,12 +166,14 @@ const BUILD_INFO: ControlUiBuildInfo = {
   builtAt: "2026-07-20T10:30:00.000Z",
   branch: "main",
   dirty: true,
+  release: false,
   buildId: "test",
 };
 
 function mountFooterFacepile() {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.variant = "footer";
+  facepile.selfUserId = "z-self";
   facepile.selfInstanceId = "self-instance";
   facepile.buildInfo = BUILD_INFO;
   facepile.gatewayVersion = "2026.7.1";
@@ -159,7 +200,7 @@ function mountFooterFacepile() {
   return facepile;
 }
 
-it("shows one footer hover card with every online user and server details", async () => {
+it("shows one footer hover card with other online users and server details", async () => {
   const facepile = mountFooterFacepile();
 
   await vi.waitFor(async () => {
@@ -178,20 +219,25 @@ it("shows one footer hover card with every online user and server details", asyn
     tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
   ).toBe(true);
   const card = facepile.querySelector('.sidebar-presence-hover-card[slot="content"]');
-  expect(card?.querySelector(".sidebar-hover-card__heading")?.textContent).toContain("Online · 3");
+  expect(
+    [...facepile.querySelectorAll(".viewer-facepile [data-viewer-id]")].map((avatar) =>
+      avatar.getAttribute("data-viewer-id"),
+    ),
+  ).toEqual(["alice", "bob"]);
+  expect(card?.querySelector(".sidebar-hover-card__heading")?.textContent).toContain("Online · 2");
   const rows = [...(card?.querySelectorAll(".sidebar-hover-card__person") ?? [])];
   expect(card?.querySelector(".sidebar-hover-card__people")?.getAttribute("tabindex")).toBe("0");
-  expect(rows.map((row) => row.getAttribute("data-viewer-id"))).toEqual(["z-self", "alice", "bob"]);
-  expect(rows[0]?.querySelector(".sidebar-hover-card__you")?.textContent).toContain("you");
+  expect(rows.map((row) => row.getAttribute("data-viewer-id"))).toEqual(["alice", "bob"]);
+  expect(card?.querySelector('[data-viewer-id="z-self"]')).toBeNull();
   // Named users show the email as a subtitle; email-only users don't repeat it.
-  expect(rows[1]?.querySelector(".sidebar-hover-card__person-email")?.textContent).toBe(
+  expect(rows[0]?.querySelector(".sidebar-hover-card__person-email")?.textContent).toBe(
     "alice@example.test",
   );
-  expect(rows[2]?.querySelector(".sidebar-hover-card__person-name")?.textContent?.trim()).toBe(
+  expect(rows[1]?.querySelector(".sidebar-hover-card__person-name")?.textContent?.trim()).toBe(
     "bob@example.test",
   );
-  expect(rows[2]?.querySelector(".sidebar-hover-card__person-email")).toBeNull();
-  expect(rows[1]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(rows[1]?.querySelector(".sidebar-hover-card__person-email")).toBeNull();
+  expect(rows[0]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
   expect(card?.textContent).toContain("Server");
   expect(card?.querySelector(".sidebar-hover-card__summary")?.textContent).toContain(
     "v2026.7.2 · main · dirty",
@@ -243,8 +289,59 @@ it("detects only other viewers watching the requested session", () => {
       },
     ],
   };
-  expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:active")).toBe(false);
-  expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:other")).toBe(true);
+  expect(hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:active")).toBe(
+    false,
+  );
+  expect(hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:other")).toBe(
+    true,
+  );
+});
+
+it.each([
+  {
+    name: "the browser instance id is not populated yet",
+    selfInstanceId: undefined,
+    presence: [
+      {
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+      {
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: ["agent:main:active"],
+      },
+    ],
+  },
+  {
+    name: "the browser's own presence row lacks a user id",
+    selfInstanceId: "self-instance",
+    presence: [
+      { instanceId: "self-instance", watchedSessions: ["agent:main:active"] },
+      {
+        instanceId: "self-second-tab",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+      {
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: ["agent:main:active"],
+      },
+    ],
+  },
+])("excludes authenticated self from session facepiles when $name", async (fixture) => {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "session";
+  facepile.selfUserId = "self";
+  facepile.selfInstanceId = fixture.selfInstanceId;
+  facepile.sessionKey = "agent:main:active";
+  facepile.presencePayload = { presence: fixture.presence };
+  document.body.append(facepile);
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector('[data-viewer-id="self"]')).toBeNull();
+    expect(facepile.querySelector('[data-viewer-id="alice"]')).not.toBeNull();
+  });
 });
 
 it("keeps collaboration UI dormant for a solo identity", () => {

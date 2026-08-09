@@ -261,27 +261,23 @@ describe("Windows inline allowlist analysis", () => {
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o755);
     }
-    try {
-      const env = makePathEnv(dir);
-      const analysis = analyzeArgvCommand({
-        argv: ["cmd.exe", "/c", "node.exe", "app.js"],
-        cwd: dir,
-        env,
-      });
+    const env = makePathEnv(dir);
+    const analysis = analyzeArgvCommand({
+      argv: ["cmd.exe", "/c", "node.exe", "app.js"],
+      cwd: dir,
+      env,
+    });
 
-      expect(analysis.ok).toBe(true);
-      const result = evaluateExecAllowlist({
-        analysis,
-        allowlist: [{ pattern: nodePath }],
-        safeBins: new Set(),
-        cwd: dir,
-        env,
-        platform: "win32",
-      });
-      expect(result.allowlistSatisfied).toBe(true);
-      expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(analysis.ok).toBe(true);
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: nodePath }],
+      safeBins: new Set(),
+      cwd: dir,
+      env,
+      platform: "win32",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
   });
 });

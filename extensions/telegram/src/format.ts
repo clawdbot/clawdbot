@@ -147,19 +147,22 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   return out.join("\n");
 }
 
-export function markdownToTelegramHtml(
-  markdown: string,
-  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
-): string {
-  const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+function parseTelegramLegacyMarkdown(markdown: string, tableMode?: MarkdownTableMode): MarkdownIR {
+  return markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     assistantTranscriptRoleHeaders: true,
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode,
+    tableMode: tableMode === "block" ? "code" : tableMode,
   });
+}
+
+export function markdownToTelegramHtml(
+  markdown: string,
+  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
+): string {
+  const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
   const html = renderTelegramHtml(ir);
   const telegramHtml = renderSupportedTelegramHtml(html);
   // Apply file reference wrapping if requested (for chunked rendering)
@@ -192,7 +195,7 @@ const TELEGRAM_RICH_HTML_TABLE_PATTERN = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
 const TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
 const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
 const TELEGRAM_HTML_CAPTION_PATTERN = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i;
-const TELEGRAM_HTML_COLSPAN_PATTERN = /\bcolspan\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i;
+const TELEGRAM_HTML_COLSPAN_PATTERN = /(?:^|\s)colspan\s*=\s*(['"]?)\s*(\d+)\s*\1(?=\s|$)/i;
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "b",
   "strong",
@@ -343,6 +346,15 @@ function stripTelegramHtmlForPlainText(html: string): string {
   return decodeTelegramHtmlEntities(
     html.replace(TELEGRAM_HTML_BREAK_PATTERN, "\n").replace(TELEGRAM_HTML_TAG_PATTERN, ""),
   );
+}
+
+export function countTelegramHtmlVisibleCharacters(html: string): number {
+  // Telegram limits UTF-16 caption characters after stripping markup and decoding entities.
+  return stripTelegramHtmlForPlainText(html).length;
+}
+
+export function resolveTelegramHtmlVisibleText(html: string): string {
+  return stripTelegramHtmlForPlainText(html);
 }
 
 function encodePlainTextForTelegramHtmlStrip(text: string): string {
@@ -592,7 +604,7 @@ function normalizeTelegramLegacyHtmlTables(html: string): string {
 }
 
 function parseTelegramHtmlColspan(attrs: string): number {
-  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.slice(1).find(Boolean);
+  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.[2];
   const value = raw ? Number.parseInt(raw, 10) : 1;
   return Number.isFinite(value) && value > 1 ? Math.min(value, 21) : 1;
 }
@@ -685,12 +697,32 @@ function clampToSurrogateBoundary(text: string, index: number): number {
   return index > 1 ? index - 1 : index + 1;
 }
 
+// Prefer a word/paragraph boundary inside the entity-safe window so long text
+// runs break between words instead of mid-word. Whitespace never falls inside
+// an HTML entity, so this keeps entities intact; the caller falls back to the
+// entity-safe hard cut only when the window has no interior whitespace.
+function findTelegramHtmlWordSafeSplitIndex(text: string, end: number): number {
+  let lastNewline = 0;
+  let lastWhitespace = 0;
+  for (let index = 1; index < end; index += 1) {
+    const char = text[index];
+    if (char === "\n") {
+      lastNewline = index + 1;
+    } else if (char !== undefined && /\s/.test(char)) {
+      lastWhitespace = index + 1;
+    }
+  }
+  return lastNewline > 0 ? lastNewline : lastWhitespace;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
-  const splitIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  const entitySafeIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  const wordSafeIndex = findTelegramHtmlWordSafeSplitIndex(text, entitySafeIndex);
+  const splitIndex = wordSafeIndex > 0 ? wordSafeIndex : entitySafeIndex;
   return clampToSurrogateBoundary(text, splitIndex);
 }
 
@@ -881,14 +913,7 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
-    assistantTranscriptRoleHeaders: true,
-    linkify: true,
-    enableSpoilers: true,
-    headingStyle: "none",
-    blockquotePrefix: "",
-    tableMode: options.tableMode,
-  });
+  const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
   return renderTelegramChunksWithinHtmlLimit(ir, limit);
 }
 

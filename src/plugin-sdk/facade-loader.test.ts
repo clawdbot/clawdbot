@@ -5,10 +5,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
+  loadFacadeModuleAtLocationSync,
+  loadBundledPluginPublicSurfaceModule,
   loadBundledPluginPublicSurfaceModuleSync,
+  MissingPublicSurfaceError,
   resetFacadeLoaderStateForTest,
   setFacadeLoaderSourceTransformFactoryForTest,
 } from "./facade-loader.js";
@@ -25,6 +29,18 @@ type FacadeLoaderSourceTransformFactory = NonNullable<
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
+
+function captureThrownError(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected function to throw");
+}
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -90,6 +106,33 @@ function createBundledPluginFixture(params: {
     "utf8",
   );
   return { bundledPluginsDir, pluginId, pluginRoot };
+}
+
+function createBundledChannelConfigFixtures(): string {
+  const bundledPluginsDir = path.join(
+    packageRoot,
+    "dist",
+    nextTrustedPluginId("openclaw-channel-config-fixtures-"),
+  );
+  trustedBundledPluginFixtureRoots.push(bundledPluginsDir);
+  for (const [pluginId, exportName] of [
+    ["telegram", "TelegramConfigSchema"],
+    ["imessage", "IMessageConfigSchema"],
+  ] as const) {
+    const pluginRoot = path.join(bundledPluginsDir, pluginId);
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    writeFixturePackageJson(pluginRoot, pluginId);
+    fs.writeFileSync(
+      path.join(pluginRoot, "config-api.js"),
+      [
+        'import { z } from "zod";',
+        `export const ${exportName} = z.object({ dmPolicy: z.literal("pairing").default("pairing") });`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
+  return bundledPluginsDir;
 }
 
 function createPackageSourcePluginFixture(params: {
@@ -187,6 +230,21 @@ afterEach(() => {
 });
 
 describe("plugin-sdk facade loader", () => {
+  it("resolves channel config facades lazily from generated plugin fixtures", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createBundledChannelConfigFixtures();
+    const { IMessageConfigSchema, TelegramConfigSchema } =
+      await import("./bundled-channel-config-schema.js");
+
+    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(TelegramConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    const extended = TelegramConfigSchema.safeExtend({ testOnly: z.literal(true) });
+    expect(extended.safeParse({ dmPolicy: "pairing", testOnly: true }).success).toBe(true);
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["telegram"]);
+
+    expect(IMessageConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["imessage", "telegram"]);
+  });
+
   it("honors trusted bundled plugin dir overrides under the package root", () => {
     const pluginId = nextTrustedPluginId("openclaw-facade-loader-override-");
     const overrideA = createBundledPluginFixture({
@@ -238,12 +296,57 @@ describe("plugin-sdk facade loader", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-    expect(() =>
+    const error = captureThrownError(() =>
       loadBundledPluginPublicSurfaceModuleSync({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
-    ).toThrow("Unable to resolve bundled plugin public surface browser/browser-maintenance.js");
+    );
+
+    expect(error).toBeInstanceOf(MissingPublicSurfaceError);
+    expect(error.message).toBe(
+      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    );
+  });
+
+  it("throws typed errors for async missing bundled facades", async () => {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+    let rejection: unknown;
+    try {
+      await loadBundledPluginPublicSurfaceModule({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(MissingPublicSurfaceError);
+    expect(rejection).toHaveProperty(
+      "message",
+      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    );
+  });
+
+  it("open failures are not classified as MissingPublicSurfaceError", () => {
+    const tempRoot = createTempDirSync("openclaw-facade-loader-boundary-fail-");
+    const boundaryRoot = path.join(tempRoot, "plugin");
+    const outsidePath = path.join(tempRoot, "outside.js");
+    fs.mkdirSync(boundaryRoot, { recursive: true });
+    fs.writeFileSync(outsidePath, 'export const marker = "outside";\n', "utf8");
+
+    const error = captureThrownError(() =>
+      loadFacadeModuleAtLocationSync({
+        location: { modulePath: outsidePath, boundaryRoot },
+        trackedPluginId: "boundary-failure",
+      }),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(MissingPublicSurfaceError);
+    expect(error.message).toBe(`Unable to open bundled plugin public surface ${outsidePath}`);
   });
 
   it("shares loaded facade ids with facade-runtime", () => {

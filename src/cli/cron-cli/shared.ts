@@ -174,8 +174,7 @@ function computeStatus(job: CronJob): string {
 }
 
 // Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
-// verbatim as the --json `status` field, so the failure count must stay out of it.
-// consecutiveErrors resets to 0 on the next successful run, so the count is live.
+// verbatim as the --json `status` field, so failure and disable detail stays out of it.
 function decorateStatusWithFailures(status: string, consecutiveErrors: number | undefined): string {
   const failures = consecutiveErrors ?? 0;
   if (status !== "error" || failures <= 1) {
@@ -188,6 +187,11 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 
 function formatCronStatusForDisplay(job: CronJob): string {
   const state = job.state ?? {};
+  if (computeStatus(job) === "disabled" && state.autoDisabled) {
+    return state.autoDisabled.reason === "schedule-errors"
+      ? "disabled (schedule)"
+      : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  }
   return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
 }
 
@@ -205,7 +209,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
       storage?: string;
       sqlitePath?: string;
     };
-    if (res?.enabled === true) {
+    if (res?.enabled !== false) {
       return;
     }
     const store =
@@ -216,7 +220,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
           : "";
     defaultRuntime.error(
       [
-        "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
+        "warning: the automations scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
         "Re-enable with `cron.enabled: true` (or remove `cron.enabled: false`) and restart the Gateway.",
         store ? `store: ${store}` : "",
       ]
@@ -323,7 +327,7 @@ const CRON_NAME_PAD = 24;
 const CRON_SCHEDULE_PAD = 32;
 const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 12;
+const CRON_STATUS_PAD = 19;
 const CRON_TARGET_PAD = 9;
 const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
@@ -363,18 +367,7 @@ const formatIsoMinute = (iso: string) => {
   return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
 };
 
-const formatSpan = (ms: number) => {
-  if (ms < 60_000) {
-    return "<1m";
-  }
-  if (ms < 3_600_000) {
-    return `${Math.round(ms / 60_000)}m`;
-  }
-  if (ms < 86_400_000) {
-    return `${Math.round(ms / 3_600_000)}h`;
-  }
-  return `${Math.round(ms / 86_400_000)}d`;
-};
+const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   if (!ms) {
@@ -442,7 +435,7 @@ export function printCronList(
   opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
 ) {
   if (jobs.length === 0) {
-    runtime.log("No cron jobs.");
+    runtime.log("No automations.");
     return;
   }
 

@@ -10,7 +10,7 @@ import {
   resolveNpmPackFilename,
   runPluginNpmCommand,
   usage,
-} from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+} from "../../scripts/verify-plugin-npm-published-runtime.mts";
 
 describe("plugin npm publish verifier args", () => {
   it("parses help and package specs before npm calls", () => {

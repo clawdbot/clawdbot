@@ -647,11 +647,12 @@ async function runSetupWizardOnce(
   if (opts.skipSearch) {
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));
   } else {
-    const { setupSearch } = await import("../commands/onboard-search.js");
-    nextConfig = await setupSearch(nextConfig, runtime, prompter, {
+    const { runSearchSetupFlow } = await import("../flows/search-setup.js");
+    const searchSetup = await runSearchSetupFlow(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
+    nextConfig = searchSetup.config;
   }
 
   if (opts.skipSkills) {

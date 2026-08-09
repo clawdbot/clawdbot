@@ -4,6 +4,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => {
+  // Bind provider discovery to this file's mocks in non-isolated plugin workers.
+  vi.resetModules();
   const loadSource = vi.fn();
   const loaderCache = { kind: "provider-discovery-loader-cache", clear: vi.fn() };
   return {
@@ -580,27 +582,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(params.onlyPluginIds).toEqual(["kilocode"]);
   });
 
-  it("enables bundled provider Vitest compat when falling back from discovery entries", () => {
-    const fullProviders = [createProvider({ id: "deepseek", mode: "catalog" })];
-    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([]);
-    mocks.resolvePluginProviders.mockReturnValue(fullProviders);
-
-    expect(
-      resolvePluginDiscoveryProvidersRuntime({
-        env: { VITEST: "true" } as NodeJS.ProcessEnv,
-        onlyPluginIds: ["deepseek"],
-      }),
-    ).toEqual(fullProviders);
-
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
-    expect(requireResolvePluginProvidersParams()).toEqual(
-      expect.objectContaining({
-        bundledProviderVitestCompat: true,
-        onlyPluginIds: ["deepseek"],
-      }),
-    );
-  });
-
   it("shares one metadata snapshot between provider id discovery and entry loading", () => {
     const registry = { plugins: [] };
     const manifestRegistry = {
@@ -664,6 +645,30 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(providers[0]?.id).toBe("deepseek");
     expect(providers[0]?.pluginId).toBe("deepseek");
     expect(providers[0]?.staticCatalog).toBe(staticProvider.staticCatalog);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("returns synthetic-auth discovery entries only when explicitly requested", () => {
+    const syntheticProvider: ProviderPlugin = {
+      id: "claude-cli",
+      label: "Claude CLI",
+      auth: [],
+      resolveSyntheticAuth: () => ({
+        apiKey: "synthetic-token",
+        source: "test",
+        mode: "oauth",
+      }),
+    };
+    mocks.loadSource.mockReturnValue(syntheticProvider);
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      includeSyntheticAuthProviders: true,
+    });
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({ id: "claude-cli", pluginId: "deepseek" });
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 

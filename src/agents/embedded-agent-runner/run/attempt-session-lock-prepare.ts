@@ -1,7 +1,11 @@
 /** Acquires and publishes the session-write ownership used by one attempt. */
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockTargetKey,
+} from "../../session-write-lock.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { resolveEmbeddedAttemptSessionWriteLockOptions } from "./attempt.run-decisions.js";
 import {
@@ -18,7 +22,16 @@ type OwnedTranscriptWriteContext = Parameters<typeof withOwnedSessionTranscriptW
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function prepareEmbeddedAttemptSessionLock(input: {
-  attempt: Pick<EmbeddedRunAttemptParams, "abortSignal" | "config" | "sessionFile" | "sessionKey">;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "abortSignal"
+    | "config"
+    | "runId"
+    | "sessionFile"
+    | "sessionId"
+    | "sessionKey"
+    | "sessionTarget"
+  >;
   externalAbortController: {
     arm: () => void;
     throwIfFiredAfterPrepCleanup: () => Promise<void>;
@@ -38,6 +51,15 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
     config: attempt.config,
     compactionTimeoutMs,
   });
+  const sessionTarget = await resolveAgentRunSessionTarget({
+    agentId: attempt.sessionTarget?.agentId,
+    config: attempt.config,
+    missingSessionKey: "resolve-existing",
+    sessionFile: attempt.sessionFile,
+    sessionId: attempt.sessionId,
+    sessionKey: attempt.sessionKey,
+    sessionTarget: attempt.sessionTarget,
+  });
 
   await externalAbortController.throwIfFiredAfterPrepCleanup();
   const sessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
@@ -49,26 +71,25 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   // controller setup or the post-arm abort fence fails.
   input.onSessionFileOwnerAcquired(sessionFileOwner);
 
-  const getSessionManager = (operation: "entry merge" | "file reload") => {
+  const getSessionManager = () => {
     const sessionManager = input.getSessionManager();
     if (!sessionManager) {
-      throw new Error(`session manager unavailable during prompt-released ${operation}`);
+      throw new Error("session manager unavailable during prompt-released file reload");
     }
     return sessionManager;
   };
   const sessionLockController = await createEmbeddedAttemptSessionLockController({
     acquireSessionWriteLock,
     initialAcquireSignal: attempt.abortSignal,
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
     lockOptions: {
-      sessionFile: attempt.sessionFile,
+      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
+      targetKind: "session-key",
       ...sessionWriteLockOptions,
     },
-    mergePromptReleasedSessionEntries: (entries) =>
-      getSessionManager("entry merge").mergePromptReleasedSessionEntries(entries, {
-        persistLeaf: true,
-      }),
     reloadPromptReleasedSessionFile: () => {
-      getSessionManager("file reload").setSessionFile(attempt.sessionFile);
+      getSessionManager().reloadPersistedTranscript();
     },
   });
   input.onSessionLockReleaseReady(() => sessionLockController.dispose());
@@ -76,6 +97,8 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   const ownedTranscriptWriteContext: OwnedTranscriptWriteContext = {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
+    sessionTarget: attempt.sessionTarget,
+    assertOwned: () => sessionLockController.assertOwned(),
     canAdvanceSessionEntryCache: (snapshot) =>
       sessionLockController.canAdvanceSessionEntryCache(snapshot),
     publishSessionFileSnapshot: (snapshot) =>

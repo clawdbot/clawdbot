@@ -103,7 +103,7 @@ type RuntimeVersionPreference = "env-first" | "runtime-first";
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(version);
   // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
-  // Prefer explicit service/package markers in that edge case.
+  // Prefer explicit runtime/package markers in that edge case.
   if (!trimmed || trimmed === "0.0.0") {
     return undefined;
   }
@@ -121,11 +121,7 @@ function resolveVersionFromRuntimeSources(params: {
       ? [params.env["OPENCLAW_VERSION"], params.runtimeVersion]
       : [params.runtimeVersion, params.env["OPENCLAW_VERSION"]];
   return (
-    firstNonEmpty(
-      ...preferredCandidates,
-      params.env["OPENCLAW_SERVICE_VERSION"],
-      params.env["npm_package_version"],
-    ) ?? params.fallback
+    firstNonEmpty(...preferredCandidates, params.env["npm_package_version"]) ?? params.fallback
   );
 }
 

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { withPathResolutionEnv } from "../../test-utils/env.js";
+import { withEnv, withPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
@@ -107,6 +107,47 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toBe("");
     expect(snapshot.skills).toStrictEqual([]);
+  });
+
+  it("keeps symlinked compatibility skills out of isolated session snapshots", async () => {
+    if (!tempHome) {
+      throw new Error("temporary home is unavailable");
+    }
+    const home = await fs.realpath(tempHome.home);
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const compatibilitySkillsDir = path.join(home, ".claude", "skills");
+    const personalSkillDir = path.join(compatibilitySkillsDir, "personal-compat");
+    await writeSkill({
+      dir: personalSkillDir,
+      name: "personal-compat",
+      description: "Personal compatibility skill",
+    });
+    await fs.mkdir(path.join(home, ".agents"), { recursive: true });
+    await fs.symlink(compatibilitySkillsDir, path.join(home, ".agents", "skills"), "dir");
+    const buildHomeSnapshot = () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+    try {
+      const defaultSnapshot = withEnv(
+        { HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") },
+        buildHomeSnapshot,
+      );
+      expectSnapshotNamesAndPrompt(defaultSnapshot, { contains: ["personal-compat"] });
+      expect(defaultSnapshot.resolvedSkills?.[0]?.filePath).toBe(
+        await fs.realpath(path.join(personalSkillDir, "SKILL.md")),
+      );
+
+      const isolatedSnapshot = withEnv(
+        { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "scratch-state") },
+        buildHomeSnapshot,
+      );
+      expectSnapshotNamesAndPrompt(isolatedSnapshot, { omits: ["personal-compat"] });
+    } finally {
+      await fs.rm(path.join(home, ".agents", "skills"), { force: true });
+      await fs.rm(path.join(home, ".claude"), { recursive: true, force: true });
+    }
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {

@@ -5,6 +5,8 @@ import OSLog
 
 extension Notification.Name {
     static let openclawNodeHostWorkerFailed = Notification.Name("openclaw.node-host-worker.failed")
+    static let openclawNodeHostWorkerRetryExhausted = Notification.Name(
+        "openclaw.node-host-worker.retry-exhausted")
 }
 
 struct MacNodeHostManifest: Equatable, Sendable {
@@ -14,8 +16,18 @@ struct MacNodeHostManifest: Equatable, Sendable {
     let pathEnv: String
 }
 
+struct MacNodeHostWorkerLaunch: Equatable, Sendable {
+    let command: [String]
+    let currentDirectoryURL: URL?
+
+    init(command: [String], currentDirectoryURL: URL? = nil) {
+        self.command = command
+        self.currentDirectoryURL = currentDirectoryURL
+    }
+}
+
 protocol MacNodeHostWorking: Sendable {
-    func start(command: [String]) async throws -> MacNodeHostManifest
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest
     func supports(_ command: String) async -> Bool
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse
     func handleInput(invokeId: String, seq: Int, payloadJSON: String) async
@@ -61,7 +73,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var stdoutSource: DispatchSourceRead?
     private var stderrSource: DispatchSourceRead?
     private var processGeneration: UUID?
-    private var launchedCommand: [String]?
+    private var launchedWorker: MacNodeHostWorkerLaunch?
     private var stdoutBuffer = Data()
     private var manifest: MacNodeHostManifest?
     private var inventoryData: Data?
@@ -87,12 +99,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.onUnexpectedExit = onUnexpectedExit
     }
 
-    func start(command: [String]) async throws -> MacNodeHostManifest {
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         try await withCheckedThrowingContinuation { continuation in
             self.queue.async {
                 if let manifest = self.manifest,
                    self.process?.isRunning == true,
-                   self.launchedCommand == command
+                   self.launchedWorker == launch
                 {
                     continuation.resume(returning: manifest)
                     return
@@ -102,7 +114,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     return
                 }
                 self.startContinuation = continuation
-                self.startLocked(command: command)
+                self.startLocked(launch: launch)
             }
         }
     }
@@ -283,7 +295,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         }
     }
 
-    private func startLocked(command: [String]) {
+    private func startLocked(launch: MacNodeHostWorkerLaunch) {
+        let command = launch.command
         guard let executable = command.first, !executable.isEmpty else {
             self.finishStartLocked(.failure(WorkerError.unavailable("node-host worker command missing")))
             return
@@ -295,8 +308,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
+            return
+        }
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = Array(command.dropFirst())
+        process.currentDirectoryURL = launch.currentDirectoryURL
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
@@ -306,7 +324,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         self.process = process
-        self.launchedCommand = command
+        self.launchedWorker = launch
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
@@ -387,14 +405,16 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     private func consumeStdoutLocked(_ data: Data) {
+        var searchStart = self.stdoutBuffer.count
         self.stdoutBuffer.append(data)
         guard self.stdoutBuffer.count <= 25 * 1024 * 1024 else {
             self.stopLocked(reason: "worker response exceeded limit", notifyUnexpectedExit: true)
             return
         }
-        while let newline = self.stdoutBuffer.firstIndex(of: 0x0A) {
+        while let newline = self.stdoutBuffer[searchStart...].firstIndex(of: 0x0A) {
             let line = self.stdoutBuffer.prefix(upTo: newline)
             self.stdoutBuffer.removeSubrange(...newline)
+            searchStart = 0
             guard !line.isEmpty,
                   let message = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
             else { continue }
@@ -638,7 +658,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.process?.terminate()
         }
         self.process = nil
-        self.launchedCommand = nil
+        self.launchedWorker = nil
         self.stdinPipe = nil
         self.stdoutPipe = nil
         self.stderrPipe = nil
