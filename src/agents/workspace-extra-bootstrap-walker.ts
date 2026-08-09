@@ -508,6 +508,41 @@ async function* walkWorkspaceFiles(
   }
 }
 
+// A globstar immediately followed by two or more consecutive `..` transitions
+// (`**/../../AGENTS.md`) is a degenerate fs.glob shape. Node's repeated-parent
+// semantics are depth/structure-dependent, so the recursive parent-traversal walk
+// returns a SUPERSET of fs.glob's contained set there — bootstrap files fs.glob
+// never matched. The walk rejects such an alternative instead of walking it, and
+// the loader surfaces a diagnostic. A single `..` after the globstar (`**/../X`)
+// is exact parity and is not flagged, so this only fires on the repeated shape.
+function isRepeatedGlobstarParentAlternative(parts: readonly string[]): boolean {
+  for (let index = 0; index < parts.length; index += 1) {
+    if (parts[index] !== "**") {
+      continue;
+    }
+    let consecutiveParentSteps = 0;
+    for (let next = index + 1; parts[next] === ".."; next += 1) {
+      consecutiveParentSteps += 1;
+    }
+    if (consecutiveParentSteps >= 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Loader-facing check mirroring the parent-traversal walk's alternative filter:
+// true when the pattern expands to any globstar-with-repeated-`..` alternative the
+// walker rejects (see isRepeatedGlobstarParentAlternative). The loader emits an
+// `unsupported-pattern` diagnostic from this while resolveExtraBootstrapPatternPaths
+// still resolves the pattern's other (valid) brace alternatives, so a mixed brace
+// pattern loses only the unsupported alternative — not every configured file.
+export function patternHasUnsupportedParentTraversal(pattern: string): boolean {
+  const normalized = normalizeWorkspacePatternPath(pattern);
+  const { globParts } = new Minimatch(normalized, extraBootstrapMatchOptions());
+  return globParts.some((parts) => isRepeatedGlobstarParentAlternative(parts));
+}
+
 // Resolve the contained `..` (parent) transitions Node fs.glob performs for a
 // globstar-parent pattern such as `**/../AGENTS.md`. optimizationLevel 2 reduces
 // the collapsible `..` shapes (`*/../`, `<literal>/../`, `a/**/../b`) into a
@@ -526,19 +561,22 @@ async function* walkWorkspaceFiles(
 // two walkers agree with each other and with fs.glob's followed-symlink rule.
 // Only alternatives that still carry a `..` are walked here; every `..`-free
 // alternative is already covered by the downward matcher in walkWorkspaceFiles.
-//
-// Accepted deviation: for the pathological, never-configured shape of two or more
-// consecutive `..` after a globstar (`**/../../AGENTS.md`), Node's internal
-// fs.glob prunes a few additional contained matches this recursive rule keeps, so
-// the walker may return a superset of the contained set there. It never escapes
-// the workspace and never affects single-`..` globstar parents like the case
-// above.
+// A globstar followed by two or more consecutive `..` (`**/../../AGENTS.md`) is
+// rejected rather than walked: Node's repeated-parent semantics are
+// depth-dependent, so this recursive rule would return a superset of fs.glob's
+// contained set — bootstrap files fs.glob never matched. Such an alternative is
+// filtered out below (per brace alternative), and the loader surfaces an
+// `unsupported-pattern` diagnostic via patternHasUnsupportedParentTraversal so the
+// operator sees why the pattern produced fewer files. A single `..` after the
+// globstar (`**/../X`) stays exact parity and is unaffected.
 async function* walkExtraBootstrapParentTraversalMatches(
   workspaceDir: string,
   strictRead: boolean,
   globParts: string[][],
 ): AsyncGenerator<string> {
-  const parentAlternatives = globParts.filter((parts) => parts.includes(".."));
+  const parentAlternatives = globParts.filter(
+    (parts) => parts.includes("..") && !isRepeatedGlobstarParentAlternative(parts),
+  );
   if (parentAlternatives.length === 0) {
     return;
   }

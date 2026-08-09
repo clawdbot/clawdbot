@@ -211,6 +211,54 @@ describe("resolveExtraBootstrapPatternPaths parent-traversal parity", () => {
     }
   });
 
+  it("matches Node fs.glob for globstar-parent leaf directories (parity lock)", async () => {
+    // Parity lock for the globstar-parent leaf case. Node fs.glob only reaches a
+    // parent-directory AGENTS.md by descending into a CHILD of that directory and
+    // popping back up, so a leaf directory with no child dir is NOT the source of a
+    // match: the globstar has nothing to descend, `**/..` never lands on the leaf,
+    // and the leaf's own AGENTS.md is omitted. These guard against a future
+    // "current-directory continuation" that would add the wrong superset
+    // (`leaf/AGENTS.md`) and diverge from fs.glob.
+
+    // Tree A: root AGENTS.md + a childless leaf dir. fs.glob yields only the root
+    // file; the leaf's own AGENTS.md is omitted.
+    const treeA = await createWorkspaceDir("f1-leaf-with-root");
+    await fs.mkdir(path.join(treeA, "leaf"), { recursive: true });
+    await fs.writeFile(path.join(treeA, "AGENTS.md"), "root", "utf-8");
+    await fs.writeFile(path.join(treeA, "leaf", "AGENTS.md"), "leaf", "utf-8");
+    const walkerA = (
+      await resolveExtraBootstrapPatternPaths(treeA, "**/../AGENTS.md", false)
+    ).toSorted();
+    expect(walkerA).toStrictEqual(["AGENTS.md"]);
+    expect(walkerA).toStrictEqual(await nodeGlobContained(treeA, "**/../AGENTS.md"));
+
+    // Tree B: only a childless leaf dir, no root file. Nothing to pop up to, so the
+    // in-root match set is empty.
+    const treeB = await createWorkspaceDir("f1-leaf-no-root");
+    await fs.mkdir(path.join(treeB, "leaf"), { recursive: true });
+    await fs.writeFile(path.join(treeB, "leaf", "AGENTS.md"), "leaf", "utf-8");
+    const walkerB = (
+      await resolveExtraBootstrapPatternPaths(treeB, "**/../AGENTS.md", false)
+    ).toSorted();
+    expect(walkerB).toStrictEqual([]);
+    expect(walkerB).toStrictEqual(await nodeGlobContained(treeB, "**/../AGENTS.md"));
+
+    // Tree C: root + `sub` with its own child dir. `sub` is a reachable parent (via
+    // `sub/child` popping) and root is reached via `sub` popping, so both AGENTS.md
+    // files match; `sub/child/AGENTS.md` stays omitted because `child` is itself a
+    // childless leaf.
+    const treeC = await createWorkspaceDir("f1-child-bearing");
+    await fs.mkdir(path.join(treeC, "sub", "child"), { recursive: true });
+    await fs.writeFile(path.join(treeC, "AGENTS.md"), "root", "utf-8");
+    await fs.writeFile(path.join(treeC, "sub", "AGENTS.md"), "sub", "utf-8");
+    await fs.writeFile(path.join(treeC, "sub", "child", "AGENTS.md"), "child", "utf-8");
+    const walkerC = (
+      await resolveExtraBootstrapPatternPaths(treeC, "**/../AGENTS.md", false)
+    ).toSorted();
+    expect(walkerC).toStrictEqual(["AGENTS.md", "sub/AGENTS.md"]);
+    expect(walkerC).toStrictEqual(await nodeGlobContained(treeC, "**/../AGENTS.md"));
+  });
+
   it("prunes a globstar parent traversal that only escapes the workspace", async () => {
     // The contained-parent walk still enforces the workspace boundary: a globstar
     // parent whose only fs.glob matches sit above the root (via the zero-globstar
