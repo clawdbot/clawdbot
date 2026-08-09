@@ -2,6 +2,7 @@
 import { cancel, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import {
@@ -41,7 +42,7 @@ async function fetchResumeSessions(opts: ResumeCliOptions) {
         finish(() => reject(new Error(reason || "Gateway connection closed")));
       client.start();
     });
-    return await loadRecentSessions(client, { includeGlobal: true });
+    return await loadRecentSessions(client);
   } catch (error) {
     const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
       import("../tui/tui-formatters.js"),
@@ -114,13 +115,21 @@ function formatResumeCandidate(candidate: SessionPickerChoice): string {
   return label === key ? key : `${label} [${key}]`;
 }
 
+function resolveExplicitGlobalSessionKey(query: string | undefined): string | undefined {
+  const parsed = parseAgentSessionKey(query);
+  return parsed?.rest === "global" ? `agent:${parsed.agentId}:global` : undefined;
+}
+
 /** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
   requireInteractiveResumeTerminal();
   const trimmedQuery = query?.trim();
-  const sessions = await fetchResumeSessions(opts);
+  const explicitGlobalSessionKey = resolveExplicitGlobalSessionKey(trimmedQuery);
+  const sessions = explicitGlobalSessionKey ? [] : await fetchResumeSessions(opts);
   let sessionKey: string | null;
-  if (trimmedQuery) {
+  if (explicitGlobalSessionKey) {
+    sessionKey = explicitGlobalSessionKey;
+  } else if (trimmedQuery) {
     const resolution = resolveResumeSession(sessions, trimmedQuery);
     if (resolution.kind !== "match") {
       reportResumeFailure(trimmedQuery, resolution);

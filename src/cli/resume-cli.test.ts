@@ -9,6 +9,11 @@ const gatewayMocks = vi.hoisted(() => ({
   selectStyled: vi.fn(),
 }));
 
+const runtimeMocks = vi.hoisted(() => ({
+  error: vi.fn(),
+  exit: vi.fn(),
+}));
+
 vi.mock("../../packages/terminal-core/src/prompt-select-styled.js", () => ({
   selectStyled: gatewayMocks.selectStyled,
 }));
@@ -20,6 +25,10 @@ vi.mock("../tui/gateway-chat.js", () => ({
 vi.mock("../tui/tui.js", () => ({
   resolveGatewayDisconnectState: vi.fn(),
   runTui: gatewayMocks.runTui,
+}));
+
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtimeMocks,
 }));
 
 type SessionRow = TuiSessionList["sessions"][number];
@@ -61,6 +70,8 @@ beforeEach(() => {
   gatewayMocks.connect.mockReset();
   gatewayMocks.runTui.mockReset().mockResolvedValue(undefined);
   gatewayMocks.selectStyled.mockReset();
+  runtimeMocks.error.mockReset();
+  runtimeMocks.exit.mockReset();
 });
 
 afterEach(() => {
@@ -127,39 +138,58 @@ describe("resolveResumeSession", () => {
 });
 
 describe("runResumeCommand", () => {
-  it("resolves the global session row", async () => {
+  it("excludes the bare global session from query resolution", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-    const client = createGatewayClient([{ key: "global", displayName: "global" }]);
+    const client = createGatewayClient([]);
 
     await runResumeCommand("global", {});
 
     expect(client.listSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ includeGlobal: true }),
+      expect.objectContaining({ includeGlobal: false }),
     );
-    expect(gatewayMocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({ session: "global", forceProcessExitOnReturn: true }),
-    );
+    expect(runtimeMocks.exit).toHaveBeenCalledWith(1);
+    expect(gatewayMocks.runTui).not.toHaveBeenCalled();
   });
 
-  it("offers the global session in the interactive picker", async () => {
+  it("omits the bare global session from the interactive picker", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-    const client = createGatewayClient([{ key: "global", displayName: "global" }]);
-    gatewayMocks.selectStyled.mockResolvedValue("global");
+    const client = createGatewayClient([
+      { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
+    ]);
+    gatewayMocks.selectStyled.mockResolvedValue("agent:main:alpha");
 
     await runResumeCommand(undefined, {});
 
     expect(client.listSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ includeGlobal: true }),
+      expect.objectContaining({ includeGlobal: false }),
     );
     expect(gatewayMocks.selectStyled).toHaveBeenCalledWith(
       expect.objectContaining({
-        options: [expect.objectContaining({ value: "global" })],
+        options: [expect.objectContaining({ value: "agent:main:alpha" })],
       }),
     );
     expect(gatewayMocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({ session: "global", forceProcessExitOnReturn: true }),
+      expect.objectContaining({
+        session: "agent:main:alpha",
+        forceProcessExitOnReturn: true,
+      }),
+    );
+  });
+
+  it("preserves an explicitly agent-qualified global session", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+
+    await runResumeCommand("AGENT:Work:GLOBAL", {});
+
+    expect(gatewayMocks.connect).not.toHaveBeenCalled();
+    expect(gatewayMocks.runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: "agent:work:global",
+        forceProcessExitOnReturn: true,
+      }),
     );
   });
 

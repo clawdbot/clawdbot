@@ -21,6 +21,10 @@ With no query, OpenClaw displays up to 50 sessions active in the last seven
 days. With a query, an exact session key wins; otherwise OpenClaw requires a
 unique substring or fuzzy match across session keys, display names, and labels.
 
+The picker omits bare `global` rows because they do not identify an owning
+agent. To attach one, pass a fully qualified key such as
+`openclaw resume agent:main:global`.
+
 If a query is ambiguous, OpenClaw prints the matching candidates and exits with
 status 1. If no recent session matches, it suggests the picker and
 [`openclaw sessions`](/cli/sessions), then exits with status 1.
@@ -38,9 +42,12 @@ status 1. If no recent session matches, it suggests the picker and
 [`openclaw tui`](/cli/tui). It never starts a Gateway automatically. If the
 configured Gateway is unavailable, start or repair it and rerun the command.
 
-With no explicit `--url`, `resume` follows the active local Gateway recorded by
-the running process. With `--url`, pass `--token` or `--password` explicitly
-unless a device credential is already stored for that exact Gateway origin.
+`resume` resolves configured Gateway auth SecretRefs for token/password auth
+when possible (`env`/`file`/`exec` providers).
+
+With no explicit URL or port, `resume` follows the active local Gateway port
+recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
+`OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.
 
 ## Examples
 
