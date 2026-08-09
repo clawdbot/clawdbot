@@ -4,7 +4,7 @@ title: "Memory configuration reference"
 sidebarTitle: "Memory config"
 read_when:
   - You want to configure memory search providers or embedding models
-  - You want to enable hybrid search, MMR, or temporal decay
+  - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
 ---
 
@@ -356,9 +356,10 @@ All under `memory.search.query`:
 
 Hybrid retrieval remains enabled. The builtin engine always applies a fixed
 30-day recency half-life to dated daily notes and a fixed importance
-multiplier after hybrid relevance. `MEMORY.md`, `USER.md`, and other evergreen
-memory files do not decay. Nullable importance is neutral, so no migration or
-new tuning key is required for existing indexes.
+multiplier after hybrid relevance, then applies MMR diversity ordering with a
+fixed lambda of `0.7`. `MEMORY.md`, `USER.md`, and other evergreen memory files
+do not decay. Nullable importance is neutral, so no migration or new tuning
+key is required for existing indexes.
 
 Strong trigger matches on promoted, trusted entries can inject up to three
 compact memories on eligible interactive turns. Today, root `MEMORY.md` and
