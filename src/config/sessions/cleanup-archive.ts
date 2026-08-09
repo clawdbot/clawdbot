@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db-registry.js";
 import { resolveSessionArtifactCanonicalPathsForEntry } from "./disk-budget.js";
-import { cleanupSessionArchivedTranscriptFiles } from "./session-archive-accessor.js";
+import { cleanupSessionArchivedTranscriptFiles } from "./session-archive-retention.js";
 import { resolveSessionTranscriptArchiveDirectoryFromStorePath } from "./session-sqlite-target.js";
 import {
   EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,

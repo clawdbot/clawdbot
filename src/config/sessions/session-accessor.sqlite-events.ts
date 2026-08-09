@@ -8,12 +8,16 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 
 // Outward notifications happen only after the owning SQLite mutation commits.
 
+export function emitSessionTranscriptPathUpdates(sessionFiles: readonly string[]): void {
+  for (const sessionFile of sessionFiles) {
+    emitSessionTranscriptUpdate({ sessionFile });
+  }
+}
+
 export function emitArchivedTranscriptUpdates(
   archivedTranscripts: readonly SessionLifecycleArchivedTranscript[],
 ): void {
-  for (const archived of archivedTranscripts) {
-    emitSessionTranscriptUpdate({ sessionFile: archived.archivedPath });
-  }
+  emitSessionTranscriptPathUpdates(archivedTranscripts.map((archived) => archived.archivedPath));
 }
 
 export async function publishTranscriptUpdate(

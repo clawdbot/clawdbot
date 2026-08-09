@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { cleanupArchivedSessionTranscripts } from "./session-transcript-files.fs.js";
+import {
+  cleanupArchivedSessionTranscripts,
+  resolveSessionTranscriptResetArchiveCandidatesAsync,
+} from "./session-transcript-files.fs.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = Date.parse("2026-06-02T00:00:00.000Z");
@@ -112,6 +115,46 @@ describe("cleanupArchivedSessionTranscripts", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  it("invalidates reset archive discovery after retention deletion", async () => {
+    const sessionId = "cache-session";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    const archivePath = `${transcriptPath}.reset.${OLD_STAMP}`;
+    await fsPromises.writeFile(
+      archivePath,
+      `${JSON.stringify({ type: "session", id: sessionId })}\n`,
+    );
+    const canonicalArchivePath = await fsPromises.realpath(archivePath);
+    const realStat = fsPromises.stat.bind(fsPromises);
+    const stableDirectoryStat = await realStat(dir);
+    vi.spyOn(fsPromises, "stat").mockImplementation(async (target) => {
+      return path.resolve(String(target)) === path.resolve(dir)
+        ? stableDirectoryStat
+        : await realStat(target);
+    });
+
+    await expect(
+      resolveSessionTranscriptResetArchiveCandidatesAsync(
+        sessionId,
+        path.join(dir, "sessions.json"),
+        transcriptPath,
+      ),
+    ).resolves.toContain(canonicalArchivePath);
+
+    await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+      nowMs: NOW_MS,
+    });
+
+    await expect(
+      resolveSessionTranscriptResetArchiveCandidatesAsync(
+        sessionId,
+        path.join(dir, "sessions.json"),
+        transcriptPath,
+      ),
+    ).resolves.not.toContain(canonicalArchivePath);
   });
 
   it("reports only archives deleted successfully when one disappears during cleanup", async () => {

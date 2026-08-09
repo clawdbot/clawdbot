@@ -90,14 +90,14 @@ import {
 } from "./transcript-write-context.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
-const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
+const cleanupSessionArchivedTranscriptFilesMock = vi.hoisted(() => vi.fn(async () => {}));
 const tempDirs: string[] = [];
 
-vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
+vi.mock("./session-archive-retention.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-archive-retention.js")>();
   return {
     ...actual,
-    cleanupArchivedSessionTranscripts: cleanupArchivedSessionTranscriptsMock,
+    cleanupSessionArchivedTranscriptFiles: cleanupSessionArchivedTranscriptFilesMock,
   };
 });
 
@@ -139,7 +139,7 @@ describe("session accessor seam", () => {
   }
 
   beforeEach(() => {
-    cleanupArchivedSessionTranscriptsMock.mockReset();
+    cleanupSessionArchivedTranscriptFilesMock.mockReset();
     tempDir = makeTempDir(tempDirs, "openclaw-session-accessor-");
     storePath = path.join(tempDir, "sessions.json");
     transcriptPath = path.join(tempDir, "session.jsonl");
@@ -2607,7 +2607,7 @@ describe("session accessor seam", () => {
 
   it("captures SQLite archived transcript cleanup failures when requested", async () => {
     const cleanupError = new Error("cleanup failed");
-    cleanupArchivedSessionTranscriptsMock.mockRejectedValueOnce(cleanupError);
+    cleanupSessionArchivedTranscriptFilesMock.mockRejectedValueOnce(cleanupError);
     const scope = {
       sessionId: "session-1",
       sessionKey: "agent:main:cleanup",
@@ -2642,7 +2642,7 @@ describe("session accessor seam", () => {
     expect(result.removedEntries).toBe(1);
     expect(result.archivedTranscriptDirectories).toHaveLength(1);
     expect(result.artifactCleanupError).toBe(cleanupError);
-    expect(cleanupArchivedSessionTranscriptsMock).toHaveBeenCalledWith(
+    expect(cleanupSessionArchivedTranscriptFilesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         directories: result.archivedTranscriptDirectories,
       }),

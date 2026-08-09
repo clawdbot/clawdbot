@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   cleanupSessionArchivedTranscriptFiles: vi.fn(),
 }));
 
-vi.mock("./session-archive-accessor.js", () => ({
+vi.mock("./session-archive-retention.js", () => ({
   cleanupSessionArchivedTranscriptFiles: mocks.cleanupSessionArchivedTranscriptFiles,
 }));
 
