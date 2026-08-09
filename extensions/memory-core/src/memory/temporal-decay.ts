@@ -13,7 +13,11 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+// Dated daily notes also live in subdirectories (e.g. dreaming phase reports at
+// memory/dreaming/light/2026-05-14.md); a date-only basename anywhere below
+// memory/ must decay, otherwise nested reports stay evergreen forever (#121046).
+// Matches the nested-path shape short-term promotion already recognizes.
+const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 
 function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
