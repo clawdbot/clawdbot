@@ -36,6 +36,7 @@ import {
 } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -102,7 +103,11 @@ import {
   runQaSuite,
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
-import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
+import {
+  resolveQaSuiteOutputDir,
+  resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
+} from "./suite-planning.js";
 import {
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
   resolveQaReportOnlyOptionalScenarioNames as resolveQaReportOnlyOptionalScenarioNamesFromCatalog,
@@ -627,6 +632,9 @@ export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOption
 
 export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const outputDir = await resolveQaSuiteOutputDir(repoRoot, opts.outputDir);
+  const canonicalEvidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
+  await fs.rm(canonicalEvidencePath, { force: true });
   const scenarioPack = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
   const profile = normalizeQaRunProfile(
@@ -714,58 +722,67 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     );
   }
 
-  process.stdout.write(
-    `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
-  );
-  let evidencePath: string | undefined;
-  let expectedCells: QaProfileEvidencePlan["expectedCells"] = [];
-  let observedCells: QaProfileEvidencePlan["observedCells"] = [];
-  await withTemporaryQaProfileEnv(profile, async () => {
-    const suiteResult = await runQaSuiteCommand({
-      repoRoot,
-      outputDir: opts.outputDir,
-      evidenceMode: opts.evidenceMode,
-      transportId: opts.transportId,
-      providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
-      fastMode: opts.fastMode,
-      failFast: opts.failFast,
-      scenarioIds: scenarios.map((scenario) => scenario.id),
-      explicitScenarioSelection: requestedScenarioIds.length > 0,
-      concurrency: opts.concurrency,
-      allowFailures: opts.allowFailures,
-      channelDriver: profileReport.channelDriver,
-      expandScenarioChannels: true,
+  try {
+    process.stdout.write(
+      `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
+    );
+    let evidencePath: string | undefined;
+    let expectedCells: QaProfileEvidencePlan["expectedCells"] = [];
+    let observedCells: QaProfileEvidencePlan["observedCells"] = [];
+    await withTemporaryQaProfileEnv(profile, async () => {
+      const suiteResult = await runQaSuiteCommandWithOutputDir(
+        {
+          repoRoot,
+          evidenceMode: opts.evidenceMode,
+          transportId: opts.transportId,
+          providerMode,
+          primaryModel: opts.primaryModel,
+          alternateModel: opts.alternateModel,
+          fastMode: opts.fastMode,
+          failFast: opts.failFast,
+          scenarioIds: scenarios.map((scenario) => scenario.id),
+          explicitScenarioSelection: requestedScenarioIds.length > 0,
+          concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
+          channelDriver: profileReport.channelDriver,
+          expandScenarioChannels: true,
+        },
+        outputDir,
+      );
+      evidencePath =
+        suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
+      expectedCells =
+        suiteResult && "expectedCells" in suiteResult ? suiteResult.expectedCells : [];
+      observedCells =
+        suiteResult && "observedCells" in suiteResult ? suiteResult.observedCells : [];
     });
-    evidencePath =
-      suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
-    expectedCells = suiteResult && "expectedCells" in suiteResult ? suiteResult.expectedCells : [];
-    observedCells = suiteResult && "observedCells" in suiteResult ? suiteResult.observedCells : [];
-  });
-  if (!evidencePath) {
-    throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
+    if (!evidencePath) {
+      throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
+    }
+    const profilePlan = qaProfileEvidencePlan.build({
+      profile,
+      membershipScenarios: taxonomyScenarios,
+      selectedScenarios: scenarios,
+      excludedScenarios: executionSelection.excludedScenarios,
+      expectedCells,
+      observedCells,
+    });
+    await attachQaProfileScorecardEvidenceToFile({
+      evidencePath,
+      evidenceMode: opts.evidenceMode,
+      profile,
+      profilePlan,
+      filters: {
+        surface: opts.surface,
+        category: opts.category,
+      },
+      categories,
+    });
+    process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
+  } catch (error) {
+    await fs.rm(canonicalEvidencePath, { force: true });
+    throw error;
   }
-  const profilePlan = qaProfileEvidencePlan.build({
-    profile,
-    membershipScenarios: taxonomyScenarios,
-    selectedScenarios: scenarios,
-    excludedScenarios: executionSelection.excludedScenarios,
-    expectedCells,
-    observedCells,
-  });
-  await attachQaProfileScorecardEvidenceToFile({
-    evidencePath,
-    evidenceMode: opts.evidenceMode,
-    profile,
-    profilePlan,
-    filters: {
-      surface: opts.surface,
-      category: opts.category,
-    },
-    categories,
-  });
-  process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
 }
 
 function selectQaScenarioDefinitionsForChannelResolution(params: {
@@ -854,8 +871,12 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);
 }
 
-export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
+async function runQaSuiteCommandWithOutputDir(
+  opts: QaSuiteCommandOptions,
+  resolvedOutputDir?: string,
+) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const outputDir = resolvedOutputDir ?? resolveRepoRelativeOutputDir(repoRoot, opts.outputDir);
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
   const runtimePair = parseQaRuntimePair(opts.runtimePair);
@@ -985,7 +1006,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
       repoRoot,
-      outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+      outputDir,
       transportId,
       ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
@@ -1040,7 +1061,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
   const runtimeResult = await runQaSuite({
     repoRoot,
-    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+    outputDir,
     evidenceMode: opts.evidenceMode,
     transportId,
     channelDriver,
@@ -1129,6 +1150,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     }
   }
   return undefined;
+}
+
+export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
+  return await runQaSuiteCommandWithOutputDir(opts);
 }
 
 export async function runQaParityReportCommand(opts: {
