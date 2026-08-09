@@ -307,12 +307,15 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
-  it("uses rollback journaling for databases on Linux virtiofs volumes", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-"));
+  it("uses rollback journaling for virtiofs mountinfo entries", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-mountinfo-"));
     try {
       const db = createMockDb();
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x10002000)); // VIRTIOFS_MAGIC
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - virtiofs /dev/vda rw\n`,
+      );
 
       configureSqliteWalMaintenance(db, {
         checkpointIntervalMs: 0,
@@ -325,14 +328,17 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
-  it("uses rollback journaling for virtiofs mountinfo entries", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-mountinfo-"));
+  it("uses rollback journaling for virtiofs mount command entries", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-mount-"));
     try {
       const db = createMockDb();
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
-      vi.spyOn(fs, "readFileSync").mockReturnValue(
-        `42 12 0:41 / ${tempDir} rw,relatime - virtiofs /dev/vda rw\n`,
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(
+        Buffer.from(`virtiofs on ${tempDir} type virtiofs (rw,relatime)\n`),
       );
 
       configureSqliteWalMaintenance(db, {
