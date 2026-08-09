@@ -390,7 +390,11 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false, allowArchivedAt: false },
+      {
+        allowDependencyLinks: false,
+        allowDependencyOverride: false,
+        allowArchivedAt: false,
+      },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -455,6 +459,7 @@ export class WorkboardCoreStore {
       async () =>
         await this.updateCard(id, patch, {
           allowMetadataDependencyLinks: false,
+          allowMetadataDependencyOverride: false,
           enforceStatusHolds: true,
         }),
     );
@@ -465,6 +470,7 @@ export class WorkboardCoreStore {
     patch: WorkboardCardPatch,
     options: {
       allowMetadataDependencyLinks?: boolean;
+      allowMetadataDependencyOverride?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
     } = {},
@@ -525,6 +531,7 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      allowDependencyOverride: options.allowMetadataDependencyOverride === true,
       preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
@@ -936,9 +943,13 @@ export class WorkboardCoreStore {
       return card;
     }
     if (card.metadata?.dependencyOverride && !dependencyOverrideMatchesCard(card)) {
-      card = await this.updateCard(card.id, {
-        metadata: { ...card.metadata, dependencyOverride: undefined },
-      });
+      card = await this.updateCard(
+        card.id,
+        {
+          metadata: { ...card.metadata, dependencyOverride: undefined },
+        },
+        { allowMetadataDependencyOverride: true },
+      );
     }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {
@@ -952,9 +963,13 @@ export class WorkboardCoreStore {
           !card.metadata.dependencyOverride.scheduledWithoutDate &&
           !(scheduledAt && scheduledAt > now)
         ) {
-          return await this.updateCard(card.id, {
-            metadata: { ...card.metadata, dependencyOverride: undefined },
-          });
+          return await this.updateCard(
+            card.id,
+            {
+              metadata: { ...card.metadata, dependencyOverride: undefined },
+            },
+            { allowMetadataDependencyOverride: true },
+          );
         }
       }
       return card;

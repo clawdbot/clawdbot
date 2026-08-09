@@ -81,7 +81,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         return await this.updateCard(
           id,
           { status, metadata: clearedMetadata },
-          { enforceStatusHolds: false },
+          { enforceStatusHolds: false, allowMetadataDependencyOverride: true },
         );
       }
       const parentIds = cardParentIds(existing).toSorted();
@@ -107,7 +107,10 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
             dependencyOverride,
           },
         },
-        { enforceStatusHolds: input.force !== true },
+        {
+          enforceStatusHolds: input.force !== true,
+          allowMetadataDependencyOverride: true,
+        },
       );
     });
   }

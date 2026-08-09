@@ -1732,6 +1732,48 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("keeps dependency recovery authorization private to force promotion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Initially complete parent", status: "done" });
+    const updateChild = await store.create({
+      title: "Generic update target",
+      status: "ready",
+      parents: [parent.id],
+      metadata: {
+        dependencyOverride: { grantedAt: 1, parentIds: [parent.id], reason: "Forged create" },
+      },
+    });
+    const bulkChild = await store.create({
+      title: "Generic bulk target",
+      status: "ready",
+      parents: [parent.id],
+    });
+    expect(updateChild.metadata).not.toHaveProperty("dependencyOverride");
+    await store.update(parent.id, { status: "blocked" });
+
+    const forged = {
+      grantedAt: Date.now(),
+      parentIds: [parent.id],
+      reason: "Forged generic update",
+    };
+    const updated = await store.update(updateChild.id, {
+      metadata: { dependencyOverride: forged },
+    });
+    const bulk = await store.bulkUpdate({
+      ids: [bulkChild.id],
+      patch: { metadata: { dependencyOverride: forged } },
+    });
+
+    expect(updated.metadata).not.toHaveProperty("dependencyOverride");
+    expect(bulk.cards[0]?.metadata).not.toHaveProperty("dependencyOverride");
+    await expect(store.claim(updateChild.id, { ownerId: "worker" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+    await expect(store.claim(bulkChild.id, { ownerId: "worker" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+  });
+
   it("invalidates a force promotion when the parent snapshot changes", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const originalParent = await store.create({ title: "Original parent", status: "blocked" });

@@ -264,6 +264,75 @@ describe("workboard gateway methods", () => {
     ).toBeUndefined();
   });
 
+  it("does not let generic update routes forge dependency recovery authorization", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const store = new WorkboardStore(createMemoryStore());
+    const api = {
+      runtime: {
+        agent: {
+          listAgentIds: vi.fn(() => ["main"]),
+          resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    registerWorkboardGatewayMethods({ api, store });
+    const context = {
+      getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+    };
+    const parent = await store.create({ title: "Initially complete parent", status: "done" });
+    const updateChild = await store.create({
+      title: "Gateway update target",
+      status: "ready",
+      parents: [parent.id],
+    });
+    const bulkChild = await store.create({
+      title: "Gateway bulk target",
+      status: "ready",
+      parents: [parent.id],
+    });
+    await store.update(parent.id, { status: "blocked" });
+    const forged = { grantedAt: Date.now(), parentIds: [parent.id], reason: "Forged gateway" };
+
+    const updateRespond = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: { id: updateChild.id, patch: { metadata: { dependencyOverride: forged } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: updateRespond,
+    } as never);
+    const bulkRespond = vi.fn();
+    await methods.get("workboard.cards.bulk")?.handler({
+      params: { ids: [bulkChild.id], patch: { metadata: { dependencyOverride: forged } } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: bulkRespond,
+    } as never);
+
+    expect(updateRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(updateRespond.mock.calls[0]?.[1]?.card.metadata).not.toHaveProperty(
+      "dependencyOverride",
+    );
+    expect(bulkRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(bulkRespond.mock.calls[0]?.[1]?.cards[0]?.metadata).not.toHaveProperty(
+      "dependencyOverride",
+    );
+    await expect(store.claim(updateChild.id, { ownerId: "worker" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+    await expect(store.claim(bulkChild.id, { ownerId: "worker" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+  });
+
   it("stores metadata updates through dedicated card methods", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];

@@ -1074,6 +1074,7 @@ export function normalizeMetadata(
   fallback: WorkboardMetadata = {},
   options: {
     allowDependencyLinks?: boolean;
+    allowDependencyOverride?: boolean;
     allowArchivedAt?: boolean;
     preserveProofId?: string;
   } = {},
@@ -1196,11 +1197,12 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
-    dependencyOverride: Object.hasOwn(record, "dependencyOverride")
-      ? record.dependencyOverride
-        ? normalizeDependencyOverride(record.dependencyOverride)
-        : undefined
-      : fallback.dependencyOverride,
+    dependencyOverride:
+      options.allowDependencyOverride === true && Object.hasOwn(record, "dependencyOverride")
+        ? record.dependencyOverride
+          ? normalizeDependencyOverride(record.dependencyOverride)
+          : undefined
+        : fallback.dependencyOverride,
   };
   return trimMetadataToBudget(normalized, options);
 }
