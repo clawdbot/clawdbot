@@ -109,8 +109,8 @@ function createInput(options?: {
     setActiveToolsByName,
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
-  const sessionLockController = {
-    withSessionWriteLock: vi.fn(async (operation: () => unknown) => await operation()),
+  const transcriptLifecycle = {
+    withTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
   };
   const hookRunner = { id: "hooks" };
   const sessionToolAllowlist = [{ name: "read" }];
@@ -181,7 +181,7 @@ function createInput(options?: {
       },
       runAbortSignal: new AbortController().signal,
       sessionAgentId: "agent-1",
-      sessionLockController: sessionLockController as never,
+      transcriptLifecycle: transcriptLifecycle as never,
       sessionManager: sessionManager as never,
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),

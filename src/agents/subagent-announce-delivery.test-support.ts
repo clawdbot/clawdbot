@@ -26,8 +26,8 @@ type DeliveryDeps = {
 type Testing = {
   setDepsForTest(overrides?: Partial<DeliveryDeps>): void;
   hasAnnounceSendEvidence(error: unknown): boolean;
-  hasSessionFileChangedAnnounceError(error: unknown): boolean;
-  isSessionFileChangedAnnounceError(message: string): boolean;
+  hasWriterClaimReboundAnnounceError(error: unknown): boolean;
+  isWriterClaimReboundAnnounceError(error: unknown): boolean;
 };
 
 function getTesting(): Testing {
@@ -39,8 +39,8 @@ function getTesting(): Testing {
 export const testing: Testing = {
   setDepsForTest: (overrides) => getTesting().setDepsForTest(overrides),
   hasAnnounceSendEvidence: (error) => getTesting().hasAnnounceSendEvidence(error),
-  hasSessionFileChangedAnnounceError: (error) =>
-    getTesting().hasSessionFileChangedAnnounceError(error),
-  isSessionFileChangedAnnounceError: (message) =>
-    getTesting().isSessionFileChangedAnnounceError(message),
+  hasWriterClaimReboundAnnounceError: (error) =>
+    getTesting().hasWriterClaimReboundAnnounceError(error),
+  isWriterClaimReboundAnnounceError: (error) =>
+    getTesting().isWriterClaimReboundAnnounceError(error),
 };

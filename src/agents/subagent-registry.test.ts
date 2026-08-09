@@ -12,7 +12,7 @@ import type {
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
 import {
-  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1992,9 +1992,9 @@ describe("subagent registry seam flow", () => {
     const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
       resolveWait = resolve;
     });
-    const staleWriteLock = vi.fn();
-    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      staleWriteLock();
+    const requesterTranscriptWrite = vi.fn();
+    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      requesterTranscriptWrite();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
@@ -2008,16 +2008,16 @@ describe("subagent registry seam flow", () => {
         return {};
       }
       const result = await pendingWait;
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshCompletionWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshCompletionWrite);
       return result;
     });
     mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return true;
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, assertOwned: () => undefined, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
       async () => {
         mod.registerSubagentRun({
           runId: "run-detached-requester-owner",
@@ -2039,7 +2039,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
@@ -4755,7 +4755,7 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  it("does not restore session-write ownership after a successor is released", async () => {
+  it("does not restore a superseded lifecycle after a successor is released", async () => {
     const childSessionKey = "agent:main:subagent:released-timing-owner";
     mockPendingAgentWait();
     mocks.loadSessionStore.mockReturnValue({
