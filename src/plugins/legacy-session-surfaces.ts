@@ -1,18 +1,31 @@
 // Resolves plugin-owned legacy session-key behavior from selected setup entries.
+import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import type { BundledChannelLegacySessionSurface } from "../plugin-sdk/channel-entry-contract.types.js";
 import { resolveConfiguredChannelPluginIds } from "./channel-plugin-ids.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import {
   EMPTY_LEGACY_SESSION_SURFACES,
   type PreparedLegacySessionSurfaces,
 } from "./legacy-session-surfaces.types.js";
-import { readLoadedLegacySessionSurfaces } from "./loader-channel-runtime.js";
-import { loadPluginRegistryHandle } from "./loader.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-  type PluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
+import {
+  resolveCanonicalDistRuntimeSource,
+  resolvePluginRuntimeArtifact,
+} from "./plugin-runtime-artifact-resolution.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resolvePluginRuntimeLoadContext, type PluginRuntimeLoadContext } from "./runtime/load-context.js";
+
+type LegacySurfaceManifestRecord = NonNullable<
+  PluginRuntimeLoadContext["manifestRegistry"]
+>["plugins"][number];
 
 function prepareResult(
   surfaces: BundledChannelLegacySessionSurface[],
@@ -26,6 +39,84 @@ function prepareResult(
 
 function formatLoadFailure(pluginId: string, detail: string): string {
   return `Deferred legacy session-key migration for channel owner "${pluginId}": ${detail}. Restore or reinstall the plugin setup entry, then rerun openclaw doctor --fix`;
+}
+
+function resolveLegacySessionSurface(moduleExport: unknown): BundledChannelLegacySessionSurface {
+  const resolved = unwrapDefaultModuleExport(moduleExport);
+  if (!resolved || typeof resolved !== "object") {
+    throw new Error("setup entry does not export loadLegacySessionSurface");
+  }
+  const setupEntry = resolved as { kind?: unknown; loadLegacySessionSurface?: unknown };
+  if (
+    setupEntry.kind !== "bundled-channel-setup-entry" ||
+    typeof setupEntry.loadLegacySessionSurface !== "function"
+  ) {
+    throw new Error("setup entry does not export loadLegacySessionSurface");
+  }
+  const surface = setupEntry.loadLegacySessionSurface() as unknown;
+  if (!isRecord(surface)) {
+    throw new Error("legacy session surface must be an object");
+  }
+  const isGroupKey = surface.isLegacyGroupSessionKey;
+  const canonicalizeKey = surface.canonicalizeLegacySessionKey;
+  if (
+    (isGroupKey !== undefined && typeof isGroupKey !== "function") ||
+    (canonicalizeKey !== undefined && typeof canonicalizeKey !== "function") ||
+    (typeof isGroupKey !== "function" && typeof canonicalizeKey !== "function")
+  ) {
+    throw new Error("legacy session surface must declare a supported session-key callback");
+  }
+  return surface as BundledChannelLegacySessionSurface;
+}
+
+function loadLegacySessionSurface(params: {
+  record: LegacySurfaceManifestRecord & { setupSource: string };
+  env: NodeJS.ProcessEnv;
+  moduleLoaders: PluginModuleLoaderCache;
+  artifactRegistry: ReturnType<typeof createEmptyPluginRegistry>;
+}): BundledChannelLegacySessionSurface {
+  const setupEntry = resolvePluginRuntimeArtifact({
+    pluginId: params.record.id,
+    entryKind: "setup",
+    source: params.record.setupSource,
+    rootDir: params.record.rootDir,
+    origin: params.record.origin,
+    preferBuiltPluginArtifacts: false,
+    packageManifest: params.record.packageManifest,
+    registry: params.artifactRegistry,
+  });
+  const moduleSource = resolveCanonicalDistRuntimeSource(setupEntry.source);
+  const moduleRoot = resolveCanonicalDistRuntimeSource(setupEntry.rootDir);
+  const opened = openRootFileSync({
+    absolutePath: moduleSource,
+    rootPath: moduleRoot,
+    boundaryLabel: "plugin root",
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: params.record.origin,
+      rootDir: params.record.rootDir,
+      env: params.env,
+    }),
+    skipLexicalRootCheck: true,
+  });
+  if (!opened.ok) {
+    throw new Error(
+      describeRootFileOpenFailure({
+        failure: opened,
+        subject: "plugin setup entry path",
+        boundaryLabel: "plugin root",
+        filePath: moduleSource,
+      }),
+    );
+  }
+  const safeSource = opened.path;
+  fs.closeSync(opened.fd);
+  const moduleExport = getCachedPluginModuleLoader({
+    cache: params.moduleLoaders,
+    modulePath: safeSource,
+    importerUrl: import.meta.url,
+    loaderFilename: import.meta.url,
+  })(safeSource);
+  return resolveLegacySessionSurface(moduleExport);
 }
 
 /** Resolves immutable session surfaces from the exact configured channel-owner snapshot. */
@@ -74,45 +165,23 @@ export function prepareLegacySessionSurfaces(params: {
     return prepareResult([], failures);
   }
 
-  let registry: ReturnType<typeof loadPluginRegistryHandle>;
-  try {
-    registry = loadPluginRegistryHandle(
-      buildPluginRuntimeLoadOptions(context, {
-        onlyPluginIds: loadableRecords.map((record) => record.id),
-        cache: false,
-        includeSetupOnlyChannelPlugins: true,
-        forceSetupOnlyChannelPlugins: true,
-        requireSetupEntryForSetupOnlyChannelPlugins: true,
-        channelPluginLoadIntent: "setup",
-        loadLegacySessionSurfaces: true,
-      }),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return prepareResult(
-      [],
-      [...failures, ...loadableRecords.map((record) => formatLoadFailure(record.id, detail))],
-    );
-  }
-
-  const surfacesByPluginId = new Map(
-    readLoadedLegacySessionSurfaces(registry).map((entry) => [entry.pluginId, entry.surface]),
-  );
+  const surfaces: BundledChannelLegacySessionSurface[] = [];
+  const moduleLoaders = createPluginModuleLoaderCache();
+  const artifactRegistry = createEmptyPluginRegistry();
   for (const record of loadableRecords) {
-    if (surfacesByPluginId.has(record.id)) {
-      continue;
+    try {
+      surfaces.push(
+        loadLegacySessionSurface({
+          record: record as LegacySurfaceManifestRecord & { setupSource: string },
+          env: context.env,
+          moduleLoaders,
+          artifactRegistry,
+        }),
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      failures.push(formatLoadFailure(record.id, detail));
     }
-    const detail =
-      registry.diagnostics.find(
-        (diagnostic) => diagnostic.pluginId === record.id && diagnostic.level === "error",
-      )?.message ?? "the setup entry did not return its declared legacy-session sidecar";
-    failures.push(formatLoadFailure(record.id, detail));
   }
-  return prepareResult(
-    loadableRecords.flatMap((record) => {
-      const surface = surfacesByPluginId.get(record.id);
-      return surface ? [surface] : [];
-    }),
-    failures,
-  );
+  return prepareResult(surfaces, failures);
 }

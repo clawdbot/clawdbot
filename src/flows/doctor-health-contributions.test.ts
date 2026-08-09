@@ -1764,10 +1764,14 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({ cfg });
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
+      cfg,
+      legacySessionSurfaces: { failures: [], surfaces: [] },
+    });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
+      legacySessionSurfaces: { failures: [], surfaces: [] },
       recoverCorruptTargetStore: false,
     });
   });
@@ -1871,11 +1875,13 @@ describe("doctor health contributions", () => {
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces: { failures: [], surfaces: [] },
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces: { failures: [], surfaces: [] },
       recoverCorruptTargetStore: true,
     });
   });

@@ -39,8 +39,6 @@ export type PluginLoadOptions = {
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   /** Select full runtime registration or the lightweight unconfigured-channel setup path. */
   channelPluginLoadIntent?: ChannelPluginLoadIntent;
-  /** Load only explicitly declared legacy-session sidecars from selected setup entries. */
-  loadLegacySessionSurfaces?: boolean;
   /** Prefer bundled JavaScript artifacts over source TypeScript entrypoints. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;

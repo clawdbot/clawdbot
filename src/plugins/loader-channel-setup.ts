@@ -1,9 +1,7 @@
 // Builds channel setup metadata from plugin light surfaces.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundledChannelLegacySessionSurface } from "../plugin-sdk/channel-entry-contract.types.js";
 import type { ChannelPluginLoadIntent } from "./loader-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -201,45 +199,6 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
         }
       : {}),
   };
-}
-
-export function resolveLegacySessionSurfaceRegistration(moduleExport: unknown): {
-  surface?: BundledChannelLegacySessionSurface;
-  loadError?: unknown;
-} {
-  const resolved = unwrapDefaultModuleExport(moduleExport);
-  if (!resolved || typeof resolved !== "object") {
-    return {};
-  }
-  const setupEntry = resolved as { kind?: unknown; loadLegacySessionSurface?: unknown };
-  if (
-    setupEntry.kind !== "bundled-channel-setup-entry" ||
-    typeof setupEntry.loadLegacySessionSurface !== "function"
-  ) {
-    return {};
-  }
-  try {
-    const surface = setupEntry.loadLegacySessionSurface() as unknown;
-    if (!isRecord(surface)) {
-      return { loadError: new Error("legacy session surface must be an object") };
-    }
-    const isGroupKey = surface.isLegacyGroupSessionKey;
-    const canonicalizeKey = surface.canonicalizeLegacySessionKey;
-    if (
-      (isGroupKey !== undefined && typeof isGroupKey !== "function") ||
-      (canonicalizeKey !== undefined && typeof canonicalizeKey !== "function") ||
-      (typeof isGroupKey !== "function" && typeof canonicalizeKey !== "function")
-    ) {
-      return {
-        loadError: new Error(
-          "legacy session surface must declare a supported session-key callback",
-        ),
-      };
-    }
-    return { surface: surface as BundledChannelLegacySessionSurface };
-  } catch (error) {
-    return { loadError: error };
-  }
 }
 
 export function shouldLoadChannelPluginInSetupRuntime(params: {

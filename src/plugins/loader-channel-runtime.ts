@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
-import type { BundledChannelLegacySessionSurface } from "../plugin-sdk/channel-entry-contract.types.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
   mergeSetupRuntimeChannelPlugin,
   resolveBundledRuntimeChannelRegistration,
-  resolveLegacySessionSurfaceRegistration,
   resolveSetupChannelRegistration,
 } from "./loader-channel-setup.js";
 import type { PluginModuleLoader } from "./loader-module-runtime.js";
@@ -18,34 +16,10 @@ import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { resolveCanonicalDistRuntimeSource } from "./plugin-runtime-artifact-resolution.js";
-import type { createPluginRegistry, PluginRecord, PluginRegistry } from "./registry.js";
+import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
 
 type PluginRegistryBuilder = ReturnType<typeof createPluginRegistry>;
-type LegacySessionSurfaceEntry = {
-  pluginId: string;
-  surface: BundledChannelLegacySessionSurface;
-};
-
-const LEGACY_SESSION_SURFACES = Symbol("legacy-session-surfaces");
-type LegacySessionSurfaceRegistry = PluginRegistry & {
-  [LEGACY_SESSION_SURFACES]?: LegacySessionSurfaceEntry[];
-};
-
-function appendLoadedLegacySessionSurface(
-  registry: PluginRegistry,
-  entry: LegacySessionSurfaceEntry,
-): void {
-  const target = registry as LegacySessionSurfaceRegistry;
-  (target[LEGACY_SESSION_SURFACES] ??= []).push(entry);
-}
-
-/** Reads sidecars collected on a caller-owned setup-only registry. */
-export function readLoadedLegacySessionSurfaces(
-  registry: PluginRegistry,
-): readonly LegacySessionSurfaceEntry[] {
-  return (registry as LegacySessionSurfaceRegistry)[LEGACY_SESSION_SURFACES] ?? [];
-}
 
 /**
  * Handles the setup-entry channel path.
@@ -67,42 +41,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
   candidateOrigin: PluginRecord["origin"];
   logger: PluginLogger;
   pushPluginLoadError: (message: string) => void;
-  loadLegacySessionSurfaces: boolean;
 }): boolean {
   const { manifestRecord, record, registrationPlan, runtimeCandidateEntry, registryBuilder } =
     params;
   if (!registrationPlan.loadSetupEntry || !manifestRecord.setupSource) {
     return false;
-  }
-  if (params.loadLegacySessionSurfaces) {
-    const registration = resolveLegacySessionSurfaceRegistration(params.mod);
-    if (registration.loadError) {
-      recordPluginError({
-        logger: params.logger,
-        registry: registryBuilder.registry,
-        record,
-        seenIds: params.seenIds,
-        pluginId: record.id,
-        origin: params.candidateOrigin,
-        phase: "load",
-        error: registration.loadError,
-        logPrefix: `[plugins] ${record.id} failed to load legacy session surface from ${record.source}: `,
-        diagnosticMessagePrefix: "failed to load legacy session surface: ",
-        diagnosticCode: "channel-setup-failure",
-      });
-      return true;
-    }
-    if (!registration.surface) {
-      params.pushPluginLoadError("setup entry does not export loadLegacySessionSurface");
-      return true;
-    }
-    appendLoadedLegacySessionSurface(registryBuilder.registry, {
-      pluginId: record.id,
-      surface: registration.surface,
-    });
-    registryBuilder.registry.plugins.push(record);
-    params.seenIds.set(record.id, params.candidateOrigin);
-    return true;
   }
   const setupRegistration = resolveSetupChannelRegistration(params.mod);
   if (setupRegistration.loadError) {
