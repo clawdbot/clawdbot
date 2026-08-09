@@ -28,7 +28,7 @@ import {
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
-import { withoutRuntimeExternalAuthProfilePublication } from "./auth-profiles/store.js";
+import { withoutRuntimeExternalAuthProfilePublication } from "./auth-profiles/runtime-external-profile-publication.js";
 import {
   buildInlineProviderModels,
   type InlineModelEntry,

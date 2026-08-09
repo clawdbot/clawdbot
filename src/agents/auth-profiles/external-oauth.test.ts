@@ -11,13 +11,13 @@ import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import { withoutRuntimeExternalAuthProfilePublication } from "./runtime-external-profile-publication.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
-  withoutRuntimeExternalAuthProfilePublication,
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 

@@ -40,6 +40,7 @@ import {
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
+import { shouldPublishRuntimeExternalAuthProfiles } from "./runtime-external-profile-publication.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
@@ -91,7 +92,6 @@ const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
 type AuthProfileRuntimeMode = { kind: "env-only" } | { kind: "agent-dir"; agentDir: string };
 
 const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
-const runtimeExternalProfilePublication = new AsyncLocalStorage<boolean>();
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -105,11 +105,6 @@ export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
 /** Run a bounded operation against one existing persisted auth store. */
 export function withAuthProfileStoreAgentDir<T>(agentDir: string, run: () => T): T {
   return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir }, run);
-}
-
-/** Read external overlays while the prepared owner itself is rebuilding. */
-export function withoutRuntimeExternalAuthProfilePublication<T>(run: () => T): T {
-  return runtimeExternalProfilePublication.run(false, run);
 }
 
 function isEnvOnlyAuthProfileRuntime(): boolean {
@@ -1167,7 +1162,7 @@ export function ensureAuthProfileStore(
   }
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
-  const publishExternalProfiles = runtimeExternalProfilePublication.getStore() !== false;
+  const publishExternalProfiles = shouldPublishRuntimeExternalAuthProfiles();
   const externalCli = resolveExternalCliOverlayOptions(effectiveOptions);
   const runtimeStore = resolveRuntimeAuthProfileStore(effectiveAgentDir, effectiveOptions);
   const store = overlayExternalAuthProfiles(
