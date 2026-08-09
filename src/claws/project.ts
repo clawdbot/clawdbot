@@ -99,7 +99,8 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
     targetRelative === "" ||
     targetRelative === ".." ||
     targetRelative.startsWith(`..${sep}`) ||
-    isAbsolute(targetRelative)
+    isAbsolute(targetRelative) ||
+    isExcludedProjectSource(targetRelative)
   ) {
     return false;
   }

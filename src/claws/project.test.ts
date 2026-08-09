@@ -349,6 +349,22 @@ describe("Claw projects", () => {
     );
   });
 
+  it.each([".git/CLAW.md", "node_modules/example/CLAW.md"])(
+    "rejects a CLAW.md symlink into excluded tree %s",
+    async (targetPath) => {
+      const project = tempDirs.make("openclaw-claw-manifest-excluded-link-");
+      await writeRichProject(project);
+      await mkdir(dirname(join(project, targetPath)), { recursive: true });
+      await rename(join(project, "CLAW.md"), join(project, targetPath));
+      await symlink(targetPath, join(project, "CLAW.md"), "file");
+
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_not_found" })],
+      });
+    },
+  );
+
   it("rejects a CLAW.md symlink that escapes the project", async () => {
     const project = tempDirs.make("openclaw-claw-manifest-escape-");
     const outside = tempDirs.make("openclaw-claw-manifest-outside-");
