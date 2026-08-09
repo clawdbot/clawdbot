@@ -170,15 +170,28 @@ describe("users gateway methods", () => {
 
   it("validates and routes email links", async () => {
     linkEmail.mockReturnValue(profile);
+    const refreshConnectedUserProfile = vi.fn();
 
-    const respond = await runUsersHandler("users.linkEmail", {
-      email: "ada@example.com",
-      targetProfileId: "profile-1",
-    });
+    const respond = await runUsersHandler(
+      "users.linkEmail",
+      {
+        email: "ada@example.com",
+        targetProfileId: "profile-1",
+      },
+      undefined,
+      { refreshConnectedUserProfile },
+    );
 
     expect(respond).toHaveBeenCalledWith(true, { profile });
     expect(validateUsersLinkEmailResult(respond.mock.calls[0]?.[1])).toBe(true);
     expect(linkEmail).toHaveBeenCalledWith("ada@example.com", "profile-1");
+    expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
+      id: profile.id,
+      displayName: profile.displayName,
+      avatarRevision: String(profile.updatedAt),
+      hasAvatar: profile.hasAvatar,
+      updatedAt: profile.updatedAt,
+    });
   });
 
   it("returns protocol-complete display name mutations", async () => {

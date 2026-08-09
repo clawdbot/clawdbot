@@ -7,6 +7,13 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  ensureProfileForEmail,
+  getUserProfileDisplay,
+  linkEmail,
+  resolveUserProfileId,
+} from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -331,6 +338,81 @@ describe("createGatewayRequestContext", () => {
         stateVersion: { presence: 1, health: 1 },
       },
     );
+  });
+
+  it("canonicalizes a connected profile after its durable identity is merged", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const source = ensureProfileForEmail("merge-source@example.test");
+      const target = ensureProfileForEmail("merge-target@example.test");
+      const unrelatedProfile = ensureProfileForEmail("merge-unrelated@example.test");
+      const sourceClient = {
+        ...makeGatewayClient({
+          connId: "merge-source",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserId: "merge-source@example.test",
+        authenticatedUserProfile: {
+          profileId: source.id,
+          displayName: source.displayName,
+          avatarRevision: String(source.updatedAt),
+          hasAvatar: false,
+          updatedAt: source.updatedAt,
+        },
+        presenceKey: "profile-refresh-merge-source",
+      };
+      const unrelatedClient = {
+        ...makeGatewayClient({
+          connId: "merge-unrelated",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserId: "merge-unrelated@example.test",
+        authenticatedUserProfile: {
+          profileId: unrelatedProfile.id,
+          displayName: unrelatedProfile.displayName,
+          avatarRevision: String(unrelatedProfile.updatedAt),
+          hasAvatar: false,
+          updatedAt: unrelatedProfile.updatedAt,
+        },
+        presenceKey: "profile-refresh-merge-unrelated",
+      };
+      const capturedProfile = sourceClient.authenticatedUserProfile;
+      const params = makeContextParams({
+        clients: new Set([sourceClient, unrelatedClient]) as never,
+      });
+      const context = createGatewayRequestContext(params);
+
+      const linked = linkEmail("merge-source@example.test", target.id);
+      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      const display = getUserProfileDisplay(linked.id);
+      context.refreshConnectedUserProfile?.({
+        ...display,
+        updatedAt: linked.updatedAt,
+      });
+
+      expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
+      expect(sourceClient.authenticatedUserProfile).toEqual({
+        profileId: target.id,
+        displayName: target.displayName,
+        avatarRevision: display.avatarRevision,
+        hasAvatar: false,
+        updatedAt: linked.updatedAt,
+      });
+      expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
+      const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+        presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
+      };
+      expect(
+        presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
+      ).toEqual({
+        id: target.id,
+        email: "merge-source@example.test",
+        name: target.displayName,
+        avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
+      });
+      expect(presence.presence?.some((entry) => entry.user?.id === unrelatedProfile.id)).toBe(
+        false,
+      );
+    });
   });
 
   it("preserves the Gravatar-backed route when a changed profile has no upload", () => {

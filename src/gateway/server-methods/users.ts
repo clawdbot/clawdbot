@@ -148,7 +148,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.linkEmail": ({ params, respond }) => {
+  "users.linkEmail": ({ context, params, respond }) => {
     if (!validateUsersLinkEmailParams(params)) {
       respond(
         false,
@@ -163,7 +163,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(true, { profile: linkEmail(email, params.targetProfileId) });
+      const profile = linkEmail(email, params.targetProfileId);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

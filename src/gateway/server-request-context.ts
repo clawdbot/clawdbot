@@ -8,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { upsertPresence } from "../infra/system-presence.js";
+import { resolveUserProfileId } from "../state/user-profiles.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -268,11 +269,18 @@ export function createGatewayRequestContext(
       let presenceChanged = false;
       for (const gatewayClient of params.clients) {
         const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
-        if (authenticatedUserProfile?.profileId !== profile.id) {
+        if (!authenticatedUserProfile) {
+          continue;
+        }
+        const canonicalProfileId =
+          authenticatedUserProfile.profileId === profile.id
+            ? profile.id
+            : resolveUserProfileId(authenticatedUserProfile.profileId);
+        if (canonicalProfileId !== profile.id) {
           continue;
         }
         Object.assign(authenticatedUserProfile, {
-          profileId: profile.id,
+          profileId: canonicalProfileId,
           displayName: profile.displayName,
           avatarRevision: profile.avatarRevision,
           hasAvatar: profile.hasAvatar,
