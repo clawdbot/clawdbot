@@ -152,6 +152,12 @@ function projectPathKey(value: string, caseInsensitive: boolean): string {
   return caseInsensitive ? normalized.toLowerCase() : normalized;
 }
 
+function isExcludedProjectSource(value: string): boolean {
+  return portableClawPathKey(value)
+    .split("/")
+    .some((segment) => segment === ".git" || segment === "node_modules");
+}
+
 async function isCaseInsensitiveProjectRoot(root: string): Promise<boolean> {
   const [canonical, folded] = await Promise.all([
     lstat(resolve(root, "CLAW.md")).catch(() => undefined),
@@ -345,6 +351,33 @@ export async function validateClawProject(
   const claw = await readClawManifestFile(root);
   if (!claw.ok) {
     return { ok: false, root, diagnostics: claw.diagnostics };
+  }
+  const excludedSource = [
+    ...(claw.snapshot.openClawProfile
+      ? [
+          {
+            path: claw.snapshot.openClawProfile.sourcePath,
+            diagnosticPath: "$.metadata.openclaw.config",
+          },
+        ]
+      : []),
+    ...claw.snapshot.workspaceSources.map((source) => ({
+      path: source.sourcePath,
+      diagnosticPath: "$.workspace",
+    })),
+  ].find((source) => isExcludedProjectSource(source.path));
+  if (excludedSource) {
+    return {
+      ok: false,
+      root,
+      diagnostics: [
+        diagnostic(
+          "project_excluded_source",
+          excludedSource.diagnosticPath,
+          `Selected project source ${JSON.stringify(excludedSource.path)} cannot come from .git or node_modules.`,
+        ),
+      ],
+    };
   }
   const reservedPackageSource = claw.snapshot.workspaceSources.find(
     (source) => source.sourcePath.normalize("NFC").toLowerCase() === "package.json",

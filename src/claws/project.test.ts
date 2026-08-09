@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -359,6 +359,56 @@ describe("Claw projects", () => {
     await expect(validateClawProject(project)).resolves.toMatchObject({
       ok: false,
       diagnostics: [expect.objectContaining({ code: "project_not_found" })],
+    });
+  });
+
+  it.each([
+    ".git/config",
+    "node_modules/example/secret.md",
+    "workspace/.git/config",
+    "workspace/node_modules/example/secret.md",
+  ])("rejects an explicitly selected source from %s", async (sourcePath) => {
+    const project = tempDirs.make("openclaw-claw-excluded-source-");
+    const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
+    await writeRichProject(project);
+    await mkdir(dirname(join(project, sourcePath)), { recursive: true });
+    await writeFile(join(project, sourcePath), "sensitive local state\n");
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace("workspace/reference.md", sourcePath),
+    );
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
+    });
+    await expect(buildClawProject(project, output)).rejects.toMatchObject({
+      code: "project_invalid",
+    } satisfies Partial<ClawProjectError>);
+  });
+
+  it("rejects a custom profile selected from an excluded tree", async () => {
+    const project = tempDirs.make("openclaw-claw-excluded-profile-");
+    await writeRichProject(project);
+    await rename(
+      join(project, "profiles", "openclaw.yml"),
+      join(project, "profiles", "unused.yml"),
+    );
+    await mkdir(join(project, ".git"), { recursive: true });
+    await writeFile(join(project, ".git", "profile.yaml"), "schemaVersion: 1\nagent: {}\n");
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace(
+        "agent:\n  id: demo-claw",
+        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: .git/profile.yaml",
+      ),
+    );
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
     });
   });
 
