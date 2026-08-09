@@ -17,7 +17,7 @@ import {
 import { sshArgvPort } from "./worker-ssh-argv.test-support.js";
 
 describe("worker tunnel manager", () => {
-  it("cascades environment stop into the desktop tunnel owner", async () => {
+  it("cascades only an epoch-matched environment stop into the desktop tunnel owner", async () => {
     const fake = fakeRunner();
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const starting = manager.desktop.acquire({
@@ -33,7 +33,12 @@ describe("worker tunnel manager", () => {
     const close = vi.fn();
     manager.desktop.attachObserver("worker:desktop-cascade", { control: false, close });
 
-    await manager.stop("worker:desktop-cascade");
+    await manager.stop("worker:desktop-cascade", 1);
+
+    expect(fake.starts[0]?.process.stopCount).toBe(0);
+    expect(close).not.toHaveBeenCalled();
+
+    await manager.stop("worker:desktop-cascade", 2);
 
     expect(fake.starts[0]?.process.stopCount).toBe(1);
     expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed");

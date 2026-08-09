@@ -297,9 +297,9 @@ export function createWorkerDesktopTunnels(deps: {
     };
   }
 
-  async function stop(environmentId: string): Promise<void> {
+  async function stop(environmentId: string, ownerEpoch?: number): Promise<void> {
     const entry = entries.get(environmentId);
-    if (entry) {
+    if (entry && (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch)) {
       await stopEntry(entry);
     }
   }

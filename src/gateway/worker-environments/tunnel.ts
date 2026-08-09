@@ -474,7 +474,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     if (entry && (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch)) {
       await stopEntry(entry);
     }
-    await desktop.stop(environmentId);
+    await desktop.stop(environmentId, ownerEpoch);
   }
 
   async function stopAll(): Promise<void> {

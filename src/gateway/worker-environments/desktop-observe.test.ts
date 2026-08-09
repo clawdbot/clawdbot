@@ -32,7 +32,9 @@ describe("worker desktop observer tokens", () => {
   });
 });
 
-async function createProxyHarness(params: { getBufferedAmount?: () => number } = {}) {
+async function createProxyHarness(
+  params: { control?: boolean; getBufferedAmount?: () => number } = {},
+) {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-observe-"));
   const localSocketPath = path.join(root, "desktop.sock");
   let desktopPeer: net.Socket | undefined;
@@ -82,7 +84,7 @@ async function createProxyHarness(params: { getBufferedAmount?: () => number } =
   const minted = mintWorkerDesktopObserverToken({
     environmentId: "worker:pump",
     ownerEpoch: 2,
-    control: false,
+    control: params.control ?? false,
     localSocketPath,
   });
   const ws = new WebSocket(
@@ -94,6 +96,22 @@ async function createProxyHarness(params: { getBufferedAmount?: () => number } =
     ws.once("error", reject);
   });
   return { closeObserver, desktopPeer: await peerConnected, observerUrl: ws.url, release, ws };
+}
+
+function readSocketBytes(socket: net.Socket, byteLength: number): Promise<Buffer> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk);
+      received += chunk.length;
+      if (received >= byteLength) {
+        socket.off("data", onData);
+        resolve(Buffer.concat(chunks));
+      }
+    };
+    socket.on("data", onData);
+  });
 }
 
 async function expectUnauthorizedObserver(url: string): Promise<void> {
@@ -129,7 +147,7 @@ describe("worker desktop observer proxy", () => {
     await expectUnauthorizedObserver(observerUrl.toString());
   });
 
-  it("pumps binary RFB bytes both directions and propagates desktop close", async () => {
+  it("drops view-only input while forwarding framebuffer requests", async () => {
     const harness = await createProxyHarness();
     const fromDesktop = new Promise<Buffer>((resolve) => {
       harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
@@ -137,17 +155,44 @@ describe("worker desktop observer proxy", () => {
     harness.desktopPeer.write(Buffer.from("RFB 003.008\n"));
     await expect(fromDesktop).resolves.toEqual(Buffer.from("RFB 003.008\n"));
 
-    const fromWebSocket = new Promise<Buffer>((resolve) => {
-      harness.desktopPeer.once("data", resolve);
-    });
-    harness.ws.send(Buffer.from([1, 2, 3]));
-    await expect(fromWebSocket).resolves.toEqual(Buffer.from([1, 2, 3]));
+    const handshake = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1])]);
+    const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
+    const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+    const fromWebSocket = readSocketBytes(
+      harness.desktopPeer,
+      handshake.length + framebufferRequest.length,
+    );
+    harness.ws.send(Buffer.concat([handshake, keyEvent, framebufferRequest]));
+    await expect(fromWebSocket).resolves.toEqual(Buffer.concat([handshake, framebufferRequest]));
 
     const closed = new Promise<void>((resolve) => {
       harness.ws.once("close", () => resolve());
     });
     harness.desktopPeer.destroy();
     await closed;
+    expect(harness.release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps controlling observers on the plain pass-through path", async () => {
+    const harness = await createProxyHarness({ control: true });
+    const bytes = Buffer.from([1, 2, 3]);
+    const fromWebSocket = readSocketBytes(harness.desktopPeer, bytes.length);
+    harness.ws.send(bytes);
+    await expect(fromWebSocket).resolves.toEqual(bytes);
+  });
+
+  it("closes malformed view-only streams with a policy violation", async () => {
+    const harness = await createProxyHarness();
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      harness.ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+    harness.ws.send(
+      Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1, 255])]),
+    );
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "invalid view-only RFB stream",
+    });
     expect(harness.release).toHaveBeenCalledOnce();
   });
 

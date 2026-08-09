@@ -2042,6 +2042,54 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     }
 }
 
+public struct WorkerDesktopObserveParams: Codable, Sendable {
+    public let environmentid: String
+    public let control: Bool?
+
+    public init(
+        environmentid: String,
+        control: Bool? = nil)
+    {
+        self.environmentid = environmentid
+        self.control = control
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+        case control
+    }
+}
+
+public struct WorkerDesktopObserveResult: Codable, Sendable {
+    public let transport: String
+    public let wspath: String
+    public let expiresatms: Int
+    public let control: Bool
+    public let vncpassword: String?
+
+    public init(
+        transport: String,
+        wspath: String,
+        expiresatms: Int,
+        control: Bool,
+        vncpassword: String? = nil)
+    {
+        self.transport = transport
+        self.wspath = wspath
+        self.expiresatms = expiresatms
+        self.control = control
+        self.vncpassword = vncpassword
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case transport
+        case wspath = "wsPath"
+        case expiresatms = "expiresAtMs"
+        case control
+        case vncpassword = "vncPassword"
+    }
+}
+
 public struct SystemInfoParams: Codable, Sendable {}
 
 public struct SystemInfoResult: Codable, Sendable {

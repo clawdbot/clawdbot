@@ -4,6 +4,7 @@ import net from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type { WorkerDesktopTunnels } from "./desktop-tunnel.js";
+import { createRfbClientMessageFilter } from "./rfb-view-only-filter.js";
 
 export const WORKER_DESKTOP_OBSERVE_PATH = "/worker-desktop/observe";
 const TOKEN_TTL_MS = 60_000;
@@ -105,9 +106,7 @@ export function handleWorkerDesktopUpgrade(
     return true;
   }
   desktopObserverWss.handleUpgrade(req, socket, head, (ws) => {
-    // Phase 1 view-only is client-enforced. Every token holder is operator.admin, so this is UX
-    // arbitration rather than a privilege boundary; controller exclusivity is server-enforced.
-    // Server-side RFB input filtering remains a named phase-2 option.
+    // View-only is enforced here at the RFB message boundary; the UI setting is only UX.
     const observer = deps.tunnels.attachObserver(entry.environmentId, {
       control: entry.control,
       close: (code, reason) => ws.close(code, reason),
@@ -117,6 +116,7 @@ export function handleWorkerDesktopUpgrade(
       return;
     }
     const desktopSocket = net.connect(entry.localSocketPath);
+    const clientMessageFilter = entry.control ? undefined : createRfbClientMessageFilter();
     let closed = false;
     let resumeTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -138,7 +138,19 @@ export function handleWorkerDesktopUpgrade(
       if (!isBinary || closed) {
         return;
       }
-      desktopSocket.write(rawDataBuffer(data));
+      const chunk = rawDataBuffer(data);
+      if (!clientMessageFilter) {
+        desktopSocket.write(chunk);
+        return;
+      }
+      const result = clientMessageFilter.filter(chunk);
+      if ("error" in result) {
+        closeBoth(1008, "invalid view-only RFB stream");
+        return;
+      }
+      if (result.forward.length > 0) {
+        desktopSocket.write(result.forward);
+      }
     });
     ws.once("close", () => closeBoth(1000, "desktop observer closed"));
     ws.once("error", () => closeBoth(1011, "desktop observer failed"));

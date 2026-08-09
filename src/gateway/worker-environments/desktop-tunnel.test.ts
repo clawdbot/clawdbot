@@ -152,6 +152,27 @@ describe("worker desktop tunnels", () => {
     await manager.stopAll();
   });
 
+  it("fences stop by owner epoch while allowing matching and unconditional teardown", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const second = acquire(manager, 2, { protocol: "rfb", port: 5900 });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await second;
+
+    await manager.stop("worker:one", 1);
+    expect(fake.starts[0]?.process.stopCount).toBe(0);
+    await manager.stop("worker:one", 2);
+    expect(fake.starts[0]?.process.stopCount).toBe(1);
+
+    const third = acquire(manager, 3, { protocol: "rfb", port: 5900 });
+    await waitForStarts(fake.starts, 2);
+    fake.starts[1]?.process.becomeReady();
+    await third;
+    await manager.stop("worker:one");
+    expect(fake.starts[1]?.process.stopCount).toBe(1);
+  });
+
   it("enforces controller takeover and the observer cap", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
