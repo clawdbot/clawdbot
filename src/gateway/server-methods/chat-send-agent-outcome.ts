@@ -1,7 +1,7 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readToolValidationErrorSummary } from "../../agents/tool-error-summary.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import { broadcastChatAborted, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { GatewayRequestContext } from "./types.js";
 
