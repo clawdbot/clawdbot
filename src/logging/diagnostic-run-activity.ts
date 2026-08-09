@@ -17,6 +17,15 @@ import {
 } from "./diagnostic-argument-churn-activity.js";
 import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
+  clearRecoveredOwnerEmbeddedRuns,
+  clearRecoveredOwnerMarkers,
+  hasEmbeddedRunStartedAfter,
+  ownerRefsForRecovery,
+  pruneActivityStartedBeforeRecoveryCutoff,
+  rememberRecoveredOwnerStartEventCutoffs,
+  shouldIgnoreRecoveredOwnerStartEvent,
+} from "./diagnostic-recovered-owner-activity.js";
+import {
   clearRepeatedRequestActivity,
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
@@ -439,171 +448,6 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
-function ownerRefsForRecovery(params: {
-  sessionId?: string;
-  activeSessionId?: string;
-}): Set<string> {
-  const refs = [params.activeSessionId?.trim(), params.sessionId?.trim()].filter(
-    (ref): ref is string => Boolean(ref),
-  );
-  return new Set(refs);
-}
-
-function ownerRefsForStartedEvent(event: { runId?: string; sessionId?: string }): string[] {
-  return [event.runId?.trim(), event.sessionId?.trim()].filter((ref): ref is string =>
-    Boolean(ref),
-  );
-}
-
-function markerBelongsToRecoveredOwner(
-  marker: { runId?: string; sessionId?: string },
-  ownerRefs: Set<string>,
-): boolean {
-  return (
-    (marker.runId !== undefined && ownerRefs.has(marker.runId)) ||
-    (marker.sessionId !== undefined && ownerRefs.has(marker.sessionId))
-  );
-}
-
-function embeddedRunStartedAfter(
-  embeddedRun: ActiveEmbeddedRun,
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && embeddedRun.sequence > sequence;
-}
-
-function activityMarkerStartedAfter(
-  marker: { sequence?: number },
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && marker.sequence !== undefined && marker.sequence > sequence;
-}
-
-function clearRecoveredOwnerEmbeddedRuns(
-  activity: SessionActivity,
-  ownerRefs: Set<string>,
-  recoveryStartedAfterSequence: number | undefined,
-): void {
-  if (ownerRefs.size === 0) {
-    return;
-  }
-  for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
-    if (
-      embeddedRun.sessionId !== undefined &&
-      ownerRefs.has(embeddedRun.sessionId) &&
-      !embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterSequence)
-    ) {
-      embeddedRunIndex.remove(activity, key);
-    }
-  }
-}
-
-function hasEmbeddedRunStartedAfter(
-  activity: SessionActivity,
-  sequence: number | undefined,
-): boolean {
-  if (sequence === undefined) {
-    return activity.activeEmbeddedRuns.size > 0;
-  }
-  for (const embeddedRun of activity.activeEmbeddedRuns.values()) {
-    if (embeddedRun.sequence > sequence) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function clearRecoveredOwnerMarkers(
-  activity: SessionActivity,
-  ownerRefs: Set<string>,
-  recoveryStartedAfterSequence: number | undefined,
-): void {
-  if (ownerRefs.size === 0) {
-    return;
-  }
-  for (const [key, tool] of activity.activeTools) {
-    if (
-      markerBelongsToRecoveredOwner(tool, ownerRefs) &&
-      !activityMarkerStartedAfter(tool, recoveryStartedAfterSequence)
-    ) {
-      activity.activeTools.delete(key);
-    }
-  }
-  for (const [key, modelCall] of activity.activeModelCalls) {
-    if (
-      markerBelongsToRecoveredOwner(modelCall, ownerRefs) &&
-      !activityMarkerStartedAfter(modelCall, recoveryStartedAfterSequence)
-    ) {
-      activity.activeModelCalls.delete(key);
-    }
-  }
-}
-
-function pruneActivityStartedBeforeRecoveryCutoff(
-  activity: SessionActivity,
-  recoveryStartedAfterEmbeddedRunSequence: number | undefined,
-  recoveryStartedAfterDiagnosticEventSequence: number | undefined,
-): void {
-  if (
-    recoveryStartedAfterEmbeddedRunSequence === undefined &&
-    recoveryStartedAfterDiagnosticEventSequence === undefined
-  ) {
-    return;
-  }
-  for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
-    if (!embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
-      embeddedRunIndex.remove(activity, key);
-    }
-  }
-  for (const [key, tool] of activity.activeTools) {
-    if (!activityMarkerStartedAfter(tool, recoveryStartedAfterDiagnosticEventSequence)) {
-      activity.activeTools.delete(key);
-    }
-  }
-  for (const [key, modelCall] of activity.activeModelCalls) {
-    if (!activityMarkerStartedAfter(modelCall, recoveryStartedAfterDiagnosticEventSequence)) {
-      activity.activeModelCalls.delete(key);
-    }
-  }
-}
-
-function rememberRecoveredOwnerStartEventCutoffs(
-  activity: SessionActivity,
-  ownerRefs: Set<string>,
-  recoveryStartedAfterSequence: number | undefined,
-): void {
-  if (recoveryStartedAfterSequence === undefined) {
-    return;
-  }
-  for (const ownerRef of ownerRefs) {
-    // Recovery can clear a session before the async diagnostic queue drains.
-    // Remember the queue watermark so older start events cannot recreate stale activity.
-    activity.recoveredOwnerStartEventCutoffs.set(
-      ownerRef,
-      Math.max(
-        recoveryStartedAfterSequence,
-        activity.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0,
-      ),
-    );
-  }
-}
-
-function shouldIgnoreRecoveredOwnerStartEvent(
-  activity: SessionActivity,
-  event: { runId?: string; sessionId?: string; seq?: number },
-): boolean {
-  if (event.seq === undefined) {
-    return false;
-  }
-  for (const ownerRef of ownerRefsForStartedEvent(event)) {
-    const cutoff = activity.recoveredOwnerStartEventCutoffs.get(ownerRef);
-    if (cutoff !== undefined && event.seq <= cutoff) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Reconciles a session's terminal embedded-run activity at once. Used when an
 // authority (stuck-session recovery) declares the lane idle and the per-run
 // markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
@@ -662,6 +506,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     activity,
     ownerRefs,
     params.recoveryStartedAfterEmbeddedRunSequence,
+    (workKey) => embeddedRunIndex.remove(activity, workKey),
   );
   clearRecoveredOwnerMarkers(
     activity,
@@ -674,6 +519,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
         activity,
         params.recoveryStartedAfterEmbeddedRunSequence,
         params.recoveryStartedAfterDiagnosticEventSequence,
+        (workKey) => embeddedRunIndex.remove(activity, workKey),
       );
       touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
       return { cleared: false, blockedByActiveEmbeddedRun: true };
