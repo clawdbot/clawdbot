@@ -187,7 +187,7 @@ type MSTeamsSendErrorKind =
  * (Graph/SharePoint) failed before the Bot Framework activity create was
  * attempted, so the message definitely was NOT delivered.
  */
-export type MSTeamsSendErrorStage = "prepare";
+type MSTeamsSendErrorStage = "prepare";
 
 const MS_TEAMS_SEND_ERROR_STAGE_PROPERTY = "msteamsSendStage";
 
