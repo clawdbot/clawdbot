@@ -5,7 +5,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -21,14 +20,13 @@ import {
   resolveBundledChannelGeneratedPath,
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
+import { shouldIncludeBundledChannelSetupFeatureForConfig } from "./bundled-setup-policy.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -416,53 +414,18 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
-  metadata: BundledChannelPluginMetadata;
-  config?: OpenClawConfig;
-}): boolean {
-  if (!params.config) {
-    return true;
-  }
-  const pluginId = params.metadata.manifest.id;
-  if (
-    !passesManifestOwnerBasePolicy({
-      plugin: { id: pluginId },
-      normalizedConfig: normalizePluginsConfig(params.config.plugins),
-      allowRestrictiveAllowlistBypass: true,
-    })
-  ) {
-    return false;
-  }
-
-  let hasExplicitChannelDisable = false;
-  for (const channelId of params.metadata.manifest.channels ?? [pluginId]) {
-    const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
-    if (!normalizedChannelId) {
-      continue;
-    }
-    const channelConfig = (params.config.channels as Record<string, unknown> | undefined)?.[
-      normalizedChannelId
-    ];
-    if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
-      continue;
-    }
-    if ((channelConfig as { enabled?: unknown }).enabled === false) {
-      hasExplicitChannelDisable = true;
-      continue;
-    }
-    return true;
-  }
-
-  return !hasExplicitChannelDisable;
-}
-
 function listBundledChannelPluginIdsForSetupFeature(
   rootScope: BundledChannelRootScope,
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig } = {},
+  options: { config?: OpenClawConfig; pluginIds?: readonly string[] } = {},
 ): readonly ChannelId[] {
-  const eligible = listBundledChannelMetadata(rootScope).filter((metadata) =>
-    shouldIncludeBundledChannelSetupFeatureForConfig({ metadata, config: options.config }),
+  const scopedPluginIds = options.pluginIds ? new Set(options.pluginIds) : null;
+  const eligible = listBundledChannelMetadata(rootScope).filter(
+    (metadata) =>
+      (!scopedPluginIds ||
+        scopedPluginIds.has(metadata.manifest.id) ||
+        metadata.manifest.channels?.some((channelId) => scopedPluginIds.has(channelId))) &&
+      shouldIncludeBundledChannelSetupFeatureForConfig({ metadata, config: options.config }),
   );
   const hinted = eligible.filter(
     (metadata) => metadata.packageManifest?.setupFeatures?.[feature] === true,
@@ -667,25 +630,30 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
   });
 }
 
+type BundledChannelLegacyArtifact<TArtifact> = {
+  pluginId: ChannelId;
+  artifact: TArtifact;
+};
+
 function listBundledChannelLegacyArtifacts<TArtifact>(
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig },
+  options: { config?: OpenClawConfig; pluginIds?: readonly string[] },
   loadFromEntry: (entry: BundledChannelSetupEntryRuntimeContract) => TArtifact | undefined,
   loadFromPlugin: (plugin: ChannelPlugin) => TArtifact | undefined,
-): readonly TArtifact[] {
+): readonly BundledChannelLegacyArtifact<TArtifact>[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
   return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, options).flatMap((id) => {
     const entry = getBundledChannelArtifactForRoot("setupEntry", id, rootScope, loadContext);
     const artifact = entry ? loadFromEntry(entry) : undefined;
     if (artifact) {
-      return [artifact];
+      return [{ pluginId: id, artifact }];
     }
     if (entry?.features?.[feature] !== true) {
       return [];
     }
     const plugin = getBundledChannelArtifactForRoot("setupPlugin", id, rootScope, loadContext);
     const fallback = plugin ? loadFromPlugin(plugin) : undefined;
-    return fallback ? [fallback] : [];
+    return fallback ? [{ pluginId: id, artifact: fallback }] : [];
   });
 }
 
@@ -697,18 +665,22 @@ export function listBundledChannelLegacySessionSurfaces(
     options,
     (entry) => entry.loadLegacySessionSurface?.(),
     (plugin) => plugin.messaging,
-  );
+  ).map((entry) => entry.artifact);
 }
 
-export function listBundledChannelLegacyStateMigrationDetectors(
-  options: { config?: OpenClawConfig } = {},
-): readonly BundledChannelLegacyStateMigrationDetector[] {
+/** Deprecated setup-entry migrations adapted into the plugin doctor pipeline. */
+export function listBundledChannelLegacyStateMigrationDetectorEntries(
+  options: { config?: OpenClawConfig; pluginIds?: readonly string[] } = {},
+): ReadonlyArray<{
+  pluginId: ChannelId;
+  detector: BundledChannelLegacyStateMigrationDetector;
+}> {
   return listBundledChannelLegacyArtifacts(
     "legacyStateMigrations",
     options,
     (entry) => entry.loadLegacyStateMigrationDetector?.(),
     (plugin) => plugin.lifecycle?.detectLegacyStateMigrations,
-  );
+  ).map(({ pluginId, artifact }) => ({ pluginId, detector: artifact }));
 }
 
 export function getBundledChannelAccountInspector(

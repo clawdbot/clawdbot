@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   type EventSessionRoutingPolicy,
   resolveEventSessionKeyForPolicy,
@@ -33,6 +34,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -49,7 +51,11 @@ import {
   recordNotifyOnExitRemoval,
   tail,
 } from "./bash-process-registry.js";
-import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
+import {
+  appendExecTimeoutRetryGuidance,
+  renderExecExitLabel,
+  renderExecUpdateText,
+} from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -328,16 +334,19 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   session.exitNotified = true;
-  const exitLabel = session.exitSignal
-    ? `signal ${session.exitSignal}`
-    : `code ${session.exitCode ?? 0}`;
+  const exitLabel = renderExecExitLabel(session);
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
     return;
   }
-  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
+  if (
+    status === "completed" &&
+    session.exitCode === 0 &&
+    !output &&
+    session.notifyOnExitEmptySuccess !== true
+  ) {
     return;
   }
   const summary = output
@@ -778,6 +787,8 @@ export async function runExecProcess(opts: {
           aggregated: session.aggregated.trim(),
           durationMs: Date.now() - startedAt,
         });
+        // Background observers need the finalizer failure in the same bounded, redacted output.
+        appendOutput(session, "stderr", `\n${redactToolPayloadText(formatErrorMessage(error))}\n`);
       } else {
         logWarn(`exec: sandbox finalize after process failure failed (${String(error)}).`);
       }

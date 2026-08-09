@@ -52,11 +52,12 @@ describe("worker transcript provider replay", () => {
     const message = assistantWithReplay();
     Object.assign(message.providerReplay!, { providerScratch: "private" });
 
-    const projected = toWorkerTranscriptMessage(message);
-    expect(projected?.role).toBe("assistant");
-    if (!projected || projected.role !== "assistant") {
+    const result = toWorkerTranscriptMessage(message, "transcript");
+    expect(result?.kind).toBe("complete");
+    if (!result || result.kind !== "complete" || result.message.role !== "assistant") {
       throw new Error("expected projected assistant message");
     }
+    const projected = result.message;
     expect(projected.providerReplay).toEqual(providerReplay);
     expect(JSON.stringify(projected)).not.toContain("providerScratch");
     expect(isWorkerTranscriptMessageFrameSafe(projected)).toBe(true);
@@ -71,43 +72,51 @@ describe("worker transcript provider replay", () => {
     expect(toAgentMessage(projected)).toMatchObject({ providerReplay });
   });
 
-  it("keeps the maximum replay data budget inside a complete commit frame", () => {
+  it("keeps replay above 48 KiB whole when the complete commit frame fits", () => {
+    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
     const message = assistantWithReplay({
       ...providerReplay,
-      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+      data: ciphertext,
     });
 
-    const projected = toWorkerTranscriptMessage(message);
+    const result = toWorkerTranscriptMessage(message, "transcript");
 
-    expect(projected?.role).toBe("assistant");
-    expect(projected?.role === "assistant" ? projected.providerReplay?.data.length : 0).toBe(
-      WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
-    );
-    expect(projected && isWorkerTranscriptMessageFrameSafe(projected)).toBe(true);
+    expect(result?.kind).toBe("complete");
+    if (!result || result.kind !== "complete" || result.message.role !== "assistant") {
+      throw new Error("expected projected assistant message");
+    }
+    expect(result.message.providerReplay?.data).toBe(ciphertext);
+    expect(isWorkerTranscriptMessageFrameSafe(result.message)).toBe(true);
   });
 
   it.each([
     {
-      name: "raw UTF-8 data over budget",
+      name: "raw UTF-8 data over the replay field budget",
       replay: { ...providerReplay, data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1) },
+      reason: "provider-replay-data-budget" as const,
     },
     {
-      name: "multibyte data over its byte budget",
-      replay: { ...providerReplay, data: "€".repeat(20_000) },
+      name: "multibyte data whose complete frame is over budget",
+      replay: { ...providerReplay, data: "€".repeat(21_845) },
+      reason: "transcript-commit-frame-budget" as const,
     },
     {
       name: "JSON-escaped data over the complete frame budget",
       replay: { ...providerReplay, data: "\0".repeat(12_000) },
+      reason: "transcript-commit-frame-budget" as const,
     },
     {
       name: "a schema-valid id over the complete frame budget",
       replay: { ...providerReplay, id: "i".repeat(65_536), data: "opaque" },
+      reason: "transcript-commit-frame-budget" as const,
     },
-  ])("omits the entire replay for $name", ({ replay }) => {
-    const projected = toWorkerTranscriptMessage(assistantWithReplay(replay));
+  ])("degrades without ciphertext for $name", ({ replay, reason }) => {
+    const result = toWorkerTranscriptMessage(assistantWithReplay(replay), "transcript");
 
-    expect(projected?.role).toBe("assistant");
-    expect(projected?.role === "assistant" ? projected.providerReplay : undefined).toBeUndefined();
-    expect(projected && isWorkerTranscriptMessageFrameSafe(projected)).toBe(true);
+    if (!result || result.kind !== "provider-replay-unavailable") {
+      throw new Error("expected degraded replay projection");
+    }
+    expect(result.details).toMatchObject({ reason });
+    expect(JSON.stringify(result.details)).not.toContain(replay.data);
   });
 });

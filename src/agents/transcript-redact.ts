@@ -295,10 +295,6 @@ function sanitizeOpenAICompactionReplayState(
     (isSuppression
       ? value.data !== OPENAI_COMPACTION_SUPPRESSION_DATA
       : !isStructurallyValidOpaqueReplayToken(value.data)) ||
-    (value.id !== undefined &&
-      (isSuppression ||
-        typeof value.id !== "string" ||
-        !isOpenAIResponseItemId(value.id, route))) ||
     (value.replayIndex !== undefined &&
       (isSuppression ||
         !Number.isSafeInteger(value.replayIndex) ||
@@ -313,10 +309,14 @@ function sanitizeOpenAICompactionReplayState(
   ) {
     return undefined;
   }
+  const replayId =
+    !isSuppression && typeof value.id === "string" && isOpenAIResponseItemId(value.id, route)
+      ? value.id
+      : undefined;
   return {
     v: 1,
     type: replayType,
-    ...(value.id !== undefined ? { id: value.id } : {}),
+    ...(replayId !== undefined ? { id: replayId } : {}),
     data: value.data,
     ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
     provider: value.provider,

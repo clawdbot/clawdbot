@@ -705,11 +705,56 @@ describe("google video generation provider", () => {
         cfg: {},
         durationSeconds: 3,
       }),
-    ).rejects.toThrow("Google video operation response exceeds 16777216 bytes");
+    ).rejects.toThrow("Google video operation response: JSON response exceeds 16777216 bytes");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(streamed.getReadCount()).toBeLessThan(64);
     expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("reports malformed Google REST operation JSON with a stable provider error", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{ nope", { status: 200 })));
+
+    await expect(
+      buildGoogleVideoGenerationProvider().generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google video operation response: malformed JSON response");
+  });
+
+  it("rejects invalid UTF-8 in Google REST operation JSON before parsing", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    const invalidUtf8Json = new Uint8Array([
+      ...Buffer.from('{"done":true,"name":"operations/'),
+      0xff,
+      ...Buffer.from('"}'),
+    ]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(invalidUtf8Json)));
+
+    await expect(
+      buildGoogleVideoGenerationProvider().generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google video operation response: malformed JSON response");
   });
 
   it("retries transient Google REST poll failures with empty bodies", async () => {

@@ -42,10 +42,15 @@ import {
 } from "../../infra/update-post-core-finalize.js";
 import {
   buildUpdateRestartSentinelPayload,
+  normalizeControlPlaneUpdateResult,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
-import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import {
+  getUpdateAvailable,
+  getUpdateSchedule,
+  refreshGatewayUpdateStatus,
+} from "../../infra/update-startup.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
@@ -143,6 +148,15 @@ export const updateHandlers: GatewayRequestHandlers = {
         `update.status sentinel refresh failed: ${formatUpdateRunErrorMessage(err)}`,
       );
       sentinel = getLatestUpdateRestartSentinel();
+    }
+    if (context?.getRuntimeConfig) {
+      try {
+        await refreshGatewayUpdateStatus(context.getRuntimeConfig());
+      } catch (err) {
+        context.logGateway?.warn(
+          `update.status checkout refresh failed: ${formatUpdateRunErrorMessage(err)}`,
+        );
+      }
     }
     const schedule = getUpdateSchedule();
     const result = {
@@ -486,6 +500,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         durationMs: 0,
       };
     }
+
+    result = normalizeControlPlaneUpdateResult(result);
 
     // A failed RPC owns the adopted campaign until it explicitly releases it;
     // only a started handoff may leave "applying" for the successor process.

@@ -171,6 +171,7 @@ export async function cleanupCodexAttempt(
     log: embeddedAgentLog,
     cleanup: async () => {
       await prompt.context.attemptTools.scopedMcpTools?.dispose();
+      await prompt.context.attemptTools.scheduledConfiguredMcp?.dispose();
     },
   });
   runAbortController.signal.removeEventListener("abort", abortListener);

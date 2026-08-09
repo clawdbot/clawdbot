@@ -80,6 +80,43 @@ export const UpdateAvailableSchema = closedObject({
   commits: Type.Optional(Type.Array(UpdateCommitSchema, { maxItems: 5 })),
 });
 
+const GitInstallMetadataProperties = {
+  currentSha: Type.Optional(NonEmptyString),
+  commitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  installedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+} as const;
+
+const GitUpdateStatusSchema = Type.Union([
+  closedObject({ ...GitInstallMetadataProperties, status: Type.Literal("current") }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("behind"),
+    commitsBehind: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("ahead"),
+    commitsAhead: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("diverged"),
+    commitsAhead: Type.Integer({ minimum: 1 }),
+    commitsBehind: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("unavailable"),
+    reason: Type.Union([
+      Type.Literal("fetch-failed"),
+      Type.Literal("no-upstream"),
+      Type.Literal("no-upstream-sha"),
+      Type.Literal("comparison-failed"),
+      Type.Literal("git-unavailable"),
+    ]),
+  }),
+]);
+
 /** Authoritative automatic-update schedule and in-memory campaign state. */
 export const UpdateScheduleStateSchema = closedObject({
   channel: NonEmptyString,
@@ -87,6 +124,7 @@ export const UpdateScheduleStateSchema = closedObject({
   install: Type.Optional(
     closedObject({
       kind: Type.Union([Type.Literal("package"), Type.Literal("git"), Type.Literal("unknown")]),
+      git: Type.Optional(GitUpdateStatusSchema),
     }),
   ),
   target: Type.Optional(

@@ -386,6 +386,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,

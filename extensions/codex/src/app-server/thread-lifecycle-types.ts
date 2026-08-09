@@ -66,6 +66,8 @@ export type CodexStartOrResumeThreadParams = {
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
+  /** Versioned owner of configured MCP for scheduled dynamic-tool execution. */
+  configuredMcpOwnershipVersion?: 1;
   environmentSelection?: CodexTurnEnvironmentParams[];
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;

@@ -91,6 +91,8 @@ export type GatewayClient = {
   /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
   isControlUiDeviceAuthMigration?: boolean;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */

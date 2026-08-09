@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   createConfigIO,
   resolveConfigPath,
@@ -122,6 +123,8 @@ type CliStatusSummary = {
   version: string;
   entrypoint?: string;
 };
+
+type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
 const gatewayProbeAuthModuleLoader = createLazyImportLoader(
   () => import("../../gateway/probe-auth.js"),
@@ -343,6 +346,10 @@ export type DaemonStatus = {
     };
     version?: string | null;
     error?: string;
+    connectFailure?: {
+      kind: GatewayConnectFailureKind;
+      detailCode?: string;
+    };
     url?: string;
     authWarning?: string;
   };

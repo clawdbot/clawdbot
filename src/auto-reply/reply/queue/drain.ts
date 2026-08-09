@@ -572,6 +572,17 @@ function collectRuntimeMetadata(
   };
 }
 
+function resolveQueuedCronCreatorAuthorityUnavailable(
+  items: readonly FollowupRun[],
+): "queued-local-operator" | undefined {
+  return items.some(
+    (item) =>
+      item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
+  )
+    ? "queued-local-operator"
+    : undefined;
+}
+
 type FollowupQueueSummaryState = {
   cap: number;
   droppedCount: number;
@@ -983,6 +994,9 @@ async function runSyntheticOverflowSummary(params: {
           turnAdoptionLifecycle: {
             // Synthetic aggregate owner — not a durable exclusive ingress identity.
             admission: "cancel-only" as const,
+            ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
+              ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+              : {}),
             onAdopted: async () => {
               await params.onAdmitted?.();
               admitted = true;
@@ -1320,6 +1334,9 @@ export function scheduleFollowupDrain(
                       turnAdoptionLifecycle: {
                         // Synthetic aggregate owner — sources keep their own admission.
                         admission: "cancel-only" as const,
+                        ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
+                          ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+                          : {}),
                         onAdopted: admitGroupSources,
                         onSettled: () => {
                           if (admitted) {

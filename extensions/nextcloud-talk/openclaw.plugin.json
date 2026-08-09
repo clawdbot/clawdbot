@@ -1,8 +1,7 @@
 {
   "id": "nextcloud-talk",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "name": "Nextcloud Talk",
   "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",

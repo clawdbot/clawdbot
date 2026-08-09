@@ -4,7 +4,7 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   verifyChain,

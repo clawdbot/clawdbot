@@ -7,6 +7,7 @@ import {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
@@ -25,6 +26,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -381,6 +383,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const sessionKey = targetSessionKey ?? directSessionKey;
       const storePath = normalizeOptionalString(target?.storePath);
       const agentId = normalizeOptionalString(target?.agentId ?? params.agentId);
+      const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+      if (sessionKeyAgentId && normalizedAgentId && normalizedAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${normalizedAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
+      // Embedded runs accept one exact key. Carry its resolved store into the
+      // keyless ID/file scan so incognito ownership stays in the process-held DB.
+      const ownershipStorePath =
+        sessionKey && sessionKeyAgentId
+          ? resolveSessionStorePathForScope({
+              agentId: sessionKeyAgentId,
+              sessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       const entry = sessionKey
         ? registryParams.runtime.agent.session.getSessionEntry({
             sessionKey,
@@ -455,11 +475,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        agentId: ownershipAgentId,
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: target?.storePath,
+        storePath: ownershipStorePath,
       });
       return undefined;
     };

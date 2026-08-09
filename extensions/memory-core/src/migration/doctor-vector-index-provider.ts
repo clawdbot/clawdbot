@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";

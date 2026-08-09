@@ -1,3 +1,4 @@
+import { stripOpenAIResponsesCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import type { AgentMessage } from "../../types.js";
 import {
   asAgentMessage,
@@ -38,13 +39,23 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
   }
 }
 
-function appendContextMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
+function stripStalePrefixReplay(message: AgentMessage): AgentMessage {
+  return message.role === "assistant"
+    ? stripOpenAIResponsesCompactionReplayCheckpoint(message)
+    : message;
+}
+
+function appendContextMessage(
+  messages: AgentMessage[],
+  entry: SessionTreeEntry,
+  options?: { prefixWasRewritten?: boolean },
+): void {
   if (entry.type === "compaction" || (entry.type === "branch_summary" && !entry.summary)) {
     return;
   }
   const message = projectSessionEntryMessage(entry);
   if (message) {
-    messages.push(message);
+    messages.push(options?.prefixWasRewritten ? stripStalePrefixReplay(message) : message);
   }
 }
 
@@ -53,7 +64,9 @@ function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntr
     entry.type === "message" &&
     (entry.message.role === "user" || entry.message.role === "assistant")
   ) {
-    const message = { ...entry.message } as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true };
+    const message = { ...stripStalePrefixReplay(entry.message) } as AgentMessage & {
+      [SESSION_HISTORY_PRELUDE]?: true;
+    };
     Object.defineProperty(message, SESSION_HISTORY_PRELUDE, {
       configurable: true,
       enumerable: false,
@@ -91,7 +104,8 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
     }
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
     // A reset kept tail mirrors the old cross-log replay contract: only user/assistant
-    // rows survive. Compaction keeps its existing richer retained-tail behavior.
+    // rows survive. Both retained-tail forms now follow rewritten prefixes, so
+    // prefix-bound checkpoints are stale.
     let foundFirstKept = false;
     for (const entry of pathEntries.slice(0, boundaryIdx)) {
       if (entry.id === boundary.firstKeptEntryId) {
@@ -101,7 +115,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
         if (boundary.type === "reset") {
           appendResetKeptMessage(messages, entry);
         } else {
-          appendContextMessage(messages, entry);
+          appendContextMessage(messages, entry, { prefixWasRewritten: true });
         }
       }
     }

@@ -875,6 +875,8 @@ export class GatewayClient {
     assembled: AssembledConnect,
   ) {
     const role = this.opts.role ?? "operator";
+    const detailCode =
+      error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
     const shouldRetryWithDeviceToken = shouldRetryGatewayWithDeviceToken({
       retryBudgetUsed: this.deviceTokenRetryBudgetUsed,
       currentDeviceToken: assembled.resolvedDeviceToken,
@@ -886,9 +888,7 @@ export class GatewayClient {
     if (
       this.opts.deviceIdentity &&
       assembled.usingStoredDeviceToken &&
-      error instanceof GatewayClientRequestError &&
-      readConnectErrorDetailCode(error.details) ===
-        ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+      detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
     ) {
       const deviceId = this.opts.deviceIdentity.deviceId;
       try {
@@ -942,7 +942,11 @@ export class GatewayClient {
     }
     this.notifyConnectError(error);
     const message = `gateway connect failed: ${formatGatewayClientErrorForLog(error)}`;
-    if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(error)) {
+    if (
+      this.opts.mode === GATEWAY_CLIENT_MODES.PROBE ||
+      isGatewayClientStoppedError(error) ||
+      detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED
+    ) {
       this.logDebug(message);
     } else {
       this.logError(message);

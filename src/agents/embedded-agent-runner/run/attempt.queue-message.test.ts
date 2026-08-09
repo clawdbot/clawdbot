@@ -9,6 +9,15 @@ type EmbeddedAgentActiveSessionSteerTarget = Parameters<
   typeof steerActiveSessionWithOptionalDeliveryWait
 >[0];
 
+function createIdentityAwareSteer(message: object): EmbeddedAgentActiveSessionSteerTarget["steer"] {
+  return async (_text, _images, _recorder, _media, _imageOrder, queueIdentity) => {
+    setSteeringMessageIdentity(
+      message as Parameters<typeof setSteeringMessageIdentity>[0],
+      queueIdentity,
+    );
+  };
+}
+
 function steerWithDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -88,9 +97,13 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.
     let emit!: (event: unknown) => void;
+    const queuedMessage = {
+      role: "user",
+      content: [{ type: "text", text: "queued completion" }],
+    };
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       getSteeringMessages: () => [],
-      steer: async () => {},
+      steer: createIdentityAwareSteer(queuedMessage),
       subscribe: (listener) => {
         emit = listener;
         return () => {};
@@ -104,20 +117,14 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     emit({
       type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "queued completion" }],
-      },
+      message: queuedMessage,
     });
     await Promise.resolve();
     expect(settled).toBe(false);
 
     emit({
       type: "message_end",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "queued completion" }],
-      },
+      message: queuedMessage,
     });
 
     await expect(wait).resolves.toBeUndefined();
@@ -156,7 +163,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         },
       },
       getSteeringMessages: () => steeringUiMessages,
-      steer: async () => {},
+      steer: createIdentityAwareSteer(targetMessage),
       subscribe: () => () => {},
     };
 
@@ -202,7 +209,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         },
       },
       getSteeringMessages: () => steeringUiMessages,
-      steer: async () => {},
+      steer: createIdentityAwareSteer(targetMessage),
       subscribe: (listener) => {
         emit = listener;
         return () => {
@@ -294,6 +301,67 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(steeringUiMessages).toEqual(["same text"]);
   });
 
+  it("cancels the exact expanded steer without leaving a duplicate UI entry", async () => {
+    const expandedText = "expanded steering text";
+    const first = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: expandedText }],
+      timestamp: 1,
+    };
+    const second = { ...first, content: [...first.content], timestamp: 2 };
+    setSteeringMessageIdentity(first, "keep-first");
+    setSteeringMessageIdentity(second, "cancel-second");
+    const queueMessages = [first, second];
+    const steeringUiMessages = [expandedText, expandedText];
+    const controller = new AbortController();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: { steeringQueue: { messages: queueMessages } },
+      getSteeringMessages: () => steeringUiMessages,
+      steer: async () => {},
+      subscribe: () => () => {},
+    };
+
+    const wait = steerWithDeliveryWait(activeSession, "/expand same text", 10_000, {
+      queueIdentity: "cancel-second",
+      abortSignal: controller.signal,
+    });
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(wait).rejects.toThrow("queued steering message was cancelled before delivery");
+    expect(queueMessages).toEqual([first]);
+    expect(steeringUiMessages).toEqual([expandedText]);
+  });
+
+  it("removes the empty UI entry for an image-only queued steer", async () => {
+    const image = { type: "image" as const, data: "image-data", mimeType: "image/png" };
+    const message = { role: "user" as const, content: [image], timestamp: 1 };
+    setSteeringMessageIdentity(message, "image-only");
+    const queueMessages = [message];
+    const steeringUiMessages = [""];
+    const controller = new AbortController();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: { steeringQueue: { messages: queueMessages } },
+      getSteeringMessages: () => steeringUiMessages,
+      steer: async () => {},
+      subscribe: () => () => {},
+    };
+
+    const wait = steerActiveSessionWithOptionalDeliveryWait(activeSession, "", {
+      images: [image],
+      queueIdentity: "image-only",
+      abortSignal: controller.signal,
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+    });
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(wait).rejects.toThrow("queued steering message was cancelled before delivery");
+    expect(queueMessages).toEqual([]);
+    expect(steeringUiMessages).toEqual([]);
+  });
+
   it("marks a missing queued message as accepted without transcript confirmation", async () => {
     vi.useFakeTimers();
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
@@ -336,7 +404,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
           },
         },
         getSteeringMessages: () => steeringUiMessages,
-        steer: async () => {},
+        steer: createIdentityAwareSteer(targetMessage),
         subscribe: (listener) => {
           emit = listener;
           return () => {};
@@ -354,10 +422,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
       emit({
         type: "message_end",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "completion survives retry" }],
-        },
+        message: targetMessage,
       });
 
       await expect(wait).resolves.toBeUndefined();
@@ -384,7 +449,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
           },
         },
         getSteeringMessages: () => steeringUiMessages,
-        steer: async () => {},
+        steer: createIdentityAwareSteer(targetMessage),
         subscribe: (listener) => {
           emit = listener;
           return () => {};
@@ -402,10 +467,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
       emit({
         type: "message_end",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "completion survives compaction" }],
-        },
+        message: targetMessage,
       });
 
       await expect(wait).resolves.toBeUndefined();

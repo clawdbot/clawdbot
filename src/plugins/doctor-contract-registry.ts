@@ -2,10 +2,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { listBundledChannelLegacyStateMigrationDetectorEntries } from "../channels/plugins/bundled.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
@@ -208,13 +210,12 @@ function loadPluginDoctorContractEntry(
   };
 }
 
-function resolvePluginDoctorContracts(params: {
-  surface: PluginDoctorContractSurface;
+function resolvePluginDoctorManifestRecords(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
-}): PluginDoctorContractEntry[] {
+}): PluginManifestRegistryRecord[] {
   const env = params?.env ?? process.env;
   if (params?.pluginIds && params.pluginIds.length === 0) {
     return [];
@@ -227,19 +228,39 @@ function resolvePluginDoctorContracts(params: {
     includeDisabled: true,
   });
 
-  const entries: PluginDoctorContractEntry[] = [];
   const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
-  for (const record of manifestRegistry.plugins) {
-    if (
-      scopedPluginIds &&
-      !scopedPluginIds.has(record.id) &&
-      !(record.packageName && scopedPluginIds.has(record.packageName)) &&
-      !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
-      !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
-      !record.providers.some((providerId) => scopedPluginIds.has(providerId))
-    ) {
-      continue;
-    }
+  return manifestRegistry.plugins.filter(
+    (record) =>
+      !(
+        scopedPluginIds &&
+        !scopedPluginIds.has(record.id) &&
+        !(record.packageName && scopedPluginIds.has(record.packageName)) &&
+        !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
+        !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
+        !record.providers.some((providerId) => scopedPluginIds.has(providerId))
+      ),
+  );
+}
+
+function resolvePluginDoctorContracts(params: {
+  surface: PluginDoctorContractSurface;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
+}): PluginDoctorContractEntry[] {
+  return loadPluginDoctorContractEntries({
+    records: resolvePluginDoctorManifestRecords(params),
+    surface: params.surface,
+  });
+}
+
+function loadPluginDoctorContractEntries(params: {
+  records: PluginManifestRegistryRecord[];
+  surface: PluginDoctorContractSurface;
+}): PluginDoctorContractEntry[] {
+  const entries: PluginDoctorContractEntry[] = [];
+  for (const record of params.records) {
     const declaration = record.doctorContract;
     // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
     if (declaration && declaration[params.surface] !== true) {
@@ -261,7 +282,7 @@ export function listPluginDoctorLegacyConfigRules(params?: {
 }): LegacyConfigRule[] {
   return resolvePluginDoctorContracts({
     ...params,
-    surface: "legacyConfigRules",
+    surface: "configRepair",
   }).flatMap((entry) => entry.rules);
 }
 
@@ -272,10 +293,13 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
   pluginIds?: readonly string[];
 }): DoctorSessionRouteStateOwner[] {
   const owners = new Map<string, DoctorSessionRouteStateOwner>();
-  for (const owner of resolvePluginDoctorContracts({
-    ...params,
+  const records = resolvePluginDoctorManifestRecords(params ?? {});
+  const manifestOwners = records.flatMap((record) => record.sessionRouteStateOwners ?? []);
+  const legacyModuleOwners = loadPluginDoctorContractEntries({
+    records: records.filter((record) => record.sessionRouteStateOwners === undefined),
     surface: "sessionRouteStateOwners",
-  }).flatMap((entry) => entry.sessionRouteStateOwners)) {
+  }).flatMap((entry) => entry.sessionRouteStateOwners);
+  for (const owner of [...manifestOwners, ...legacyModuleOwners]) {
     if (!owners.has(owner.id)) {
       owners.set(owner.id, owner);
     }
@@ -316,12 +340,29 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginDoctorStateMigrationEntry[] {
-  return resolvePluginDoctorContracts({ ...params, surface: "stateMigrations" }).flatMap((entry) =>
+  const declaredEntries = resolvePluginDoctorContracts({
+    ...params,
+    surface: "stateMigrations",
+  }).flatMap((entry) =>
     entry.stateMigrations.map((migration) => ({
       pluginId: entry.pluginId,
       migration,
     })),
   );
+  // Shipped channel setup entries may still declare migration detectors. Keep this
+  // single bridge until the 2027.1 external-plugin migration window closes.
+  const legacyEntries = listBundledChannelLegacyStateMigrationDetectorEntries({
+    config: params?.config,
+    pluginIds: params?.pluginIds,
+  }).map(({ pluginId, detector }) => ({
+    pluginId,
+    migration: definePluginDoctorMigrationFromPlans({
+      id: `${pluginId}-legacy-channel-state`,
+      label: `${pluginId} legacy channel state`,
+      resolvePlans: detector,
+    }),
+  }));
+  return [...declaredEntries, ...legacyEntries];
 }
 
 export function applyPluginDoctorCompatibilityMigrations(
@@ -340,7 +381,7 @@ export function applyPluginDoctorCompatibilityMigrations(
   const changes: string[] = [];
   for (const entry of resolvePluginDoctorContracts({
     ...params,
-    surface: "normalizeCompatibilityConfig",
+    surface: "configRepair",
   })) {
     const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {

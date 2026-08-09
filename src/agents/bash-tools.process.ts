@@ -22,7 +22,7 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecExitLabel } from "./bash-tools.exec-output.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -417,11 +417,7 @@ export function createProcessTool(
                         })`) +
                         aggregateOutputNote +
                         retainedOutputNote +
-                        `\n\nProcess exited with ${
-                          scopedFinished.exitSignal
-                            ? `signal ${scopedFinished.exitSignal}`
-                            : `code ${scopedFinished.exitCode ?? 0}`
-                        }.`,
+                        `\n\nProcess exited with ${renderExecExitLabel(scopedFinished)}.`,
                       scopedFinished.exitReason,
                     ),
                   },
@@ -464,23 +460,12 @@ export function createProcessTool(
           }
           const { stdout, stderr, outputDropped } = drainSession(scopedSession);
           const exited = scopedSession.exited;
-          const exitCode = scopedSession.exitCode ?? 0;
-          const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
             markTerminalPollObserved(scopedSession);
             acknowledgeNotifyOnExit(scopedSession);
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
-            markExited(
-              scopedSession,
-              scopedSession.exitCode ?? null,
-              scopedSession.exitSignal ?? null,
-              status,
-              scopedSession.exitReason,
-              scopedSession.noOutputTimedOut,
-            );
           }
           const status = exited
-            ? exitCode === 0 && exitSignal == null
+            ? scopedSession.terminalStatus === "completed"
               ? "completed"
               : "failed"
             : "running";
@@ -506,9 +491,7 @@ export function createProcessTool(
                     aggregateOutputNote +
                     retainedOutputNote +
                     (exited
-                      ? `\n\nProcess exited with ${
-                          exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                        }.`
+                      ? `\n\nProcess exited with ${renderExecExitLabel(scopedSession)}.`
                       : buildInputWaitHint(runtime) || "\n\nProcess still running."),
                   exited ? scopedSession.exitReason : undefined,
                 ),
@@ -517,7 +500,7 @@ export function createProcessTool(
             details: {
               status,
               sessionId: params.sessionId,
-              exitCode: exited ? exitCode : undefined,
+              exitCode: exited ? (scopedSession.exitCode ?? undefined) : undefined,
               ...(exited && scopedSession.exitSignal != null
                 ? { exitSignal: scopedSession.exitSignal }
                 : {}),

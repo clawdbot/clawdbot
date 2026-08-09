@@ -14,6 +14,10 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
+import {
+  bindActiveCronCreatorAuthorityResolver,
+  runWithCronCreatorAuthorityResolver,
+} from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
@@ -48,6 +52,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -157,6 +162,9 @@ const mockState = vi.hoisted(() => ({
   disposedTranscriptWriteAttempts: 0,
   runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
   runtimeAssistantTextsBeforeDelivery: [] as string[],
+  cronAuthorityProbe: undefined as
+    | ((runId: string | undefined) => Promise<void> | void)
+    | undefined,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
   // though ctx still carries their rewritten paths. This mirrors how the real
@@ -324,6 +332,7 @@ dispatchInboundMessageMock.mockImplementation(
         }>,
       ) => void;
       replyOptions?: {
+        runId?: string;
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
@@ -347,6 +356,7 @@ dispatchInboundMessageMock.mockImplementation(
       mockState.lastDispatchOriginatingLeafEntryId =
         params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
       mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
+      await mockState.cronAuthorityProbe?.(params.replyOptions?.runId);
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -1094,6 +1104,7 @@ async function runNonStreamingChatSend(params: {
   client?: unknown;
   expectBroadcast?: boolean;
   requestParams?: Record<string, unknown>;
+  directExternal?: boolean;
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
@@ -1111,10 +1122,11 @@ async function runNonStreamingChatSend(params: {
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
   }
-  await expectDefined(
-    chatHandlers["chat.send"],
-    'chatHandlers["chat.send"] test invariant',
-  )({
+  const handler =
+    params.directExternal === false
+      ? handleChatSend
+      : expectDefined(chatHandlers["chat.send"], 'chatHandlers["chat.send"] test invariant');
+  await handler({
     params: {
       ...sendParams,
       ...params.requestParams,
@@ -1293,6 +1305,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.disposedTranscriptWriteAttempts = 0;
     mockState.runtimeAssistantContentBeforeDelivery = null;
     mockState.runtimeAssistantTextsBeforeDelivery = [];
+    mockState.cronAuthorityProbe = undefined;
   });
 
   it.each([
@@ -7124,6 +7137,187 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 });
 
 describe("chat.send operator UI client sender context", () => {
+  it.each([
+    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web"],
+    [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, "darwin"],
+  ] as const)(
+    "binds lazy configured-MCP cron authority to an admitted local %s turn",
+    async (clientId, mode, platform) => {
+      await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-cron-authority-${clientId}-`);
+      const { send } = createChatRequestFixture();
+      let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+      let resolvedGrant: { runId: string; token: string } | undefined;
+      mockState.cronAuthorityProbe = async (runId) => {
+        await runWithCronCreatorAuthorityResolver({
+          runId: runId ?? "",
+          resolve: async () => ({
+            tools: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
+            provenance: { version: 1, source: "final-executable-surface" },
+          }),
+          run: async () => {
+            retainedResolver = bindActiveCronCreatorAuthorityResolver(runId);
+            const snapshot = await retainedResolver!();
+            resolvedGrant = snapshot.grant;
+            expect(snapshot.tools).toEqual([
+              "read",
+              { name: "configured__lookup", pluginId: "bundle-mcp" },
+            ]);
+          },
+        });
+      };
+
+      await send({
+        idempotencyKey: `idem-cron-authority-${clientId}`,
+        client: {
+          connect: {
+            client: { id: clientId, mode, version: "dev", platform },
+            scopes: ["operator.admin"],
+          },
+          internal: { isLocalClient: true },
+        },
+        expectBroadcast: false,
+      });
+
+      expect(resolvedGrant).toMatchObject({ runId: `idem-cron-authority-${clientId}` });
+      await expect(retainedResolver!()).rejects.toThrow(
+        "Configured MCP cron authority is no longer active",
+      );
+      expect(() => consumeCronCreatorAuthorityGrant(resolvedGrant!)).toThrow(
+        "Configured MCP cron authority is no longer active",
+      );
+    },
+  );
+
+  it("denies otherwise-eligible internal chat.send re-entry, including Talk consults", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-internal-reentry-");
+    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+    mockState.cronAuthorityProbe = async (runId) => {
+      runWithCronCreatorAuthorityResolver({
+        runId: runId ?? "",
+        resolve: async () => ({
+          tools: ["read", "configured__lookup"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () => {
+          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
+        },
+      });
+    };
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-cron-authority-internal-reentry",
+      message: "Talk realtime agent consult prompt",
+      directExternal: false,
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: ["operator.admin"],
+        },
+        internal: { isLocalClient: true },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(boundResolver!).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "remote client",
+      client: { internal: {}, scopes: ["operator.admin"] },
+    },
+    {
+      name: "non-admin client",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.write"] },
+    },
+    {
+      name: "incognito session",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      sessionEntry: { incognito: true },
+    },
+    {
+      name: "synthetic client",
+      client: {
+        internal: { isLocalClient: true, syntheticClient: true },
+        scopes: ["operator.admin"],
+      },
+    },
+    {
+      name: "input provenance",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      requestParams: { systemInputProvenance: { kind: "external_user" } },
+    },
+    {
+      name: "delegated handoff",
+      client: {
+        internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
+        scopes: ["operator.admin"],
+      },
+    },
+    {
+      name: "spawned lineage",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      sessionEntry: { spawnedBy: "agent:main:parent" },
+    },
+    {
+      name: "synthetic cron continuation",
+      client: {
+        internal: { isLocalClient: true, cronRunContinuation: true },
+        scopes: ["operator.admin"],
+      },
+    },
+    {
+      name: "persisted cron continuation",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      sessionEntry: {
+        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
+      },
+    },
+  ])("does not mint configured-MCP cron authority for $name", async (testCase) => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-negative-");
+    mockState.sessionEntry = testCase.sessionEntry ?? {};
+    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+    mockState.cronAuthorityProbe = async (runId) => {
+      runWithCronCreatorAuthorityResolver({
+        runId: runId ?? "",
+        resolve: async () => ({
+          tools: ["read"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () => {
+          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
+        },
+      });
+    };
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: testCase.client.scopes,
+        },
+        internal: testCase.client.internal,
+      },
+      requestParams: testCase.requestParams,
+      expectBroadcast: false,
+    });
+
+    expect(boundResolver!).toBeUndefined();
+  });
+
   it("does not inject sender identity fields for Control UI clients", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-control-ui-sender-");
     const { send } = createChatRequestFixture();

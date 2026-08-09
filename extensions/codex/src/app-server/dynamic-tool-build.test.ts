@@ -36,6 +36,7 @@ import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const hoisted = vi.hoisted(() => ({
+  normalizeAgentRuntimeTools: vi.fn(),
   resolveWebSearchToolPolicy: vi.fn(),
 }));
 
@@ -49,6 +50,17 @@ vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
     ) => {
       hoisted.resolveWebSearchToolPolicy(...args);
       return actual.resolveWebSearchToolPolicy(...args);
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    normalizeAgentRuntimeTools: (...args: Parameters<typeof actual.normalizeAgentRuntimeTools>) => {
+      hoisted.normalizeAgentRuntimeTools(...args);
+      return actual.normalizeAgentRuntimeTools(...args);
     },
   };
 });
@@ -175,6 +187,7 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   beforeEach(async () => {
+    hoisted.normalizeAgentRuntimeTools.mockClear();
     hoisted.resolveWebSearchToolPolicy.mockClear();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
   });
@@ -1548,6 +1561,59 @@ describe("Codex app-server dynamic tool build", () => {
     const tool = expectDefined(tools[0], "Codex dynamic tool");
     expect(tool).not.toBe(wrappedTool);
     expect(isToolWrappedWithBeforeToolCallHook(tool)).toBe(true);
+  });
+
+  it("builds the durable registered-tool superset without loading a provider runtime", async () => {
+    const sessionFile = path.join(tempDir, "session-registered-tools.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-registered-tools");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    const runtimePlan = createCodexRuntimePlanFixture();
+    const planNormalize = vi.fn((tools: RuntimeDynamicToolForTest[]) =>
+      tools.map((tool) => ({ ...tool, description: `turn:${tool.description}` })),
+    );
+    runtimePlan.tools.normalize = planNormalize as typeof runtimePlan.tools.normalize;
+    params.runtimePlan = runtimePlan;
+    const messageTool = createRuntimeDynamicTool("message");
+    const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
+    const invalidTool = {
+      ...createRuntimeDynamicTool("invalid_registered_tool"),
+      parameters: { type: "array", items: { type: "string" } },
+    };
+    setOpenClawCodingToolsFactoryForTests((options) => [
+      messageTool,
+      ...(options?.enableHeartbeatTool === true ? [heartbeatTool, invalidTool] : []),
+    ]);
+
+    const turnTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+    });
+    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      forceHeartbeatTool: true,
+      ignoreDisableMessageTool: true,
+      ignoreRuntimePlan: true,
+      sandbox: null as never,
+    });
+
+    expect(planNormalize).toHaveBeenCalledOnce();
+    expect(hoisted.normalizeAgentRuntimeTools).toHaveBeenCalledTimes(2);
+    expect(hoisted.normalizeAgentRuntimeTools.mock.calls[0]?.[0]).toMatchObject({
+      runtimePlan,
+    });
+    expect(hoisted.normalizeAgentRuntimeTools.mock.calls[1]?.[0]).toMatchObject({
+      allowProviderRuntimePluginLoad: false,
+      runtimePlan: undefined,
+    });
+    expect(hoisted.normalizeAgentRuntimeTools.mock.calls[1]?.[0]).not.toHaveProperty(
+      "runtimeHandle",
+    );
+    expect(turnTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(turnTools[0]?.description).toBe(`turn:${messageTool.description}`);
+    expect(registeredTools.map((tool) => tool.name)).toEqual(["message", "heartbeat_respond"]);
+    expect(registeredTools.map((tool) => tool.description)).toEqual([
+      messageTool.description,
+      heartbeatTool.description,
+    ]);
   });
 
   it("passes runtime config into Codex exec dynamic tool construction", async () => {

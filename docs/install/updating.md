@@ -265,6 +265,11 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 You can also choose the update channel and enable automatic updates from
 **Settings → Updates** (`/settings/updates`) in the Control UI.
+For a `dev` git install, opening this page refreshes the tracked upstream and
+shows whether the checkout is current, ahead, diverged, unavailable, or a
+specific number of commits behind. It also shows exact and relative build,
+verified install, and last-commit times. Existing checkouts show an unknown
+install time until their next verified successful update.
 
 | Channel           | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

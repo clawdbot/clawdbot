@@ -5174,8 +5174,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(proofStep.run).toContain(
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
     );
+    expect(proofStep.run).toContain(
+      "env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
+    );
     expect(proofStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
     expect(proofStep.run).toContain("Selected target predates");
+  });
+
+  it("scopes cold-runner watchdog headroom to the SQLite flip proof", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+
+    expect(runStep.run).toContain("sqlite-session-flip-proof)");
+    expect(runStep.run).toContain(
+      'run_check "sqlite sessions/transcripts flip proof" env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run',
+    );
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBeUndefined();
   });
 
   it("restores the dist build cache before building and saves only cache misses", () => {

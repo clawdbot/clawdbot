@@ -33,7 +33,7 @@ import {
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
 import { WORKER_LOCAL_TOOL_NAMES, type WorkerLocalToolName } from "./tool-authority.js";
-import { toWorkerTranscriptMessage } from "./transcript-message.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 
 function toError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
@@ -79,15 +79,9 @@ type RunWorkerEmbeddedTurnParams = {
   signal?: AbortSignal;
 };
 
-type RunWorkerEmbeddedTurnResult = {
-  messages: WorkerTranscriptMessage[];
-};
-
 const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
-export async function runWorkerEmbeddedTurn(
-  params: RunWorkerEmbeddedTurnParams,
-): Promise<RunWorkerEmbeddedTurnResult> {
+export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
   const model = createNativeModelOwnedRuntimeModel({
     provider: params.modelRef.provider,
     modelId: params.modelRef.model,
@@ -203,13 +197,20 @@ export async function runWorkerEmbeddedTurn(
   });
   session.agent.sessionId = params.sessionId;
   session.setActiveToolsByName([...activeToolNames]);
-  session.agent.streamFn = (_model, context, options) =>
-    params.inference.stream({
+  session.agent.streamFn = (_model, context, options) => {
+    const projected = toWorkerInferenceContext(context);
+    if (projected.kind === "provider-replay-unavailable") {
+      throw new Error(
+        `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (${projected.details.reason})`,
+      );
+    }
+    return params.inference.stream({
       modelRef: params.modelRef,
-      context: toWorkerInferenceContext(context),
+      context: projected.context,
       options: structuredClone(params.inferenceOptions ?? {}),
       ...(options?.signal ? { signal: options.signal } : {}),
     });
+  };
 
   const liveRuntime = createWorkerLiveRuntime(params.live);
   const unsubscribe = session.subscribe(liveRuntime.handleSessionEvent);
@@ -270,11 +271,4 @@ export async function runWorkerEmbeddedTurn(
   if (finalTranscriptFailure !== undefined) {
     throw finalTranscriptFailure;
   }
-
-  return {
-    messages: session.agent.state.messages.flatMap((message) => {
-      const projected = toWorkerTranscriptMessage(message);
-      return projected ? [projected] : [];
-    }),
-  };
 }

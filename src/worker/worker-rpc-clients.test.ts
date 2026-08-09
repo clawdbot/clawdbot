@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
-  type WorkerHelloOk,
-  type WorkerLiveEvent,
-  type WorkerTranscriptMessage,
+import type {
+  WorkerHelloOk,
+  WorkerLiveEvent,
+  WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceEventFrame,
@@ -288,7 +287,7 @@ describe("worker transcript commit client", () => {
     });
   });
 
-  it("commits a terminal assistant message at the provider replay budget", async () => {
+  it("commits a terminal assistant message with replay near the frame ceiling", async () => {
     const harness = connectionHarness();
     harness.requestTranscriptCommit.mockResolvedValueOnce({
       type: "res",
@@ -309,7 +308,7 @@ describe("worker transcript commit client", () => {
       providerReplay: {
         v: 1,
         type: "openai-responses-compaction",
-        data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+        data: "x".repeat(60 * 1024),
         provider: "openai",
         api: "openai-responses",
         model: "gpt-5.6-sol",

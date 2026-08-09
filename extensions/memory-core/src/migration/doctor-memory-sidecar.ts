@@ -12,7 +12,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   ensureOpenClawAgentDatabaseSchema,
   openNodeSqliteDatabase,

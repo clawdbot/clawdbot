@@ -534,6 +534,39 @@ describe("ConfigPage curated mutation eligibility", () => {
 });
 
 describe("ConfigPage Updates integration", () => {
+  it("refreshes update status once when the page becomes active", () => {
+    const refreshUpdateStatus = vi.fn(async () => {});
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      syncUpdateStatusRefresh: () => void;
+    };
+    state.context = {
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.status"] },
+          },
+        },
+      },
+      overlays: { refreshUpdateStatus },
+    } as unknown as ApplicationContext;
+
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+    page.pageId = "advanced";
+    state.syncUpdateStatusRefresh();
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  });
+
   it("stages policy changes through patchForm and delegates Update now to overlays", () => {
     const patchForm = vi.fn();
     const runUpdate = vi.fn();
