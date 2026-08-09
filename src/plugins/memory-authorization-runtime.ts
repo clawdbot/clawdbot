@@ -19,7 +19,7 @@ const AUTHORIZED_MEMORY_RUNTIME_METHODS = [
 
 type AuthorizedMemoryRuntimeMethodName = (typeof AUTHORIZED_MEMORY_RUNTIME_METHODS)[number];
 
-export type MemoryAuthorizationRuntimeInspection = Readonly<{
+type MemoryAuthorizationRuntimeInspection = Readonly<{
   version: 1;
   capabilityDeclaration: "missing" | "malformed" | "partial" | "complete";
   declaredCapabilityCount: number;
