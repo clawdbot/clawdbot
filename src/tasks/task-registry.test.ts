@@ -2,6 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js";
+import {
+  addSession,
+  deleteSession,
+  markBackgrounded,
+  markExited,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -545,6 +554,7 @@ describe("task-registry", () => {
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
+    resetProcessRegistryForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
@@ -2701,13 +2711,18 @@ describe("task-registry", () => {
     });
   });
 
-  it("retains live background exec tasks and marks missing process sessions lost", async () => {
+  it("retains removed background exec tasks until the process exits", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
+      const session = createProcessSessionFixture({ id: "amber-reef" });
+      addSession(session);
+      markBackgrounded(session);
+      deleteSession(session.id);
+
       const task = createTaskFixture("cli", {
         taskKind: "exec",
-        sourceId: "amber-reef",
-        runId: "exec:amber-reef",
+        sourceId: session.id,
+        runId: `exec:${session.id}`,
         task: "Background CLI command",
         lastEventAt: Date.now() - 10 * 60_000,
       });
@@ -2715,7 +2730,7 @@ describe("task-registry", () => {
       configureTaskRegistryMaintenanceRuntimeForTest({
         currentTasks,
         snapshotTasks: [task],
-        isBackgroundExecSessionActive: () => true,
+        isBackgroundExecSessionActive,
       });
 
       expect(await runTaskRegistryMaintenance()).toEqual({
@@ -2726,11 +2741,8 @@ describe("task-registry", () => {
       });
       expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
 
-      configureTaskRegistryMaintenanceRuntimeForTest({
-        currentTasks,
-        snapshotTasks: [task],
-        isBackgroundExecSessionActive: () => false,
-      });
+      markExited(session, null, "SIGTERM", "killed");
+
       expect(await runTaskRegistryMaintenance()).toEqual({
         reconciled: 1,
         recovered: 0,
