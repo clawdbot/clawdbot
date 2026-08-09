@@ -117,6 +117,9 @@ event path, immediate replies, and listener-owned status reactions.
         "message.im",
         "message.mpim"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true
     }
   }
 }
@@ -195,6 +198,11 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "message.im",
         "message.mpim"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "message_menu_options_url": "https://gateway-host.example.com/slack/events"
     }
   }
 }
@@ -242,12 +250,15 @@ bot identity for loop prevention.
 
 Enterprise support accepts direct Socket Mode or HTTP `message` and
 `app_mention` events plus workspace-qualified outbound messages. Relay mode,
-slash commands, interactions, App Home, reaction event listeners, pins,
-Slack-native approvals, and bindings remain unavailable for an enterprise
-account. Slack action tools remain unavailable except for file uploads and
-adding or removing emoji reactions. Outbound acknowledgment, typing, and
-status reactions are supported and require `reactions:write`; inbound reaction
-notifications remain unavailable.
+slash commands, general interactions, App Home, reaction event listeners,
+pins, and bindings remain unavailable for an enterprise account. Slack-native
+exec approval buttons are the only supported Enterprise interaction; they stay
+scoped to the workspace that originated the approval and require explicitly
+configured, team-qualified approvers. Plugin approvals remain unavailable for
+Enterprise accounts. Slack action tools remain unavailable except for file
+uploads and adding or removing emoji reactions. Outbound acknowledgment,
+typing, and status reactions are supported and require `reactions:write`;
+inbound reaction notifications remain unavailable.
 
 OpenClaw records Enterprise Grid destinations as
 `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
@@ -389,6 +400,9 @@ Enterprise Grid organization installation, use the dedicated
         "reaction_added",
         "reaction_removed"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true
     }
   }
 }
@@ -455,6 +469,9 @@ Enterprise Grid organization installation, use the dedicated
         "message.groups",
         "message.im"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true
     }
   }
 }
@@ -770,8 +787,8 @@ Set up the companion app as follows:
 
 3. Choose one event transport:
 
-   - **Socket Mode:** enable Socket Mode and create an app-level token with `connections:write`. Configure it as `appToken`.
-   - **HTTP Request URL:** point Event Subscriptions at the public OpenClaw Slack endpoint and copy **Basic Information -> App Credentials -> Signing Secret**. Configure it as `signingSecret`.
+   - **Socket Mode:** enable Socket Mode and Interactivity, then create an app-level token with `connections:write`. Interactivity does not need a public Request URL. Configure the token as `appToken`.
+   - **HTTP Request URL:** point Event Subscriptions and Interactivity at the public OpenClaw Slack endpoint and copy **Basic Information -> App Credentials -> Signing Secret**. Configure it as `signingSecret`.
 
 4. Install or reinstall the app, authorize it as the intended human, and copy the resulting user OAuth token into `userToken`.
 
@@ -907,6 +924,9 @@ Base manifest (Socket Mode default):
         "reaction_added",
         "reaction_removed"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true
     }
   }
 }
@@ -1732,14 +1752,15 @@ plugin-owned storage without seeing the complete form payload.
 
 Slack can act as a native approval client with interactive buttons and interactions, instead of falling back to the Web UI or terminal.
 
-- Exec and plugin approvals can render as Slack-native Block Kit prompts.
+- Workspace-installed apps can render exec and plugin approvals as Slack-native Block Kit prompts.
 - `channels.slack.execApprovals.*` remains the native exec approval client enablement and DM/channel routing config.
-- Exec approval DMs use `channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`.
+- Workspace-install exec approval DMs use `channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`.
 - Plugin approvals use Slack-native buttons when Slack is enabled as a native approval client for the originating session, or when `approvals.plugin` routes to the originating Slack session or a Slack target.
 - Plugin approval DMs use Slack plugin approvers from `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
 - Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
+- Enterprise Grid org installs support native exec approvals only. They require explicit `team:<team-id>:user:<user-id>` entries in the account's `execApprovals.approvers`; raw user IDs and `commands.ownerAllowFrom` are ignored. Only approvers matching the originating team receive prompts or can resolve them. Enterprise plugin approvals remain disabled because Slack plugin approvers are not workspace-qualified.
 
-This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
+This uses the same shared approval button surface as other channels. Enable **Interactivity** in the Slack app settings before using native approvals. Existing apps must enable it too. Socket Mode does not need a public Interactivity Request URL; HTTP apps use the same public `/slack/events` endpoint as Event Subscriptions.
 When those buttons are present, they are the primary approval UX; OpenClaw
 should only include a manual `/approve` command when the tool result says chat
 approvals are unavailable or manual approval is the only path.
@@ -1747,19 +1768,21 @@ approvals are unavailable or manual approval is the only path.
 Config path:
 
 - `channels.slack.execApprovals.enabled`
-- `channels.slack.execApprovals.approvers` (optional; falls back to `commands.ownerAllowFrom` when possible)
+- `channels.slack.execApprovals.approvers` (workspace installs may omit it and fall back to `commands.ownerAllowFrom`; Enterprise accounts require explicit team-qualified entries)
 - `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
 - `agentFilter`, `sessionFilter`
 
 Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
-exec approver resolves. Slack can also handle native plugin approvals through this native-client
-path when Slack plugin approvers resolve and the request matches the native-client filters. Set
+exec approver resolves. For Enterprise accounts, an approver resolves only when an explicit
+team-qualified entry matches the request's originating team. Workspace installs can also handle
+native plugin approvals through this native-client path when Slack plugin approvers resolve and the request matches the native-client filters. Set
 `enabled: false` to disable Slack as a native approval client explicitly. Set `enabled: true` to
 force native approvals on when approvers resolve. Disabling Slack exec approvals does not disable
-native Slack plugin approval delivery that is enabled through `approvals.plugin`; plugin approval
-delivery uses Slack plugin approvers instead.
+native Slack plugin approval delivery for workspace installs that is enabled through
+`approvals.plugin`; plugin approval delivery uses Slack plugin approvers instead. Enterprise
+accounts never enable native plugin approvals.
 
-Default behavior with no explicit Slack exec approval config:
+Default workspace-install behavior with no explicit Slack exec approval config:
 
 ```json5
 {
@@ -1786,12 +1809,32 @@ opt into origin-chat delivery:
 }
 ```
 
+Enterprise accounts must configure workspace-qualified approvers explicitly:
+
+```json5
+{
+  channels: {
+    slack: {
+      enterpriseOrgInstall: true,
+      execApprovals: {
+        enabled: true,
+        approvers: ["team:T12345678:user:U12345678"],
+      },
+    },
+  },
+}
+```
+
+An Enterprise exec request is eligible only when its origin includes a workspace and at least one
+configured approver matches that team. Raw IDs, owner fallback entries, and approvers qualified for
+another team fail closed.
+
 Shared `approvals.exec` forwarding is separate. Use it only when exec approval prompts must also
 route to other chats or explicit out-of-band targets. Shared `approvals.plugin` forwarding is also
 separate; Slack native delivery suppresses that fallback only when Slack can handle the plugin
 approval request natively.
 
-Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
+For workspace-installed apps, same-chat `/approve` also works in Slack channels and DMs that already support commands. Enterprise Grid org installs do not support Slack slash commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 
 ## Events and operational behavior
 
@@ -1853,7 +1896,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
-- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `execApprovals.*`, `userToken`, `userTokenReadOnly`
 
 </Accordion>
 

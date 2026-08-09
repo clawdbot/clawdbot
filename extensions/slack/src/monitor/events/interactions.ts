@@ -1,7 +1,11 @@
 // Slack plugin module implements interactions behavior.
 import { truncateSlackText } from "../../truncate.js";
 import type { SlackMonitorContext } from "../context.js";
-import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";
+import {
+  registerSlackApprovalBlockActionHandler,
+  registerSlackBlockActionHandler,
+  summarizeAction,
+} from "./interactions.block-actions.js";
 import { registerModalLifecycleHandler } from "./interactions.modal.js";
 import { registerSlackShortcutHandler } from "./interactions.shortcuts.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
@@ -217,4 +221,15 @@ export function registerSlackInteractionEvents(params: {
       formatSystemEvent: formatSlackInteractionSystemEvent,
     });
   }
+}
+
+export function registerSlackApprovalInteractionEvents(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}): void {
+  registerSlackApprovalBlockActionHandler({
+    ctx: params.ctx,
+    trackEvent: params.trackEvent,
+    formatSystemEvent: formatSlackInteractionSystemEvent,
+  });
 }

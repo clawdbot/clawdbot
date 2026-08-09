@@ -303,11 +303,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       `Slack Enterprise Grid org account "${account.accountId}" requires direct socket or HTTP delivery; relay mode is unsupported`,
     );
   }
-  if (enterpriseOrgInstall && account.config.execApprovals?.enabled === true) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${account.accountId}" does not support Slack-native exec approvals`,
-    );
-  }
   if (enterpriseOrgInstall) {
     assertEnterpriseSlackPolicyConfig({ config: account.config, accountId: account.accountId });
     assertNoEnterpriseSlackBindings({ cfg, accountId: account.accountId });
@@ -672,7 +667,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     onPrepared: presenceMonitor?.observe,
   });
   if (
-    installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
       cfg,
       accountId: account.accountId,
@@ -686,6 +680,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       context: {
         app,
         config: slackCfg.execApprovals ?? {},
+        // Credential rotation intentionally invalidates outstanding Enterprise approval controls.
+        approvalSigningKey: token,
       },
       abortSignal: opts.abortSignal,
     });
