@@ -91,7 +91,7 @@ describe("dispatchReplyFromConfig", () => {
     };
   }
 
-  it("loads a registry handle before reading inbound hook state", async () => {
+  it("falls back to a live registry handle when the Gateway dispatch runtime is inactive", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -100,8 +100,29 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:main",
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const replyResolver = vi.fn(
+      async (
+        _ctx: MsgContext,
+        _opts?: GetReplyOptions,
+        _cfg?: OpenClawConfig,
+        _preparedRuntime?: unknown,
+      ) => ({ text: "hi" }) satisfies ReplyPayload,
+    );
+    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(undefined);
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     const pluginLoadOptions = firstMockArg(
       runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
@@ -117,17 +138,33 @@ describe("dispatchReplyFromConfig", () => {
         "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
       ),
     );
+    expect(replyResolver.mock.calls[0]?.[3]).toBeUndefined();
   });
 
   it("uses zero fallback registry loads for a published Gateway dispatch", async () => {
     setNoAbort();
     const cfg = emptyConfig;
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const replyResolver = vi.fn(
+      async (
+        _ctx: MsgContext,
+        _opts?: GetReplyOptions,
+        _cfg?: OpenClawConfig,
+        _preparedRuntime?: unknown,
+      ) => ({ text: "hi" }) satisfies ReplyPayload,
+    );
     const preparedRegistry = createTestRegistry([]);
-    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedRuntime = Object.freeze({
+      agentId: "main",
+      agentDir: "/tmp/prepared-agent",
+      workspaceDir: "/tmp/prepared-workspace",
+      config: cfg,
+      modelCatalog: { entries: [], routeVariants: [] },
+      inboundPluginRegistry: preparedRegistry,
+    });
     const preparedLookup = vi
-      .spyOn(preparedRuntime, "loadPublishedGatewayInboundPluginRegistry")
-      .mockResolvedValue(preparedRegistry);
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(preparedRuntime);
     try {
       await dispatchReplyFromConfig({
         ctx: buildTestCtx({
@@ -143,6 +180,7 @@ describe("dispatchReplyFromConfig", () => {
       expect(preparedLookup).toHaveBeenCalledOnce();
       expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
       expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+      expect(replyResolver.mock.calls[0]?.[3]).toBe(preparedRuntime);
     } finally {
       preparedLookup.mockRestore();
     }
