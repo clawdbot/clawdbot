@@ -269,6 +269,7 @@ vi.mock("../commands/auth-choice.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: entries };

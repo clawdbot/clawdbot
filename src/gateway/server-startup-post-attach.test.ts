@@ -197,6 +197,7 @@ vi.mock("../infra/update-startup.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: hoisted.loadModelCatalog,
 }));
 

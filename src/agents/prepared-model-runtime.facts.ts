@@ -16,7 +16,6 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import {
@@ -56,6 +55,11 @@ import {
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  listPreparedSyntheticAuthProviderRefs,
+  resolvePreparedSyntheticAuth,
+  scopeSyntheticAuthProviderRefs,
+} from "./prepared-model-runtime.synthetic-auth.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -156,53 +160,6 @@ function prepareAgentFacts(
       ]),
     ].toSorted((left, right) => left.localeCompare(right)),
   };
-}
-
-// Provider-scoped live builds must not fan ambient synthetic-auth discovery out to every
-// registered provider; each unscoped ref can force a full plugin module load on the read path.
-function scopeSyntheticAuthProviderRefs(
-  refs: readonly string[],
-  providerDiscoveryProviderIds: readonly string[] | undefined,
-): string[] {
-  if (!providerDiscoveryProviderIds) {
-    return [...refs];
-  }
-  const scoped = new Set(providerDiscoveryProviderIds.map((id) => normalizeProviderId(id)));
-  return refs.filter((ref) => scoped.has(normalizeProviderId(ref)));
-}
-
-function listPreparedSyntheticAuthProviderRefs(providers: readonly ProviderPlugin[]): string[] {
-  return [
-    ...new Set(
-      providers.flatMap((provider) =>
-        typeof provider.resolveSyntheticAuth === "function"
-          ? [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])]
-          : [],
-      ),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolvePreparedSyntheticAuth(params: {
-  config: PreparedModelRuntimeInput["config"];
-  provider: string;
-  providers: readonly ProviderPlugin[];
-}): { apiKey?: string } | undefined {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const providerPlugin = params.providers.find((candidate) =>
-    [candidate.id, ...(candidate.aliases ?? []), ...(candidate.hookAliases ?? [])].some(
-      (ref) => normalizeProviderId(ref) === normalizedProvider,
-    ),
-  );
-  return (
-    providerPlugin?.resolveSyntheticAuth?.({
-      config: params.config,
-      provider: params.provider,
-      providerConfig: Object.entries(params.config.models?.providers ?? {}).find(
-        ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
-      )?.[1],
-    }) ?? undefined
-  );
 }
 
 export async function prepareWorkspaceBuildGroup(
