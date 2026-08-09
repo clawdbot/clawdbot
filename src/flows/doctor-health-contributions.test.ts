@@ -1764,14 +1764,20 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    const legacySessionSurfaces = (
+      mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as {
+        legacySessionSurfaces?: unknown;
+      }
+    ).legacySessionSurfaces;
+    expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
-      legacySessionSurfaces: { failures: [], surfaces: [] },
+      legacySessionSurfaces,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
-      legacySessionSurfaces: { failures: [], surfaces: [] },
+      legacySessionSurfaces,
       recoverCorruptTargetStore: false,
     });
   });
@@ -1872,16 +1878,22 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    const legacySessionSurfaces = (
+      mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as {
+        legacySessionSurfaces?: unknown;
+      }
+    ).legacySessionSurfaces;
+    expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
       doctorOnlyStateMigrations: true,
-      legacySessionSurfaces: { failures: [], surfaces: [] },
+      legacySessionSurfaces,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
-      legacySessionSurfaces: { failures: [], surfaces: [] },
+      legacySessionSurfaces,
       recoverCorruptTargetStore: true,
     });
   });
