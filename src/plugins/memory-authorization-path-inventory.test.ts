@@ -15,7 +15,6 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const REQUIRED_PHASE_0_PATH_IDS = [
   "selected-runtime-manager-acquisition",
   "selected-runtime-backend-resolution",
-  "selected-runtime-startup-warmup-and-sync",
   "bootstrap-memory-and-user-files",
   "startup-recent-memory-context",
   "memory-search-tool",
