@@ -22,6 +22,18 @@ type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
   baseUrlHash: string;
 };
 
+/** Removes prefix-bound checkpoint state while preserving route-scoped suppression state. */
+export function stripOpenAIResponsesCompactionReplayCheckpoint(
+  message: AssistantMessage,
+): AssistantMessage {
+  if (message.providerReplay?.type !== OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE) {
+    return message;
+  }
+  const replaySafeMessage = { ...message };
+  delete replaySafeMessage.providerReplay;
+  return replaySafeMessage;
+}
+
 function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? shortHash(normalized) : undefined;
