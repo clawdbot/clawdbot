@@ -31,6 +31,7 @@ vi.mock("./plugin-payload-validation.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { VERSION } from "../../version.js";
 import {
   filterRecordsToActive,
@@ -688,6 +689,59 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.errored).toBe(true);
   });
 
+  it("keeps an active __proto__ record in smoke and package-path classification", async () => {
+    const installPath = "/tmp/openclaw-state/npm/projects/__proto__/node_modules/__proto__";
+    const record: PluginInstallRecord = { source: "npm", installPath };
+    const records = Object.create(null) as Record<string, PluginInstallRecord>;
+    Object.defineProperty(records, "__proto__", {
+      configurable: true,
+      enumerable: true,
+      value: record,
+      writable: true,
+    });
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records,
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(new Error("EACCES: permission denied"), installPath);
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+    mocks.runPluginPayloadSmokeCheck.mockImplementation(
+      async (params: { records: Record<string, PluginInstallRecord> }) => {
+        expect(Object.getPrototypeOf(params.records)).toBeNull();
+        expect(Object.keys(params.records)).toEqual(["__proto__"]);
+        expect(Object.getOwnPropertyDescriptor(params.records, "__proto__")?.value).toBe(record);
+        return {
+          checked: ["__proto__"],
+          failures: [
+            {
+              pluginId: "__proto__",
+              installPath,
+              reason: "unreadable-package-json",
+              detail: `Could not read package.json at ${installPath}/package.json: EACCES`,
+            },
+          ],
+        };
+      },
+    );
+
+    const result = await runPostCorePluginConvergence({
+      cfg: { plugins: { enabled: true } } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({
+      pluginId: "__proto__",
+      reason: expect.stringContaining("unreadable-package-json"),
+    });
+    expect(result.errored).toBe(true);
+  });
+
   it("does not promote an inactive package read error into an ownerless blocker", async () => {
     const installPath = "/tmp/openclaw-state/npm/projects/brave/node_modules/brave";
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
@@ -809,6 +863,34 @@ describe("convergenceWarningsToOutcomes", () => {
 });
 
 describe("filterRecordsToActive", () => {
+  it.each(["__proto__", "constructor", "toString"] as const)(
+    "retains active %s records as own enumerable entries without cloning",
+    (pluginId) => {
+      const record: PluginInstallRecord = { source: "npm", installPath: `/p/${pluginId}` };
+      const records = Object.create(null) as Record<string, PluginInstallRecord>;
+      Object.defineProperty(records, pluginId, {
+        configurable: true,
+        enumerable: true,
+        value: record,
+        writable: true,
+      });
+
+      const filtered = filterRecordsToActive({
+        cfg: { plugins: { enabled: true } } as unknown as OpenClawConfig,
+        records,
+      });
+
+      expect(Object.getPrototypeOf(filtered)).toBeNull();
+      expect(Object.keys(filtered)).toEqual([pluginId]);
+      expect(Object.hasOwn(filtered, pluginId)).toBe(true);
+      expect(Object.getOwnPropertyDescriptor(filtered, pluginId)).toMatchObject({
+        enumerable: true,
+        value: record,
+      });
+      expect(filtered[pluginId]).toBe(record);
+    },
+  );
+
   it("retains records for plugins whose entry is enabled", () => {
     const records = {
       enabled: { source: "npm" as const, installPath: "/p/enabled" },
