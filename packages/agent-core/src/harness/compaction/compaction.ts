@@ -17,7 +17,11 @@ import {
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { convertToLlm, type HarnessMessage } from "../messages.js";
-import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
+import {
+  buildSessionContext,
+  projectSessionEntryMessage,
+  selectResetKeptEntries,
+} from "../session/session.js";
 import {
   type CompactionEntry,
   CompactionError,
@@ -70,13 +74,6 @@ function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage
     return undefined;
   }
   return projectSessionEntryMessage(entry);
-}
-
-function isResetReplayableEntry(entry: SessionTreeEntry): boolean {
-  return (
-    entry.type === "message" &&
-    (entry.message.role === "user" || entry.message.role === "assistant")
-  );
 }
 
 /** Generated compaction data ready to be persisted as a compaction entry. */
@@ -714,7 +711,7 @@ export function prepareCompaction(
     if (prevBoundary?.type === "reset") {
       const keptEntries =
         firstKeptEntryIndex >= 0
-          ? pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex).filter(isResetReplayableEntry)
+          ? selectResetKeptEntries(pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex))
           : [];
       resetPreludeMessages = keptEntries.flatMap((entry) => {
         const message = getMessageFromEntryForCompaction(entry);
