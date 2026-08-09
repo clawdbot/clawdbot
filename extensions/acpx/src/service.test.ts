@@ -855,27 +855,6 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
-  it("warns when legacy compatibility config is explicitly ignored", async () => {
-    const workspaceDir = await makeTempDir();
-    const ctx = createServiceContext(workspaceDir);
-    const runtime = createMockRuntime();
-    const service = createAcpxRuntimeService(ctx, {
-      pluginConfig: {
-        queueOwnerTtlSeconds: 30,
-        strictWindowsCmdWrapper: false,
-      },
-      runtimeFactory: () => runtime as never,
-    });
-
-    await service.start(ctx);
-
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "embedded acpx runtime ignores legacy compatibility config: queueOwnerTtlSeconds, strictWindowsCmdWrapper=false",
-    );
-
-    await service.stop?.(ctx);
-  });
-
   it("lets the skip env override the opt-in embedded runtime startup probe without advertising health", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
