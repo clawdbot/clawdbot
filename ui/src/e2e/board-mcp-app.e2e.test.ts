@@ -232,16 +232,16 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       .toBeGreaterThan(0);
     await waitForMountedApp(page);
     const widgetBackgrounds = await page.evaluate(() => {
-      const widget = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+      const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
       const frame = document
         .querySelector("mcp-app-view")
         ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
-      if (!widget || !frame) {
+      if (!widgetElement || !frame) {
         throw new Error("dashboard MCP App frame is missing");
       }
       return {
         frame: getComputedStyle(frame).backgroundColor,
-        widget: getComputedStyle(widget).backgroundColor,
+        widget: getComputedStyle(widgetElement).backgroundColor,
       };
     });
     expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
