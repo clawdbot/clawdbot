@@ -2293,10 +2293,15 @@ describe("runCli exit behavior", () => {
     expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
-  it("does not start the managed proxy for local gateway client commands", async () => {
+  it.each([
+    ["local gateway status", ["node", "openclaw", "status"]],
+    ["models JSON alias", ["node", "openclaw", "models", "--json"]],
+    ["models status JSON alias", ["node", "openclaw", "models", "--status-json"]],
+    ["models plain alias", ["node", "openclaw", "models", "--status-plain"]],
+  ])("does not start the managed proxy for %s", async (_name, argv) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
-    await runCli(["node", "openclaw", "status"]);
+    await runCli(argv);
 
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(stopProxyMock).not.toHaveBeenCalled();
@@ -2432,17 +2437,14 @@ describe("runCli exit behavior", () => {
     );
   });
 
-  it.each([
-    ["JSON flag", ["node", "openclaw", "plugins", "marketplace", "list", "--json"]],
-    ["models status JSON alias", ["node", "openclaw", "models", "--status-json"]],
-  ])("routes managed-proxy startup logs away for the %s", async (_name, argv) => {
+  it("routes managed-proxy startup logs away for JSON output", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
     startProxyMock.mockImplementationOnce(async () => {
       expect(loggingState.forceConsoleToStderr).toBe(true);
       return null;
     });
 
-    await runCli(argv);
+    await runCli(["node", "openclaw", "plugins", "marketplace", "list", "--json"]);
 
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
     expect(loggingState.forceConsoleToStderr).toBe(false);

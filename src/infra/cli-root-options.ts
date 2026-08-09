@@ -62,7 +62,7 @@ export function getRootOptionAwareCommandPath(argv: readonly string[], depth: nu
   return path;
 }
 
-export type CommandPositionalsParseOptions = {
+type CommandPositionalsParseOptions = {
   commandPath: ReadonlyArray<string>;
   booleanFlags?: ReadonlyArray<string>;
   valueFlags?: ReadonlyArray<string>;
