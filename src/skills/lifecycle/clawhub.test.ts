@@ -330,10 +330,17 @@ describe("skills-clawhub", () => {
       expect(params.rootMarkers).toEqual(["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]);
       return await params.onExtracted("/tmp/extracted-skill");
     });
-    installPackageDirMock.mockResolvedValue({
-      ok: true,
-      targetDir: "/tmp/workspace/skills/agentreceipt",
-    });
+    installPackageDirMock.mockImplementation(
+      async (params: {
+        afterInstall?: () => Promise<{ ok: boolean; error?: string; code?: string }>;
+      }) => {
+        const staged = await params.afterInstall?.();
+        if (staged && !staged.ok) {
+          return staged;
+        }
+        return { ok: true, targetDir: "/tmp/workspace/skills/agentreceipt" };
+      },
+    );
     evaluateSkillInstallPolicyMock.mockResolvedValue(undefined);
   });
 
@@ -2272,7 +2279,7 @@ describe("skills-clawhub", () => {
       },
     ]);
     expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledTimes(1);
-    expect(installPackageDirMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
     expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(
       "# Weather edited during download\n",
     );

@@ -53,6 +53,8 @@ type SkillArchiveInstallResult =
 
 export type SkillArchiveInstallFailureKind = "invalid-request" | "unavailable";
 
+const SKILL_REPLACE_BLOCKED_CODE = "skill_replace_blocked";
+
 /** Normalizes a tracked slug without accepting traversal or path separators. */
 export function normalizeTrackedSkillSlug(raw: string): string {
   const slug = raw.trim();
@@ -206,13 +208,7 @@ export async function installExtractedSkillRoot(params: {
       }
     }
 
-    if (params.onBeforeReplace) {
-      const blocked = await params.onBeforeReplace();
-      if (blocked) {
-        return installFailure(blocked, "invalid-request");
-      }
-    }
-
+    const onBeforeReplace = params.onBeforeReplace;
     const install = await installPackageDir({
       sourceDir: params.extractedRoot,
       targetDir,
@@ -222,9 +218,22 @@ export async function installExtractedSkillRoot(params: {
       copyErrorPrefix: "failed to install skill",
       hasDeps: false,
       depsLogMessage: "",
+      ...(onBeforeReplace
+        ? {
+            afterInstall: async () => {
+              const blocked = await onBeforeReplace();
+              return blocked
+                ? { ok: false as const, error: blocked, code: SKILL_REPLACE_BLOCKED_CODE }
+                : { ok: true as const };
+            },
+          }
+        : {}),
     });
     if (!install.ok) {
-      return installFailure(install.error, "unavailable");
+      return installFailure(
+        install.error,
+        install.code === SKILL_REPLACE_BLOCKED_CODE ? "invalid-request" : "unavailable",
+      );
     }
     if (shouldDispatchChange) {
       const after = await snapshotCommittedSkillArtifactBestEffort({
