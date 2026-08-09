@@ -163,8 +163,7 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
-/** Access Gateway-only run fields without widening the exported ChatRunState record shape. */
-export function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
+function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
   return record;
 }
 

@@ -43,7 +43,7 @@ import {
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-import { internalChatRunRecord, isChatAbortMarkerCurrent } from "./server-chat-state.js";
+import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
   ChatRunEntry,
@@ -359,6 +359,16 @@ export type AgentEventHandlerOptions = {
 type AgentEventHandler = ((event: AgentEventPayload) => void) & {
   dispose: () => void;
 };
+
+type InternalChatRunRecord = ReturnType<ChatRunState["getOrCreate"]> & {
+  pendingDeltaFlush?: { timer: NodeJS.Timeout; flush: () => void };
+};
+
+function internalChatRunRecord(
+  record: ReturnType<ChatRunState["getOrCreate"]>,
+): InternalChatRunRecord {
+  return record;
+}
 
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
