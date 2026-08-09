@@ -69,19 +69,6 @@ export function renderChatTaskSuggestions(props: {
                 </div>
               </details>
             </div>
-            ${props.canDismiss
-              ? html`
-                  <button
-                    class="btn btn--ghost btn--icon task-suggestion__dismiss"
-                    type="button"
-                    ?disabled=${busy}
-                    aria-label=${t("chat.taskSuggestions.dismiss", { title })}
-                    @click=${() => props.onDismiss(suggestion)}
-                  >
-                    ${icons.x}
-                  </button>
-                `
-              : nothing}
             <div class="task-suggestion__actions">
               <div class="task-suggestion__split">
                 <button
@@ -165,6 +152,19 @@ export function renderChatTaskSuggestions(props: {
                   : nothing}
               </div>
             </div>
+            ${props.canDismiss
+              ? html`
+                  <button
+                    class="btn btn--ghost btn--icon task-suggestion__dismiss"
+                    type="button"
+                    ?disabled=${busy}
+                    aria-label=${t("chat.taskSuggestions.dismiss", { title })}
+                    @click=${() => props.onDismiss(suggestion)}
+                  >
+                    ${icons.x}
+                  </button>
+                `
+              : nothing}
           </article>
         `;
       })}

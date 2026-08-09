@@ -1586,7 +1586,7 @@ openclaw-chat-video-player {
 .task-suggestion {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: start;
   gap: 12px;
   padding: 12px;
@@ -1667,25 +1667,32 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__actions {
-  grid-column: 2 / -1;
   display: flex;
   align-items: center;
+  align-self: start;
   justify-self: end;
 }
 
+/* Compact split control pinned to the card's top-right; both halves share one
+   fixed height so the chevron cap can never overhang the primary segment. */
 .task-suggestion__split {
   display: inline-flex;
   align-items: stretch;
+  height: 26px;
 }
 
 .task-suggestion__start {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
   border-color: var(--accent);
   border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: var(--primary);
   color: var(--primary-foreground);
+  font-size: 12px;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -1693,11 +1700,19 @@ openclaw-chat-video-player {
   border-radius: var(--radius-md);
 }
 
+.task-suggestion__start svg {
+  width: 12px;
+  height: 12px;
+}
+
 .task-suggestion__menu-trigger {
-  min-width: 34px;
-  height: 100%;
+  display: grid;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
   margin-left: -1px;
-  padding: 8px;
+  padding: 0;
+  place-items: center;
   border-color: var(--accent);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: var(--primary);
@@ -1705,8 +1720,8 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__menu-trigger svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .task-suggestion__menu[open] .task-suggestion__menu-trigger svg {
