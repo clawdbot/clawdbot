@@ -7,8 +7,8 @@ on:
         description: Docker release version without the v prefix
         required: true
         type: string
-      source_image:
-        description: Source registry image containing the verified release tags
+      source_refs:
+        description: Newline-delimited alias=immutable-ref entries verified by the caller
         required: true
         type: string
       include_browser:
@@ -21,7 +21,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  VERCEL_CLI_VERSION: 58.4.4
+  NODE_VERSION: "24.15.0"
 
 jobs:
   publish:
@@ -37,6 +37,23 @@ jobs:
 
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Materialize the complete CLI dependency closure before the production
+      # token enters any step environment. The committed lock and integrity
+      # checks keep registry and Sandbox operations on reviewed executable code.
+      - name: Materialize locked Vercel CLI
+        id: vercel_cli
+        run: |
+          set -euo pipefail
+          bash scripts/materialize-vercel-cli.sh \
+            .github/release/vercel-cli \
+            "${RUNNER_TEMP}/vercel-cli" \
+            "${GITHUB_OUTPUT}"
 
       - name: Validate Vercel Container Registry configuration
         env:
@@ -59,12 +76,13 @@ jobs:
 
       - name: Authenticate Docker to Vercel Container Registry
         env:
+          VERCEL_CLI: ${{ steps.vercel_cli.outputs.cli }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           set -euo pipefail
-          npx --yes "vercel@${VERCEL_CLI_VERSION}" vcr login docker \
+          "${VERCEL_CLI}" vcr login docker \
             --project "${VERCEL_PROJECT_ID}" \
             --scope "${VERCEL_SCOPE}" \
             --format json
@@ -72,7 +90,7 @@ jobs:
       - name: Copy and verify release images and channel aliases
         env:
           INCLUDE_BROWSER: ${{ inputs.include_browser }}
-          SOURCE_IMAGE: ${{ inputs.source_image }}
+          SOURCE_REFS: ${{ inputs.source_refs }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
           VERSION: ${{ inputs.version }}
         run: |
@@ -81,9 +99,14 @@ jobs:
           if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
             browser_args+=(--include-browser)
           fi
+          source_ref_args=()
+          while IFS= read -r source_ref; do
+            [[ -z "${source_ref}" ]] && continue
+            source_ref_args+=(--source-ref "${source_ref}")
+          done <<< "${SOURCE_REFS}"
           node scripts/vercel-container-registry-publish.mjs \
             --version "${VERSION}" \
-            --source-image "${SOURCE_IMAGE}" \
+            "${source_ref_args[@]}" \
             --target-image "${TARGET_IMAGE}" \
             "${browser_args[@]}"
 
@@ -92,6 +115,7 @@ jobs:
       - name: Run custom-image Sandbox smoke
         env:
           VERCEL_AUTH_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_CLI: ${{ steps.vercel_cli.outputs.cli }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
           VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
@@ -99,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           repository="${VERCEL_VCR_IMAGE##*/}"
-          npx --yes "vercel@${VERCEL_CLI_VERSION}" sandbox run \
+          "${VERCEL_CLI}" sandbox run \
             --silent \
             --rm \
             --non-persistent \

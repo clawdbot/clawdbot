@@ -18,7 +18,7 @@ export function publishVercelContainerRegistryImages(
   params: {
     includeBrowser: boolean;
     version: string;
-    sourceImage: string;
+    sourceRefs: string[];
     targetImage: string;
   },
   options?: {

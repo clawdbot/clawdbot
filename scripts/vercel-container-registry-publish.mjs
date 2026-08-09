@@ -94,6 +94,48 @@ function requireDigest(value, imageRef) {
   return digest;
 }
 
+function parseImmutableSourceRefs(values, includeBrowser) {
+  if (!Array.isArray(values)) {
+    throw new Error("sourceRefs must be an array of alias=immutable-ref entries.");
+  }
+  const variants = resolveVariants(includeBrowser);
+  const expectedAliases = new Set(variants.map(({ aliasKey }) => aliasKey));
+  const byAlias = new Map();
+  let sourceImage;
+
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    const aliasKey = value.slice(0, separator).trim();
+    const immutableRef = value.slice(separator + 1).trim();
+    if (separator <= 0 || !expectedAliases.has(aliasKey)) {
+      throw new Error(`Unexpected VCR source alias in ${JSON.stringify(value)}.`);
+    }
+    if (byAlias.has(aliasKey)) {
+      throw new Error(`Duplicate VCR source alias: ${aliasKey}.`);
+    }
+
+    const atIndex = immutableRef.lastIndexOf("@");
+    const image = requireImageName(immutableRef.slice(0, atIndex), `${aliasKey} source image`);
+    const digest = requireDigest(immutableRef.slice(atIndex + 1), immutableRef);
+    const normalizedRef = `${image}@${digest}`;
+    if (sourceImage && sourceImage !== image) {
+      throw new Error(`All immutable VCR source refs must use ${sourceImage}; got ${image}.`);
+    }
+    sourceImage = image;
+    byAlias.set(aliasKey, normalizedRef);
+  }
+
+  for (const aliasKey of expectedAliases) {
+    if (!byAlias.has(aliasKey)) {
+      throw new Error(`Missing immutable VCR source ref for ${aliasKey}.`);
+    }
+  }
+  if (!sourceImage) {
+    throw new Error("At least one immutable VCR source ref is required.");
+  }
+  return { byAlias, sourceImage };
+}
+
 function inspectRawManifest(imageRef, execFileSyncImpl) {
   const raw = String(runImagetools(["inspect", imageRef, "--raw"], execFileSyncImpl));
   try {
@@ -237,32 +279,29 @@ function verifyCleanIndex(imageRef, expectedDigests, execFileSyncImpl) {
 export function publishVercelContainerRegistryImages(params, options = {}) {
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
-  const plan = createVercelContainerRegistryPublishPlan(params);
+  const immutableSources = parseImmutableSourceRefs(params.sourceRefs, params.includeBrowser);
+  const plan = createVercelContainerRegistryPublishPlan({
+    includeBrowser: params.includeBrowser,
+    sourceImage: immutableSources.sourceImage,
+    targetImage: params.targetImage,
+    version: params.version,
+  });
   const selectedVariants = resolveVariants(params.includeBrowser);
 
   // Docker release indexes also contain provenance attestation manifests with
   // unknown/unknown platforms. VCR stores those indexes but does not prepare
   // them for Sandbox, so publish a clean amd64+arm64 index from the exact image
   // manifest digests and keep the architecture tags as carbon-copy manifests.
+  // Every source ref was attestation-verified by the caller as an immutable
+  // index, so a mutable release-tag rewrite cannot change these copy inputs.
   const variants = selectedVariants.map(({ aliasKey, suffix }) => {
     const manifestTag = `${plan.version}${suffix}`;
-    const manifestSourceRef = `${plan.sourceImage}:${manifestTag}`;
+    const manifestSourceRef = immutableSources.byAlias.get(aliasKey);
     const platformDigests = resolvePlatformDigests(
       manifestSourceRef,
       execFileSyncImpl,
       ARCHITECTURES,
     );
-    for (const architecture of ARCHITECTURES) {
-      const architectureSourceRef = `${plan.sourceImage}:${manifestTag}-${architecture}`;
-      const architectureDigests = resolvePlatformDigests(architectureSourceRef, execFileSyncImpl, [
-        architecture,
-      ]);
-      if (architectureDigests[architecture] !== platformDigests[architecture]) {
-        throw new Error(
-          `${architectureSourceRef} resolved to ${architectureDigests[architecture]}, expected ${platformDigests[architecture]} from ${manifestSourceRef}.`,
-        );
-      }
-    }
     return { aliasKey, manifestTag, platformDigests };
   });
 
@@ -389,7 +428,7 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
 
 function printHelp() {
   console.log(
-    "Usage: node scripts/vercel-container-registry-publish.mjs --version YYYY.M.P --source-image REGISTRY/IMAGE --target-image REGISTRY/IMAGE [--include-browser]",
+    "Usage: node scripts/vercel-container-registry-publish.mjs --version YYYY.M.P --source-ref ALIAS=REGISTRY/IMAGE@sha256:DIGEST [...] --target-image REGISTRY/IMAGE [--include-browser]",
   );
 }
 
@@ -399,7 +438,7 @@ function main() {
     options: {
       help: { type: "boolean", short: "h" },
       "include-browser": { type: "boolean" },
-      "source-image": { type: "string" },
+      "source-ref": { type: "string", multiple: true },
       "target-image": { type: "string" },
       version: { type: "string" },
     },
@@ -409,12 +448,12 @@ function main() {
     printHelp();
     return;
   }
-  if (!values.version || !values["source-image"] || !values["target-image"]) {
-    throw new Error("--version, --source-image, and --target-image are required.");
+  if (!values.version || !values["source-ref"] || !values["target-image"]) {
+    throw new Error("--version, --source-ref, and --target-image are required.");
   }
   const plan = publishVercelContainerRegistryImages({
     includeBrowser: values["include-browser"] ?? false,
-    sourceImage: values["source-image"],
+    sourceRefs: values["source-ref"],
     targetImage: values["target-image"],
     version: values.version,
   });
