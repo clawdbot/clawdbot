@@ -373,6 +373,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       {
         sessionKey: TEST_SESSION_KEY,
         sessionTarget: wrappedCompactionArgs().sessionTarget,
+        assertOwned: () => undefined,
         withSessionWriteLock,
       },
       async () => await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs()),

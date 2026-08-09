@@ -12,6 +12,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 let currentCampaignId: string | undefined;
 let updateSchedule: UpdateScheduleState | null;
 let updateChannel: "stable" | "beta" | "dev" | null;
+const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 type UpdateCampaignAdoption = NonNullable<ReturnType<UpdateCampaignController["adopt"]>>;
 
 const adoptCampaignMock = vi.fn<() => UpdateCampaignAdoption | undefined>(() => ({
@@ -103,9 +104,12 @@ vi.mock("../../infra/update-campaign.js", () => ({
   },
 }));
 
-vi.mock("../../infra/update-channels.js", () => ({
-  normalizeUpdateChannel: () => updateChannel,
-}));
+vi.mock("../../infra/update-channels.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-channels.js")>(
+    "../../infra/update-channels.js",
+  );
+  return { ...actual, normalizeUpdateChannel: () => updateChannel };
+});
 
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   buildManagedServiceHandoffUnavailableMessage: () => "handoff unavailable",
@@ -129,6 +133,12 @@ vi.mock("../../infra/update-runner.js", () => ({
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: () => updateSchedule,
+}));
+
+vi.mock("../../version.js", () => ({
+  get VERSION() {
+    return versionMock.value;
+  },
 }));
 
 vi.mock("../server-restart-sentinel.js", () => ({
@@ -157,6 +167,7 @@ beforeEach(() => {
   currentCampaignId = "campaign-1";
   updateSchedule = null;
   updateChannel = null;
+  versionMock.value = "1.0.0";
   adoptCampaignMock.mockReset();
   adoptCampaignMock.mockReturnValue({
     campaignId: "campaign-1",
@@ -266,6 +277,23 @@ describe("update.run campaign ownership", () => {
 
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "beta", tag: "2.0.0" }),
+    );
+  });
+
+  it("keeps a configless extended-stable package install on that channel", async () => {
+    versionMock.value = "2026.6.33";
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "global",
+      mode: "npm",
+      root: "/tmp/openclaw",
+      packageRoot: "/tmp/openclaw",
+    });
+
+    await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, invokeUpdateRun);
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "extended-stable" }),
     );
   });
 

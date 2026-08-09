@@ -64,7 +64,7 @@ import {
 } from "./session-transcript-turn-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { mergeSessionEntry } from "./types.js";
 
 // Transcript write owner. Queue coordination surrounds synchronous SQLite commit sections.
@@ -264,7 +264,7 @@ export async function appendSqliteTranscriptEvent(
 
 /** Appends one raw non-message transcript event synchronously for sync session runtimes. */
 export function appendSqliteTranscriptEventSync(
-  scope: SessionTranscriptAccessScope,
+  scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
 ): Result<boolean, TranscriptEventAppendError> {
@@ -282,6 +282,20 @@ export function appendSqliteTranscriptEventSync(
       return;
     }
     if (fresh.entry.sessionId !== resolved.sessionId) {
+      result = err({
+        actualSessionId: fresh.entry.sessionId,
+        code: "session-rebound",
+        expectedSessionId: resolved.sessionId,
+        sessionKey: resolved.sessionKey,
+      });
+      return;
+    }
+    if (
+      (scope.expectedLifecycleRevision !== undefined &&
+        fresh.entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
+      (scope.expectedWriterRunId !== undefined &&
+        (fresh.entry as InternalSessionEntry).activeWriterRunId !== scope.expectedWriterRunId)
+    ) {
       result = err({
         actualSessionId: fresh.entry.sessionId,
         code: "session-rebound",
@@ -335,6 +349,7 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
     config?: import("../types.openclaw.js").OpenClawConfig;
     cwd?: string;
     expectedLifecycleRevision?: string;
+    expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
     messages: readonly SessionTranscriptTurnMessageAppend[];
@@ -494,7 +509,14 @@ export function appendSqliteTranscriptMessageSync<TMessage>(
   let result: TranscriptMessageAppendResult<TMessage> | undefined;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
-    if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
+    if (
+      !fresh ||
+      fresh.entry.sessionId !== resolved.sessionId ||
+      (scope.expectedLifecycleRevision !== undefined &&
+        fresh.entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
+      (scope.expectedWriterRunId !== undefined &&
+        (fresh.entry as InternalSessionEntry).activeWriterRunId !== scope.expectedWriterRunId)
+    ) {
       return;
     }
     result = appendSqliteTranscriptMessageInTransaction(database, resolved, options);

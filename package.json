@@ -110,7 +110,7 @@
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-fs.d.ts",
-    "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-sessions.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-schema.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
@@ -174,6 +174,7 @@
     "!dist/plugin-sdk/realtime-bootstrap-context.d.ts",
     "!dist/plugin-sdk/realtime-transcription.d.ts",
     "!dist/plugin-sdk/realtime-voice-audio-queue.d.ts",
+    "!dist/plugin-sdk/realtime-voice-activation.d.ts",
     "!dist/plugin-sdk/realtime-voice.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
@@ -182,6 +183,11 @@
     "!dist/plugin-sdk/response-limit-runtime.d.ts",
     "!dist/plugin-sdk/retry-runtime.d.ts",
     "!dist/plugin-sdk/runtime-doctor-migrations.d.ts",
+    "!dist/plugin-sdk/doctor-repair-runtime.d.ts",
+    "!dist/plugin-sdk/model-ref-parse.d.ts",
+    "!dist/plugin-sdk/outbound-echo-runtime.d.ts",
+    "!dist/plugin-sdk/plugin-state-store-runtime.d.ts",
+    "!dist/plugin-sdk/session-store-paths.d.ts",
     "!dist/plugin-sdk/runtime-doctor.d.ts",
     "!dist/plugin-sdk/runtime-fetch.d.ts",
     "!dist/plugin-sdk/sandbox.d.ts",
@@ -301,7 +307,6 @@
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
     "!dist/extensions/opencode/**",
-    "!dist/extensions/opencode-go/**",
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",
@@ -401,8 +406,20 @@
       "types": "./dist/plugin-sdk/health.d.ts",
       "default": "./dist/plugin-sdk/health.js"
     },
-    "./plugin-sdk/runtime-doctor": {
-      "default": "./dist/plugin-sdk/runtime-doctor.js"
+    "./plugin-sdk/doctor-repair-runtime": {
+      "default": "./dist/plugin-sdk/doctor-repair-runtime.js"
+    },
+    "./plugin-sdk/model-ref-parse": {
+      "default": "./dist/plugin-sdk/model-ref-parse.js"
+    },
+    "./plugin-sdk/outbound-echo-runtime": {
+      "default": "./dist/plugin-sdk/outbound-echo-runtime.js"
+    },
+    "./plugin-sdk/session-store-paths": {
+      "default": "./dist/plugin-sdk/session-store-paths.js"
+    },
+    "./plugin-sdk/plugin-state-store-runtime": {
+      "default": "./dist/plugin-sdk/plugin-state-store-runtime.js"
     },
     "./plugin-sdk/runtime-doctor-migrations": {
       "default": "./dist/plugin-sdk/runtime-doctor-migrations.js"
@@ -430,6 +447,10 @@
     "./plugin-sdk/channel-streaming": {
       "types": "./dist/plugin-sdk/channel-streaming.d.ts",
       "default": "./dist/plugin-sdk/channel-streaming.js"
+    },
+    "./plugin-sdk/channel-streaming-config": {
+      "types": "./dist/plugin-sdk/channel-streaming-config.d.ts",
+      "default": "./dist/plugin-sdk/channel-streaming-config.js"
     },
     "./plugin-sdk/setup-tools": {
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
@@ -1141,6 +1162,9 @@
     "./plugin-sdk/realtime-voice-audio-queue": {
       "default": "./dist/plugin-sdk/realtime-voice-audio-queue.js"
     },
+    "./plugin-sdk/realtime-voice-activation": {
+      "default": "./dist/plugin-sdk/realtime-voice-activation.js"
+    },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
@@ -1204,8 +1228,8 @@
     "./plugin-sdk/memory-core-host-engine-fs": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-fs.js"
     },
-    "./plugin-sdk/memory-core-host-engine-qmd": {
-      "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    "./plugin-sdk/memory-core-host-engine-sessions": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-sessions.js"
     },
     "./plugin-sdk/memory-core-host-engine-schema": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-schema.js"
@@ -1502,6 +1526,7 @@
     "check:database-first-legacy-stores": "node scripts/check-database-first-legacy-stores.mjs",
     "check:deprecated-api-usage": "node scripts/check-deprecated-api-usage.mjs",
     "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
+    "check:doctor-deprecation-registry": "node --import tsx scripts/check-doctor-deprecation-registry.ts",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:env-var-count": "node scripts/check-env-var-count.mjs",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
@@ -1881,7 +1906,7 @@
     "test:live:media:music": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts music",
     "test:live:media:video": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts video",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "node scripts/test-projects.mjs src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts",
+    "test:macos:ci": "node scripts/test-projects.mjs src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts",
     "test:max": "node scripts/test-projects-max.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
@@ -2058,7 +2083,6 @@
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.10",
     "esbuild": "0.28.1",
-    "fast-glob": "3.3.3",
     "ipaddr.js": "2.4.0",
     "jscpd": "5.0.12",
     "jsdom": "29.1.1",
@@ -2074,6 +2098,7 @@
     "shiki": "4.3.1",
     "signal-utils": "0.21.1",
     "sigstore": "5.0.0",
+    "string-width": "8.2.2",
     "stylelint": "17.14.1",
     "stylelint-config-recommended": "18.0.0",
     "tsdown": "0.22.1",

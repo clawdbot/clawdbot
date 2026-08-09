@@ -183,10 +183,17 @@ describe("LabsPage", () => {
       note: "labs: update localModelLean",
     },
     {
+      label: "CLI agents",
+      index: 5,
+      sourceConfig: {},
+      expectedPatch: { gateway: { cliAgents: { enabled: true } } },
+      note: "labs: update cliAgents",
+    },
+    {
       // Not a boolean gate: the on state is the conservative `direct` mode, so
       // enabling here cannot start recording group or unknown conversations.
       label: "Message audit metadata",
-      index: 5,
+      index: 6,
       sourceConfig: { logging: { audit: { messages: "off" } } },
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",

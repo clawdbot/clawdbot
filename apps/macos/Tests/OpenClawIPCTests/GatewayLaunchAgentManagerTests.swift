@@ -4,6 +4,10 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test func `daemon commands tolerate first run state migrations`() {
+        #expect(GatewayLaunchAgentManager.startupMigrationTolerance >= 120)
+    }
+
     @Test func `reads Gateway service ownership command directly from launchd`() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")

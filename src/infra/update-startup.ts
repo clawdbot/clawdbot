@@ -47,6 +47,7 @@ import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-c
 import {
   channelToNpmTag,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
   DEFAULT_PACKAGE_CHANNEL,
   type UpdateChannel,
 } from "./update-channels.js";
@@ -838,12 +839,55 @@ export async function runGatewayUpdateCheck(params: {
   if (params.isNixMode) {
     return;
   }
-  const configuredChannel =
-    normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const configChannel = normalizeUpdateChannel(params.cfg.update?.channel);
   const updateCampaign = params.updateCampaign ?? gatewayUpdateCampaign;
   const auto = resolveAutoUpdatePolicy(params.cfg);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
+  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
+  const potentialChannel = resolveEffectiveUpdateChannel({
+    configChannel,
+    currentVersion: VERSION,
+    installKind: "package",
+  }).channel;
+  const potentialAutoDesired =
+    (potentialChannel === "stable" || potentialChannel === "beta" || potentialChannel === "dev") &&
+    auto.enabled &&
+    !autoDisabledByEnv &&
+    !autoDisabledByExternalSupervisor;
+  if (!shouldRunUpdateHints && !potentialAutoDesired && configChannel === "extended-stable") {
+    updateCampaign.clear();
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+    const priorSchedule =
+      updateScheduleCache?.channel === potentialChannel ? updateScheduleCache : null;
+    const initialSchedule: UpdateScheduleState = priorSchedule
+      ? { ...priorSchedule, autoEnabled: auto.enabled }
+      : { channel: potentialChannel, autoEnabled: auto.enabled };
+    setUpdateScheduleCache({
+      next: withoutTarget(initialSchedule),
+      onUpdateScheduleChange: params.onUpdateScheduleChange,
+    });
+    return;
+  }
+  const mightUseInstalledExtendedStableChannel =
+    configChannel === null && potentialChannel === "extended-stable";
+  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
+  if (
+    configChannel === "extended-stable" ||
+    configChannel === "dev" ||
+    mightUseInstalledExtendedStableChannel
+  ) {
+    installStatus = await resolveStartupInstallStatus(configChannel === "dev");
+  }
+  const configuredChannel = resolveEffectiveUpdateChannel({
+    configChannel,
+    currentVersion: VERSION,
+    installKind: installStatus?.status.installKind ?? "unknown",
+    git: installStatus?.status.git,
+  }).channel;
   const autoDesired =
     (configuredChannel === "stable" ||
       configuredChannel === "beta" ||
@@ -851,7 +895,6 @@ export async function runGatewayUpdateCheck(params: {
     auto.enabled &&
     !autoDisabledByEnv &&
     !autoDisabledByExternalSupervisor;
-  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
 
   if (updateScheduleCache?.channel !== configuredChannel) {
     updateCampaign.clear();
@@ -918,9 +961,10 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
-  if (configuredChannel === "extended-stable" || configuredChannel === "dev") {
+  if ((configuredChannel === "extended-stable" || configuredChannel === "dev") && !installStatus) {
     installStatus = await resolveStartupInstallStatus(configuredChannel === "dev");
+  }
+  if (installStatus && (configuredChannel === "extended-stable" || configuredChannel === "dev")) {
     setUpdateScheduleCache({
       next: withInstallStatus(
         updateScheduleCache ?? initialSchedule,

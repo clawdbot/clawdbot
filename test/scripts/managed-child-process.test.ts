@@ -386,7 +386,7 @@ setInterval(() => {}, 1_000);
   });
 
   posixIt("waits through transient indeterminate process-group state", async () => {
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     let childPid = 0;
     let injectedIndeterminate = false;
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
@@ -419,7 +419,7 @@ setInterval(() => {}, 1_000);
   });
 
   posixIt("accepts a process group that vanishes before its cleanup signal", async () => {
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     let childPid = 0;
     let injectedLiveGroup = false;
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {

@@ -24,18 +24,39 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     );
   });
 
-  it("allows only organizational session patches with write scope", () => {
+  it.each([
+    { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
+    { name: "model reset", patch: { model: null } },
+    {
+      name: "safe mixed patch",
+      patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
+    },
+    {
+      name: "CAS envelope",
+      patch: { expectedSessionId: "session-1", expectedLifecycleRevision: "revision-1" },
+    },
+  ])("keeps $name write-scoped", ({ patch }) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {
         key: "agent:main:thread",
-        label: "Renamed",
-        archived: true,
+        agentId: "main",
+        ...patch,
       }),
     ).toBe("operator.write");
+  });
+
+  it.each([
+    { thinkingLevel: "high" },
+    { fastMode: true },
+    { verboseLevel: "full" },
+    { reasoningLevel: "high" },
+    { model: "openai/gpt-5.6-luna", thinkingLevel: "high" },
+    { model: null, futureField: true },
+  ])("keeps privileged or unknown patch fields admin-scoped %#", (patch) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {
         key: "agent:main:thread",
-        thinkingLevel: "high",
+        ...patch,
       }),
     ).toBe("operator.admin");
   });
@@ -51,12 +72,19 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
             expectedLifecycleRevision: "revision-1",
           },
         ],
-        patch: { label: "Renamed", archived: true, unread: false },
+        patch: { label: "Renamed", archived: true, unread: false, model: "openai/gpt-5.6-luna" },
+      }),
+    ).toBe("operator.write");
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+        targets: [{ key: "agent:main:thread" }],
+        patch: { model: null },
       }),
     ).toBe("operator.write");
     for (const patch of [
       { statusNote: "Working" },
       { thinkingLevel: "high" },
+      { model: "openai/gpt-5.6-luna", fastMode: true },
       { futureField: true },
     ]) {
       expect(

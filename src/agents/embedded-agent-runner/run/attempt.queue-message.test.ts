@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
-import { setSteeringMessageIdentity } from "../../sessions/steering-message-identity.js";
+import {
+  reportSteeringMessagePersistenceFailure,
+  setSteeringMessageIdentity,
+} from "../../sessions/steering-message-identity.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 
 type EmbeddedAgentActiveSessionSteerTarget = Parameters<
@@ -129,6 +132,55 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     await expect(wait).resolves.toBeUndefined();
     expect(settled).toBe(true);
+  });
+
+  it("rejects only the exact drained steer when its transcript append fails", async () => {
+    const failedMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same text" }],
+      timestamp: 1,
+    };
+    const survivingMessage = { ...failedMessage, timestamp: 2 };
+    setSteeringMessageIdentity(failedMessage, "failed-turn");
+    setSteeringMessageIdentity(survivingMessage, "surviving-turn");
+    const listeners = new Set<(event: unknown) => void>();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: { steeringQueue: { messages: [] } },
+      getSteeringMessages: () => [],
+      steer: async () => {},
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const abortController = new AbortController();
+    const failedWait = steerWithDeliveryWait(activeSession, "same text", 10_000, {
+      queueIdentity: "failed-turn",
+      abortSignal: abortController.signal,
+    });
+    const survivingWait = steerWithDeliveryWait(activeSession, "same text", 10_000, {
+      queueIdentity: "surviving-turn",
+      abortSignal: abortController.signal,
+    });
+    const rejection = expect(failedWait).rejects.toThrow("SQLite transcript append failed");
+
+    try {
+      reportSteeringMessagePersistenceFailure(
+        failedMessage,
+        new Error("SQLite transcript append failed"),
+      );
+      await rejection;
+      expect(listeners).toHaveLength(1);
+
+      for (const listener of listeners) {
+        listener({ type: "message_end", message: survivingMessage });
+      }
+      await expect(survivingWait).resolves.toBeUndefined();
+      expect(listeners).toHaveLength(0);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([failedWait, survivingWait, rejection]);
+    }
   });
 
   it("removes only the timed-out steering message and preserves unrelated payloads", async () => {

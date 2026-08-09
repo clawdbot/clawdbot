@@ -192,10 +192,6 @@
       "types": "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
       "default": "./src/provider-web-search-config-contract.ts"
     },
-    "./runtime-doctor": {
-      "types": "./dist/src/plugin-sdk/runtime-doctor.d.ts",
-      "default": "./src/runtime-doctor.ts"
-    },
     "./runtime-env": {
       "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
       "default": "./src/runtime-env.ts"

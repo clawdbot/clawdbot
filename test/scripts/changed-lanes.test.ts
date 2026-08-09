@@ -1460,6 +1460,7 @@ describe("scripts/changed-lanes", () => {
       "environment variable count ratchet",
       "max-lines suppression ratchet",
       "changelog attributions",
+      "doctor deprecation registry",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
@@ -1640,6 +1641,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
+      "check:doctor-deprecation-registry",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
@@ -2019,6 +2021,31 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("runs macOS CI tests for workspace rsync receiver owners", () => {
+    for (const changedPath of [
+      "src/worker/workspace-rsync-receiver.ts",
+      "src/gateway/worker-environments/workspace-sync.ts",
+      "src/gateway/worker-environments/workspace-sync-helpers.ts",
+      "src/gateway/worker-environments/workspace-accepted-sync.ts",
+      "src/gateway/worker-environments/workspace-accepted-remote-script.ts",
+      "src/gateway/worker-environments/workspace-mutation-remote-script.ts",
+      "src/gateway/worker-environments/workspace-rsync-path.test.ts",
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
+
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "macOS app CI tests",
+          args: ["test:macos:ci"],
+        }),
+      );
+    }
+  });
+
   it("runs the native state schema guard for either contract owner", () => {
     for (const changedPath of [
       "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
@@ -2314,6 +2341,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],
@@ -2336,6 +2364,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],

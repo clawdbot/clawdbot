@@ -97,6 +97,7 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  loadProviderScopedThinkingCatalogMock: vi.fn((_params: unknown) => undefined),
   loadPreparedModelCatalogSnapshotMock: vi.fn(
     async (): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -551,6 +552,11 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-catalog.runtime.js", () => ({
+  // The scoped thinking catalog hydrates from the same runtime snapshot the test controls.
+  loadProviderScopedThinkingCatalog: async (params: unknown) => {
+    state.loadProviderScopedThinkingCatalogMock(params);
+    return (await state.loadPreparedModelCatalogSnapshotMock()).entries;
+  },
   loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
 }));
 
@@ -3523,11 +3529,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       allowModelOverride: true,
     });
 
-    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledWith({
-      config: state.runtimeConfigMock,
-      agentId: "default",
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: state.runtimeConfigMock,
+        provider: "ollama",
+        model: "minimax-m3:cloud",
+        agentId: "default",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",

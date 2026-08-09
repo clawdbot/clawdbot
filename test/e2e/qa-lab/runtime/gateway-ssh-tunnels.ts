@@ -431,7 +431,9 @@ exec "$@"
       signal: NodeJS.Signals | null;
     }>((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
+      child.once("close", (exitCode, exitSignal) =>
+        resolve({ code: exitCode, signal: exitSignal }),
+      );
     });
     const evidencePath = path.join(options.artifactBase, QA_EVIDENCE_FILENAME);
     const evidence = await fs

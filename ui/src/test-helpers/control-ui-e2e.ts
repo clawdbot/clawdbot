@@ -256,6 +256,7 @@ export type ControlUiMockGatewayScenario = {
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
+  cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
 };
@@ -654,6 +655,7 @@ function normalizeScenario(
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
+    cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
   };
@@ -672,6 +674,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
     terminalEnabled: normalizedScenario.terminalEnabled,
+    cliAgentsEnabled: normalizedScenario.cliAgentsEnabled,
   };
 }
 

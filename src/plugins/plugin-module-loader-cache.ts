@@ -231,10 +231,8 @@ function createPluginModuleLoader(params: {
     loadedTargetExports.set(target, loaded);
     return loaded;
   };
-  // When the caller has explicitly opted out of native loading (for example
-  // `bundled-capability-runtime` in Vitest+dist mode, which depends on
-  // jiti's alias rewriting to surface a narrow SDK slice), route every
-  // target through jiti so those alias rewrites still apply.
+  // When the caller has explicitly opted out of native loading, route every
+  // target through jiti so caller-provided alias rewrites still apply.
   if (!params.tryNative) {
     return (target) =>
       loadCachedTarget(target, () => {

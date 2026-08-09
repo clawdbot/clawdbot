@@ -201,6 +201,13 @@ vi.mock("../agents/auth-profiles.js", () => ({
     seedTestAuthProfile(params);
     return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
   },
+  upsertAuthProfileWithLockOrThrow: async (params: {
+    profileId: string;
+    credential: StoredAuthProfile;
+    agentDir?: string;
+  }) => {
+    seedTestAuthProfile(params);
+  },
 }));
 
 function normalizeText(value: unknown): string {

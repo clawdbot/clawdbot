@@ -15,9 +15,9 @@ import {
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
-  DEFAULT_PACKAGE_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import {
@@ -38,6 +38,7 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-man
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
@@ -206,7 +207,12 @@ async function updateCommandInternal(
   const selectedChannel =
     requestedChannel ??
     storedChannel ??
-    (installKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL);
+    (installKind === "git"
+      ? DEFAULT_GIT_CHANNEL
+      : resolveEffectiveUpdateChannel({
+          currentVersion: VERSION,
+          installKind,
+        }).channel);
   if (selectedChannel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateFailure({
       root,
@@ -221,9 +227,15 @@ async function updateCommandInternal(
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
-  const defaultChannel =
-    updateInstallKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
-  const channel = requestedChannel ?? storedChannel ?? defaultChannel;
+  const channel =
+    requestedChannel ??
+    storedChannel ??
+    (updateInstallKind === "git"
+      ? DEFAULT_GIT_CHANNEL
+      : resolveEffectiveUpdateChannel({
+          currentVersion: VERSION,
+          installKind: updateInstallKind,
+        }).channel);
   const devTargetRef =
     channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
 

@@ -15,6 +15,7 @@ import {
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
+import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const localStorageValues = new Map<string, string>();
@@ -1702,20 +1703,10 @@ describe("grouped chat rendering", () => {
     const first = surpriseFor("stream:agent:main:pending");
     // Stable across re-renders: the same key keeps the same surprise decision.
     expect(surpriseFor("stream:agent:main:pending")).toEqual(first);
-    // At most one surprise modifier; plain in-place clawing is the unmarked default.
-    expect(first.length).toBeLessThanOrEqual(1);
-    for (const cls of first) {
-      expect([
-        "chat-reading-indicator--southpaw",
-        "chat-reading-indicator--flurry",
-        "chat-reading-indicator--spin",
-        "chat-reading-indicator--shadowbox",
-        "chat-reading-indicator--backflip",
-        "chat-reading-indicator--zen",
-        "chat-reading-indicator--drummer",
-        "chat-reading-indicator--peekaboo",
-      ]).toContain(cls);
-    }
+    // The render must route exactly the picker's seeded decision — nothing
+    // extra, nothing hand-rolled — so new stances can never drift this test.
+    const decision = selectWorkingClawSurprise("stream:agent:main:pending");
+    expect(first).toEqual(decision ? [decision] : []);
   });
 
   it("keeps the synthetic progress word screen-reader-only across runs", () => {

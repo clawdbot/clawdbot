@@ -3,7 +3,11 @@ import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./internal/discord.js";
-import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
+import {
+  createDiscordLoopbackRest,
+  discordWebMediaMockFactory,
+  makeDiscordRest,
+} from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 
@@ -725,6 +729,26 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
     });
+  });
+
+  it("sends the detected JPEG media type across a real loopback multipart request", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      await sendMessageDiscord("channel:789", "photo", {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+      });
+
+      const upload = loopback.requests.find((request) => request.method === "POST");
+      expect(upload?.path).toContain("/channels/789/messages");
+      expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(upload?.body).toContain('name="files[0]"; filename="photo.jpg"');
+      expect(upload?.body).toContain("Content-Type: image/jpeg");
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("preserves text when Discord rejects an upload with error 40005", async () => {

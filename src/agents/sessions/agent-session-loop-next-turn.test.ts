@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt.queue-message.js";
 import type { AgentTool } from "../runtime/index.js";
 import {
   createAssistant,
@@ -22,6 +23,51 @@ import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+function mockAbortableQueuedRun() {
+  const executeTool = vi.fn();
+  const requests: Array<{ context: Context; signal: AbortSignal | undefined }> = [];
+  const tool: ToolDefinition = {
+    name: "queued_action",
+    label: "Queued action",
+    description: "records whether a queued turn executed",
+    parameters: Type.Object({}),
+    execute: async () => {
+      executeTool();
+      return { content: [{ type: "text", text: "action completed" }], details: {} };
+    },
+  };
+
+  streamMocks.streamSimple.mockImplementation(
+    (activeModel: Model, context: Context, options?: SimpleStreamOptions) => {
+      const requestIndex = requests.length;
+      requests.push({ context, signal: options?.signal });
+      if (requestIndex === 0) {
+        const stream = createAssistantMessageEventStream();
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            const message = createAssistant(activeModel, [], "aborted");
+            stream.push({ type: "error", reason: "aborted", error: message });
+            stream.end();
+          },
+          { once: true },
+        );
+        return stream;
+      }
+
+      const content: AssistantMessage["content"] =
+        requestIndex === 1
+          ? [{ type: "toolCall", id: "queued-action-call", name: tool.name, arguments: {} }]
+          : [{ type: "text", text: "queued turn finished" }];
+      return createAssistantResultStream(
+        createAssistant(activeModel, content, requestIndex === 1 ? "toolUse" : "stop"),
+      );
+    },
+  );
+
+  return { executeTool, requests, tool };
+}
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
   it("drains a follow-up queued by an agent-end handler", async () => {
@@ -60,6 +106,72 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(JSON.stringify(requests[1]?.messages)).toContain("queued after end");
     expect(session.agent.hasQueuedMessages()).toBe(false);
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
+  });
+
+  it.each([
+    {
+      kind: "steering",
+      queue: (session: AgentSession) => session.steer("keep queued steering"),
+      messages: (session: AgentSession) => session.getSteeringMessages(),
+      expected: "keep queued steering",
+    },
+    {
+      kind: "follow-up",
+      queue: (session: AgentSession) => session.followUp("keep queued follow-up"),
+      messages: (session: AgentSession) => session.getFollowUpMessages(),
+      expected: "keep queued follow-up",
+    },
+  ])("keeps queued $kind dormant after its active run is aborted", async (scenario) => {
+    const { executeTool, requests, tool } = mockAbortableQueuedRun();
+    const { session } = await createTestSession({ customTools: [tool] });
+    const prompt = session.prompt("wait for operator cancellation");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+
+    await scenario.queue(session);
+    expect(session.agent.hasQueuedMessages()).toBe(true);
+
+    await Promise.all([session.abort(), prompt]);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.signal?.aborted).toBe(true);
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(session.agent.hasQueuedMessages()).toBe(true);
+    expect(scenario.messages(session)).toEqual([scenario.expected]);
+  });
+
+  it("cancels only an uncommitted steering confirmation after an aborted turn", async () => {
+    const { executeTool, requests, tool } = mockAbortableQueuedRun();
+    const { session } = await createTestSession({ customTools: [tool] });
+    const prompt = session.prompt("wait for operator cancellation");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+
+    await session.steer("keep unrelated steering");
+    await session.followUp("keep unrelated follow-up");
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(
+      session,
+      "cancel only this steering",
+      { deliveryTimeoutMs: 10_000, waitForTranscriptCommit: true },
+    ).then(
+      () => "committed",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    await vi.waitFor(() =>
+      expect(session.getSteeringMessages()).toEqual([
+        "keep unrelated steering",
+        "cancel only this steering",
+      ]),
+    );
+
+    await Promise.all([session.abort(), prompt]);
+
+    await expect(delivery).resolves.toBe(
+      "active session ended before queued steering message was committed to the transcript",
+    );
+    expect(requests).toHaveLength(1);
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
+    expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
+    expect(session.agent.hasQueuedMessages()).toBe(true);
   });
 
   it("leaves queued messages dormant after a turn handoff", async () => {

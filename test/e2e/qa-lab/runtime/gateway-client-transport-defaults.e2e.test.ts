@@ -262,7 +262,7 @@ describe("GatewayClient transport defaults", () => {
         firstSocket.resolve(socket);
         return;
       }
-      waitForImmediate().then(() => socket.close(1012, "retry"));
+      void waitForImmediate().then(() => socket.close(1012, "retry"));
     });
     const client = new GatewayClient({
       url,

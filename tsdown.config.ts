@@ -302,6 +302,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
     "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
+    "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",

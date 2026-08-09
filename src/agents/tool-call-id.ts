@@ -1,4 +1,9 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import {
+  extractToolCallsFromAssistant as extractPairingToolCalls,
+  extractToolResultId as extractPairingToolResultId,
+  extractToolResultIds as extractPairingToolResultIds,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 /**
  * Tool call id normalization and extraction helpers.
  *
@@ -66,63 +71,17 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
 export function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
-  const content = msg.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-
-  const toolCalls: ToolCallLike[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
-      continue;
-    }
-    if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
-      toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
-      });
-    }
-  }
-  return toolCalls;
+  return extractPairingToolCalls(msg);
 }
 
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
-  return extractToolResultIds(msg)[0] ?? null;
+  return extractPairingToolResultId(msg);
 }
 
 export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolResult" }>): string[] {
-  const ids: string[] = [];
-  const record = msg as {
-    toolCallId?: unknown;
-    toolUseId?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-    callId?: unknown;
-    call_id?: unknown;
-  };
-  for (const value of [
-    record.toolCallId,
-    record.toolUseId,
-    record.tool_call_id,
-    record.tool_use_id,
-    record.callId,
-    record.call_id,
-  ]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const id = value.trim();
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  return extractPairingToolResultIds(msg);
 }
 
 function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {

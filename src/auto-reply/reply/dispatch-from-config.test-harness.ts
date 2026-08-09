@@ -372,8 +372,6 @@ export const globalBeforeAll0 = async () => {
   ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
-  await import("./dispatch-acp-tts.runtime.js");
-  await import("./dispatch-acp-session.runtime.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
   ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));

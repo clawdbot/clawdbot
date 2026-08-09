@@ -122,17 +122,29 @@ async function resolveActivePlacement(
     }
     if (result.status === "unavailable") {
       lookupFailures += 1;
-      if (!isCurrent() || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
-        if (!isCurrent() && lastKnownEnvironmentId) {
+      const submissionCancelled = !isCurrent();
+      if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
+        if (lastKnownEnvironmentId) {
+          // The last successful placement read still proves worker ownership.
+          // Destroy it before returning, or a lookup outage can orphan paid capacity.
           const cleanupError = await cancelActivePlacement(client, {
             key: params.key,
             agentId: params.agentId,
             environmentId: lastKnownEnvironmentId,
             abortRun: false,
           });
-          return cleanupError
-            ? { status: "cleanup-rejected", error: cleanupError }
-            : { status: "cancelled" };
+          if (submissionCancelled) {
+            return cleanupError
+              ? { status: "cleanup-rejected", error: cleanupError }
+              : { status: "cancelled" };
+          }
+          const placementError = "cloud worker placement could not be verified";
+          return {
+            status: "cleanup-rejected",
+            error: cleanupError
+              ? `${placementError}; cleanup failed: ${cleanupError}`
+              : placementError,
+          };
         }
         return {
           status: "cleanup-rejected",

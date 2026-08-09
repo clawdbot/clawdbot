@@ -255,6 +255,7 @@ describe("worker turn launcher", () => {
       profileId: "development",
       profileSnapshot: { settings: { region: "test" } },
       provisionOperationId: "provision-worker-turn",
+      sharedHost: false,
       bootstrapReceipt: {
         bundleHash: BUNDLE_HASH,
         openclawVersion: "2026.7.2",

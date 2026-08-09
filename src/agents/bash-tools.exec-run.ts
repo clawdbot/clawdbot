@@ -17,7 +17,7 @@ import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-comma
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";

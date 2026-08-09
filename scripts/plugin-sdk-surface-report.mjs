@@ -167,12 +167,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: restore the documented session-catalog and tool-results plugin contracts.
       // +1: focused inbound-event delivery correlation for channel plugins.
       // +1: dependency-light agent scope helpers for doctor migration enumeration.
-      150,
+      // +1: dependency-light channel streaming config readers for doctor closures
+      //     (realtime-voice-activation is private-local and not counted here).
+      151,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      // +4: session discussion state, info, provider, and registration contracts.
+      // +5: session discussion state, info, provider, registration, and Control UI path contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
       // +1: channel-owned setup contract factory.
@@ -228,12 +230,13 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: simple channel secret contract factory replacing repeated collectors.
       // +4: focused agent scope functions for doctor migration enumeration.
       // +1: shared transcript credential-safety prompt for plugin-owned agent harnesses.
-      4840,
+      // +3: channel streaming config reader re-exports and session-agent scope resolver.
+      4844,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      // +1: session discussion provider registration.
+      // +2: session discussion provider registration and canonical Control UI path building.
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: settled-turn full-attempt projector.
       // +1: channel-owned setup contract factory.
@@ -280,7 +283,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
       // +4: focused agent scope functions for doctor migration enumeration.
-      2916,
+      // +3: channel streaming config reader functions and session-agent scope resolver.
+      2920,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

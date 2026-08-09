@@ -536,6 +536,14 @@ export function appendClientVoiceTranscript(
   return appendVoiceTranscript({ ...params, origin: "client" });
 }
 
+/** Wait for the accepted transcript/effect prefix without closing the logical call. */
+export async function flushClientVoiceSessionWrites(params: {
+  agentId: string;
+  voiceSessionId: string;
+}): Promise<void> {
+  await voiceSessionOperations.flush(operationKey(params.agentId, params.voiceSessionId));
+}
+
 /** Append one finalized relay-owned transcript item idempotently. */
 export function appendRelayVoiceTranscript(
   params: Omit<Parameters<typeof appendVoiceTranscript>[0], "origin">,

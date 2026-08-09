@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
 let addRoleDiscord: typeof import("./send.js").addRoleDiscord;
 let banMemberDiscord: typeof import("./send.js").banMemberDiscord;
 let createThreadDiscord: typeof import("./send.js").createThreadDiscord;
+let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 let DiscordThreadInitialMessageError: typeof import("./send.js").DiscordThreadInitialMessageError;
 let listGuildEmojisDiscord: typeof import("./send.js").listGuildEmojisDiscord;
 let listThreadsDiscord: typeof import("./send.js").listThreadsDiscord;
@@ -75,6 +76,64 @@ function timerDelayAt(source: MockCallSource, callIndex = 0) {
   return mockArg(source, callIndex, 1, `timer delay ${callIndex}`);
 }
 
+function createDiscordForumPayloadHarness(parentType: ChannelType = ChannelType.GuildForum) {
+  const parentId = "700";
+  const { rest, getMock, postMock } = makeDiscordRest();
+  let threadCount = 0;
+  let messageCount = 0;
+
+  getMock.mockImplementation(async (path: unknown) => {
+    const channelId = String(path).split("/").at(-1);
+    return {
+      id: channelId,
+      type: channelId === parentId ? parentType : ChannelType.PublicThread,
+    };
+  });
+  postMock.mockImplementation(async (path: unknown) => {
+    if (path === Routes.threads(parentId)) {
+      threadCount += 1;
+      const threadId = String(700 + threadCount);
+      return {
+        id: threadId,
+        message: { id: `starter-${threadCount}`, channel_id: threadId },
+      };
+    }
+    const channelId = String(path).split("/").at(-2);
+    messageCount += 1;
+    return { id: `message-${messageCount}`, channel_id: channelId };
+  });
+
+  return {
+    parentId,
+    postMock,
+    run: async (
+      payload: { text: string; mediaUrls?: string[] },
+      options: {
+        threadId?: string;
+        onDeliveryResult?: Parameters<
+          NonNullable<typeof discordOutbound.sendPayload>
+        >[0]["onDeliveryResult"];
+      } = {},
+    ) =>
+      await discordOutbound.sendPayload?.({
+        cfg: DISCORD_TEST_CFG,
+        to: `channel:${parentId}`,
+        text: payload.text,
+        payload,
+        ...(options.threadId ? { threadId: options.threadId } : {}),
+        ...(options.onDeliveryResult ? { onDeliveryResult: options.onDeliveryResult } : {}),
+        deps: {
+          discord: async (...[target, text, sendOptions]: Parameters<typeof sendMessageDiscord>) =>
+            await sendMessageDiscord(target, text, {
+              ...sendOptions,
+              rest,
+              token: "t",
+            }),
+        },
+      }),
+  };
+}
+
 function createRateLimitError(
   response: Response,
   body: { message: string; retry_after: number; global: boolean },
@@ -110,6 +169,7 @@ beforeAll(async () => {
     uploadEmojiDiscord,
     uploadStickerDiscord,
   } = await import("./send.js"));
+  ({ discordOutbound } = await import("./outbound-adapter.js"));
 });
 
 beforeEach(() => {
@@ -126,6 +186,96 @@ afterAll(() => {
 });
 
 describe("sendMessageDiscord", () => {
+  it.each([
+    {
+      label: "a 2001-character reply",
+      payload: { text: "a".repeat(2001) },
+      expectedThreadMessages: 1,
+    },
+    {
+      label: "a reply with two image attachments",
+      payload: {
+        text: "Generated images",
+        mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
+      },
+      expectedThreadMessages: 2,
+    },
+  ])("keeps $label in one automatically created forum thread", async (testCase) => {
+    const { parentId, postMock, run } = createDiscordForumPayloadHarness();
+    const onDeliveryResult = vi.fn();
+
+    const result = await run(testCase.payload, { onDeliveryResult });
+
+    const requestPaths = postMock.mock.calls.map((call) => call[0]);
+    expect(requestPaths).toEqual([
+      Routes.threads(parentId),
+      ...Array.from({ length: testCase.expectedThreadMessages }, () =>
+        Routes.channelMessages("701"),
+      ),
+    ]);
+    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.channelId)).toEqual(
+      Array.from({ length: testCase.expectedThreadMessages + 1 }, () => "701"),
+    );
+    expect(result?.receipt).toMatchObject({
+      threadId: "701",
+      platformMessageIds: [
+        "starter-1",
+        ...Array.from(
+          { length: testCase.expectedThreadMessages },
+          (_, index) => `message-${index + 1}`,
+        ),
+      ],
+    });
+  });
+
+  it("keeps chunked regular-channel replies on their original channel", async () => {
+    const { parentId, postMock, run } = createDiscordForumPayloadHarness(ChannelType.GuildText);
+
+    const result = await run({ text: "a".repeat(2001) });
+
+    expect(postMock.mock.calls.map((call) => call[0])).toEqual([
+      Routes.channelMessages(parentId),
+      Routes.channelMessages(parentId),
+    ]);
+    expect(result?.receipt?.threadId).toBeUndefined();
+    expect(result?.receipt?.platformMessageIds).toEqual(["message-2"]);
+  });
+
+  it("keeps chunked replies targeted at an explicitly selected thread", async () => {
+    const { postMock, run } = createDiscordForumPayloadHarness();
+
+    const result = await run({ text: "a".repeat(2001) }, { threadId: "701" });
+
+    expect(postMock.mock.calls.map((call) => call[0])).toEqual([
+      Routes.channelMessages("701"),
+      Routes.channelMessages("701"),
+    ]);
+    expect(result?.receipt?.threadId).toBeUndefined();
+    expect(result?.receipt?.platformMessageIds).toEqual(["message-2"]);
+  });
+
+  it("does not attempt a follow-up when forum thread creation is rejected", async () => {
+    const { parentId, postMock, run } = createDiscordForumPayloadHarness();
+    postMock.mockRejectedValueOnce(new Error("missing access"));
+
+    await expect(run({ text: "a".repeat(2001) })).rejects.toThrow("missing access");
+
+    expect(postMock).toHaveBeenCalledOnce();
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads(parentId));
+  });
+
+  it("does not send a forum follow-up when delivery bookkeeping rejects the starter", async () => {
+    const { parentId, postMock, run } = createDiscordForumPayloadHarness();
+    const onDeliveryResult = vi.fn().mockRejectedValue(new Error("delivery bookkeeping failed"));
+
+    await expect(run({ text: "a".repeat(2001) }, { onDeliveryResult })).rejects.toThrow(
+      "delivery bookkeeping failed",
+    );
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(postMock.mock.calls.map((call) => call[0])).toEqual([Routes.threads(parentId)]);
+  });
+
   it("creates a thread", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "t1" });

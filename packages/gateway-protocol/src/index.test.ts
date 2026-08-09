@@ -31,6 +31,7 @@ import {
   validateTasksRecoveryParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
+  validateTalkClientCreateResult,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
   validateTalkSessionAppendAudioParams,
@@ -688,7 +689,7 @@ describe("validateTalkClientCreateParams", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
-        capabilities: ["camera-frame"],
+        capabilities: ["camera-frame", "gateway-control-v1"],
       }),
     ]);
   });
@@ -705,6 +706,28 @@ describe("validateTalkClientCreateParams", () => {
   it("rejects unknown browser capabilities", () => {
     expectRejected(validateTalkClientCreateParams, [
       talkClient({ capabilities: ["screen-frame"] }),
+    ]);
+  });
+
+  it("accepts only the Gateway-owned control descriptor", () => {
+    expectAccepted(validateTalkClientCreateResult, [
+      {
+        provider: "openai",
+        transport: "webrtc",
+        voiceSessionId: "voice-1",
+        clientSecret: "single-use-token",
+        offerUrl: "/plugins/openai/realtime/calls",
+        clientControl: { owner: "gateway" },
+      },
+    ]);
+    expectRejected(validateTalkClientCreateResult, [
+      {
+        provider: "openai",
+        transport: "webrtc",
+        voiceSessionId: "voice-1",
+        clientSecret: "provider-secret",
+        clientControl: { owner: "client" },
+      },
     ]);
   });
 });

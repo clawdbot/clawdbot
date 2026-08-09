@@ -8,7 +8,10 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import prettyMilliseconds from "pretty-ms";
-import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "./lib/plugin-sdk-entries.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -182,6 +185,10 @@ export const BUILD_ALL_STEPS = [
         ...TSDOWN_UNIFIED_CACHE_INPUTS,
       ],
       outputs: declarationCacheOutputs(["dist"]),
+      requiredOutputs: (env) =>
+        env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+          ? listPluginSdkDeclarationOutputs(pluginSdkEntrypoints)
+          : listPluginSdkDeclarationOutputs(),
       restore: "always",
       runOnHit: {
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
@@ -622,6 +629,14 @@ function normalizePortablePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 
+function resolveCacheRequiredOutputs(cache, env) {
+  const outputs =
+    typeof cache.requiredOutputs === "function"
+      ? cache.requiredOutputs(env)
+      : (cache.requiredOutputs ?? []);
+  return outputs.map((output) => normalizePortablePath(output));
+}
+
 function resolveBuildCacheRoot(rootDir, env) {
   // Dev update preflight and final builds run in separate worktrees. A shared
   // root lets content signatures decide reuse without relocating built trees.
@@ -709,7 +724,17 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
   const stampedOutputs = Array.isArray(stamp?.outputs)
     ? stamp.outputs.map((entry) => normalizePortablePath(entry))
     : [];
-  const stampMatches = stamp?.version === BUILD_CACHE_VERSION && stamp.signature === signature;
+  const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
+  const stampedOutputSet = new Set(stampedOutputs);
+  // Restore trusts the stamp inventory, so legacy partial stamps must name the
+  // complete current contract before either output tree can make them fresh.
+  const stampIncludesRequiredOutputs = requiredOutputs.every((output) =>
+    stampedOutputSet.has(output),
+  );
+  const stampMatches =
+    stamp?.version === BUILD_CACHE_VERSION &&
+    stamp.signature === signature &&
+    stampIncludesRequiredOutputs;
   const actualOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);
   const cachedOutputsPresent =
@@ -746,6 +771,18 @@ export function writeBuildAllStepCacheStamp(step, cacheState, params = {}) {
   }
   const fsImpl = params.fs ?? fs;
   const rootDir = params.rootDir ?? process.cwd();
+  const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
+  const relativeOutputSet = new Set(
+    cacheState.relativeOutputFiles.map((output) => normalizePortablePath(output)),
+  );
+  // Validate before copying so an incomplete run cannot mutate the cached tree
+  // while leaving its previous stamp in place.
+  if (
+    !requiredOutputs.every((output) => relativeOutputSet.has(output)) ||
+    !hasAllFiles(rootDir, requiredOutputs, fsImpl)
+  ) {
+    return;
+  }
   for (const relativeFile of cacheState.relativeOutputFiles) {
     copyFileSync(
       fsImpl,

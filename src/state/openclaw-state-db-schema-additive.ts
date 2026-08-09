@@ -138,6 +138,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   }
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
+  ensureColumn(db, "worktrees", "run_end_cleanup_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
@@ -362,6 +363,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)",
   );
   ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
+  ensureColumn(db, "worker_environments", "shared_host INTEGER CHECK (shared_host IN (0, 1))");
   ensureColumn(db, "worker_workspace_pending_results", "staged_result_ref TEXT");
   ensureColumn(
     db,

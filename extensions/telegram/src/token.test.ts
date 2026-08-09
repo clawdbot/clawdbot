@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTelegramBotUserIdFromToken, resolveTelegramToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+import { resolveTelegramToken } from "./token.js";
 
 describe("resolveTelegramBotUserIdFromToken", () => {
   it.each([

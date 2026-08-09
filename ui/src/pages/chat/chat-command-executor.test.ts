@@ -73,12 +73,13 @@ function executeSlashCommand(
 function restrictedSnapshot(
   client: GatewayBrowserClient,
   methods: string[],
+  scopes = ["operator.read"],
 ): Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> {
   return {
     client,
     phase: "connected",
     hello: {
-      auth: { role: "operator", scopes: ["operator.read"] },
+      auth: { role: "operator", scopes },
       features: { methods },
     } as ApplicationGatewaySnapshot["hello"],
   };
@@ -140,17 +141,27 @@ describe("executeSlashCommand directives", () => {
     expectNoRequestCall(request, "sessions.compact");
   });
 
-  it("does not patch session settings without operator.admin", async () => {
-    const request = vi.fn();
+  it.each([
+    { name: "allows /model with operator.write", scopes: ["operator.write"], allowed: true },
+    { name: "rejects /model without operator.write", scopes: ["operator.read"], allowed: false },
+  ])("$name", async ({ scopes, allowed }) => {
+    const request = vi.fn(async () => createResolvedModelPatch("gpt-5-mini", "openai"));
     const client = { request } as unknown as GatewayBrowserClient;
 
     const result = await executeSlashCommand(client, "main", "model", "gpt-5-mini", {
-      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"]),
+      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"], scopes),
       chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
     });
 
-    expect(result.failed).toBe(true);
-    expectNoRequestCall(request, "sessions.patch");
+    expect(result.failed === true).toBe(!allowed);
+    if (allowed) {
+      expect(requireRequestCall(request, "sessions.patch").payload).toMatchObject({
+        key: "main",
+        model: "gpt-5-mini",
+      });
+    } else {
+      expectNoRequestCall(request, "sessions.patch");
+    }
   });
 
   it("defers slash-command model cache publication to the captured chat owner", async () => {

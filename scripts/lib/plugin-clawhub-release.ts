@@ -13,6 +13,7 @@ import {
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   collectRequiredLatestDependencies,
+  isPluginExternalPublicationDeferred,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
@@ -45,6 +46,7 @@ type PluginPackageJson = {
       minGatewayVersion?: string;
     };
     build?: {
+      bundledDist?: boolean;
       openclawVersion?: string;
       pluginSdkVersion?: string;
     };
@@ -281,6 +283,9 @@ export function collectClawHubPublishablePluginPackages(
     }
     const packageName = packageJson.name?.trim() ?? "";
     if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
+      continue;
+    }
+    if (isPluginExternalPublicationDeferred(packageJson)) {
       continue;
     }
     if (packageJson.openclaw?.release?.publishToClawHub !== true) {

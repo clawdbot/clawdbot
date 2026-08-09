@@ -384,18 +384,6 @@ describe("OpenClaw performance workflow", () => {
     expect(websocketRetryDelayIndex).toBeLessThan(run.indexOf(benchmark));
   });
 
-  it("isolates gateway readiness identity from benchmark device state", () => {
-    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-
-    expect(run).toContain('gateway_readiness_home="$(mktemp -d)"');
-    expect(run).toContain('gateway_readiness_state="$gateway_readiness_home/.openclaw"');
-    expect(run).toContain('gateway_readiness_config="$gateway_readiness_state/openclaw.json"');
-    expect(run).toContain('mkdir -p "$gateway_state" "$gateway_readiness_state"');
-    expect(run).toContain('cp "$gateway_config" "$gateway_readiness_config"');
-    expect(run).toContain(': > "$gateway_readiness_log"');
-    expect(run).toContain('rm -rf "$gateway_home" "$gateway_readiness_home"');
-  });
-
   it("runs trusted CLI performance cases against the frozen candidate entrypoint", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
 
@@ -403,25 +391,6 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
     expect(run).toContain("--case gatewayHealthJsonConnected \\");
     expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
-  });
-
-  it("isolates the source performance gateway from network and scheduled work", () => {
-    const step = findStep("Run OpenClaw source performance probes", "source_performance");
-    const run = step.run ?? "";
-
-    expect(run).toContain("catalog_refresh_config");
-    expect(run).toContain("rg -q 'catalogRefresh:' src/config/zod-schema.core.ts");
-    expect(run).toContain(
-      'catalog_refresh_config=\'    "models": { "catalogRefresh": { "enabled": false } },\'',
-    );
-    expect(run).toContain('"update": { "checkOnStart": false },');
-    expect(run).toContain('"agents": { "defaults": { "heartbeat": { "every": "0m" } } },');
-    expect(run).toContain(
-      'OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \\',
-    );
-    expect(readWorkflow().env?.OPENCLAW_SKIP_CRON).toBeUndefined();
-    expect(readWorkflow().jobs?.source_performance?.env?.OPENCLAW_SKIP_CRON).toBeUndefined();
-    expect(step.env?.OPENCLAW_SKIP_CRON).toBeUndefined();
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {

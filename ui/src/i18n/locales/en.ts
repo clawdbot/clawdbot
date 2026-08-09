@@ -702,8 +702,13 @@ export const en: TranslationMap = {
     start: "Start session",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
+    cloudOwnershipLost:
+      "Another window took over this cloud session. Check recent sessions before starting this task again.",
     createOutcomeUnknown:
       "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+    cliAgentsGroup: "CLI agents",
+    cloudSetupInterrupted:
+      "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
   },
   dashboardsPage: {
@@ -887,6 +892,7 @@ export const en: TranslationMap = {
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
+    cloudWorkerStopResult: 'Cloud worker for "{session}" is {state}.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
@@ -1872,6 +1878,8 @@ export const en: TranslationMap = {
     start: "Start browser",
     empty: "No open tabs. Enter a URL above to browse.",
     noChatTarget: "Open a chat session first so the annotation has somewhere to go.",
+    annotationLimitReached:
+      "Remove a browser annotation before retrying (maximum 4 cards and 8,000 characters of generated context).",
     inspectUnavailable: "Element inspection is disabled (browser.evaluateEnabled=false).",
     annotationSent: "Annotation added to the chat composer.",
     errors: {
@@ -1970,7 +1978,7 @@ export const en: TranslationMap = {
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
-    memory: "Memory engine, backend, search, and dreaming.",
+    memory: "Memory engine, search, and dreaming.",
     talk: "Realtime voice: provider, model, and speaker voice.",
     infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
     labs: "Experimental agent and tool capabilities.",
@@ -2470,18 +2478,6 @@ export const en: TranslationMap = {
         "The memory slot points at this plugin, but the plugin itself is disabled, so memory is not running.",
       enable: "Enable",
     },
-    backend: {
-      title: "Backend",
-      description: "How memory is stored and retrieved for the selected engine.",
-      rowTitle: "Retrieval backend",
-      builtin: "Built-in",
-      qmd: "QMD",
-      invalid: "Invalid configured value",
-      builtinHint: "Memory files are indexed and searched by OpenClaw itself.",
-      qmdHint: "Retrieval is delegated to QMD. Its settings appear below.",
-      invalidHint:
-        "The configured memory.backend value is invalid. Choose a backend or reset it to use the default.",
-    },
     addons: {
       title: "Add-ons",
       description:
@@ -2762,6 +2758,11 @@ export const en: TranslationMap = {
       title: "Lean tools for local models",
       description:
         "Drop heavyweight default tools that smaller local models handle poorly, leaving a shorter set they can use reliably.",
+    },
+    cliAgents: {
+      title: "CLI agents",
+      description:
+        "Show external CLI session engines in the new-session model picker when their plugins support creating sessions.",
     },
     auditMessages: {
       title: "Message audit metadata",
@@ -5031,8 +5032,17 @@ export const en: TranslationMap = {
       fallbackAttempts: "Attempts: {attempts}",
       cancelReply: "Cancel reply",
       attachmentPreview: "Attachment preview",
+      browserAnnotation: "Browser annotation",
+      browserAnnotationPreview: "Browser annotation preview",
+      browserAnnotationRegion: "{count} marked region",
+      browserAnnotationRegions: "{count} marked regions",
+      browserAnnotationInspectedElement: "Element inspected",
+      browserAnnotationRemoved: "Browser annotation removed.",
+      browserAnnotationUndoUnavailable:
+        "Undo is unavailable because the browser annotation limit has been reached.",
       compactRecommendedContext: "Compact recommended session context",
       removeAttachment: "Remove attachment",
+      removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
       attachPhoto: "Photo",
       attachFile: "Attach file",
@@ -5092,7 +5102,7 @@ export const en: TranslationMap = {
         usageCredits: "Usage credits",
         budgetValue: "{used} of {limit}",
         limitFiveHour: "5-hour limit",
-        limitWeekly: "Weekly · all models",
+        limitWeekly: "Weekly",
         limitDaily: "Daily limit",
         limitHours: "{hours}-hour limit",
       },
@@ -5151,6 +5161,7 @@ export const en: TranslationMap = {
     },
     attachments: {
       attachedFile: "Attached file",
+      showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       checking: "Checking...",

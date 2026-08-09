@@ -8,6 +8,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { CliDeps } from "../cli/deps.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { callGateway } from "../gateway/call.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -72,6 +73,7 @@ async function runExplicitAnnounceTurn(params: {
   cfg: ReturnType<typeof makeCfg>;
   deps: CliDeps;
   channel: ChannelCase["channel"];
+  deleteAfterRun?: boolean;
   to: string;
 }) {
   return await runCronIsolatedAgentTurn({
@@ -79,6 +81,7 @@ async function runExplicitAnnounceTurn(params: {
     deps: params.deps,
     job: {
       ...makeJob({ kind: "agentTurn", message: "do it" }),
+      ...(params.deleteAfterRun === true ? { deleteAfterRun: true } : {}),
       delivery: {
         mode: "announce",
         channel: params.channel,
@@ -119,6 +122,7 @@ function expectCoreChannelSendCall({
 
 async function expectCoreChannelAnnounceDelivery({
   assertSend,
+  deleteAfterRun,
   meta,
   payloads,
   testCase,
@@ -127,6 +131,7 @@ async function expectCoreChannelAnnounceDelivery({
   meta?: Parameters<typeof mockAgentPayloads>[1];
   payloads: Parameters<typeof mockAgentPayloads>[0];
   testCase: ChannelCase;
+  deleteAfterRun?: boolean;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
     const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
@@ -142,6 +147,7 @@ async function expectCoreChannelAnnounceDelivery({
       cfg,
       deps,
       channel: testCase.channel,
+      deleteAfterRun,
       to: testCase.to,
     });
 
@@ -320,6 +326,33 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+  });
+
+  it("delivers only the final Slack result after an earlier heartbeat acknowledgement", async () => {
+    const slack = CASES[0];
+    if (!slack) {
+      throw new Error("expected Slack channel case");
+    }
+    const finalResult = "Critical deployment failure: database unavailable.";
+    await expectCoreChannelAnnounceDelivery({
+      testCase: slack,
+      deleteAfterRun: true,
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: finalResult }],
+      meta: { meta: makeRunMeta(finalResult) },
+      assertSend: (sendFn, cfg) => {
+        expect(sendFn).toHaveBeenCalledTimes(1);
+        expectCoreChannelSendCall({
+          cfg,
+          expectedText: finalResult,
+          expectedTo: slack.expectedTo,
+          sendFn,
+          sentAt: 0,
+        });
+      },
+    });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
   });
 
   for (const testCase of CASES) {

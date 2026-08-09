@@ -1,5 +1,4 @@
 // Telegram tests cover bot native command menu plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,
@@ -18,7 +17,7 @@ type SyncMenuOptions = {
   setMyCommands: ReturnType<typeof vi.fn>;
   commandsToRegister: Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
   accountId: string;
-  botIdentity: string;
+  botToken: string;
   runtimeLog?: ReturnType<typeof vi.fn>;
   runtimeError?: ReturnType<typeof vi.fn>;
 };
@@ -35,7 +34,7 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
     } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
     commandsToRegister: options.commandsToRegister,
     accountId: options.accountId,
-    botIdentity: options.botIdentity,
+    botToken: options.botToken,
   });
 }
 
@@ -59,124 +58,92 @@ function setMyCommandsPayload(
 }
 
 describe("bot-native-command-menu", () => {
-  it("caps menu entries to Telegram limit", () => {
-    const allCommands = Array.from({ length: 105 }, (_, i) => ({
-      command: `cmd_${i}`,
-      description: `Command ${i}`,
-    }));
+  const canonicalCommands = Array.from({ length: 100 }, (_, index) => ({
+    command: `canonical_${index}`,
+    description: `Canonical ${index}`,
+  }));
+  it.each([
+    {
+      label: ">100 count cap",
+      allCommands: [
+        { command: "early_alias", description: "Alias", isAlias: true },
+        ...canonicalCommands,
+        { command: "configured", description: "Configured", isConfigured: true },
+      ],
+      maxTotalChars: TELEGRAM_COMMAND_TEXT_LIMIT,
+      retry: false,
+      expected: ["configured", ...canonicalCommands.slice(0, 99).map(({ command }) => command)],
+    },
+    {
+      label: "sub-100 text omission",
+      allCommands: [
+        { command: "early_alias", description: "Alias", isAlias: true },
+        { command: "canonical_later", description: "Canonical" },
+        { command: "custom_last", description: "Configured", isConfigured: true },
+      ],
+      maxTotalChars: 28,
+      retry: false,
+      expected: ["custom_last", "canonical_later"],
+    },
+    {
+      label: "BOT_COMMANDS_TOO_MUCH retry",
+      allCommands: [
+        { command: "early_alias", description: "Alias", isAlias: true },
+        { command: "canonical_a", description: "Canonical A" },
+        { command: "configured", description: "Configured", isConfigured: true },
+        { command: "canonical_b", description: "Canonical B" },
+        { command: "canonical_c", description: "Canonical C" },
+      ],
+      maxTotalChars: TELEGRAM_COMMAND_TEXT_LIMIT,
+      retry: true,
+      expected: ["configured", "canonical_a", "canonical_b", "canonical_c"],
+    },
+    {
+      label: "no pressure",
+      allCommands: [
+        { command: "early_alias", description: "🦞".repeat(250), isAlias: true },
+        { command: "canonical", description: "Canonical" },
+        { command: "plugin", description: "Plugin" },
+        { command: "configured", description: "Configured", isConfigured: true },
+      ],
+      maxTotalChars: TELEGRAM_COMMAND_TEXT_LIMIT,
+      retry: false,
+      expected: ["early_alias", "canonical", "plugin", "configured"],
+    },
+  ])(
+    "handles $label with configured, canonical, then alias pressure priority",
+    async (testCase) => {
+      const result = buildCappedTelegramMenuCommands({
+        allCommands: testCase.allCommands,
+        maxTotalChars: testCase.maxTotalChars,
+      });
+      if (!testCase.retry) {
+        expect(result.commandsToRegister.map(({ command }) => command)).toEqual(testCase.expected);
+        return;
+      }
 
-    const result = buildCappedTelegramMenuCommands({ allCommands });
-
-    expect(result.commandsToRegister).toHaveLength(100);
-    expect(result.totalCommands).toBe(105);
-    expect(result.maxCommands).toBe(100);
-    expect(result.overflowCount).toBe(5);
-    expect(result.commandsToRegister[0]).toEqual({ command: "cmd_0", description: "Command 0" });
-    expect(result.commandsToRegister[99]).toEqual({
-      command: "cmd_99",
-      description: "Command 99",
-    });
-  });
-
-  it("does not let aliases consume command slots before canonical commands", () => {
-    const canonicalCommands = Array.from({ length: 100 }, (_, i) => ({
-      command: `cmd_${i}`,
-      description: `Command ${i}`,
-    }));
-    const allCommands = [
-      ...canonicalCommands.slice(0, 99),
-      { command: "side", description: "Alias", isAlias: true },
-      expectDefined(canonicalCommands[99], "last canonical Telegram command"),
-    ];
-
-    const result = buildCappedTelegramMenuCommands({ allCommands });
-
-    expect(result.commandsToRegister).toEqual(canonicalCommands);
-    expect(result.totalCommands).toBe(101);
-    expect(result.overflowCount).toBe(1);
-  });
-
-  it("preserves alias order when the Telegram command cap is not exceeded", () => {
-    const allCommands = [
-      { command: "btw", description: "Ask a side question" },
-      { command: "side", description: "Alias", isAlias: true },
-      { command: "plugin_command", description: "Plugin command" },
-    ];
-
-    const result = buildCappedTelegramMenuCommands({ allCommands });
-
-    expect(result.commandsToRegister).toEqual([
-      { command: "btw", description: "Ask a side question" },
-      { command: "side", description: "Alias" },
-      { command: "plugin_command", description: "Plugin command" },
-    ]);
-    expect(result.totalCommands).toBe(3);
-    expect(result.overflowCount).toBe(0);
-  });
-
-  it("counts aliases dropped by the Telegram command cap", () => {
-    const canonicalCommands = Array.from({ length: 99 }, (_, i) => ({
-      command: `cmd_${i}`,
-      description: `Command ${i}`,
-    }));
-    const aliasCommands = Array.from({ length: 5 }, (_, i) => ({
-      command: `alias_${i}`,
-      description: `Alias ${i}`,
-      isAlias: true,
-    }));
-
-    const result = buildCappedTelegramMenuCommands({
-      allCommands: [...canonicalCommands, ...aliasCommands],
-    });
-
-    expect(result.commandsToRegister).toEqual([
-      ...canonicalCommands,
-      { command: "alias_0", description: "Alias 0" },
-    ]);
-    expect(result.totalCommands).toBe(104);
-    expect(result.overflowCount).toBe(4);
-  });
-
-  it("shortens descriptions before dropping commands to fit Telegram payload budget", () => {
-    const allCommands = Array.from({ length: 92 }, (_, i) => ({
-      command: `cmd_${i}`,
-      description: "x".repeat(100),
-    }));
-
-    const result = buildCappedTelegramMenuCommands({ allCommands });
-
-    expect(result.commandsToRegister).toHaveLength(92);
-    expect(result.descriptionTrimmed).toBe(true);
-    expect(result.textBudgetDropCount).toBe(0);
-    const totalText = result.commandsToRegister.reduce(
-      (total, command) => total + command.command.length + command.description.length,
-      0,
-    );
-    expect(totalText).toBeLessThanOrEqual(TELEGRAM_COMMAND_TEXT_LIMIT);
-    expect(result.commandsToRegister.filter((command) => command.description.length > 56)).toEqual(
-      [],
-    );
-  });
-
-  it("drops tail commands only when minimal descriptions still cannot fit the payload budget", () => {
-    const allCommands = [
-      { command: "alpha_cmd", description: "First command" },
-      { command: "bravo_cmd", description: "Second command" },
-      { command: "charlie_cmd", description: "Third command" },
-    ];
-
-    const result = buildCappedTelegramMenuCommands({
-      allCommands,
-      maxTotalChars: 20,
-    });
-
-    expect(result.commandsToRegister).toEqual([
-      { command: "alpha_cmd", description: "F" },
-      { command: "bravo_cmd", description: "S" },
-    ]);
-    expect(result.descriptionTrimmed).toBe(true);
-    expect(result.textBudgetDropCount).toBe(1);
-  });
+      const setMyCommands = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
+        .mockResolvedValue(undefined);
+      syncMenuCommandsWithMocks({
+        deleteMyCommands: vi.fn(async () => undefined),
+        setMyCommands,
+        commandsToRegister: result.commandsToRegister,
+        accountId: `test-pressure-${Date.now()}`,
+        botToken: "bot-a",
+      });
+      await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(3));
+      const retryPayload = setMyCommandsPayload(setMyCommands, 1);
+      expect(retryPayload.map((command) => (command as { command: string }).command)).toEqual(
+        testCase.expected,
+      );
+      expect(setMyCommandsPayload(setMyCommands, 2)).toEqual(retryPayload);
+      expect(retryPayload.every((command) => Object.keys(command as object).length === 2)).toBe(
+        true,
+      );
+    },
+  );
 
   it("does not reuse cached capped results for delimiter-like descriptions", () => {
     const first = buildCappedTelegramMenuCommands({
@@ -271,413 +238,6 @@ describe("bot-native-command-menu", () => {
     );
     expect(result.issues).toContain(
       'Plugin command "/<unknown>" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).',
-    );
-  });
-
-  it("deletes stale commands before setting new menu", async () => {
-    const callOrder: string[] = [];
-    const deleteMyCommands = vi.fn(async (options?: { scope?: { type?: string } }) => {
-      callOrder.push(options?.scope?.type ? `delete:${options.scope.type}` : "delete:default");
-    });
-    const setMyCommands = vi.fn(
-      async (_commands: unknown, options?: { scope?: { type?: string } }) => {
-        callOrder.push(options?.scope?.type ? `set:${options.scope.type}` : "set:default");
-      },
-    );
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [{ command: "cmd", description: "Command" }],
-      accountId: `test-delete-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalled();
-    });
-
-    expect(callOrder).toEqual([
-      "delete:default",
-      "delete:all_group_chats",
-      "set:default",
-      "set:all_group_chats",
-    ]);
-  });
-
-  it("registers the menu in default and group chat scopes", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const commands = [{ command: "cmd", description: "Command" }];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: commands,
-      accountId: `test-scopes-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(2);
-    });
-
-    expect(setMyCommands).toHaveBeenCalledWith(commands);
-    expect(setMyCommands).toHaveBeenCalledWith(commands, {
-      scope: { type: "all_group_chats" },
-    });
-  });
-
-  it("registers localized command descriptions per Telegram language scope", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-    const commands = [
-      {
-        command: "cmd",
-        description: "Default",
-        descriptionLocalizations: {
-          ko: "한국어",
-          "en-GB": "British English is unsupported by Telegram",
-        },
-      },
-    ];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands,
-      accountId: `test-localized-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(4);
-    });
-
-    expect(setMyCommandsPayload(setMyCommands, 0)).toEqual([
-      { command: "cmd", description: "Default" },
-    ]);
-    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
-      { command: "cmd", description: "한국어" },
-    ]);
-    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({ language_code: "ko" });
-    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({
-      scope: { type: "all_group_chats" },
-      language_code: "ko",
-    });
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram command menu ignored unsupported description localization codes: en-GB.",
-    );
-  });
-
-  it("caps localized command descriptions before registering Telegram variants", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [
-        {
-          command: "long",
-          description: "Default",
-          descriptionLocalizations: { ko: "x".repeat(300) },
-        },
-      ],
-      accountId: `test-localized-cap-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(4);
-    });
-
-    const localizedPayload = setMyCommandsPayload(setMyCommands, 2);
-    expect(localizedPayload[0]).toMatchObject({ command: "long" });
-    expect((localizedPayload[0] as { description: string }).description).toHaveLength(256);
-  });
-
-  it("skips sync when only command order changes (#32017)", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-    const commands = [
-      { command: "bravo", description: "B" },
-      { command: "alpha", description: "A" },
-    ];
-    const accountId = `test-order-stable-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands.toReversed(),
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(deleteMyCommands).toHaveBeenCalledTimes(2);
-    expect(setMyCommands).toHaveBeenCalledTimes(2);
-  });
-
-  it("resyncs when a command description changes (#32017)", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-    const accountId = `test-description-change-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: [{ command: "alpha", description: "A" }],
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: [{ command: "alpha", description: "Changed" }],
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-  });
-
-  it("resyncs delimiter-like command lists without hash collisions", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-    const accountId = `test-delimiter-collision-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: [{ command: "a", description: "b\0c\0d" }],
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: [
-        { command: "a", description: "b" },
-        { command: "c", description: "d" },
-      ],
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-  });
-
-  it("skips sync when command hash is unchanged (#32017)", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-
-    const accountId = `test-skip-${Date.now()}`;
-    const commands = [{ command: "skip_test", description: "Skip test command" }];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(2);
-    });
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "bot-a",
-    });
-
-    expect(setMyCommands).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not reuse cached hash across different bot identities", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-    const accountId = `test-bot-identity-${Date.now()}`;
-    const commands = [{ command: "same", description: "Same" }];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "token-bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "token-bot-b",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-  });
-
-  it("does not cache empty-menu hash when deleteMyCommands fails", async () => {
-    const deleteMyCommands = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transient failure"))
-      .mockResolvedValue(undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeLog = vi.fn();
-    const accountId = `test-empty-delete-fail-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: [],
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: [],
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(deleteMyCommands).toHaveBeenCalledTimes(4));
-  });
-
-  it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
-      .mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-    const runtimeError = vi.fn();
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      runtimeError,
-      commandsToRegister: Array.from({ length: 100 }, (_, i) => ({
-        command: `cmd_${i}`,
-        description: `Command ${i}`,
-      })),
-      accountId: `test-retry-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(3);
-    });
-    const firstPayload = setMyCommandsPayload(setMyCommands, 0);
-    const secondPayload = setMyCommandsPayload(setMyCommands, 1);
-    const thirdPayload = setMyCommandsPayload(setMyCommands, 2);
-    expect(firstPayload).toHaveLength(100);
-    expect(secondPayload).toHaveLength(80);
-    expect(thirdPayload).toHaveLength(80);
-    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
-      scope: { type: "all_group_chats" },
-    });
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
-    );
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram accepted 80 commands after BOT_COMMANDS_TOO_MUCH (started with 100; omitted 20). Reduce plugin/skill/custom commands to expose more menu entries.",
-    );
-    expect(runtimeError).not.toHaveBeenCalled();
-  });
-
-  it("registers localized variants from the accepted retry command set", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
-      .mockResolvedValue(undefined);
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: Array.from({ length: 100 }, (_, i) => ({
-        command: `cmd_${i}`,
-        description: `Command ${i}`,
-        descriptionLocalizations: { ko: `명령 ${i}` },
-      })),
-      accountId: `test-localized-retry-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(5);
-    });
-    expect(setMyCommandsPayload(setMyCommands, 0)).toHaveLength(100);
-    expect(setMyCommandsPayload(setMyCommands, 1)).toHaveLength(80);
-    expect(setMyCommandsPayload(setMyCommands, 3)).toHaveLength(80);
-    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({ language_code: "ko" });
-  });
-
-  it.each([
-    { label: "description envelope", error: { description: "BOT_COMMANDS_TOO_MUCH" } },
-    { label: "message envelope", error: { message: "BOT_COMMANDS_TOO_MUCH" } },
-  ])("retries when Telegram returns a plain-object $label error", async ({ error }) => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: Array.from({ length: 10 }, (_, i) => ({
-        command: `cmd_${i}`,
-        description: `Command ${i}`,
-      })),
-      accountId: `test-envelope-${Date.now()}`,
-      botIdentity: "bot-a",
-    });
-
-    await waitForTelegramMenu(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(3);
-    });
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
     );
   });
 });

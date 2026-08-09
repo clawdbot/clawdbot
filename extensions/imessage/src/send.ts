@@ -51,6 +51,8 @@ import {
   protectIMessageFencedRoleMarkers,
   sanitizeIMessageFinalOutboundText,
 } from "./monitor/sanitize-outbound.js";
+import { withIMessageRemoteFile } from "./remote-file.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -88,7 +90,12 @@ type IMessageSendOpts = {
     maxBytes: number,
     options?: Parameters<typeof resolveOutboundAttachmentFromUrl>[2],
   ) => Promise<{ path: string; contentType?: string }>;
-  createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
+  createClient?: (params: {
+    cliPath: string;
+    dbPath?: string;
+    remoteHost?: string;
+  }) => Promise<IMessageRpcClient>;
+  withRemoteFile?: typeof withIMessageRemoteFile;
   runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
   onDeliveryResult?: (result: IMessageDeliveryProgress) => Promise<void> | void;
   resolveMessageGuidImpl?: (params: {
@@ -596,7 +603,14 @@ async function trySendAttachmentForTarget(params: {
   echoText?: string;
   echoMedia?: MediaPlaceholderTextFact;
   pendingEchoTtlMs: number;
+  timeoutMs?: number;
+  remoteHost?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
+  requestRpc?: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+  withRemoteFile: typeof withIMessageRemoteFile;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
   if (params.audioAsVoice && params.sendTransport === "applescript") {
@@ -604,18 +618,37 @@ async function trySendAttachmentForTarget(params: {
       "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
     );
   }
-  let attachmentChatTarget: string | null;
-  try {
-    attachmentChatTarget = await resolveAttachmentChatTarget({
-      target: params.target,
-      service: params.service,
-      runCliJson: params.runCliJson,
-    });
-  } catch (error) {
-    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
-      return null;
+  if (params.remoteHost && params.sendTransport === "applescript") {
+    return null;
+  }
+  let attachmentChatTarget: string | null = null;
+  if (params.remoteHost) {
+    if (params.target.kind === "chat_guid") {
+      attachmentChatTarget = params.target.chatGuid;
+    } else if (params.target.kind === "chat_identifier") {
+      attachmentChatTarget = params.target.chatIdentifier;
+    } else if (params.target.kind === "handle") {
+      const normalizedHandle = normalizeIMessageHandle(params.target.to);
+      if (normalizedHandle) {
+        const service = params.target.service !== "auto" ? params.target.service : params.service;
+        attachmentChatTarget = `${service === "sms" ? "SMS" : service === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
+      }
+    } else {
+      attachmentChatTarget = formatIMessageChatTarget(params.target.chatId);
     }
-    throw error;
+  } else {
+    try {
+      attachmentChatTarget = await resolveAttachmentChatTarget({
+        target: params.target,
+        service: params.service,
+        runCliJson: params.runCliJson,
+      });
+    } catch (error) {
+      if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
+        return null;
+      }
+      throw error;
+    }
   }
   if (!attachmentChatTarget) {
     if (params.audioAsVoice) {
@@ -640,8 +673,34 @@ async function trySendAttachmentForTarget(params: {
         pending: true,
       });
     }
-    result = await withOriginalIMessageAttachmentPath(params.filePath, async (attachmentPath) =>
-      params.runCliJson([
+    result = await withOriginalIMessageAttachmentPath(params.filePath, async (attachmentPath) => {
+      if (params.remoteHost) {
+        const requestRpc = params.requestRpc;
+        if (!requestRpc) {
+          throw new Error("iMessage remote attachment RPC is unavailable");
+        }
+        return await params.withRemoteFile({
+          remoteHost: params.remoteHost,
+          localPath: attachmentPath,
+          timeoutMs: params.timeoutMs,
+          use: async (remotePath) => {
+            const rpcParams: Record<string, unknown> = {
+              file: remotePath,
+              ...(params.audioAsVoice ? { audio: true } : {}),
+              ...(params.replyToId ? { reply_to: params.replyToId } : {}),
+            };
+            if (params.target.kind === "chat_id") {
+              rpcParams.chat_id = params.target.chatId;
+            } else if (params.target.kind === "chat_guid") {
+              rpcParams.chat_guid = params.target.chatGuid;
+            } else {
+              rpcParams.chat_identifier = attachmentChatTarget;
+            }
+            return await requestRpc("send.attachment", rpcParams);
+          },
+        });
+      }
+      return await params.runCliJson([
         "send-attachment",
         "--chat",
         attachmentChatTarget,
@@ -652,8 +711,8 @@ async function trySendAttachmentForTarget(params: {
         "--transport",
         // One-shot imsg names its private-API transport dylib; JSON-RPC calls it bridge.
         params.sendTransport === "bridge" ? "dylib" : params.sendTransport,
-      ]),
-    );
+      ]);
+    });
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
@@ -735,10 +794,14 @@ export async function sendMessageIMessage(
     });
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
+  const remoteHost = await resolveIMessageRemoteHost({
+    cliPath,
+    remoteHost: account.config.remoteHost,
+  });
   const chatDbLookupPath = resolveIMessageChatDbLookupPath({
     cliPath,
     dbPath,
-    remoteHost: account.config.remoteHost,
+    remoteHost,
   });
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
@@ -751,11 +814,13 @@ export async function sendMessageIMessage(
     target,
     cliPath,
     dbPath,
+    remoteHost,
     hasExclusiveLocalDatabase: hasExclusiveIMessageLocalDatabase({
       cfg,
       account,
       cliPath,
       dbPath,
+      remoteHost,
     }),
     service,
     replyToId: opts.replyToId,
@@ -832,6 +897,17 @@ export async function sendMessageIMessage(
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
+  const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
+    const rpcClient = opts.createClient
+      ? await opts.createClient({ cliPath, dbPath, remoteHost })
+      : await createIMessageRpcClient({ cliPath, dbPath, remoteHost });
+    try {
+      return await rpcClient.request<Record<string, unknown>>(method, rpcParams, { timeoutMs });
+    } finally {
+      await rpcClient.stop();
+    }
+  };
+  const withRemoteFile = opts.withRemoteFile ?? withIMessageRemoteFile;
 
   if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
     const attachmentResult = await trySendAttachmentForTarget({
@@ -845,7 +921,11 @@ export async function sendMessageIMessage(
       ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       echoMedia,
       pendingEchoTtlMs,
+      timeoutMs,
+      remoteHost,
       runCliJson,
+      requestRpc: requestOwnedRpc,
+      withRemoteFile,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
     if (attachmentResult) {
@@ -931,8 +1011,8 @@ export async function sendMessageIMessage(
   const client =
     opts.client ??
     (opts.createClient
-      ? await opts.createClient({ cliPath, dbPath })
-      : await createIMessageRpcClient({ cliPath, dbPath }));
+      ? await opts.createClient({ cliPath, dbPath, remoteHost })
+      : await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
   let closedClient = false;
   const stopOwnedClient = async () => {
@@ -946,9 +1026,17 @@ export async function sendMessageIMessage(
     const request = async (nativeParams: Record<string, unknown>) =>
       await client.request<Record<string, unknown>>("send", nativeParams, { timeoutMs });
     const response = filePath
-      ? await withOriginalIMessageAttachmentPath(filePath, async (attachmentPath) =>
-          request({ ...sendParams, file: attachmentPath }),
-        )
+      ? await withOriginalIMessageAttachmentPath(filePath, async (attachmentPath) => {
+          if (remoteHost) {
+            return await withRemoteFile({
+              remoteHost,
+              localPath: attachmentPath,
+              timeoutMs,
+              use: async (remotePath) => request({ ...sendParams, file: remotePath }),
+            });
+          }
+          return await request({ ...sendParams, file: attachmentPath });
+        })
       : await request(sendParams);
     const failure = resolveIMessageSendFailure(response);
     if (failure) {

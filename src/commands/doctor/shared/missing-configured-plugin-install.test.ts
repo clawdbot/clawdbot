@@ -1142,6 +1142,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   it.each([
     ["enabled-only disabled stub", { channels: { matrix: { enabled: false } } }],
     [
+      "channel metadata",
+      {
+        channels: {
+          modelByChannel: { matrix: { default: "openai/gpt-5.6-luna" } },
+          " ": { homeserver: "https://matrix.example.org" },
+        },
+      },
+    ],
+    [
       "disabled configured channel",
       { channels: { matrix: { enabled: false, homeserver: "https://matrix.example.org" } } },
     ],

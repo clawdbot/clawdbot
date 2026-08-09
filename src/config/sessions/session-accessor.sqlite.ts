@@ -44,6 +44,7 @@ export {
   applySqliteSessionStoreProjection,
   purgeSqliteDeletedAgentSessionEntries,
 } from "./session-accessor.sqlite-projection.js";
+export { applySqliteSessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
 export {
   forkSqliteSessionEntryFromParentTarget,
   forkSqliteSessionTranscriptFromParent,

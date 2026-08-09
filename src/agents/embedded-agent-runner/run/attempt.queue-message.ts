@@ -10,7 +10,10 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
-import { getSteeringMessageIdentity } from "../../sessions/steering-message-identity.js";
+import {
+  getSteeringMessageIdentity,
+  subscribeSteeringMessagePersistenceFailure,
+} from "../../sessions/steering-message-identity.js";
 import { log } from "../logger.js";
 import type {
   EmbeddedAgentQueueMessageOptions,
@@ -223,6 +226,7 @@ async function steerAndWaitForTranscriptCommit(
         clearTimeout(terminalTimer);
       }
       unsubscribe?.();
+      unsubscribePersistenceFailure?.();
       abortSignal?.removeEventListener("abort", onAbort);
       if (err) {
         reject(toErrorObject(err, "Non-Error rejection"));
@@ -297,6 +301,10 @@ async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
+    const unsubscribePersistenceFailure = subscribeSteeringMessagePersistenceFailure(
+      queueIdentity,
+      (error) => finish(error),
+    );
     if (abortRequested) {
       reportAcceptance(false);
       finish(new Error("queued steering message was cancelled before acceptance"));

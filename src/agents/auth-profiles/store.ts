@@ -1326,6 +1326,8 @@ export function getPreparedRuntimeAuthProfileStoreSnapshot(
   return getPreparedRuntimeAuthProfileStoreSnapshotImpl(agentDir, inheritedAuthDir);
 }
 
+export { getRuntimeAuthProfileStoreSnapshotRevision };
+
 /** Replace runtime auth-profile snapshots, used by tests and prepared runtimes. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,

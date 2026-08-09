@@ -398,6 +398,22 @@ suite.define(() => {
           provider: "openai",
           timestamp: Date.now(),
         },
+        {
+          role: "assistant",
+          content: "Usage ready.",
+          model: "gateway-injected",
+          provider: "openclaw",
+          timestamp: Date.now() + 1,
+          usage: {
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        },
       ],
       methodResponses: {
         "sessions.list": {
@@ -445,8 +461,13 @@ suite.define(() => {
       await expect.poll(() => popover.textContent()).toContain("$0.018");
       await expect.poll(() => popover.textContent()).toContain("$0.0015");
       await expect.poll(() => popover.textContent()).toContain("$0.0005");
-      await expect.poll(() => popover.textContent()).toContain("openai");
-      await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
+      await expect
+        .poll(async () =>
+          (await popover.locator(".context-usage__provenance").allTextContents()).map((text) =>
+            text.replace(/\s+/g, " ").trim(),
+          ),
+        )
+        .toEqual(["Provider: openai", "Model: gpt-5.5"]);
 
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);

@@ -3,12 +3,17 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  claimMainSessionRecoveryOwner,
+  releaseMainSessionRecoveryOwner,
+} from "../../agents/main-session-recovery-store.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -350,6 +355,104 @@ describe("createReplyRestartRecoveryClaimController", () => {
         cycleId: "cycle-new",
         revision: 1,
       },
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
+    });
+  });
+
+  it("rejects durable admission when the captured recovery owner releases", async () => {
+    const root = tempDirs.make("openclaw-reply-admission-owner-release-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:chat:topic:owner-release";
+    const sessionId = "channel-session-id";
+    const sourceTurnId = "telegram-update-new";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "chat",
+      accountId: "default",
+      threadId: "thread",
+    };
+    let entry: InternalSessionEntry = {
+      sessionId,
+      updatedAt: 10,
+      abortedLastRun: true,
+      status: "running",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 0,
+      },
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const owner = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      sessionId,
+      target: { sessionKey, storePath },
+    });
+    expect(owner.kind).toBe("claimed");
+    if (owner.kind !== "claimed") {
+      return;
+    }
+    entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
+    }))) as InternalSessionEntry;
+    const sourceMessage = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey: sourceTurnId,
+      timestamp: Date.now(),
+    };
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    const delegate = createUserTurnTranscriptRecorder({
+      message: sourceMessage,
+      target: {
+        agentId: "main",
+        sessionEntry: entry,
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      updateMode: "none",
+    });
+    const recorder = {
+      ...delegate,
+      getAdmissionReceipt: () => admission,
+      persistApproved: async (
+        options?: Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0],
+      ) => {
+        await releaseMainSessionRecoveryOwner(owner.lease);
+        return await delegate.persistApproved(options);
+      },
+    } satisfies UserTurnTranscriptRecorder;
+    const controller = createReplyRestartRecoveryClaimController({
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => deliveryContext,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      sourceTurnId,
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn(recorder)).rejects.toThrow(
+      "session changed before durable user-turn admission",
+    );
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    expect(persisted).not.toHaveProperty("mainRestartRecovery");
+    expect(persisted).toMatchObject({
       restartRecoveryDeliveryRunId: "orphaned-run",
       restartRecoveryDeliverySourceRunId: "telegram-update-old",
       status: "done",

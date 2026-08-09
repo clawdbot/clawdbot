@@ -1,5 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
@@ -434,12 +438,24 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(3);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
-      await gateway.deferNext("sessions.list");
-      await gateway.closeLatest(1006, "disconnect proof");
-      await sidebarRow.waitFor({ state: "visible" });
+      const socketsBefore = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => sidebarRow.textContent()).toContain("Disconnect proof");
+      await expect.poll(() => sidebarRows.count()).toBe(3);
+      for (const otherKey of otherSessionKeys) {
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
+          .waitFor({ state: "visible" });
+      }
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
 
-      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+        .toBe(socketsBefore + 1);
+      await gateway.deferNext("sessions.list");
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
         .toBeGreaterThan(initialListCount);
@@ -501,10 +517,18 @@ suite.define(() => {
       const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
+      const socketsBefore = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+        .toBe(socketsBefore + 1);
       await gateway.deferNext("sessions.subscribe");
       await gateway.deferNext("sessions.list");
-      await gateway.closeLatest(1006, "session route reconnect");
-      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.subscribe")).length, {
           timeout: 15_000,

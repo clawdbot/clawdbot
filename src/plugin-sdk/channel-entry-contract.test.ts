@@ -120,6 +120,26 @@ function createBundledChannelEntry(params: {
 }
 
 describe("defineBundledChannelEntry", () => {
+  it("defers and memoizes config schema factories", () => {
+    const configSchema = {
+      schema: { type: "object" as const, additionalProperties: false },
+    };
+    const createConfigSchema = vi.fn(() => configSchema);
+    const entry = defineBundledChannelEntry({
+      id: "lazy-config-schema",
+      name: "Lazy Config Schema",
+      description: "lazy config schema test",
+      importMetaUrl: import.meta.url,
+      plugin: { specifier: "./unused.js" },
+      configSchema: createConfigSchema,
+    });
+
+    expect(createConfigSchema).not.toHaveBeenCalled();
+    expect(entry.configSchema).toBe(configSchema);
+    expect(entry.configSchema).toBe(configSchema);
+    expect(createConfigSchema).toHaveBeenCalledTimes(1);
+  });
+
   it("runs tool registrations without channel sidecar hydration during tool discovery", () => {
     const tempRoot = tempDirs.make("openclaw-bundled-entry-tools-");
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");

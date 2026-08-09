@@ -820,7 +820,13 @@ export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
-  return res.code === 0;
+  if (res.code === 0) {
+    return true;
+  }
+  if (isLaunchctlNotLoaded(res)) {
+    return false;
+  }
+  throw new Error(`launchctl print failed: ${formatLaunchctlResultDetail(res)}`);
 }
 
 export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<boolean> {
@@ -974,8 +980,10 @@ export async function uninstallLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const plistPath = resolveLaunchAgentPlistPath(env);
-  await execLaunchctl(["bootout", domain, plistPath]);
-  await execLaunchctl(["unload", plistPath]);
+  const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  }
 
   try {
     await fs.lstat(plistPath);

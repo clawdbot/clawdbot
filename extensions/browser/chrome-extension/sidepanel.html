@@ -27,13 +27,15 @@
         <h1 id="gate-title">Preparing this tab</h1>
         <p id="gate-detail">Chrome is proving which tab owns this panel.</p>
         <code id="request-id" class="request-id hidden"></code>
-        <button id="gate-action" class="primary hidden" type="button">Share this tab</button>
+        <button id="gate-action" class="primary hidden" type="button">Allow this tab</button>
       </section>
       <section id="messages" class="messages hidden" aria-label="Conversation"></section>
     </main>
 
     <footer class="composer-shell">
-      <div id="session-note" class="session-note">No session until this tab is shared.</div>
+      <div id="session-note" class="session-note">
+        No session until OpenClaw can access this tab.
+      </div>
       <div class="composer">
         <textarea
           id="message-input"

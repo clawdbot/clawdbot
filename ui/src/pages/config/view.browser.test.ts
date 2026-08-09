@@ -1474,6 +1474,7 @@ describe("config view", () => {
     const customButton = findButtonByText(container, "Import");
 
     expect(customButton.disabled).toBe(false);
+    expect(customButton.hasAttribute("aria-pressed")).toBe(false);
     expect(
       normalizedText(
         queryRequired(container, ".settings-theme-import__inline-hint", HTMLParagraphElement),
@@ -1510,6 +1511,18 @@ describe("config view", () => {
         .find((button) => button.textContent?.includes("100%"))
         ?.getAttribute("aria-pressed"),
     ).toBe("false");
+
+    const { container: customContainer } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hasCustomTheme: true,
+      customThemeLabel: "Light Green",
+      theme: "custom",
+    });
+    expect(findButtonByText(customContainer, "Light Green").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(findButtonByText(customContainer, "Claw").getAttribute("aria-pressed")).toBe("false");
   });
 
   it("shows Appearance defaults without reset actions", () => {

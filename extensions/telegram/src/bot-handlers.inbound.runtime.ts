@@ -35,8 +35,8 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramThreadParams,
   getTelegramTextParts,
+  resolveTelegramMessageThreadSpec,
   resolveTelegramPrimaryMedia,
-  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -236,11 +236,7 @@ export function createTelegramHandlerInboundRuntime(
     } catch (mediaErr) {
       const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
       const warningThreadParams = buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup,
-          isForum,
-          messageThreadId: resolvedThreadId ?? dmThreadId,
-        }),
+        resolveTelegramMessageThreadSpec(msg, isForum),
       );
       if (mediaRuntime.abortSignal?.aborted && isDurablyRetryableInboundMediaError(mediaErr)) {
         // Abort mid-media-resolution must stay retryable for live updates too;

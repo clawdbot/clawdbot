@@ -1,10 +1,45 @@
-import { REMOTE_WORKSPACE_ACCEPTED_LOCK_JS } from "./workspace-accepted-lock-remote-script.js";
+import { REMOTE_WORKSPACE_MUTATION_LOCK_JS } from "./workspace-mutation-lock-remote-script.js";
+import {
+  REMOTE_WORKSPACE_MUTATION_CONTEXT_JS,
+  REMOTE_WORKSPACE_RSYNC_RECEIVER_RUNTIME_JS,
+} from "./workspace-mutation-remote-script.js";
+
+export const REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS = String.raw`const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const action = "receiver";
+${REMOTE_WORKSPACE_MUTATION_CONTEXT_JS}
+const transaction = path.join(
+  transactionRoot,
+  ".openclaw-accepted-" + workspaceKey + "-" + nonce,
+);
+const receiverRoot = path.join(transaction, "next");
+function validateReceiverTarget() {
+  const phase = JSON.parse(fs.readFileSync(path.join(transaction, "phase.json"), "utf8"));
+  if (phase.version !== 1 || phase.nonce !== nonce || phase.phase !== "begun") {
+    throw new Error("invalid accepted workspace staging receiver phase");
+  }
+  const receiverRootStats = fs.lstatSync(receiverRoot);
+  if (
+    receiverRootStats.isSymbolicLink() ||
+    !receiverRootStats.isDirectory() ||
+    fs.realpathSync(receiverRoot) !== receiverRoot
+  ) {
+    throw new Error("unsafe accepted workspace staging receiver");
+  }
+}
+validateReceiverTarget();
+const receiverTarget = receiverRoot;
+const receiverArgvIndex = 5;
+${REMOTE_WORKSPACE_RSYNC_RECEIVER_RUNTIME_JS}`;
 
 export const REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const action = process.argv[1];
 const acceptedActions = ["begin", "apply", "rollback", "recover", "commit", "settle"];
+const mutationActions = [...acceptedActions, "receiver", "reset"];
 if (!acceptedActions.includes(action)) throw new Error("invalid accepted workspace transaction action");
 const root = fs.realpathSync(process.argv[2]);
 const nonce = process.argv[3];
@@ -17,6 +52,7 @@ if (transactionRootStats.isSymbolicLink() || !transactionRootStats.isDirectory()
   throw new Error("unsafe accepted workspace transaction directory");
 }
 const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
+const lockOwnerPid = process.pid;
 const transactionPrefix = ".openclaw-accepted-" + workspaceKey + "-";
 const cleanupPrefix = ".openclaw-accepted-cleanup-" + workspaceKey + "-";
 const transaction = path.join(transactionRoot, transactionPrefix + nonce);
@@ -105,17 +141,7 @@ function removeTree(target) {
 function sameInode(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
-function processIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error && error.code === "EPERM") return true;
-    if (error && error.code === "ESRCH") return false;
-    throw error;
-  }
-}
-${REMOTE_WORKSPACE_ACCEPTED_LOCK_JS}
+${REMOTE_WORKSPACE_MUTATION_LOCK_JS}
 function readPaths() {
   return parsePaths(fs.readFileSync(pathsFile, "utf8"));
 }

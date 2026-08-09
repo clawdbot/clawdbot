@@ -12,7 +12,10 @@ import {
 } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  isOpenClawAgentDatabaseOpen,
+  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
@@ -23,6 +26,7 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
+  applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -31,11 +35,13 @@ import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
+  ensureSessionEntrySync,
   listSessionEntries,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   loadTranscriptEvents,
   markSessionAbortTarget,
   onSessionIdentityMutation,
@@ -47,8 +53,10 @@ import {
   readSessionUpdatedAt,
   recordInboundSessionMeta,
   replaceSessionEntry,
+  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
+  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -1098,6 +1106,244 @@ describe("session accessor seam", () => {
     );
   });
 
+  it("rejects a transcript turn when the session id rotates mid-append", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "old-rotate-session",
+      sessionKey: "agent:main:turn-rotate",
+      storePath,
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            // Simulate a concurrent reset rotating the session id between target
+            // resolution and the transcript append.
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath },
+              { sessionId: "new-rotate-session", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    // The message must not be silently written into the stale session transcript.
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "old-rotate-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "rotate-hello" }),
+      }),
+    );
+  });
+
+  it("rejects a default-store transcript turn when the session id rotates mid-append", async () => {
+    // Caller omits storePath; resolveTranscriptTurnTarget derives the default
+    // store. The guarded path must still apply so rotation is visible.
+    const stateDir = path.join(tempDir, "state-rotate-default");
+    const expectedStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      sessionId: "old-default-rotate",
+      sessionKey: "agent:main:default-rotate",
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath: expectedStorePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath: expectedStorePath },
+              { sessionId: "new-default-rotate", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "old-default-rotate",
+        sessionKey: scope.sessionKey,
+        storePath: expectedStorePath,
+      }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "default-rotate-hello" }),
+      }),
+    );
+  });
+
+  it("keeps sessionStore-mirrored transcript turns on the legacy append path (#119221)", async () => {
+    // Mirror-only sessionStore callers (entry from memory, not a persisted
+    // SQLite row) must stay on the legacy append — the guarded transaction
+    // requires a persisted row to validate and would reject as session-rebound.
+    // Populate the mirror with an entry and deliberately create NO SQLite row,
+    // so resolveTranscriptTurnTarget resolves from the mirror (resolved.existing)
+    // and loadSessionEntry finds nothing — entryFromPersistedStore stays false.
+    const sessionStore = {} as Record<string, import("./types.js").SessionEntry>;
+    const scope = {
+      agentId: "main",
+      sessionId: "mirror-only-session",
+      sessionKey: "agent:main:mirror-only",
+      storePath,
+      sessionStore,
+    };
+    sessionStore[scope.sessionKey] = {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+    };
+    // No replaceSessionEntry: the SQLite store has no row for this key.
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "mirror-only-hello", timestamp: Date.now() },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    // No session-rebound — the legacy append accepted the message.
+    expect(result.rejectedReason).toBeUndefined();
+    expect(result.appendedCount).toBe(1);
+  });
+
+  it("does not create database state for rejected memory-only transcript turns", async () => {
+    for (const source of ["sessionStore", "sessionEntry"] as const) {
+      const stateDir = path.join(tempDir, `rejected-memory-only-${source}`);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const agentId = "main";
+      const sessionKey = `agent:main:rejected-memory-only-${source}`;
+      const sessionId = `rejected-memory-only-${source}`;
+      const memoryStorePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+      const sessionEntry: SessionEntry = { sessionId, updatedAt: Date.now() };
+      const memorySource =
+        source === "sessionStore"
+          ? { sessionStore: { [sessionKey]: sessionEntry } }
+          : { sessionEntry };
+      expect(
+        loadSessionEntryReadOnly({ agentId, env, sessionKey, storePath: memoryStorePath }),
+      ).toBeUndefined();
+      expect(fs.existsSync(databasePath)).toBe(false);
+
+      const result = await persistSessionTranscriptTurn(
+        { agentId, env, sessionId, sessionKey, storePath: memoryStorePath, ...memorySource },
+        {
+          messages: [
+            {
+              message: { role: "user", content: "rejected-memory-only" },
+              shouldAppend: () => false,
+            },
+          ],
+          touchSessionEntry: true,
+          updateMode: "none",
+        },
+      );
+
+      expect(result).toMatchObject({ appendedCount: 0, messages: [] });
+      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    }
+  });
+
+  it("guards durable sessionStore transcript turns when the entry falls back to SQLite (#119221)", async () => {
+    // sessionStore mirror is empty (no entry for the key), so resolveTranscriptTurnTarget
+    // falls back to loadSessionEntry (SQLite). The entry is persisted — the guarded
+    // path must apply and reject on rotation.
+    const scope = {
+      agentId: "main",
+      sessionId: "durable-fallback-session",
+      sessionKey: "agent:main:durable-fallback",
+      storePath,
+      sessionStore: {} as Record<string, import("./types.js").SessionEntry>,
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "durable-fallback-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath },
+              { sessionId: "new-durable-fallback", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+  });
+
+  it("rejects a transcript turn when the session id rotates before target resolution", async () => {
+    // A reset wins before resolveTranscriptTurnTarget reads the entry, so the
+    // resolved entry already holds the replacement id. The caller still passes
+    // its old id. The guarded transaction must use the caller's id (not the
+    // resolved entry's) to detect the mismatch and reject.
+    const scope = {
+      agentId: "main",
+      sessionId: "old-preresolve-session",
+      sessionKey: "agent:main:preresolve-rotate",
+      storePath,
+    };
+    // Rotate the entry before the turn is attempted — resolve will read the new id.
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: "new-preresolve-session", updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "preresolve-hello", timestamp: Date.now() } }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "new-preresolve-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "preresolve-hello" }),
+      }),
+    );
+  });
+
   it("appends SQLite turns to the active transcript leaf", async () => {
     const scope = {
       agentId: "main",
@@ -1842,6 +2088,56 @@ describe("session accessor seam", () => {
         }),
       }),
     ).rejects.toThrow("outside the selected row set");
+  });
+
+  it("projects ordered patches against one mutable store view", async () => {
+    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
+    for (const [index, sessionKey] of keys.entries()) {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: `batch-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const snapshots = new Set<object>();
+    const operation = (
+      index: number,
+      label: string,
+      authorize?: () => { ok: false; error: string } | undefined,
+    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
+      resolveTarget: (snapshot) => {
+        snapshots.add(snapshot.store);
+        return { primaryKey: keys[index]! };
+      },
+      project: ({ existingEntry, isLabelInUse }) => {
+        if (isLabelInUse(label)) {
+          return { ok: false as const, error: `duplicate:${label}` };
+        }
+        return { ok: true as const, entry: { ...existingEntry!, label } };
+      },
+      ...(authorize ? { authorize } : {}),
+    });
+
+    const results = await applySessionPatchProjections({
+      storePath,
+      operations: [
+        operation(0, "Shared"),
+        operation(1, "Shared"),
+        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
+        operation(3, "Blocked"),
+      ],
+    });
+
+    expect(snapshots.size).toBe(1);
+    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
+      "Shared",
+      "duplicate:Shared",
+      "authorization changed",
+      "Blocked",
+    ]);
+    expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
+    expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
   });
 
   it("prepares entry replacements without holding a write transaction", async () => {
@@ -3567,6 +3863,7 @@ describe("session accessor seam", () => {
         sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
         sessionTarget: scope,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run, options) => {
           publishOptions.push(options?.publishOwnedWrite);
           const result = await run();
@@ -3595,6 +3892,37 @@ describe("session accessor seam", () => {
     expect(publishOptions).toEqual([undefined]);
     expect(publishedEntryBatches).toEqual([[]]);
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
+  });
+
+  it("fences matching sync transcript and entry writes before SQLite mutation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-owned-fence",
+      sessionKey: "agent:main:owned-fence",
+      storePath,
+    };
+    const stale = new Error("lease lost");
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: scope.sessionKey,
+        sessionKey: scope.sessionKey,
+        sessionTarget: scope,
+        assertOwned: () => {
+          throw stale;
+        },
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        expect(() =>
+          ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 }),
+        ).toThrow(stale);
+        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(stale);
+      },
+    );
+
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it("resolves store-backed runtime transcript targets from structured identity", async () => {

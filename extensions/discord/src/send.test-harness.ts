@@ -1,6 +1,8 @@
 // Discord plugin module implements send harness behavior.
+import { createServer } from "node:http";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
+import { RequestClient } from "./internal/discord.js";
 
 type DiscordWebMediaMockFactoryResult = {
   loadWebMedia: MockFn;
@@ -15,6 +17,66 @@ type DiscordRestFactoryResult = {
   patchMock: MockFn;
   deleteMock: MockFn;
 };
+
+type DiscordLoopbackRequest = {
+  body: string;
+  contentType: string | undefined;
+  method: string | undefined;
+  path: string | undefined;
+};
+
+export async function createDiscordLoopbackRest(): Promise<{
+  rest: RequestClient;
+  requests: DiscordLoopbackRequest[];
+  close: () => Promise<void>;
+}> {
+  const requests: DiscordLoopbackRequest[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("error", (error) => response.destroy(error));
+    request.on("end", () => {
+      requests.push({
+        body: Buffer.concat(chunks).toString("utf8"),
+        contentType: request.headers["content-type"],
+        method: request.method,
+        path: request.url,
+      });
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify(
+          request.method === "GET"
+            ? { id: "789", type: 0 }
+            : { id: "loopback-message", channel_id: "789" },
+        ),
+      );
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Discord loopback server did not bind to a TCP port");
+  }
+  return {
+    rest: new RequestClient("test-token", {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      queueRequests: false,
+    }),
+    requests,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeIdleConnections();
+      }),
+  };
+}
 
 export function discordWebMediaMockFactory(): DiscordWebMediaMockFactoryResult {
   return {

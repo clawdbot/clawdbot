@@ -115,6 +115,7 @@ test("sessions.reset rechecks plugin ownership inside lifecycle admission", asyn
     key: sessionKey,
     reason: "reset",
     commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
     authorizedPluginId: "memory-core",
     assertCurrent: () => {
       if (replaced) {

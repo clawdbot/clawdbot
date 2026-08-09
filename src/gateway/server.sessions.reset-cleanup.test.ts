@@ -429,6 +429,7 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     key: "main",
     reason: "reset",
     commandSource: "gateway:agent",
+    workerPlacementContext: {},
     assertCurrent,
   });
   releaseMutation();
@@ -565,6 +566,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
     key: "main",
     reason: "new",
     commandSource: "gateway:agent",
+    workerPlacementContext: {},
     assertCurrent: () => {
       if (!lifecycleCurrent) {
         throw new Error("stale lifecycle");
@@ -604,6 +606,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
     key: sessionKey,
     reason: "new",
     commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
   });
   await hookStarted;
   const archivePromise = directSessionReq("sessions.patch", {
@@ -719,6 +722,7 @@ test("sessions.reset preserves a newer session after lifecycle rotation", async 
       key: "main",
       reason: "new",
       commandSource: "gateway:agent",
+      workerPlacementContext: {},
       assertCurrent: () => {
         if (!lifecycleCurrent) {
           throw new Error("stale lifecycle");

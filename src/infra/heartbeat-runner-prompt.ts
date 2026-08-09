@@ -35,6 +35,7 @@ import {
   type HeartbeatScheduledTask,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
+import { selectAgentSystemEvents } from "./system-event-ownership.js";
 import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
@@ -161,8 +162,10 @@ export async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.sessionKey,
   );
-  const pendingEventEntries =
-    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
+  const pendingEventEntries = selectAgentSystemEvents(
+    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey),
+    params.agentId,
+  );
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({

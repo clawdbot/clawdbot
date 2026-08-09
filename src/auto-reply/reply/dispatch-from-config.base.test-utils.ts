@@ -119,6 +119,35 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("uses zero fallback registry loads for a published Gateway dispatch", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const preparedRegistry = createTestRegistry([]);
+    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntime, "loadPublishedGatewayInboundPluginRegistry")
+      .mockResolvedValue(preparedRegistry);
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "whatsapp",
+          SessionKey: "agent:main:main",
+          MessageSid: "prepared",
+        }),
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+      expect(preparedLookup).toHaveBeenCalledOnce();
+      expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
+      expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    } finally {
+      preparedLookup.mockRestore();
+    }
+  });
+
   it("drops a durable source duplicate before before_dispatch hooks", async () => {
     setNoAbort();
     const sessionKey = "agent:main:discord:direct:123";
@@ -379,6 +408,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       agentId: "main",
+      expectedWriterRunId: "slack-run-1",
       text: "Slack command reply",
       mediaUrls: undefined,
       idempotencyKey: "channel-final:slack-message-1:0",

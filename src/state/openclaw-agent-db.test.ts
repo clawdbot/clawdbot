@@ -1639,6 +1639,102 @@ describe("openclaw agent database", () => {
     });
   });
 
+  it("drops reverted v9 runtime journals before STRICT migration", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeV13WorkerAgentDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP INDEX idx_agent_acp_parent_stream_run;
+      DROP TABLE acp_parent_stream_events;
+      CREATE TABLE acp_parent_stream_events (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      );
+      CREATE INDEX idx_agent_acp_parent_stream_events_created
+        ON acp_parent_stream_events(created_at DESC, run_id, seq);
+
+      DROP INDEX idx_agent_trajectory_runtime_run;
+      DROP TABLE trajectory_runtime_events;
+      CREATE TABLE trajectory_runtime_events (
+        event_id INTEGER NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        run_id TEXT,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE INDEX idx_agent_trajectory_runtime_events_session
+        ON trajectory_runtime_events(session_id, event_id);
+      CREATE INDEX idx_agent_trajectory_runtime_events_run
+        ON trajectory_runtime_events(run_id, event_id)
+        WHERE run_id IS NOT NULL;
+
+      INSERT INTO sessions (session_id, session_key, created_at, updated_at)
+      VALUES ('legacy-session', 'agent:worker-1:legacy-session', 10, 20);
+      INSERT INTO acp_parent_stream_events (run_id, seq, event_json, created_at)
+      VALUES ('run-1', 1, '{"type":"delta"}', 20);
+      INSERT INTO trajectory_runtime_events
+        (event_id, session_id, run_id, seq, event_json, created_at)
+      VALUES (1, 'legacy-session', 'run-1', 1, '{"type":"runtime"}', 20);
+      PRAGMA user_version = 9;
+      UPDATE schema_meta SET schema_version = 9 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+    const tableColumns = (table: string) =>
+      (migrated.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(tableColumns("acp_parent_stream_events")).toEqual([
+      "session_id",
+      "run_id",
+      "seq",
+      "event_json",
+      "created_at",
+    ]);
+    expect(tableColumns("trajectory_runtime_events")).toEqual([
+      "session_id",
+      "seq",
+      "run_id",
+      "event_json",
+      "created_at",
+    ]);
+    for (const table of ["acp_parent_stream_events", "trajectory_runtime_events"]) {
+      expect(
+        migrated.db.prepare("SELECT strict FROM pragma_table_list WHERE name = ?").get(table),
+      ).toEqual({ strict: 1 });
+      expect(migrated.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'index' AND name IN ('idx_agent_acp_parent_stream_events_created', 'idx_agent_trajectory_runtime_events_session', 'idx_agent_trajectory_runtime_events_run')",
+        )
+        .all(),
+    ).toEqual([]);
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'index' AND name IN ('idx_agent_acp_parent_stream_run', 'idx_agent_trajectory_runtime_run') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: "idx_agent_acp_parent_stream_run" },
+      { name: "idx_agent_trajectory_runtime_run" },
+    ]);
+  });
+
   it("migrates version 8 tables to STRICT without losing agent state", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

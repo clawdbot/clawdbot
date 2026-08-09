@@ -135,6 +135,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
+        agentId,
         sessionKey,
         isMainSession,
         isNewSession,

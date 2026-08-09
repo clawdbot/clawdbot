@@ -592,22 +592,28 @@ export async function checkUpdateStatus(params: {
   fetchGit?: boolean;
   includeRegistry?: boolean;
   registryChannel?: UpdateChannel;
+  resolveRegistryChannel?: (
+    status: Pick<UpdateCheckResult, "installKind" | "git">,
+  ) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   const timeoutMs = params.timeoutMs ?? 6000;
-  const fetchRegistry = () =>
-    params.registryChannel
+  const resolveRegistryChannel = (status: Pick<UpdateCheckResult, "installKind" | "git">) =>
+    params.registryChannel ?? params.resolveRegistryChannel?.(status);
+  const fetchRegistry = (registryChannel: UpdateChannel | undefined) =>
+    registryChannel
       ? fetchNpmRegistryVersionForChannel({
-          channel: params.registryChannel,
+          channel: registryChannel,
           timeoutMs,
         })
       : fetchNpmLatestVersion({ timeoutMs });
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
+    const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
     return {
       root: null,
       installKind: "unknown",
       packageManager: "unknown",
-      registry: params.includeRegistry ? await fetchRegistry() : undefined,
+      registry: params.includeRegistry ? await fetchRegistry(registryChannel) : undefined,
     };
   }
 
@@ -626,17 +632,6 @@ export async function checkUpdateStatus(params: {
       ? "npm"
       : detectedPackageManager;
 
-  const registry = params.includeRegistry
-    ? params.registryChannel === "extended-stable" && isGit
-      ? {
-          latestVersion: null,
-          tag: "extended-stable",
-          error: "unsupported_git_channel",
-          reason: "unsupported_git_channel" as const,
-        }
-      : await fetchRegistry()
-    : undefined;
-
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([
     isGit
@@ -648,6 +643,17 @@ export async function checkUpdateStatus(params: {
       : Promise.resolve(undefined),
     checkDepsStatus({ root, manager: packageManager }),
   ]);
+  const registryChannel = resolveRegistryChannel({ installKind, git });
+  const registry = params.includeRegistry
+    ? registryChannel === "extended-stable" && isGit
+      ? {
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel" as const,
+        }
+      : await fetchRegistry(registryChannel)
+    : undefined;
 
   return {
     root,

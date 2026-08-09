@@ -59,7 +59,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       // External delivery owns the next run after a deliberate turn handoff.
       return "handoff";
     }
-    if (!msg) {
+    if (!msg || msg.stopReason === "aborted") {
       return "settled";
     }
 

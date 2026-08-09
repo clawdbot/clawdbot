@@ -210,7 +210,10 @@ suite.define(() => {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
           sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
-          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
+          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
+            hasActiveRun: true,
+            status: "running",
+          }),
           sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
         ]),
         "sessions.patchMany": {
@@ -248,8 +251,12 @@ suite.define(() => {
       const batchMenu = page.locator("openclaw-session-menu");
       const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
       await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(
+        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
+      ).toBe(true);
       await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
-      await activateMenuItem(archiveItem);
+      await page.keyboard.press("A");
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
       const patchManyParams = requireRecord(patchMany.params);

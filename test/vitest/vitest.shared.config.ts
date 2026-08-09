@@ -32,7 +32,7 @@ export const jsdomOptimizedDeps = {
   optimizer: {
     web: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element", "marked"] as string[],
+      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
     },
   },
 };

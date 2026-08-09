@@ -4,7 +4,6 @@ import {
   ErrorCodes,
   errorShape,
   type SessionOperationEvent,
-  type SessionPlacement,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
@@ -18,6 +17,14 @@ import {
   type PluginSessionOwnershipAction,
 } from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
+import type {
+  GatewaySessionStoreTarget,
+  GatewaySessionStoreTargetWithStore,
+} from "../session-utils-contracts.js";
+import type {
+  GatewaySessionStoreCache,
+  GatewaySessionStoreDiscoveryCache,
+} from "../session-utils-store-lookup.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -27,83 +34,17 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import type { WorkerSessionPlacementRetirement } from "../worker-environments/placement-store.js";
+export {
+  resolveSessionWorkerPlacementMutationError,
+  retireSessionWorkerPlacementBeforeMutation,
+  SessionWorkerPlacementMutationError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
-export class SessionWorkerPlacementMutationError extends Error {
-  constructor(
-    readonly placementState: SessionPlacement["state"],
-    action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch",
-    key: string,
-  ) {
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
-  }
-}
-
-type SessionWorkerPlacementMutationGuard = {
-  error?: SessionWorkerPlacementMutationError;
-  retirement?: WorkerSessionPlacementRetirement;
-};
-
-export function resolveSessionWorkerPlacementMutationGuard(params: {
-  action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
-  context: GatewayRequestContext;
-  key: string;
-  sessionId: string | undefined;
-}): SessionWorkerPlacementMutationGuard {
-  if (!params.sessionId) {
-    return {};
-  }
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.sessionId])
-    .get(params.sessionId);
-  const environment = placement?.environmentId
-    ? params.context.workerEnvironmentService?.get(placement.environmentId)
-    : undefined;
-  // finishProvenDestroy clears leaseId only after provider teardown succeeds. Failed environments
-  // that retain a lease stay fenced because their teardown is pending or indeterminate.
-  const failedPlacementCanDelete =
-    params.action === "delete" &&
-    placement?.state === "failed" &&
-    (placement.environmentId === null ||
-      environment?.state === "destroyed" ||
-      (environment?.state === "failed" && environment.leaseId === null));
-  const placementCanMutate =
-    !placement ||
-    placement.state === "local" ||
-    (params.action === "delete" && placement.state === "reclaimed") ||
-    failedPlacementCanDelete;
-  if (!placementCanMutate) {
-    return {
-      error: new SessionWorkerPlacementMutationError(placement.state, params.action, params.key),
-    };
-  }
-  if (
-    params.action === "delete" &&
-    placement &&
-    (placement.state === "local" || placement.state === "reclaimed" || placement.state === "failed")
-  ) {
-    return {
-      retirement: {
-        sessionId: placement.sessionId,
-        expectedState: placement.state,
-        expectedGeneration: placement.generation,
-      },
-    };
-  }
-  return {};
-}
-
-export function resolveSessionWorkerPlacementMutationError(
-  params: Parameters<typeof resolveSessionWorkerPlacementMutationGuard>[0],
-): SessionWorkerPlacementMutationError | undefined {
-  return resolveSessionWorkerPlacementMutationGuard(params).error;
-}
-
 export function respondSessionWorkerPlacementMutationError(
-  error: SessionWorkerPlacementMutationError,
+  error: { message: string },
   respond: RespondFn,
 ): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
@@ -216,16 +157,54 @@ export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
   return true;
 }
 
+type GatewaySessionTargetOptions = {
+  agentId?: string;
+  exactRead?: boolean;
+  storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+};
+
+type HydratedGatewaySessionTargetOptions = GatewaySessionTargetOptions &
+  (
+    | { exactRead: true }
+    | { storeCache: GatewaySessionStoreCache }
+    | { targetDiscoveryCache: GatewaySessionStoreDiscoveryCache }
+  );
+
 export function resolveGatewaySessionTargetFromKey(
   key: string,
   cfg: OpenClawConfig,
-  opts?: { agentId?: string },
+  opts: HydratedGatewaySessionTargetOptions,
+): { cfg: OpenClawConfig; target: GatewaySessionStoreTargetWithStore; storePath: string };
+export function resolveGatewaySessionTargetFromKey(
+  key: string,
+  cfg: OpenClawConfig,
+  opts?: GatewaySessionTargetOptions,
+): { cfg: OpenClawConfig; target: GatewaySessionStoreTarget; storePath: string };
+export function resolveGatewaySessionTargetFromKey(
+  key: string,
+  cfg: OpenClawConfig,
+  opts?: GatewaySessionTargetOptions,
 ) {
-  const target = resolveGatewaySessionStoreTarget({
+  const targetOptions = {
     cfg,
     key,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-  });
+  };
+  const needsStore =
+    opts?.exactRead === true ||
+    opts?.storeCache !== undefined ||
+    opts?.targetDiscoveryCache !== undefined;
+  const target = needsStore
+    ? resolveGatewaySessionStoreTargetWithStore({
+        ...targetOptions,
+        ...(opts?.exactRead === true ? { exactRead: true } : {}),
+        ...(opts?.storeCache !== undefined ? { storeCache: opts.storeCache } : {}),
+        ...(opts?.targetDiscoveryCache !== undefined
+          ? { targetDiscoveryCache: opts.targetDiscoveryCache }
+          : {}),
+      })
+    : resolveGatewaySessionStoreTarget(targetOptions);
   return { cfg, target, storePath: target.storePath };
 }
 

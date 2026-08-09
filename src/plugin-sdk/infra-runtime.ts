@@ -1,7 +1,7 @@
 /**
  * @deprecated Compatibility shim only. Keep old plugins working, but do not
  * add new imports here and do not use this subpath from repo code.
- * Prefer focused openclaw/plugin-sdk/<domain> runtime subpaths instead.
+ * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
 export * from "./delivery-queue-runtime.js";

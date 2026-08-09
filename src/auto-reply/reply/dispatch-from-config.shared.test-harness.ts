@@ -627,6 +627,8 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 }));
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    acpMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>
       sessionBindingMocks.listBySession(targetSessionKey),
@@ -666,9 +668,6 @@ vi.mock("./conversation-binding-input.js", () => ({
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
 }));
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-}));
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
@@ -676,10 +675,6 @@ vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
-}));
-vi.mock("./dispatch-acp-session.runtime.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    acpMocks.readAcpSessionEntry(params),
 }));
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),

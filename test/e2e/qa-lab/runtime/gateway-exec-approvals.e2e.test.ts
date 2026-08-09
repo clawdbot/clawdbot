@@ -173,7 +173,9 @@ describe("gateway exec approvals QA", () => {
       .finally(() => {
         waitSettled = true;
       });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
     expect(waitSettled).toBe(false);
 
     await expect(

@@ -18,6 +18,7 @@ export class GatewayProtocolClient {
   constructor(options: Record<string, unknown>);
   start(): void;
   stop(): void;
+  closeSocket(code?: number, reason?: string): void;
   request(method: string, params: unknown, options?: unknown): Promise<unknown>;
 }
 
