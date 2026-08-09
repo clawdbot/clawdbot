@@ -674,6 +674,38 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("refuses direct terminal start when the requested agent has no create target", async () => {
+    const resolveCreateSession = vi.fn(() => undefined);
+    const startTerminalSession = vi.fn();
+    const open = vi.fn();
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", { resolveCreateSession, startTerminalSession }),
+      },
+    ];
+    const config = { gateway: { cliAgents: { enabled: true } } };
+
+    const respond = await call(
+      "sessions.catalog.startTerminal",
+      { catalogId: "codex", agentId: "restricted", cwd: process.cwd() },
+      config,
+      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      { isTerminalEnabled: () => true, terminalSessions: { open } },
+    );
+
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "restricted" });
+    expect(startTerminalSession).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "session catalog codex cannot create sessions",
+      }),
+    );
+  });
+
   it("memoizes a provider's create target until runtime config identity changes", async () => {
     let createSession: { model: string; agentRuntime: string } | undefined = {
       model: "anthropic/claude-opus-4-8",

@@ -6,15 +6,22 @@ import {
   type SessionsCatalogStartTerminalParams,
   validateSessionsCatalogStartTerminalParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type SessionCatalogProviderResolver = (catalogId: string) => SessionCatalogProvider | undefined;
+type SessionCatalogCreateTargetResolver = (
+  catalogId: string,
+  agentId: string,
+  config: OpenClawConfig,
+) => { ok: true } | { ok: false; message: string };
 
 /** Builds the catalog terminal-start handler around the active provider registry. */
 export function catalogStartHandler(
   resolveProvider: SessionCatalogProviderResolver,
+  resolveCreateTarget: SessionCatalogCreateTargetResolver,
 ): GatewayRequestHandlers["sessions.catalog.startTerminal"] {
   return async (opts) => {
     const { params, respond, context } = opts;
@@ -29,7 +36,8 @@ export function catalogStartHandler(
       return;
     }
     const request = params as SessionsCatalogStartTerminalParams;
-    if (context.getRuntimeConfig().gateway?.cliAgents?.enabled !== true) {
+    const config = context.getRuntimeConfig();
+    if (config.gateway?.cliAgents?.enabled !== true) {
       respond(
         false,
         undefined,
@@ -80,6 +88,11 @@ export function catalogStartHandler(
           "session catalog cannot start terminal sessions; choose a catalog that advertises createSession.startTerminal",
         ),
       );
+      return;
+    }
+    const createTarget = resolveCreateTarget(request.catalogId, request.agentId, config);
+    if (!createTarget.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, createTarget.message));
       return;
     }
     let nodeId: string | undefined;

@@ -17,8 +17,12 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
-const handler = catalogStartHandler((catalogId) =>
-  activeProvider.id === catalogId ? activeProvider : undefined,
+const resolveCreateTarget = vi.fn((): { ok: true } | { ok: false; message: string } => ({
+  ok: true,
+}));
+const handler = catalogStartHandler(
+  (catalogId) => (activeProvider.id === catalogId ? activeProvider : undefined),
+  resolveCreateTarget,
 );
 
 function startCall(
@@ -57,6 +61,8 @@ describe("sessions.catalog.startTerminal", () => {
 
   beforeEach(() => {
     activeProvider = provider();
+    resolveCreateTarget.mockReset();
+    resolveCreateTarget.mockReturnValue({ ok: true });
   });
 
   it("requires the cliAgents opt-in before terminal start", async () => {
@@ -228,6 +234,7 @@ describe("sessions.catalog.startTerminal", () => {
     }));
     activeProvider = provider({ startTerminalSession });
 
+    const config = { gateway: { cliAgents: { enabled: true } } };
     const respond = await call(
       {
         catalogId: "codex",
@@ -236,7 +243,7 @@ describe("sessions.catalog.startTerminal", () => {
         cwd,
         initialMessage: "Inspect the failing test",
       },
-      { gateway: { cliAgents: { enabled: true } } },
+      config,
       { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
       {
         isTerminalEnabled: () => true,
@@ -250,6 +257,7 @@ describe("sessions.catalog.startTerminal", () => {
       },
     );
 
+    expect(resolveCreateTarget).toHaveBeenCalledWith("codex", "research", config);
     expect(startTerminalSession).toHaveBeenCalledWith({
       agentId: "research",
       cwd,

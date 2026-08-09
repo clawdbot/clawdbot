@@ -594,7 +594,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.startTerminal": catalogStartHandler(resolveSessionCatalogProvider),
+  "sessions.catalog.startTerminal": catalogStartHandler(
+    resolveSessionCatalogProvider,
+    resolveSessionCatalogCreateTarget,
+  ),
 
   "sessions.catalog.archive": async ({ params, respond }) => {
     if (
