@@ -49,6 +49,7 @@ export function registerTabAccessEvents({
     const revocation = policy.beginRevocation(source.tabId);
     void runAccessMutation(async () => {
       try {
+        await accessReady;
         if (policy.mode === ACCESS_MODE_ALL) {
           await pauseTab(source.tabId);
         } else {

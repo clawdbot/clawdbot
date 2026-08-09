@@ -9,10 +9,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createHarness(mode: "all" | "selected" = "selected") {
+function createHarness(
+  mode: "all" | "selected" = "selected",
+  accessReady: Promise<unknown> = Promise.resolve(),
+) {
   let debuggerEventListener:
     | ((source: { tabId?: number }, method: string, params: unknown) => void)
     | undefined;
+  let debuggerDetachListener: ((source: { tabId?: number }, reason: string) => void) | undefined;
   let tabsUpdatedListener:
     | ((tabId: number, changeInfo: { groupId?: number; url?: string }) => void)
     | undefined;
@@ -51,6 +55,8 @@ function createHarness(mode: "all" | "selected" = "selected") {
     attachedTabs.delete(tabId);
     attachedAccessEpochs.delete(tabId);
   });
+  const pauseTab = vi.fn(async () => undefined);
+  const removeTabFromOpenClawGroup = vi.fn(async () => undefined);
   const chromeApi = {
     debugger: {
       onEvent: {
@@ -58,7 +64,11 @@ function createHarness(mode: "all" | "selected" = "selected") {
           debuggerEventListener = listener;
         },
       },
-      onDetach: { addListener: vi.fn() },
+      onDetach: {
+        addListener: (listener: typeof debuggerDetachListener) => {
+          debuggerDetachListener = listener;
+        },
+      },
     },
     tabs: {
       onRemoved: { addListener: vi.fn() },
@@ -85,7 +95,7 @@ function createHarness(mode: "all" | "selected" = "selected") {
 
   registerTabAccessEvents({
     chromeApi,
-    accessReady: Promise.resolve(),
+    accessReady,
     policy,
     attachedTabs,
     attachedAccessEpochs,
@@ -95,12 +105,13 @@ function createHarness(mode: "all" | "selected" = "selected") {
     send,
     scheduleTabsSync: vi.fn(),
     detachDebugger,
-    pauseTab: vi.fn(),
-    removeTabFromOpenClawGroup: vi.fn(),
-    runAccessMutation: vi.fn(),
+    pauseTab,
+    removeTabFromOpenClawGroup,
+    runAccessMutation: vi.fn(async (task) => await task()),
   });
   if (
     !debuggerEventListener ||
+    !debuggerDetachListener ||
     !tabsUpdatedListener ||
     !tabsReplacedListener ||
     !groupUpdatedListener
@@ -111,11 +122,14 @@ function createHarness(mode: "all" | "selected" = "selected") {
     attachedAccessEpochs,
     attachingTabs,
     detachDebugger,
+    debuggerDetachListener,
     debuggerEventListener,
     groupUpdatedListener,
     onConsentChanged,
     onTabRemoved,
     policy,
+    pauseTab,
+    removeTabFromOpenClawGroup,
     send,
     setAccessible: (next: boolean) => {
       accessible = next;
@@ -128,6 +142,23 @@ function createHarness(mode: "all" | "selected" = "selected") {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("tab access event epochs", () => {
+  it("waits for stored access mode before handling Chrome's cancel revocation", async () => {
+    const ready = deferred<void>();
+    const harness = createHarness("selected", ready.promise);
+
+    harness.debuggerDetachListener({ tabId: 7 }, "canceled_by_user");
+    expect(harness.policy.beginRevocation).toHaveBeenCalledWith(7);
+    expect(harness.pauseTab).not.toHaveBeenCalled();
+    expect(harness.removeTabFromOpenClawGroup).not.toHaveBeenCalled();
+
+    harness.policy.mode = "all";
+    ready.resolve();
+    await vi.waitFor(() => expect(harness.pauseTab).toHaveBeenCalledWith(7));
+
+    expect(harness.removeTabFromOpenClawGroup).not.toHaveBeenCalled();
+    expect(harness.policy.endRevocation).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       label: "all-mode URL",
