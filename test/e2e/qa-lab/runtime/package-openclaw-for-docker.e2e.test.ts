@@ -23,6 +23,7 @@ const skipDocsMapLifecycle = {
   restoreDocsMap: async (): Promise<void> => {},
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tsxImport = import.meta.resolve("tsx");
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {
@@ -243,6 +244,8 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/windows-cmd-helpers-runtime.mts",
       "scripts/lib/windows-taskkill.mjs",
     ];
     try {
@@ -257,7 +260,7 @@ describe("package-openclaw-for-docker", () => {
             process.execPath,
             [
               "--import",
-              "tsx",
+              tsxImport,
               path.join(tempRoot, "scripts/package-openclaw-for-docker.mts"),
               "--invalid",
             ],
