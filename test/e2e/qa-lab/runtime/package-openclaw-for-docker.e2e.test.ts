@@ -473,6 +473,7 @@ describe("package-openclaw-for-docker", () => {
     const originalPackageJson = `${JSON.stringify(
       {
         dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "1.2.3" },
+        devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
         files: ["dist"],
         name: "openclaw",
         version: "2026.6.17",
@@ -518,8 +519,10 @@ describe("package-openclaw-for-docker", () => {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
         bundleDependencies: string[];
         dependencies: Record<string, string>;
+        devDependencies?: Record<string, string>;
       };
       expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
+      expect(packageJson.devDependencies?.["@openclaw/session-url-contract"]).toBeUndefined();
       expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
       expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);
       expect(fs.existsSync(path.join(installedAiPath, "runtime.js"))).toBe(true);

@@ -94,9 +94,6 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
-      '@openclaw/session-url-contract':
-        specifier: workspace:*
-        version: link:packages/session-url-contract
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
@@ -260,6 +257,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@openclaw/session-url-contract':
+        specifier: workspace:*
+        version: link:packages/session-url-contract
       '@opentelemetry/sdk-node':
         specifier: 0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)(supports-color@10.2.2)
