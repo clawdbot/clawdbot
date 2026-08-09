@@ -118,7 +118,8 @@ enum OnboardingRemoteProviderIcon {
         while index < bytes.count, [0x09, 0x0A, 0x0C, 0x0D, 0x20].contains(bytes[index]) {
             index += 1
         }
-        let prefix = String(decoding: bytes[index...].prefix(5), as: UTF8.self).lowercased()
+        guard let prefix = String(bytes: bytes[index...].prefix(5), encoding: .utf8)?.lowercased()
+        else { return false }
         return prefix.hasPrefix("<svg") || prefix.hasPrefix("<?xml")
     }
 }
