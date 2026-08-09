@@ -130,7 +130,7 @@ function writeSigningSources(tempRoot: string) {
 
 describe("scripts/android-release-signing.mjs", () => {
   it("runs from an isolated copy without node_modules", () => {
-    const isolatedRoot = makeTempRoot();
+    const isolatedRoot = tempRoots.make("openclaw-android-signing-");
     for (const relativePath of ZERO_INSTALL_FILES) {
       const sourcePath = path.join(process.cwd(), relativePath);
       const destinationPath = path.join(isolatedRoot, relativePath);
