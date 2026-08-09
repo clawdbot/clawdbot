@@ -32,6 +32,7 @@ import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
+  ensureSessionEntrySync,
   listSessionEntries,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
@@ -48,6 +49,7 @@ import {
   readSessionUpdatedAt,
   recordInboundSessionMeta,
   replaceSessionEntry,
+  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
   type SessionPatchProjectionOperation,
@@ -3619,6 +3621,7 @@ describe("session accessor seam", () => {
         sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
         sessionTarget: scope,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run, options) => {
           publishOptions.push(options?.publishOwnedWrite);
           const result = await run();
@@ -3647,6 +3650,37 @@ describe("session accessor seam", () => {
     expect(publishOptions).toEqual([undefined]);
     expect(publishedEntryBatches).toEqual([[]]);
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
+  });
+
+  it("fences matching sync transcript and entry writes before SQLite mutation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-owned-fence",
+      sessionKey: "agent:main:owned-fence",
+      storePath,
+    };
+    const stale = new Error("lease lost");
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: scope.sessionKey,
+        sessionKey: scope.sessionKey,
+        sessionTarget: scope,
+        assertOwned: () => {
+          throw stale;
+        },
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        expect(() =>
+          ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 }),
+        ).toThrow(stale);
+        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(stale);
+      },
+    );
+
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it("resolves store-backed runtime transcript targets from structured identity", async () => {

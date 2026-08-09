@@ -436,6 +436,7 @@ dispatchInboundMessageMock.mockImplementation(
               sessionKey,
               storePath,
             },
+            assertOwned: () => undefined,
             withSessionWriteLock: async () => {
               mockState.disposedTranscriptWriteAttempts += 1;
               throw new Error("attempt disposed before transcript write");

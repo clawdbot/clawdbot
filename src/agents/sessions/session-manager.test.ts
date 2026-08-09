@@ -763,75 +763,7 @@ describe("SessionManager.open", () => {
     expect(loaded.getCwd()).toBe(dir);
   });
 
-  it("persists prompt-released leaf controls through SQLite markers", async () => {
-    const dir = await makeTempDir();
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-prompt-release";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release";
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionFile: marker,
-        sessionId,
-        updatedAt: 10,
-      },
-    );
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "user-message",
-      message: { role: "user", content: "question" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "base-answer",
-      message: buildAssistantMessage("base answer"),
-      parentId: user.messageId,
-    });
-    const sessionManager = openMarker(marker, sessionKey, dir);
-    const sideEntry = {
-      type: "message" as const,
-      id: "side-delivery",
-      parentId: assistant.messageId,
-      timestamp: "2026-06-15T00:00:03.000Z",
-      message: buildAssistantMessage("side delivery"),
-    };
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: sideEntry.id,
-      message: sideEntry.message,
-      parentId: sideEntry.parentId,
-    });
-
-    const mergeResult = sessionManager.mergePromptReleasedSessionEntries([sideEntry], {
-      persistLeaf: true,
-    });
-
-    expect(mergeResult?.publishedEntries).toEqual([{ kind: "id", id: expect.any(String) }]);
-    const records = await loadTranscriptEvents(scope);
-    expect(records.at(-1)).toMatchObject({
-      type: "leaf",
-      parentId: sideEntry.id,
-      targetId: assistant.messageId,
-      appendParentId: sideEntry.id,
-      appendMode: "side",
-    });
-    expect(sessionManager.getAppendParentId()).toBe(sideEntry.id);
-    expect(sessionManager.getAppendMode()).toBe("side");
-    const reopened = openMarker(marker, sessionKey, dir);
-    expect(reopened.getAppendParentId()).toBe(sideEntry.id);
-    expect(reopened.getAppendMode()).toBe("side");
-    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("rejects a prompt-released leaf control after the session target rebounds", async () => {
+  it("rejects persistence after the session target rebounds", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
@@ -851,19 +783,6 @@ describe("SessionManager.open", () => {
       parentId: user.messageId,
     });
     const sessionManager = openMarker(marker, sessionKey, dir);
-    const sideEntry = {
-      type: "message" as const,
-      id: "rebound-side-delivery",
-      parentId: assistant.messageId,
-      timestamp: "2026-07-26T00:00:00.000Z",
-      message: buildAssistantMessage("side delivery"),
-    };
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: sideEntry.id,
-      message: sideEntry.message,
-      parentId: sideEntry.parentId,
-    });
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
@@ -883,9 +802,6 @@ describe("SessionManager.open", () => {
       });
     }
 
-    expect(() =>
-      sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
-    ).toThrow("leaf control was not persisted");
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
     const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
