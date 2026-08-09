@@ -21,6 +21,7 @@ import {
 import { isSilentAgentReplyText } from "./embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { RequesterSettleWakeResolution } from "./subagent-announce.requester-settle-wake.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 import {
   clearDeliveryState,
@@ -77,6 +78,9 @@ export function createSubagentRegistryLifecycleDelivery(
     }
     deliveryState.disposition =
       delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+    if (delivery.reason === "completion_handoff_pending") {
+      deliveryState.lastDropReason = "waiting_for_requester_turn";
+    }
   };
 
   const hasPriorRequesterDeliveryMirror = async (entry: SubagentRunRecord): Promise<boolean> => {
@@ -258,6 +262,93 @@ export function createSubagentRegistryLifecycleDelivery(
         runId: maskRunId(args.entry.runId),
         childSessionKey: maskSessionKey(args.entry.childSessionKey),
       });
+    }
+  };
+
+  const reconcileSubagentAfterRequesterSettle = (
+    entry: SubagentRunRecord,
+    resolution: Exclude<RequesterSettleWakeResolution, { status: "unchanged" }>,
+  ): boolean => {
+    const target = resolveSubagentTaskTarget(entry);
+    try {
+      const deliveryUpdates = setDetachedTaskDeliveryStatusByRunId({
+        runId: target.runId,
+        runtime: "subagent",
+        sessionKey: target.sessionKey,
+        deliveryStatus: resolution.status === "failed" ? "failed" : "delivered",
+        error: resolution.status === "failed" ? resolution.error : undefined,
+      });
+      if (deliveryUpdates.length === 0) {
+        return false;
+      }
+      if (resolution.status === "failed") {
+        const endedAt = entry.execution.endedAt ?? Date.now();
+        const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
+          resolution.error,
+        );
+        const blockedUpdates = completeTaskRunByRunId({
+          runId: target.runId,
+          runtime: "subagent",
+          sessionKey: target.sessionKey,
+          endedAt,
+          lastEventAt: Date.now(),
+          progressSummary: resolveSubagentCompletionResultText(entry),
+          terminalSummary: terminalResult.terminalSummary,
+          terminalOutcome: terminalResult.terminalOutcome,
+        });
+        if (blockedUpdates.length === 0) {
+          return false;
+        }
+      }
+    } catch (err) {
+      params.warn("failed to project requester settlement to subagent task state", {
+        error: buildSafeLifecycleErrorMeta(err),
+        runId: maskRunId(target.runId),
+        childSessionKey: maskSessionKey(target.sessionKey),
+      });
+      return false;
+    }
+
+    clearPendingFinalDelivery(entry);
+    const delivery = ensureDeliveryState(entry);
+    if (resolution.status === "failed") {
+      delivery.status = "failed";
+      delivery.disposition = "permanent_failure";
+      delivery.lastError = resolution.error;
+      delivery.lastDropReason = undefined;
+      return true;
+    }
+    delivery.status = "delivered";
+    delivery.disposition =
+      resolution.status === "intentional_non_delivery" ? "intentional_non_delivery" : "delivered";
+    if (resolution.status === "delivered") {
+      const deliveredAt = Date.now();
+      delivery.deliveredAt ??= deliveredAt;
+      delivery.announcedAt ??= deliveredAt;
+    }
+    delivery.lastError = undefined;
+    delivery.lastDropReason = undefined;
+    return true;
+  };
+
+  const markSubagentTaskDeliveryPendingForRequesterSettle = (entry: SubagentRunRecord): boolean => {
+    const target = resolveSubagentTaskTarget(entry);
+    try {
+      return (
+        setDetachedTaskDeliveryStatusByRunId({
+          runId: target.runId,
+          runtime: "subagent",
+          sessionKey: target.sessionKey,
+          deliveryStatus: "pending",
+        }).length > 0
+      );
+    } catch (err) {
+      params.warn("failed to defer subagent task delivery for requester settlement", {
+        error: buildSafeLifecycleErrorMeta(err),
+        runId: maskRunId(target.runId),
+        childSessionKey: maskSessionKey(target.sessionKey),
+      });
+      return false;
     }
   };
 
@@ -487,7 +578,9 @@ export function createSubagentRegistryLifecycleDelivery(
     freezeRunResultAtCompletion,
     hasPriorRequesterDeliveryMirror,
     loadPendingFinalDeliveryPayload,
+    markSubagentTaskDeliveryPendingForRequesterSettle,
     markPendingFinalDelivery,
+    reconcileSubagentAfterRequesterSettle,
     recordAnnounceDeliveryResult,
     refreshFrozenResultFromSession,
     refreshPendingFinalDeliveryPayload,

@@ -3961,6 +3961,7 @@ describe("requester settle wake trigger", () => {
       requesterOrigin: undefined,
       settledEntry: entry,
       transitionBatch: expect.any(Function),
+      prepareBatch: expect.any(Function),
       completeBatch: expect.any(Function),
     });
     expect(entry.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
@@ -4163,6 +4164,181 @@ describe("requester settle wake trigger", () => {
 
     await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
     expect(entry.requesterSettleWake).toBeUndefined();
+  });
+
+  it("credits explicit requester quiet without inventing an external delivery timestamp", () => {
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValueOnce([
+      { taskId: "task-1" },
+    ]);
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        disposition: "intentional_non_delivery",
+        lastDropReason: "waiting_for_requester_turn",
+      },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        requesterYieldBatch: true,
+      },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+    expect(entry.delivery).toMatchObject({
+      status: "pending",
+      disposition: "intentional_non_delivery",
+      lastDropReason: "waiting_for_requester_turn",
+    });
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalled();
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+      rearmGeneration?: number,
+      resolution?: { status: "intentional_non_delivery" },
+    ) => void;
+    completeBatch([entry.runId], undefined, { status: "intentional_non_delivery" });
+
+    expect(entry.delivery).toMatchObject({
+      status: "delivered",
+      disposition: "intentional_non_delivery",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
+    expect(entry.delivery?.lastDropReason).toBeUndefined();
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "delivered",
+    });
+  });
+
+  it("marks requester settlement failure blocked before retiring its wake", () => {
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValueOnce([
+      { taskId: "task-1" },
+    ]);
+    taskExecutorMocks.completeTaskRunByRunId.mockReturnValueOnce([{ taskId: "task-1" }]);
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "child findings" },
+      delivery: {
+        status: "pending",
+        disposition: "intentional_non_delivery",
+        lastDropReason: "waiting_for_requester_turn",
+      },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        requesterYieldBatch: true,
+      },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+      rearmGeneration?: number,
+      resolution?: { status: "failed"; error: string },
+    ) => void;
+    completeBatch([entry.runId], undefined, {
+      status: "failed",
+      error: "requester settle wake retry limit reached",
+    });
+
+    expect(entry.delivery).toMatchObject({
+      status: "failed",
+      disposition: "permanent_failure",
+      lastError: "requester settle wake retry limit reached",
+    });
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "failed",
+      error: "requester settle wake retry limit reached",
+    });
+    expectFields(
+      findCallArg(
+        taskExecutorMocks.completeTaskRunByRunId,
+        (arg) => arg.terminalOutcome === "blocked",
+      ),
+      {
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion delivery failed before reaching the requester: requester settle wake retry limit reached.",
+      },
+    );
+  });
+
+  it("retains the requester settlement wake when Task projection fails", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        disposition: "intentional_non_delivery",
+        lastDropReason: "waiting_for_requester_turn",
+      },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        requesterYieldBatch: true,
+      },
+    });
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValueOnce([]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+      rearmGeneration?: number,
+      resolution?: { status: "delivered" },
+    ) => boolean;
+
+    expect(completeBatch([entry.runId], undefined, { status: "delivered" })).toBe(false);
+    expect(entry.requesterSettleWake).toBeDefined();
+    expect(entry.delivery).toMatchObject({
+      status: "pending",
+      lastDropReason: "waiting_for_requester_turn",
+    });
   });
 
   it("retains a delete-mode child after no-wake until its requester turn settles", async () => {

@@ -14,6 +14,8 @@ export { hasVisibleAgentPayload } from "./message-visibility.js";
  * cron entries, or spawned sessions have already been delivered.
  */
 export type AgentDeliveryEvidence = {
+  status?: unknown;
+  terminalReply?: unknown;
   payloads?: unknown;
   /** Durable recovery evidence sets this when its bounded payload projection omitted entries. */
   payloadsTruncated?: unknown;
@@ -36,6 +38,14 @@ export type AgentDeliveryEvidence = {
   acceptedSessionSpawns?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    aborted?: unknown;
+    error?: unknown;
+    finalAssistantRawText?: unknown;
+    finalAssistantVisibleText?: unknown;
+    livenessState?: unknown;
+    agentHarnessResultClassification?: unknown;
+    terminalReplyKind?: unknown;
+    terminalReply?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -378,6 +388,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
     "messagingToolSentTargets" in value ||
     "acceptedSessionSpawns" in value ||
     "successfulCronAdds" in value ||
+    "terminalReply" in value ||
     "meta" in value
   );
 }

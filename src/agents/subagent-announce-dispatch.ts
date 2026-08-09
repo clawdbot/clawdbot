@@ -18,6 +18,8 @@ type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_unavailable"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
+  | "requester_intentional_quiet"
+  | "requester_turn_pending"
   | "requester_abandoned"
   | "source_owner_changed"
   | "visible_reply_missing";

@@ -1,0 +1,118 @@
+title: Subagent requester intentional quiet
+
+scenario:
+  id: subagent-requester-intentional-quiet
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+  objective: Verify a yielded requester can explicitly settle a completed child with NO_REPLY without exposing child output or replaying the requester turn.
+  successCriteria:
+    - The parent spawns one bounded child and calls sessions_yield exactly once.
+    - The child result returns through the native requester-settle wake.
+    - The resumed parent returns exact NO_REPLY and produces no visible final or raw child fallback.
+    - The exact native child Task becomes succeeded and delivered after requester settlement.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/subagent-announce-delivery.ts
+    - src/agents/subagent-announce.requester-settle-wake.ts
+    - src/agents/subagent-registry-lifecycle-requester-wake.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    suiteIsolation: isolated
+    summary: Exercise an explicit quiet requester settlement through a real ephemeral Gateway and deterministic mock provider.
+    config:
+      requiredProviderMode: mock-openai
+      childLabel: qa-requester-intentional-quiet
+
+flow:
+  steps:
+    - name: settles one yielded child intentionally quietly
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: armedQuietGate
+          value:
+            expr: "await (await fetch(`${env.mock.baseUrl}/debug/requester-quiet-gate/arm`, { method: 'POST' })).json()"
+        - assert:
+            expr: "armedQuietGate.armed === true && armedQuietGate.pending === false"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:requester-quiet:${randomUUID().slice(0, 8)}`"
+        - set: prompt
+          value:
+            expr: "`Subagent requester intentional quiet check: spawn one bounded child, yield, then intentionally stay quiet after reviewing its result. QA parent correlation: ${sessionKey}`"
+        - call: startAgentRun
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                ref: prompt
+              taskTracking: false
+              timeoutMs: 30000
+        - call: waitForCondition
+          saveAs: pendingQuietTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const gate = await fetchJson(`${env.mock.baseUrl}/debug/requester-quiet-gate`); if (!gate.pending) return undefined; const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: 30000, json: true }); return payload.tasks?.find((task) => task.label === config.childLabel && task.requesterSessionKey === sessionKey && task.status === 'succeeded' && task.deliveryStatus === 'pending'); })().catch(() => undefined)"
+            - 60000
+            - 100
+        - set: releasedQuietGate
+          value:
+            expr: "await (await fetch(`${env.mock.baseUrl}/debug/requester-quiet-gate/release`, { method: 'POST' })).json()"
+        - assert:
+            expr: "releasedQuietGate.armed === false && releasedQuietGate.pending === false"
+        - call: waitForCondition
+          saveAs: quietTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: 30000, json: true }); return payload.tasks?.find((task) => task.taskId === pendingQuietTask.taskId && task.status === 'succeeded' && task.deliveryStatus === 'delivered'); })().catch(() => undefined)"
+            - 60000
+            - 100
+        - call: waitForCondition
+          saveAs: quietRequests
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => String(request.allInputText ?? '').includes(sessionKey)); const spawned = requests.filter((request) => request.plannedToolName === 'sessions_spawn'); const yielded = requests.filter((request) => request.plannedToolName === 'sessions_yield'); const settled = requests.filter((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? '')) && !/reply exactly QUIET-CHILD-OK/i.test(String(request.prompt ?? '')) && !request.plannedToolName); return spawned.length === 1 && yielded.length === 1 && settled.length === 1 ? { spawned, yielded, settled } : undefined; })().catch(() => undefined)"
+            - 60000
+            - 100
+        - call: readSessionTranscriptSummary
+          saveAs: parentTranscript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - set: parentHistory
+          value:
+            expr: "await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: 15000 })"
+        - set: visibleAssistantText
+          value:
+            expr: |-
+              (parentHistory.messages ?? []).filter((message) => message?.role === 'assistant').flatMap((message) => Array.isArray(message.content) ? message.content : [message.content]).map((item) => typeof item === 'string' ? item : (item?.type === 'text' || item?.type === 'output_text') ? String(item.text ?? '') : '').filter(Boolean).join('\n')
+        - assert:
+            expr: "String(parentTranscript.finalText ?? '').trim() === 'NO_REPLY'"
+            message:
+              expr: "`requester did not make an explicit private NO_REPLY decision: ${String(parentTranscript.finalText ?? '')}`"
+        - assert:
+            expr: "!visibleAssistantText.includes('QUIET-CHILD-OK') && !visibleAssistantText.includes('NO_REPLY')"
+            message:
+              expr: "`intentional quiet leaked child or silence-token text: ${visibleAssistantText}`"
+        - assert:
+            expr: "quietTask.requesterSessionKey === sessionKey && quietTask.deliveryStatus === 'delivered'"
+            message: native child Task did not settle as delivered at the exact requester
+      detailsExpr: "`task=${quietTask.id ?? quietTask.taskId ?? 'unknown'} requester=${sessionKey} privateDecision=${String(parentTranscript.finalText ?? '').trim()} publicAssistantText=${visibleAssistantText || '<none>'} spawnCalls=${quietRequests.spawned.length} yieldCalls=${quietRequests.yielded.length}`"

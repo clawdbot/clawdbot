@@ -6,7 +6,7 @@ const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 
 export type AgentRunTerminalReplySnapshot =
   | { disposition: "visible"; text: string }
-  | { disposition: "silent" }
+  | { disposition: "silent"; exactToken?: true }
   | { disposition: "empty" };
 
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
@@ -23,12 +23,18 @@ export function buildAgentRunTerminalReplySnapshot(params: {
   visibleText?: string;
   rawText?: string;
   terminalReplyKind?: "silent-empty";
+  recordExactToken?: boolean;
 }): AgentRunTerminalReplySnapshot {
   if (
     params.terminalReplyKind === "silent-empty" ||
     isSilentReplyText(params.rawText, SILENT_REPLY_TOKEN)
   ) {
-    return { disposition: "silent" };
+    return {
+      disposition: "silent",
+      ...(params.recordExactToken && params.rawText?.trim() === SILENT_REPLY_TOKEN
+        ? { exactToken: true as const }
+        : {}),
+    };
   }
   const text = sanitizeAgentRunTerminalReplyText(params.visibleText ?? "");
   return text ? { disposition: "visible", text } : { disposition: "empty" };
@@ -42,7 +48,15 @@ export function normalizeAgentRunTerminalReplySnapshot(
     return undefined;
   }
   const disposition = (value as { disposition?: unknown }).disposition;
-  if (disposition === "silent" || disposition === "empty") {
+  if (disposition === "silent") {
+    return {
+      disposition,
+      ...((value as { exactToken?: unknown }).exactToken === true
+        ? { exactToken: true as const }
+        : {}),
+    };
+  }
+  if (disposition === "empty") {
     return { disposition };
   }
   if (disposition !== "visible") {

@@ -29,6 +29,10 @@ function accepted(entry: SubagentRunRecord) {
   return { runId: entry.runId, childSessionKey: entry.childSessionKey };
 }
 
+function markTaskDeliveryPending() {
+  return true;
+}
+
 describe("settleRequesterTurnAfterSessionSpawns", () => {
   it("persists explicit yield intent before settlement", () => {
     const entry = makeRun("run-child", false);
@@ -51,6 +55,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const second = makeRun("run-a");
     const persistOrThrow = vi.fn();
     const schedule = vi.fn();
+    const markTaskDeliveryPending = vi.fn(() => true);
 
     expect(
       settleRequesterTurnAfterSessionSpawns({
@@ -64,6 +69,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         ]),
         persistOrThrow,
         schedule,
+        markTaskDeliveryPending,
       }),
     ).toBe(true);
 
@@ -76,7 +82,43 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       rearmGeneration: 1,
     });
     expect(first.requesterTurnRunId).toBeUndefined();
+    expect(first.delivery).toMatchObject({
+      status: "pending",
+      disposition: "intentional_non_delivery",
+      lastDropReason: "waiting_for_requester_turn",
+    });
+    expect(second.delivery).toMatchObject({
+      status: "pending",
+      disposition: "intentional_non_delivery",
+      lastDropReason: "waiting_for_requester_turn",
+    });
+    expect(markTaskDeliveryPending).toHaveBeenCalledTimes(2);
     expect(schedule).toHaveBeenCalledOnce();
+  });
+
+  it("leaves nested yielded delivery with the descendant wake owner", () => {
+    const nestedRequester = "agent:main:subagent:nested-requester";
+    const entry = makeRun("run-nested");
+    entry.requesterSessionKey = nestedRequester;
+    entry.delivery = { status: "delivered", deliveredAt: 1_900 };
+    const markTaskDeliveryPending = vi.fn(() => true);
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: nestedRequester,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(entry)],
+        runs: new Map([[entry.runId, entry]]),
+        persistOrThrow: vi.fn(),
+        schedule: vi.fn(),
+        markTaskDeliveryPending,
+      }),
+    ).toBe(true);
+
+    expect(entry.delivery).toEqual({ status: "delivered", deliveredAt: 1_900 });
+    expect(entry.requesterSettleWake).toMatchObject({ requesterYieldBatch: true });
+    expect(markTaskDeliveryPending).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -108,6 +150,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs,
         persistOrThrow,
         schedule,
+        markTaskDeliveryPending,
       }),
     ).toBe(expected);
     expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 2 : 1);
@@ -136,6 +179,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs: new Map([[entry.runId, entry]]),
         persistOrThrow: vi.fn(),
         schedule,
+        markTaskDeliveryPending,
       }),
     ).toBe(true);
     expect(entry.requesterSettleWake).toMatchObject({
@@ -160,6 +204,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs: new Map([[entry.runId, entry]]),
         persistOrThrow: vi.fn(),
         schedule,
+        markTaskDeliveryPending,
       }),
     ).toBe(true);
     expect(entry.requesterSettleWake).toMatchObject({
@@ -176,6 +221,10 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     beta.delivery = { status: "in_progress" };
     const calls: string[] = [];
     const persistOrThrow = vi.fn(() => calls.push("persist"));
+    const markTaskDeliveryPending = vi.fn(() => {
+      calls.push("task-pending");
+      return true;
+    });
     const schedule = vi.fn(() => calls.push("schedule"));
 
     expect(
@@ -190,6 +239,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         ]),
         persistOrThrow,
         schedule,
+        markTaskDeliveryPending,
       }),
     ).toBe(true);
 
@@ -205,9 +255,70 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(beta.requesterSettleWake).toEqual(frozenState);
     expect(alpha.requesterTurnRunId).toBeUndefined();
     expect(beta.requesterTurnRunId).toBeUndefined();
-    expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
-    expect(calls).toEqual(["persist", "schedule"]);
+    expect(alpha.delivery).toMatchObject({
+      status: "pending",
+      disposition: "intentional_non_delivery",
+    });
+    expect(beta.delivery).toMatchObject({
+      status: "pending",
+      disposition: "intentional_non_delivery",
+    });
+    expect(calls).toEqual(["persist", "task-pending", "task-pending", "schedule"]);
     expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha);
+  });
+
+  it("keeps the durable yielded wake when the immediate Task projection is unavailable", () => {
+    const entry = makeRun("run-child");
+    const persistOrThrow = vi.fn();
+    const schedule = vi.fn();
+    const markTaskDeliveryPending = vi.fn(() => false);
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(entry)],
+        runs: new Map([[entry.runId, entry]]),
+        persistOrThrow,
+        schedule,
+        markTaskDeliveryPending,
+      }),
+    ).toBe(true);
+
+    expect(persistOrThrow).toHaveBeenCalledExactlyOnceWith(entry.runId);
+    expect(entry.delivery).toMatchObject({
+      status: "pending",
+      lastDropReason: "waiting_for_requester_turn",
+    });
+    expect(entry.requesterSettleWake).toMatchObject({ requesterYieldBatch: true });
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
+  });
+
+  it("does not mutate Task delivery before the yielded wake is durably persisted", () => {
+    const entry = makeRun("run-child");
+    const failure = new Error("sqlite unavailable");
+    const markTaskDeliveryPending = vi.fn(() => true);
+
+    expect(() =>
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(entry)],
+        runs: new Map([[entry.runId, entry]]),
+        persistOrThrow: () => {
+          throw failure;
+        },
+        schedule: vi.fn(),
+        markTaskDeliveryPending,
+      }),
+    ).toThrow(failure);
+
+    expect(markTaskDeliveryPending).not.toHaveBeenCalled();
+    expect(entry.delivery).toEqual({ status: "delivered" });
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
   });
 
   it.each([true, false])(
@@ -244,6 +355,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           runs,
           persistOrThrow,
           schedule,
+          markTaskDeliveryPending,
         }),
       ).toBe(true);
       expect(persistOrThrow.mock.calls).toEqual(
@@ -281,6 +393,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs,
         persistOrThrow: vi.fn(),
         schedule: vi.fn(),
+        markTaskDeliveryPending,
       }),
     ).toBe(true);
     expect(runs.get(entry.runId)).toBe(entry);
@@ -305,6 +418,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs,
         persistOrThrow: vi.fn(),
         schedule: vi.fn(),
+        markTaskDeliveryPending,
       }),
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
@@ -327,6 +441,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           throw failure;
         },
         schedule: vi.fn(),
+        markTaskDeliveryPending,
       }),
     ).toThrow(failure);
     expect(runs.get(entry.runId)).toBe(entry);

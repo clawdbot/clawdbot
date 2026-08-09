@@ -85,7 +85,9 @@ agent decides whether a user-facing update is needed.
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
     - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
-    - A successful parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed.
+    - After `sessions_yield`, the yielded top-level requester owns completion settlement. Child Task delivery remains pending until that requester produces either one visible final reply or the exact `NO_REPLY` token. Exact `NO_REPLY` settles as intentional non-delivery; an empty, partial, hidden, or otherwise ambiguous requester result retries and eventually leaves the Task visibly blocked.
+    - Nested sub-agent requesters continue through the descendant-wake/replacement-run lifecycle. Their child delivery is scoped to that nested requester rather than the final external conversation.
+    - A Flow's `succeeded` state records successful child execution, while each child Task's `deliveryStatus` records requester settlement. During a yielded handoff the Flow can therefore be `succeeded` while its Tasks remain delivery-pending; a terminal handoff failure marks the affected Task blocked and the mirrored Flow blocked.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies stay owned by the parent/requester agent's normal delivery policy.
     - If direct handoff cannot be used, delivery falls back to queue routing. A queued completion remains `session_queued`, rather than delivered, until the durable queue settles.
     - Automatic completion delivery retries for up to 30 minutes, starting around 15 seconds and capping the backoff at 5 minutes. Permanent failure or deadline expiry leaves the successful child task visibly blocked instead of discarding its result.
@@ -530,6 +532,7 @@ Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - An exact `ANNOUNCE_SKIP` response suppresses announce output.
 - For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
+- After a top-level requester has explicitly yielded, exact `NO_REPLY` from the resumed requester is different: it records that the parent reviewed the child result and intentionally chose no user-visible update. Empty or non-terminal requester output does not settle that handoff.
 - Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
 
 Delivery depends on requester depth:
