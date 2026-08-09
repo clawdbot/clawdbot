@@ -64,14 +64,6 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "src/plugins/memory-runtime.ts",
   ),
   entry(
-    "selected-runtime-startup-warmup-and-sync",
-    "control",
-    "selected-memory-plugin",
-    "blocked-in-enforced-mode",
-    "extensions/memory-core/index.ts",
-    "src/gateway/server-startup-memory.ts",
-  ),
-  entry(
     "bootstrap-memory-and-user-files",
     "egress",
     "core-agent-runtime",

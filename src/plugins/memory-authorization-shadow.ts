@@ -1,7 +1,8 @@
 import { MEMORY_AUTHORIZATION_CONTRACT_VERSION } from "../memory-host-sdk/host/authorization.js";
-import { inspectMemoryAuthorizationRuntime } from "./memory-authorization-runtime.js";
+import { inspectMemoryAuthorizationCapability } from "./memory-authorization-runtime.js";
+import type { PluginRegistry } from "./registry-types.js";
 
-const inspectedRuntimes = new WeakSet<object>();
+const inspectedRegistries = new WeakSet<PluginRegistry>();
 
 type MemoryAuthorizationShadowMetadata = Readonly<{
   event: "memory-authorization-backend-surface";
@@ -16,26 +17,19 @@ type MemoryAuthorizationShadowMetadata = Readonly<{
   reasonCode: "surface-complete" | "backend-nonconforming";
 }>;
 
-function isObjectReference(value: unknown): value is object {
-  return (typeof value === "object" && value !== null) || typeof value === "function";
-}
-
 /**
- * Shadow mode returns bounded surface counts once per selected runtime. Reflection failures are
+ * Shadow mode returns bounded surface counts once per selected registry. Reflection failures are
  * nonconforming observations; logging remains with the runtime owner and cannot change selection.
  */
 export function observeMemoryAuthorizationShadowSurface(
-  runtime: unknown,
+  params: Readonly<{ capability: unknown; registry: PluginRegistry }>,
 ): MemoryAuthorizationShadowMetadata | undefined {
-  if (!isObjectReference(runtime)) {
-    return undefined;
-  }
   try {
-    if (inspectedRuntimes.has(runtime)) {
+    if (inspectedRegistries.has(params.registry)) {
       return undefined;
     }
-    inspectedRuntimes.add(runtime);
-    const inspection = inspectMemoryAuthorizationRuntime(runtime);
+    inspectedRegistries.add(params.registry);
+    const inspection = inspectMemoryAuthorizationCapability(params.capability);
     const metadata = Object.freeze({
       event: "memory-authorization-backend-surface" as const,
       mode: "shadow" as const,

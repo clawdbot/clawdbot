@@ -7,12 +7,12 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
 import { observeMemoryAuthorizationShadowSurface } from "./memory-authorization-shadow.js";
 import {
-  getMemoryRuntime,
   resolveSelectedMemoryCapabilityRegistration,
   setStandaloneMemoryManagerActive,
 } from "./memory-state.js";
-import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
+import type { MemoryPluginCapability, MemoryPluginRuntime } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
 type MemoryRuntime = NonNullable<
@@ -52,8 +52,11 @@ function resolveMemoryRuntimeWorkspaceDir(
   return resolveUserPath(dir);
 }
 
-function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
-  return resolveSelectedMemoryCapabilityRegistration(registry)?.capability.runtime;
+function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry): MemoryRuntime | undefined {
+  const registration = resolveSelectedMemoryCapabilityRegistration(registry);
+  return registration
+    ? inspectSelectedMemoryCapability({ capability: registration.capability, registry })
+    : undefined;
 }
 
 function listCurrentMemoryRuntimeOwners(): MemoryRuntimeOwner[] {
@@ -81,31 +84,32 @@ function withMemoryRuntimeOwner<T>(
   return withPluginRuntimeRegistryScope(owner.registry, () => run(owner.runtime));
 }
 
-function inspectSelectedMemoryRuntime(runtime: MemoryRuntime): MemoryRuntime {
-  // The inspection has no result-path effect: it only emits bounded shadow metadata once per
-  // selected runtime object and deliberately tolerates malformed/plugin-hostile surfaces.
-  const metadata = observeMemoryAuthorizationShadowSurface(runtime);
+function inspectSelectedMemoryCapability(params: {
+  capability: MemoryPluginCapability;
+  registry: PluginRegistry;
+}): MemoryRuntime | undefined {
+  // Inspection has no result-path effect: it emits bounded shadow metadata once per selected
+  // registry and deliberately tolerates malformed/plugin-hostile capability surfaces.
+  const metadata = observeMemoryAuthorizationShadowSurface(params);
   if (metadata) {
     try {
       log.debug("memory authorization backend surface evaluated", metadata);
     } catch {
-      // Shadow logging must not change selected runtime resolution or a legacy result path.
+      // Shadow logging must not change selected capability resolution or a legacy result path.
     }
   }
-  return runtime;
+  return params.capability.runtime;
 }
 
-/** Reads the selected registered runtime through the canonical shadow-inspected seam. */
+/** Reads the selected capability runtime through the canonical shadow-inspected seam. */
 export function getSelectedMemoryRuntime(): MemoryRuntime | undefined {
-  const runtime = getMemoryRuntime();
-  return runtime ? inspectSelectedMemoryRuntime(runtime) : undefined;
+  return resolveMemoryRuntimeFromRegistry(requireActivePluginRegistry());
 }
 
 function toMemoryRuntimeOwner(
   runtime: MemoryRuntime,
   registry?: PluginRegistry,
 ): MemoryRuntimeOwner {
-  inspectSelectedMemoryRuntime(runtime);
   return registry ? { runtime, registry } : { runtime };
 }
 

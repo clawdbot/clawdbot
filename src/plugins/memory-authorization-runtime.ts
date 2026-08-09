@@ -19,7 +19,7 @@ const AUTHORIZED_MEMORY_RUNTIME_METHODS = [
 
 type AuthorizedMemoryRuntimeMethodName = (typeof AUTHORIZED_MEMORY_RUNTIME_METHODS)[number];
 
-type MemoryAuthorizationRuntimeInspection = Readonly<{
+type MemoryAuthorizationCapabilityInspection = Readonly<{
   version: 1;
   capabilityDeclaration: "missing" | "malformed" | "partial" | "complete";
   declaredCapabilityCount: number;
@@ -32,9 +32,9 @@ type MemoryAuthorizationRuntimeInspection = Readonly<{
   reasonCode: "surface-complete" | "backend-nonconforming";
 }>;
 
-// Runtime interfaces are shallow; the bound prevents hostile prototype chains from extending a
-// shadow-only inspection beyond its fixed metadata budget.
-const MAXIMUM_RUNTIME_PROTOTYPE_DEPTH = 8;
+// Capability and runtime interfaces are shallow; the bound prevents hostile prototype chains
+// from extending a shadow-only inspection beyond its fixed metadata budget.
+const MAXIMUM_INSPECTION_PROTOTYPE_DEPTH = 8;
 
 function isObjectReference(value: unknown): value is object {
   return (typeof value === "object" && value !== null) || typeof value === "function";
@@ -45,10 +45,9 @@ type DataPropertyLookup =
   | { kind: "missing" | "accessor" | "unavailable" };
 
 /**
- * Reads a data descriptor without evaluating the corresponding property. Runtime interfaces may
- * use class methods, so the bounded prototype walk accepts data descriptors there too. A getter
- * or hostile reflection failure remains nonconforming without touching an authorized or legacy
- * runtime method.
+ * Reads a data descriptor without evaluating the corresponding property. Capability and runtime
+ * interfaces may use class methods, so the bounded prototype walk accepts data descriptors there
+ * too. A getter or hostile reflection failure remains nonconforming without touching a method.
  */
 function readDataProperty(value: unknown, key: string): DataPropertyLookup {
   if (!isObjectReference(value)) {
@@ -56,7 +55,7 @@ function readDataProperty(value: unknown, key: string): DataPropertyLookup {
   }
   try {
     let current: object | null = value;
-    for (let depth = 0; current && depth < MAXIMUM_RUNTIME_PROTOTYPE_DEPTH; depth += 1) {
+    for (let depth = 0; current && depth < MAXIMUM_INSPECTION_PROTOTYPE_DEPTH; depth += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(current, key);
       if (descriptor) {
         return "value" in descriptor
@@ -73,8 +72,8 @@ function readDataProperty(value: unknown, key: string): DataPropertyLookup {
 }
 
 /**
- * The SDK validator deliberately enforces exact descriptor shape. A plugin runtime can still be
- * a hostile Proxy, so shadow inspection turns any reflection failure into a nonconforming result.
+ * The SDK validator deliberately enforces exact descriptor shape. A plugin capability can still
+ * be a hostile Proxy, so shadow inspection turns any reflection failure into a nonconforming result.
  */
 function inspectCapabilityDeclaration(value: unknown): {
   hasWellFormedDeclaration: boolean;
@@ -99,7 +98,7 @@ function inspectCapabilityDeclaration(value: unknown): {
   }
 }
 
-function freezeInspection(params: Omit<MemoryAuthorizationRuntimeInspection, "version">) {
+function freezeInspection(params: Omit<MemoryAuthorizationCapabilityInspection, "version">) {
   return Object.freeze({
     version: 1 as const,
     ...params,
@@ -110,12 +109,12 @@ function freezeInspection(params: Omit<MemoryAuthorizationRuntimeInspection, "ve
 
 /**
  * Produces content-free shape metadata only. It is intentionally not an admission decision and
- * does not retain, invoke, or wrap the inspected runtime.
+ * does not retain, invoke, or wrap the selected capability or its runtime.
  */
-export function inspectMemoryAuthorizationRuntime(
-  runtime: unknown,
-): MemoryAuthorizationRuntimeInspection {
-  const authorization = readDataProperty(runtime, "authorization");
+export function inspectMemoryAuthorizationCapability(
+  capability: unknown,
+): MemoryAuthorizationCapabilityInspection {
+  const authorization = readDataProperty(capability, "authorization");
   const hasDeclaration = authorization.kind === "data";
   // Use the shared contract validator so shadow reporting and enforced-mode admission agree on
   // the exact declaration shape. This boundary catches reflection traps as malformed.
@@ -124,9 +123,10 @@ export function inspectMemoryAuthorizationRuntime(
   );
   const declaredCapabilityCount =
     MEMORY_AUTHORIZATION_CAPABILITY_NAMES.length - missingCapabilities.length;
+  const runtime = readDataProperty(capability, "runtime");
   const methods = AUTHORIZED_MEMORY_RUNTIME_METHODS.map((name) => ({
     name,
-    property: readDataProperty(runtime, name),
+    property: readDataProperty(runtime.kind === "data" ? runtime.value : undefined, name),
   }));
   const implementedMethodCount = methods.filter(
     ({ property }) => property.kind === "data" && typeof property.value === "function",

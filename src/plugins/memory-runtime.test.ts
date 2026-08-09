@@ -1,17 +1,21 @@
 /** Covers non-activating memory registry handles and requesting-agent workspace ownership. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+  LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+} from "../memory-host-sdk/host/authorization.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
+import type { MemoryPluginCapability, MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
 
 const mocks = vi.hoisted(() => ({
-  getMemoryRuntime: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
   logDebug: vi.fn(),
   observeMemoryAuthorizationShadowSurface: vi.fn(),
+  requireActivePluginRegistry: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveAgentWorkspaceDir: vi.fn(),
 }));
@@ -33,9 +37,9 @@ vi.mock("./memory-authorization-shadow.js", () => ({
   observeMemoryAuthorizationShadowSurface: mocks.observeMemoryAuthorizationShadowSurface,
 }));
 
-vi.mock("./memory-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory-state.js")>();
-  return { ...actual, getMemoryRuntime: mocks.getMemoryRuntime };
+vi.mock("./runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime.js")>();
+  return { ...actual, requireActivePluginRegistry: mocks.requireActivePluginRegistry };
 });
 
 import {
@@ -62,6 +66,7 @@ function createRuntime() {
 type TestRegistry<T extends MemoryPluginRuntime> = {
   registry: ReturnType<typeof createEmptyPluginRegistry>;
   runtime: T;
+  capability: MemoryPluginCapability;
 };
 
 function createRegistry(): TestRegistry<ReturnType<typeof createRuntime>>;
@@ -70,8 +75,13 @@ function createRegistry(
   runtime: MemoryPluginRuntime = createRuntime(),
 ): TestRegistry<MemoryPluginRuntime> {
   const registry = createEmptyPluginRegistry();
-  registry.memoryCapabilities.push({ pluginId: "memory-core", capability: { runtime } });
-  return { registry, runtime };
+  const capability = {
+    authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+    runtime,
+  } satisfies MemoryPluginCapability;
+  registry.plugins.push({ id: "memory-core", memorySlotSelected: true } as never);
+  registry.memoryCapabilities.push({ pluginId: "memory-core", capability });
+  return { registry, runtime, capability };
 }
 
 const memoryConfig = {
@@ -81,10 +91,10 @@ const memoryConfig = {
 describe("memory runtime handles", () => {
   beforeEach(() => {
     resetStandaloneMemoryRegistrySlot();
-    mocks.getMemoryRuntime.mockReset().mockReturnValue(undefined);
     mocks.loadPluginRegistryHandle.mockReset();
     mocks.logDebug.mockReset();
     mocks.observeMemoryAuthorizationShadowSurface.mockReset();
+    mocks.requireActivePluginRegistry.mockReset().mockReturnValue(createEmptyPluginRegistry());
     mocks.resolvePluginRegistryLoadCacheKey.mockClear();
     mocks.resolveAgentWorkspaceDir
       .mockReset()
@@ -230,9 +240,9 @@ describe("memory runtime handles", () => {
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it("prefers an already-registered runtime", () => {
-    const runtime = createRuntime();
-    mocks.getMemoryRuntime.mockReturnValue(runtime);
+  it("prefers an already-registered selected capability runtime", () => {
+    const { registry } = createRegistry();
+    mocks.requireActivePluginRegistry.mockReturnValue(registry);
 
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
       backend: "builtin",
@@ -240,13 +250,19 @@ describe("memory runtime handles", () => {
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it("inspects direct selected-runtime acquisition through the canonical seam", () => {
-    const runtime = createRuntime();
-    mocks.getMemoryRuntime.mockReturnValue(runtime);
+  it("inspects direct selected capability resolution through the canonical seam", () => {
+    const { registry, runtime } = createRegistry();
+    mocks.requireActivePluginRegistry.mockReturnValue(registry);
 
     expect(getSelectedMemoryRuntime()).toBe(runtime);
     expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledOnce();
-    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith(runtime);
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith({
+      capability: expect.objectContaining({
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+        runtime,
+      }),
+      registry,
+    });
   });
 
   it("wires each legacy resolution through shadow inspection without changing legacy resolution", () => {
@@ -261,8 +277,64 @@ describe("memory runtime handles", () => {
     });
 
     expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledTimes(2);
-    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith(runtime);
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith({
+      capability: expect.objectContaining({
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+        runtime,
+      }),
+      registry,
+    });
     expect(runtime.resolveMemoryBackendConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("observes a selected runtime-less capability without inventing a runtime", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ id: "memory-lancedb", memorySlotSelected: true } as never);
+    registry.memoryCapabilities.push({
+      pluginId: "memory-lancedb",
+      capability: { authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES },
+    });
+    mocks.requireActivePluginRegistry.mockReturnValue(registry);
+
+    expect(getSelectedMemoryRuntime()).toBeUndefined();
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith({
+      capability: expect.objectContaining({
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+      }),
+      registry,
+    });
+  });
+
+  it("observes selected authorization when it inherits a sidecar runtime", () => {
+    const registry = createEmptyPluginRegistry();
+    const runtime = createRuntime();
+    registry.plugins.push({ id: "memory-lancedb", memorySlotSelected: true } as never);
+    registry.memoryCapabilities.push(
+      {
+        pluginId: "memory-core",
+        capability: {
+          authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+          runtime,
+        },
+      },
+      {
+        pluginId: "memory-lancedb",
+        capability: {
+          authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+          publicArtifacts: { listArtifacts: async () => [] },
+        },
+      },
+    );
+    mocks.requireActivePluginRegistry.mockReturnValue(registry);
+
+    expect(getSelectedMemoryRuntime()).toBe(runtime);
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith({
+      capability: expect.objectContaining({
+        authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+        runtime,
+      }),
+      registry,
+    });
   });
 
   it("keeps legacy resolution when shadow logging fails", () => {

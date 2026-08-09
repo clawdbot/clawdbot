@@ -4,8 +4,9 @@ import {
   LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
   MEMORY_AUTHORIZATION_CAPABILITY_NAMES,
 } from "../memory-host-sdk/host/authorization.js";
-import { inspectMemoryAuthorizationRuntime } from "./memory-authorization-runtime.js";
+import { inspectMemoryAuthorizationCapability } from "./memory-authorization-runtime.js";
 import { observeMemoryAuthorizationShadowSurface } from "./memory-authorization-shadow.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 const AUTHORIZED_METHOD_NAMES = [
   "authorize",
@@ -18,12 +19,11 @@ const AUTHORIZED_METHOD_NAMES = [
   "statusAuthorized",
 ] as const;
 
-function createRuntime(capabilities = COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES) {
+function createRuntime() {
   const notCalled = vi.fn(() => {
     throw new Error("runtime methods must not execute in shadow mode");
   });
   return {
-    authorization: capabilities,
     authorize: notCalled,
     searchAuthorized: notCalled,
     readAuthorized: notCalled,
@@ -37,8 +37,6 @@ function createRuntime(capabilities = COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES
 }
 
 class PrototypeRuntime {
-  readonly authorization = COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES;
-
   authorize() {
     throw new Error("runtime methods must not execute in shadow mode");
   }
@@ -72,10 +70,18 @@ class PrototypeRuntime {
   }
 }
 
-describe("memory authorization runtime inspection", () => {
+class PrototypeCapability {
+  readonly authorization = COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES;
+  readonly runtime = new PrototypeRuntime();
+}
+
+describe("memory authorization capability inspection", () => {
   it("reports a complete declared surface without calling an authorized or legacy method", () => {
     const runtime = createRuntime();
-    const inspection = inspectMemoryAuthorizationRuntime(runtime);
+    const inspection = inspectMemoryAuthorizationCapability({
+      authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+      runtime,
+    });
 
     expect(inspection).toMatchObject({
       version: 1,
@@ -94,12 +100,13 @@ describe("memory authorization runtime inspection", () => {
   });
 
   it("reports all-false and incomplete declarations as nonconforming", () => {
-    const legacy = inspectMemoryAuthorizationRuntime(
-      createRuntime(LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES),
-    );
-    const incomplete = inspectMemoryAuthorizationRuntime({
+    const legacy = inspectMemoryAuthorizationCapability({
+      authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+      runtime: createRuntime(),
+    });
+    const incomplete = inspectMemoryAuthorizationCapability({
       authorization: { ...COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES, scopedSync: false },
-      ...Object.fromEntries(AUTHORIZED_METHOD_NAMES.map((name) => [name, () => undefined])),
+      runtime: Object.fromEntries(AUTHORIZED_METHOD_NAMES.map((name) => [name, () => undefined])),
     });
 
     expect(legacy).toMatchObject({
@@ -119,16 +126,16 @@ describe("memory authorization runtime inspection", () => {
   });
 
   it("uses the SDK's exact capability-declaration rules for shadow reporting", () => {
-    const unexpectedCapability = inspectMemoryAuthorizationRuntime({
-      ...createRuntime(),
+    const unexpectedCapability = inspectMemoryAuthorizationCapability({
       authorization: { ...COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES, unexpected: true },
+      runtime: createRuntime(),
     });
-    const symbolicCapability = inspectMemoryAuthorizationRuntime({
-      ...createRuntime(),
+    const symbolicCapability = inspectMemoryAuthorizationCapability({
       authorization: {
         ...COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
         [Symbol("plugin-framework-metadata")]: true,
       },
+      runtime: createRuntime(),
     });
 
     expect(unexpectedCapability).toMatchObject({
@@ -144,12 +151,12 @@ describe("memory authorization runtime inspection", () => {
   });
 
   it("accepts data descriptors from class prototypes and ignores unrelated symbols", () => {
-    const runtime = new PrototypeRuntime();
-    Object.defineProperty(runtime, Symbol("plugin-framework-metadata"), {
+    const capability = new PrototypeCapability();
+    Object.defineProperty(capability, Symbol("plugin-framework-metadata"), {
       value: "not an authorization capability",
     });
 
-    expect(inspectMemoryAuthorizationRuntime(runtime)).toMatchObject({
+    expect(inspectMemoryAuthorizationCapability(capability)).toMatchObject({
       capabilityDeclaration: "complete",
       implementedMethodCount: AUTHORIZED_METHOD_NAMES.length,
       surfaceComplete: true,
@@ -160,13 +167,6 @@ describe("memory authorization runtime inspection", () => {
   it("fails closed on accessor and proxy surfaces without evaluating their getters or methods", () => {
     let getterCalls = 0;
     const accessorRuntime = Object.create(null) as Record<string, unknown>;
-    Object.defineProperty(accessorRuntime, "authorization", {
-      enumerable: true,
-      get() {
-        getterCalls += 1;
-        throw new Error("must not read authorization getter");
-      },
-    });
     for (const name of AUTHORIZED_METHOD_NAMES) {
       Object.defineProperty(accessorRuntime, name, {
         enumerable: true,
@@ -176,7 +176,31 @@ describe("memory authorization runtime inspection", () => {
         },
       });
     }
-    const proxyRuntime = new Proxy(
+    const accessorCapability = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(accessorCapability, "authorization", {
+      enumerable: true,
+      value: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+    });
+    Object.defineProperty(accessorCapability, "runtime", {
+      enumerable: true,
+      value: accessorRuntime,
+    });
+    const capabilityGetter = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(capabilityGetter, "authorization", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must not read authorization getter");
+      },
+    });
+    Object.defineProperty(capabilityGetter, "runtime", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must not read runtime getter");
+      },
+    });
+    const proxyCapability = new Proxy(
       {},
       {
         getOwnPropertyDescriptor() {
@@ -184,7 +208,7 @@ describe("memory authorization runtime inspection", () => {
         },
       },
     );
-    const declarationProxyRuntime = {
+    const declarationProxyCapability = {
       authorization: new Proxy(
         {},
         {
@@ -193,15 +217,24 @@ describe("memory authorization runtime inspection", () => {
           },
         },
       ),
+      runtime: createRuntime(),
     };
 
-    const accessor = inspectMemoryAuthorizationRuntime(accessorRuntime);
-    const undefinedDeclaration = inspectMemoryAuthorizationRuntime({ authorization: undefined });
-    const proxy = inspectMemoryAuthorizationRuntime(proxyRuntime);
-    const declarationProxy = inspectMemoryAuthorizationRuntime(declarationProxyRuntime);
+    const accessor = inspectMemoryAuthorizationCapability(accessorCapability);
+    const getter = inspectMemoryAuthorizationCapability(capabilityGetter);
+    const undefinedDeclaration = inspectMemoryAuthorizationCapability({
+      authorization: undefined,
+      runtime: createRuntime(),
+    });
+    const proxy = inspectMemoryAuthorizationCapability(proxyCapability);
+    const declarationProxy = inspectMemoryAuthorizationCapability(declarationProxyCapability);
 
     expect(getterCalls).toBe(0);
     expect(accessor).toMatchObject({
+      capabilityDeclaration: "complete",
+      reasonCode: "backend-nonconforming",
+    });
+    expect(getter).toMatchObject({
       capabilityDeclaration: "malformed",
       reasonCode: "backend-nonconforming",
     });
@@ -221,15 +254,17 @@ describe("memory authorization runtime inspection", () => {
 });
 
 describe("memory authorization shadow inspection", () => {
-  it("returns one bounded, content-free observation per selected runtime", () => {
-    const runtime = Object.assign(createRuntime(LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES), {
+  it("returns one bounded, content-free observation per selected registry", () => {
+    const runtime = Object.assign(createRuntime(), {
       content: "private content sentinel",
       prompt: "private prompt sentinel",
       query: "private query sentinel",
       principalId: "private principal sentinel",
     });
-    const first = observeMemoryAuthorizationShadowSurface(runtime);
-    const second = observeMemoryAuthorizationShadowSurface(runtime);
+    const capability = { authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES, runtime };
+    const registry = createEmptyPluginRegistry();
+    const first = observeMemoryAuthorizationShadowSurface({ capability, registry });
+    const second = observeMemoryAuthorizationShadowSurface({ capability, registry });
 
     expect(first).toMatchObject({
       mode: "shadow",
@@ -240,8 +275,39 @@ describe("memory authorization shadow inspection", () => {
     expect(JSON.stringify(first)).not.toMatch(/private|content|prompt|query|principal/u);
   });
 
-  it("does not let a hostile proxy change a selected runtime path", () => {
-    const runtime = new Proxy(
+  it("observes runtime-less selected capabilities without invoking or creating a runtime", () => {
+    const observation = observeMemoryAuthorizationShadowSurface({
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+      registry: createEmptyPluginRegistry(),
+    });
+
+    expect(observation).toEqual(
+      expect.objectContaining({
+        capabilityDeclaration: "complete",
+        implementedMethodCount: 0,
+        surfaceComplete: false,
+        reasonCode: "backend-nonconforming",
+      }),
+    );
+  });
+
+  it("deduplicates by selected registry rather than a shared runtime object", () => {
+    const runtime = createRuntime();
+    const first = observeMemoryAuthorizationShadowSurface({
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES, runtime },
+      registry: createEmptyPluginRegistry(),
+    });
+    const second = observeMemoryAuthorizationShadowSurface({
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES, runtime },
+      registry: createEmptyPluginRegistry(),
+    });
+
+    expect(first).toEqual(expect.objectContaining({ surfaceComplete: true }));
+    expect(second).toEqual(expect.objectContaining({ surfaceComplete: true }));
+  });
+
+  it("does not let a hostile proxy change a selected capability path", () => {
+    const capability = new Proxy(
       {},
       {
         getOwnPropertyDescriptor() {
@@ -249,7 +315,10 @@ describe("memory authorization shadow inspection", () => {
         },
       },
     );
-    const observation = observeMemoryAuthorizationShadowSurface(runtime);
+    const observation = observeMemoryAuthorizationShadowSurface({
+      capability,
+      registry: createEmptyPluginRegistry(),
+    });
 
     expect(observation).toEqual(
       expect.objectContaining({ reasonCode: "backend-nonconforming", surfaceComplete: false }),
