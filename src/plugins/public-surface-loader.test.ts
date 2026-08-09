@@ -462,6 +462,33 @@ describe("bundled plugin public surface loader", () => {
     expect(result).toBeNull();
   });
 
+  it("loads the next candidate when the first surface is missing", async () => {
+    const fresh = await importFreshModule<typeof import("./public-surface-loader.js")>(
+      import.meta.url,
+      "./public-surface-loader.js?scope=candidate-fallback-success",
+    );
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    const pluginDir = path.join(bundledPluginsDir, "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "runtime-api.js"),
+      'export const marker = "runtime-fallback";\n',
+      "utf8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+
+    const result = fresh.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{
+      marker: string;
+    }>({
+      dirName: "demo",
+      artifactCandidates: ["api.js", "runtime-api.js"],
+    });
+
+    expect(result?.marker).toBe("runtime-fallback");
+  });
+
   it("re-throws generic candidate load errors with the legacy missing prefix", async () => {
     const fresh = await importFreshModule<typeof import("./public-surface-loader.js")>(
       import.meta.url,
