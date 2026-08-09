@@ -4,6 +4,7 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   flush,
+  getSlackClient,
   getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
@@ -138,6 +139,53 @@ describe("slack startup user allowlist resolution", () => {
           capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
           context: expect.objectContaining({
             config: expect.objectContaining({ enabled: false }),
+            approvalSigningKey: "bot-token",
+          }),
+        }),
+      );
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  });
+
+  it("registers the native approval runtime for an Enterprise Grid account", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+          enterpriseOrgInstall: true,
+          dm: { enabled: false },
+          dmPolicy: "disabled",
+          groupPolicy: "open",
+          execApprovals: {
+            enabled: true,
+            approvers: ["team:T1:user:U123OWNER"],
+            target: "both",
+          },
+        },
+      },
+    });
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      enterprise_id: "E1",
+      is_enterprise_install: true,
+    });
+    const { channelRuntime, register } = createRuntimeContextCapture();
+
+    const monitor = startSlackMonitor(monitorSlackProvider, { channelRuntime });
+    try {
+      await getSlackHandlerOrThrow("message");
+      await flush();
+
+      expect(register).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: "slack",
+          accountId: "default",
+          capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+          context: expect.objectContaining({
+            config: expect.objectContaining({ enabled: true }),
+            approvalSigningKey: "bot-token",
           }),
         }),
       );

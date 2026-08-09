@@ -20,6 +20,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { repoName } from "../../lib/session-display.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -37,10 +38,6 @@ type WorktreeBranchesResult = {
   defaultBranch?: string;
   headBranch?: string;
 };
-
-function repoName(repoRoot: string): string {
-  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
-}
 
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })

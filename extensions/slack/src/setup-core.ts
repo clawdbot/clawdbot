@@ -337,6 +337,7 @@ export function createSlackSetupWizardBase(handlers: {
           [
             "Use a Slack user OAuth token with the User Token Scopes listed in the Slack docs.",
             "Subscribe the companion app under 'Subscribe to events on behalf of users' using the documented user events.",
+            "Enable Interactivity; Socket Mode does not need a public Request URL.",
             "Socket Mode needs an app-level token; HTTP mode needs the app signing secret.",
             "No bot token or bot user is required.",
             `Docs: ${formatDocsLink(

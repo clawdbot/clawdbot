@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -9,7 +10,10 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -80,6 +84,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -448,12 +453,19 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.connected &&
         hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.accept") === true,
+      canAcceptTaskSuggestionModes:
+        isGatewayCapabilityAdvertised(
+          this.context.gateway.snapshot,
+          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        ) === true,
       canDismissTaskSuggestions:
         state.connected &&
         hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
           true,
-      onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
+      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
+      onAcceptTaskSuggestion: (suggestion, mode, cloudProfileId) =>
+        void this.acceptTaskSuggestion(suggestion, mode, cloudProfileId),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),

@@ -279,6 +279,7 @@ export type SlackSendResult = {
 export async function updateMessageSlack(params: {
   cfg: OpenClawConfig;
   accountId?: string;
+  teamId?: string;
   channelId: string;
   messageTs: string;
   text: string;
@@ -291,7 +292,7 @@ export async function updateMessageSlack(params: {
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = getSlackWriteClient(token);
+  const client = getSlackWriteClient(token, { teamId: params.teamId });
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
