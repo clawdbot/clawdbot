@@ -75,7 +75,7 @@ export async function startOrResumeThread(
       ringZeroActive,
       ringZeroClientInstanceId,
       ringZeroConfigFingerprint,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
       userMcpServersConfigPatch,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
@@ -396,7 +396,7 @@ export async function startOrResumeThread(
       assertCodexBindingMayBeReplaced(binding, "changing web-search configuration");
       if (!ringZeroActive && transientWebSearchRestriction) {
         embeddedAgentLog.debug(
-          "codex app-server web search restricted for turn; starting transient thread",
+          "codex app-server tool surface restricted for turn; starting transient thread",
           {
             threadId: binding.threadId,
           },
@@ -613,7 +613,7 @@ export async function startOrResumeThread(
               cause,
             }),
           ringZeroActive,
-          ringZeroInheritedMcpServerNames,
+          restrictedToolSurfaceInheritedMcpServerNames,
           startModelProvider,
           startModelSelection,
           throwIfAborted,
@@ -643,7 +643,7 @@ export async function startOrResumeThread(
           environmentSelectionFingerprint,
           hostSystemAgentActive,
           ringZeroActive,
-          ringZeroInheritedMcpServerNames,
+          restrictedToolSurfaceInheritedMcpServerNames,
           nativeSkillIsolation,
           lifecycleTiming,
           normalizeBindingModelProvider,
@@ -677,7 +677,7 @@ export async function startOrResumeThread(
       environmentSelectionFingerprint,
       hostSystemAgentActive,
       ringZeroActive,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
       nativeSkillIsolation,
       lifecycleTiming,
       normalizeBindingModelProvider,

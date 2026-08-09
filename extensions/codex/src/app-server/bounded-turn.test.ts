@@ -444,7 +444,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,
       }),
-    ).rejects.toThrow("Codex ring-zero MCP attestation found server unexpected");
+    ).rejects.toThrow("Codex restricted-tool-surface MCP attestation found server unexpected");
     expect(fake.methods).not.toContain("thread/inject_items");
     expect(fake.methods).not.toContain("turn/start");
   });
