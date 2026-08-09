@@ -1,5 +1,25 @@
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
-import type { ApplicationInitialUserMessageHandoff } from "./context.ts";
+
+export type ApplicationInitialUserMessage = {
+  role: "user";
+  content: unknown[];
+  timestamp: number;
+  __openclaw?: { idempotencyKey?: string; seq?: number };
+};
+
+type InitialUserMessageHandoff = {
+  message: ApplicationInitialUserMessage;
+  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
+  owner: object;
+  sessionKey: string;
+};
+
+export type ApplicationInitialUserMessageHandoff = {
+  prepare: (handoff: InitialUserMessageHandoff) => void;
+  read: (sessionKey: string, owner: object | null) => ApplicationInitialUserMessage | null;
+  clear: (sessionKey?: string) => void;
+  subscribe: (listener: () => void) => () => void;
+};
 
 // Terminal history removes normal entries; this cap bounds abandoned active-session handoffs.
 const MAX_PENDING_INITIAL_USER_MESSAGES = 32;

@@ -12,6 +12,7 @@ import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationCloudStartup } from "./cloud-session-startup.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
@@ -70,27 +71,6 @@ export type ApplicationSkillWorkshopRevisionHandoff = {
   prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
   consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
   clear: (handoff?: SkillWorkshopRevisionHandoff) => void;
-};
-
-export type ApplicationInitialUserMessage = {
-  role: "user";
-  content: unknown[];
-  timestamp: number;
-  __openclaw?: { idempotencyKey?: string; seq?: number };
-};
-
-type InitialUserMessageHandoff = {
-  message: ApplicationInitialUserMessage;
-  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
-  owner: object;
-  sessionKey: string;
-};
-
-export type ApplicationInitialUserMessageHandoff = {
-  prepare: (handoff: InitialUserMessageHandoff) => void;
-  read: (sessionKey: string, owner: object | null) => ApplicationInitialUserMessage | null;
-  clear: (sessionKey?: string) => void;
-  subscribe: (listener: () => void) => () => void;
 };
 
 type BrowserAnnotationHandoffKey = {

@@ -16,9 +16,9 @@ import {
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type {
   ApplicationCloudStartupRuntime,
-  ApplicationInitialUserMessage,
   ApplicationCloudStartupDependencies,
 } from "./cloud-session-startup.ts";
+import type { ApplicationInitialUserMessage } from "./initial-user-message-handoff.ts";
 
 type CloudStartupPhase = NonNullable<ReturnType<ApplicationCloudStartupRuntime["get"]>>["phase"];
 type StartupPlacementPhase = Exclude<CloudStartupPhase, "pending" | "sending" | "failed">;

@@ -1,13 +1,8 @@
 import { hasCloudSessionRecovery } from "../lib/sessions/cloud-recovery-storage-key.ts";
 import type { CloudSessionRecovery } from "../lib/sessions/cloud-recovery.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type {
-  ApplicationGatewaySnapshot,
-  ApplicationInitialUserMessageHandoff,
-} from "./context.ts";
-import type { ApplicationGateway } from "./gateway.ts";
-
-export type { ApplicationInitialUserMessage } from "./context.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
+import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 
 export type ApplicationCloudStartupStatus = {
   readonly sessionKey: string;
@@ -59,25 +54,18 @@ type LoadFailure = {
   status: ApplicationCloudStartupStatus;
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function createApplicationCloudStartup(
   dependencies: ApplicationCloudStartupDependencies,
   loadRuntime: CloudStartupRuntimeLoader = () => import("./cloud-session-startup.runtime.ts"),
 ): ApplicationCloudStartup {
   const listeners = new Set<() => void>();
-  const loadFailures = new Map<string, LoadFailure>();
+  let loadFailure: LoadFailure | null = null;
   let runtime: ApplicationCloudStartupRuntime | null = null;
   let runtimeLoad: Promise<ApplicationCloudStartupRuntime | null> | null = null;
-  let stopRuntime: (() => void) | null = null;
   let disposed = false;
 
   const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.forEach((listener) => listener());
   };
 
   const ensureRuntime = (
@@ -92,7 +80,7 @@ export function createApplicationCloudStartup(
     if (runtimeLoad) {
       return runtimeLoad;
     }
-    const pending = loadRuntime()
+    runtimeLoad = loadRuntime()
       .then(({ createApplicationCloudStartupRuntime }) => {
         if (disposed) {
           return null;
@@ -101,34 +89,28 @@ export function createApplicationCloudStartup(
           reconcileCurrentSnapshot,
         });
         runtime = created;
-        stopRuntime = created.subscribe(publish);
+        created.subscribe(publish);
         if (reconcileCurrentSnapshot) {
           publish();
         }
         return created;
       })
       .catch((error: unknown) => {
-        if (runtimeLoad === pending) {
-          runtimeLoad = null;
-        }
+        runtimeLoad = null;
         throw error;
       });
-    runtimeLoad = pending;
-    return pending;
+    return runtimeLoad;
   };
 
   const maybeLoadRecovery = (snapshot: ApplicationGatewaySnapshot) => {
+    const recoveryScope = snapshot.client?.recoveryScope;
     if (
-      disposed ||
       runtime ||
       runtimeLoad ||
       snapshot.phase !== "connected" ||
       !snapshot.client?.recoveryScopeReady ||
-      !snapshot.client.recoveryScope ||
-      !hasCloudSessionRecovery(
-        dependencies.gateway.connection.gatewayUrl,
-        snapshot.client.recoveryScope,
-      )
+      !recoveryScope ||
+      !hasCloudSessionRecovery(dependencies.gateway.connection.gatewayUrl, recoveryScope)
     ) {
       return;
     }
@@ -139,7 +121,7 @@ export function createApplicationCloudStartup(
   maybeLoadRecovery(dependencies.gateway.snapshot);
 
   const start: ApplicationCloudStartup["start"] = async (input) => {
-    loadFailures.delete(input.recovery.sessionKey);
+    loadFailure = null;
     try {
       const target = await ensureRuntime(false);
       if (!target || disposed) {
@@ -150,49 +132,41 @@ export function createApplicationCloudStartup(
       if (disposed) {
         return;
       }
-      loadFailures.set(input.recovery.sessionKey, {
+      loadFailure = {
         input,
         status: {
           sessionKey: input.recovery.sessionKey,
           phase: "failed",
           startedAt: input.createdAt,
-          error: errorMessage(error),
+          error: error instanceof Error ? error.message : String(error),
           retryable: true,
         },
-      });
+      };
       publish();
     }
   };
 
   const retry: ApplicationCloudStartup["retry"] = async (sessionKey) => {
-    if (disposed) {
-      return;
-    }
     if (runtime) {
       runtime.retry(sessionKey);
       return;
     }
-    const failure = loadFailures.get(sessionKey);
-    if (failure) {
-      await start(failure.input);
-      return;
-    }
-    if (runtimeLoad) {
-      const target = await runtimeLoad.catch(() => null);
-      target?.retry(sessionKey);
+    const failure = loadFailure;
+    if (failure?.status.sessionKey === sessionKey) {
+      return start(failure.input);
     }
   };
 
   return {
     get(sessionKey) {
-      return runtime?.get(sessionKey) ?? loadFailures.get(sessionKey)?.status ?? null;
+      return (
+        runtime?.get(sessionKey) ??
+        (loadFailure?.status.sessionKey === sessionKey ? loadFailure.status : null)
+      );
     },
     start,
     retry,
     subscribe(listener) {
-      if (disposed) {
-        return () => undefined;
-      }
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -202,11 +176,10 @@ export function createApplicationCloudStartup(
       }
       disposed = true;
       stopGateway();
-      stopRuntime?.();
       runtime?.dispose();
       runtime = null;
       runtimeLoad = null;
-      loadFailures.clear();
+      loadFailure = null;
       listeners.clear();
     },
   };

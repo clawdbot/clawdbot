@@ -5,7 +5,7 @@ import {
 import type {
   ApplicationInitialUserMessage,
   ApplicationInitialUserMessageHandoff,
-} from "../../app/context.ts";
+} from "../../app/initial-user-message-handoff.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";

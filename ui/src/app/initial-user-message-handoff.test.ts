@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApplicationInitialUserMessage } from "./context.ts";
-import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
+import {
+  createInitialUserMessageHandoff,
+  type ApplicationInitialUserMessage,
+} from "./initial-user-message-handoff.ts";
 
 function message(text: string): ApplicationInitialUserMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp: 1 };
