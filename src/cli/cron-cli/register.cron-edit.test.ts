@@ -955,14 +955,56 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each([
+    ["empty", "", undefined],
+    ["whitespace", "   ", undefined],
+    ["empty with --clear-trigger", "", "--clear-trigger"],
+    ["whitespace with --clear-trigger", "   ", "--clear-trigger"],
+  ])("rejects %s --trigger-script before Gateway access", async (_label, value, clearFlag) => {
+    await expectCronEditRejection(
+      ["--trigger-script", value, ...(clearFlag ? [clearFlag] : [])],
+      "--trigger-script must not be blank",
+    );
+  });
+
+  it("validates trigger script files before Gateway access", async () => {
+    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-edit-invalid-"));
+    const emptyPath = path.join(fixtureDir, "empty.js");
+    const oversizedPath = path.join(fixtureDir, "oversized.js");
+    const missingPath = path.join(fixtureDir, "missing.js");
+    await Promise.all([
+      fs.writeFile(emptyPath, " \n", "utf8"),
+      fs.writeFile(oversizedPath, "x".repeat(65_537), "utf8"),
+    ]);
+
+    try {
+      await expectCronEditRejection(
+        ["--pacing-min", "30m", "--trigger-script", emptyPath],
+        "Trigger script must not be empty",
+      );
+      await expectCronEditRejection(
+        ["--pacing-min", "30m", "--trigger-script", oversizedPath],
+        "Trigger script exceeds 65536 bytes",
+      );
+      await expectCronEditRejection(
+        ["--pacing-min", "30m", "--trigger-script", missingPath],
+        "ENOENT",
+      );
+    } finally {
+      await fs.rm(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves trigger.once when --trigger-script replaces the script body", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-edit-trigger-"));
     const scriptPath = path.join(dir, "next.js");
     await fs.writeFile(scriptPath, "return { fire: true };\n", "utf8");
+    const configRevision = "trigger-script-revision";
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
         return {
           id: "job-1",
+          configRevision,
           trigger: { script: "return { fire: false };", once: true },
         };
       }
@@ -974,15 +1016,20 @@ describe("cron edit command", () => {
         from: "user",
       });
 
-      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-        id: "job-1",
-        patch: {
-          trigger: {
-            script: "return { fire: true };",
-            once: true,
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.objectContaining({
+          id: "job-1",
+          patch: {
+            trigger: {
+              script: "return { fire: true };",
+              once: true,
+            },
           },
-        },
-      });
+          expectedConfigRevision: configRevision,
+        }),
+      );
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
