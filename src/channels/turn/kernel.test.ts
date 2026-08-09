@@ -2424,7 +2424,36 @@ describe("channel turn kernel", () => {
     expect(result.dispatchResult.queuedFinal).toBe(true);
   });
 
-  it("rejects prepared turns that omit dispatch lifecycle ownership", async () => {
+  it("runs a legacy prepared turn that omits dispatch lifecycle ownership when no adoption lifecycle is in play", async () => {
+    // Released plugin builds predating the runDispatchLifecycle contract (e.g.
+    // @openclaw/whatsapp@2026.7.1) never adopt a durable ingress claim, so
+    // there is nothing to leak here -- see openclaw/openclaw#114020, #116453.
+    const recordInboundSession = createRecordInboundSession();
+    const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
+
+    const result = await runChannelInboundEvent({
+      channel: "test",
+      raw: { id: "msg-1", text: "hello" },
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () =>
+          ({
+            channel: "test",
+            routeSessionKey: "agent:main:test:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx(),
+            recordInboundSession,
+            runDispatch,
+          }) as unknown as ChannelTurnResolved,
+      },
+    });
+
+    expect(recordInboundSession).toHaveBeenCalled();
+    expect(runDispatch).toHaveBeenCalled();
+    expect(result.dispatched).toBe(true);
+  });
+
+  it("rejects prepared turns that omit dispatch lifecycle ownership when the caller adopts a durable ingress claim", async () => {
     const recordInboundSession = createRecordInboundSession();
     const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
     const onFinalize = vi.fn();
@@ -2433,6 +2462,7 @@ describe("channel turn kernel", () => {
       runChannelInboundEvent({
         channel: "test",
         raw: { id: "msg-1", text: "hello" },
+        turnAdoptionLifecycle: { onAdopted: vi.fn(async () => undefined) },
         adapter: {
           ingest: () => ({ id: "msg-1", rawText: "hello" }),
           resolveTurn: () =>
