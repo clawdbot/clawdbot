@@ -14,7 +14,9 @@ function formatInstalledAndAvailable(
   updateSchedule: UpdateScheduleState | null,
 ): string | undefined {
   const currentVersion = updateAvailable?.currentVersion?.trim();
-  const installed = currentVersion ? t("updates.target.version", { version: currentVersion }) : null;
+  const installed = currentVersion
+    ? t("updates.target.version", { version: currentVersion })
+    : null;
   const available = formatUpdateTargetLabel(updateSchedule, updateAvailable);
   if (installed && available) {
     return t("updates.confirm.versions", { available, installed });

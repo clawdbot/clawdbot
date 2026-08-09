@@ -17,7 +17,9 @@ import "./sidebar-update-card.ts";
 const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 
 /** Resolve the update confirmation the card opens, then let its dispatch settle. */
-async function resolveUpdateConfirmation(label: "Cancel" | "Update and restart" | "Update Mac app and restart") {
+async function resolveUpdateConfirmation(
+  label: "Cancel" | "Update and restart" | "Update Mac app and restart",
+) {
   const { modal } = await getRenderedModalDialog(document.body);
   const button = [...modal.querySelectorAll("button")].find(
     (candidate) => candidate.textContent?.trim() === label,

@@ -22,6 +22,11 @@ const UPDATE_RUN_RESPONSE = {
 } as const;
 const PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/update-confirmation");
 
+/** The dialog element lives in a shadow root; its visible copy is slotted light DOM. */
+function confirmationCopy(page: Page) {
+  return page.locator("openclaw-modal-dialog");
+}
+
 async function openUpdateCard(page: Page, baseUrl: string) {
   const gateway = await installMockGateway(page, {
     methodResponses: { "update.run": UPDATE_RUN_RESPONSE },
@@ -50,7 +55,7 @@ suite.define(() => {
         const dialog = page.getByRole("dialog");
         await dialog.waitFor();
         expect(await dialog.getAttribute("aria-label")).toBe("Update Gateway");
-        const dialogText = await dialog.textContent();
+        const dialogText = await confirmationCopy(page).textContent();
         expect(dialogText).toContain(
           "This installs the available update on the connected Gateway and restarts it.",
         );
@@ -69,7 +74,11 @@ suite.define(() => {
   it("renders the same confirmation in dark mode and on a compact viewport", async () => {
     for (const variant of [
       { colorScheme: "dark", name: "03-confirmation-dark", viewport: { height: 720, width: 1280 } },
-      { colorScheme: "light", name: "04-confirmation-compact", viewport: { height: 780, width: 420 } },
+      {
+        colorScheme: "light",
+        name: "04-confirmation-compact",
+        viewport: { height: 780, width: 420 },
+      },
     ] as const) {
       await suite.withPage(
         {
@@ -203,7 +212,9 @@ suite.define(() => {
 
         const dialog = page.getByRole("dialog");
         await dialog.waitFor();
-        expect(await dialog.textContent()).toContain("Installed v1.0.0 · Available v2.0.0");
+        expect(await confirmationCopy(page).textContent()).toContain(
+          "Installed v1.0.0 · Available v2.0.0",
+        );
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await page.screenshot({
           animations: "disabled",
