@@ -19,6 +19,14 @@ on:
         required: false
         default: telegram-status-command
         type: string
+      provider_mode:
+        description: QA provider mode
+        required: false
+        default: live-frontier
+        type: choice
+        options:
+          - live-frontier
+          - mock-openai
       crabbox_provider:
         description: Crabbox provider for the desktop transcript capture
         required: false
@@ -35,8 +43,7 @@ on:
 permissions:
   actions: read
   contents: read
-  issues: write
-  pull-requests: write
+  pull-requests: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -99,6 +106,8 @@ jobs:
       crabbox_provider: ${{ steps.resolve.outputs.crabbox_provider }}
       lease_id: ${{ steps.resolve.outputs.lease_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
+      provider_mode: ${{ steps.resolve.outputs.provider_mode }}
+      reaction_id: ${{ steps.add_reaction.outputs.reaction_id }}
       request_source: ${{ steps.resolve.outputs.request_source }}
       scenario: ${{ steps.resolve.outputs.scenario }}
       should_run: ${{ steps.resolve.outputs.should_run }}
@@ -117,10 +126,16 @@ jobs:
 
             if (eventName === "workflow_dispatch") {
               const inputs = context.payload.inputs ?? {};
+              const providerMode = inputs.provider_mode || "live-frontier";
+              if (!["live-frontier", "mock-openai"].includes(providerMode)) {
+                core.setFailed(`Unsupported provider mode for Mantis Telegram: ${providerMode}`);
+                return;
+              }
               setOutput("should_run", "true");
               setOutput("candidate_ref", inputs.candidate_ref || "main");
               setOutput("pr_number", inputs.pr_number || "");
               setOutput("scenario", inputs.scenario || "telegram-status-command");
+              setOutput("provider_mode", providerMode);
               setOutput("crabbox_provider", inputs.crabbox_provider || "aws");
               setOutput("lease_id", inputs.crabbox_lease_id || "");
               setOutput("request_source", "workflow_dispatch");
@@ -158,6 +173,7 @@ jobs:
               setOutput("candidate_ref", "");
               setOutput("pr_number", "");
               setOutput("scenario", "");
+              setOutput("provider_mode", "");
               setOutput("crabbox_provider", "");
               setOutput("lease_id", "");
               setOutput("request_source", "unsupported_issue_comment");
@@ -172,6 +188,7 @@ jobs:
             });
             const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
             const scenarioMatch = body.match(/(?:scenario|scenarios)[\s:=]+([^\s`]+)/i);
+            const providerModeMatch = body.match(/(?:provider_mode|provider-mode)[\s:=]+([^\s`]+)/i);
             const providerMatch = body.match(/(?:provider|crabbox_provider)[\s:=]+([^\s`]+)/i);
             const leaseMatch = body.match(/(?:lease|lease_id|crabbox_lease_id)[\s:=]+([^\s`]+)/i);
             const rawCandidate = candidateMatch?.[1];
@@ -184,21 +201,50 @@ jobs:
               core.setFailed(`Unsupported Crabbox provider for Mantis Telegram: ${provider}`);
               return;
             }
+            const providerMode = providerModeMatch?.[1] || "live-frontier";
+            if (!["live-frontier", "mock-openai"].includes(providerMode)) {
+              core.setFailed(`Unsupported provider mode for Mantis Telegram: ${providerMode}`);
+              return;
+            }
 
             setOutput("should_run", "true");
             setOutput("candidate_ref", candidate);
             setOutput("pr_number", String(issue.number));
             setOutput("scenario", scenarioMatch?.[1] || "telegram-status-command");
+            setOutput("provider_mode", providerMode);
             setOutput("crabbox_provider", provider);
             setOutput("lease_id", leaseMatch?.[1] || "");
             setOutput("request_source", "issue_comment");
 
-            await github.rest.reactions.createForIssueComment({
-              owner,
-              repo,
-              comment_id: context.payload.comment.id,
-              content: "eyes",
-            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+      - name: Create Mantis reaction GitHub App token
+        id: mantis_reaction_token
+        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Add Mantis eyes reaction
+        id: add_reaction
+        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.mantis_reaction_token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.reactions
+              .createForIssueComment({
+                owner,
+                repo,
+                comment_id: context.payload.comment.id,
+                content: "eyes",
+              })
+              .then(({ data: reaction }) => core.setOutput("reaction_id", String(reaction.id)))
+              .catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
 
   validate_ref:
     name: Validate candidate ref
@@ -389,6 +435,7 @@ jobs:
           CRABBOX_CAPACITY_REGIONS: ${{ env.CRABBOX_CAPACITY_REGIONS }}
           CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
+          PROVIDER_MODE: ${{ needs.resolve_request.outputs.provider_mode }}
           SCENARIO_INPUT: ${{ needs.resolve_request.outputs.scenario }}
           CANDIDATE_SHA: ${{ needs.validate_ref.outputs.candidate_revision }}
         shell: bash
@@ -407,7 +454,6 @@ jobs:
           CRABBOX_COORDINATOR_TOKEN="${CRABBOX_COORDINATOR_TOKEN:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN:-}}"
           export CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN
 
-          require_var OPENAI_API_KEY
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
@@ -416,7 +462,29 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/telegram-live"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
-          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.6-luna}"
+
+          qa_args=(
+            --repo-root "$candidate_repo"
+            --output-dir "$output_rel"
+            --provider-mode "$PROVIDER_MODE"
+          )
+          case "$PROVIDER_MODE" in
+            live-frontier)
+              require_var OPENAI_API_KEY
+              model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.6-luna}"
+              qa_args+=(--model "$model" --alt-model "$model" --fast)
+              ;;
+            mock-openai) ;;
+            *)
+              echo "Unsupported provider mode for Mantis Telegram: ${PROVIDER_MODE}" >&2
+              exit 1
+              ;;
+          esac
+          qa_args+=(
+            --credential-source convex
+            --credential-role ci
+            --allow-failures
+          )
 
           scenario_args=()
           if [[ -n "${SCENARIO_INPUT// }" ]]; then
@@ -430,17 +498,7 @@ jobs:
           fi
 
           set +e
-          pnpm --dir "$candidate_repo" openclaw qa telegram \
-            --repo-root "$candidate_repo" \
-            --output-dir "$output_rel" \
-            --provider-mode live-frontier \
-            --model "$model" \
-            --alt-model "$model" \
-            --fast \
-            --credential-source convex \
-            --credential-role ci \
-            --allow-failures \
-            "${scenario_args[@]}"
+          pnpm --dir "$candidate_repo" openclaw qa telegram "${qa_args[@]}" "${scenario_args[@]}"
           telegram_exit=$?
           set -e
 
@@ -450,7 +508,7 @@ jobs:
           fi
           echo "telegram_exit=${telegram_exit}" >> "$GITHUB_OUTPUT"
 
-          node "${GITHUB_WORKSPACE}/scripts/mantis/build-telegram-evidence.mjs" \
+          node --import tsx "${GITHUB_WORKSPACE}/scripts/mantis/build-telegram-evidence.mts" \
             --output-dir "$root" \
             --candidate-ref "$CANDIDATE_SHA" \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -566,40 +624,33 @@ jobs:
   clear_issue_comment_reaction:
     name: Clear Mantis command reaction
     needs: [resolve_request, validate_ref, run_telegram_live]
-    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' && needs.resolve_request.outputs.reaction_id != '' }}
     runs-on: ubuntu-24.04
-    permissions:
-      issues: write
+    permissions: {}
     steps:
-      - name: Remove workflow eyes reaction
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      - name: Create Mantis cleanup GitHub App token
+        id: mantis_reaction_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Remove Mantis eyes reaction
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          REACTION_ID: ${{ needs.resolve_request.outputs.reaction_id }}
+        with:
+          github-token: ${{ steps.mantis_reaction_token.outputs.token }}
           script: |
             const { owner, repo } = context.repo;
-            const commentId = context.payload.comment?.id;
-            if (!commentId) {
-              core.info("No issue comment id found; skipping reaction cleanup.");
-              return;
-            }
-
-            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+            const reactionId = Number(process.env.REACTION_ID);
+            await github.rest.reactions.deleteForIssueComment({
               owner,
               repo,
-              comment_id: commentId,
-              per_page: 100,
+              comment_id: context.payload.comment.id,
+              reaction_id: reactionId,
             });
-            const eyes = reactions.filter(
-              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
-            );
-            for (const reaction of eyes) {
-              await github.rest.reactions.deleteForIssueComment({
-                owner,
-                repo,
-                comment_id: commentId,
-                reaction_id: reaction.id,
-              });
-              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
-            }
-            if (eyes.length === 0) {
-              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
-            }
+            core.info(`Removed Mantis eyes reaction ${reactionId}.`);

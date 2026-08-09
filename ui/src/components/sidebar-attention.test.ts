@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -37,6 +37,18 @@ function cronJob(id: string): CronJob {
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "test" },
     state: { lastRunStatus: "error" },
+  };
+}
+
+function cronListResponse(jobs: CronJob[]): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "sidebar-attention-cron-fixture",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
   };
 }
 
@@ -193,6 +205,7 @@ describe("sidebar attention refresh ownership", () => {
         password: "",
       },
       subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
     } as unknown as ApplicationGateway;
     const overlays = {
       snapshot: { approvalQueue: [] },
@@ -219,7 +232,7 @@ describe("sidebar attention refresh ownership", () => {
 
     const currentAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
     now = 200_000;
-    secondCron.resolve({ jobs: [cronJob("current")] });
+    secondCron.resolve(cronListResponse([cronJob("current")]));
     secondAuth.resolve(currentAuth);
     await waitForFast(() => expect(element.loadedAtMs).toBe(200_000));
     expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
@@ -227,7 +240,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
 
     now = 300_000;
-    firstCron.resolve({ jobs: [cronJob("stale")] });
+    firstCron.resolve(cronListResponse([cronJob("stale")]));
     firstAuth.resolve({ ts: 1, providers: [] });
     await Promise.all([firstCron.promise, firstAuth.promise]);
     await new Promise<void>((resolve) => {
@@ -239,6 +252,59 @@ describe("sidebar attention refresh ownership", () => {
     expect(element.modelAuthStatus).toBe(currentAuth);
     expect(element.loadedAtMs).toBe(200_000);
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
+  });
+
+  it("clears a stale failure alert when the gateway reports an automation change", async () => {
+    const responses = {
+      "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
+      "models.authStatus": [{ ts: 1, providers: [] }],
+    };
+    const request = vi.fn((method: keyof typeof responses) => {
+      const response = responses[method].shift();
+      if (!response) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return Promise.resolve(response);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected",
+      hello: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    let eventListener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+    const gateway = {
+      snapshot,
+      connection: {
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: (listener: NonNullable<typeof eventListener>) => {
+        eventListener = listener;
+        return () => undefined;
+      },
+    } as unknown as ApplicationGateway;
+    const overlays = {
+      snapshot: { approvalQueue: [] },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["overlays"];
+    vi.stubGlobal("localStorage", createTestStorageMock());
+
+    const provider = createApplicationContextProvider({ gateway, overlays } as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+    await waitForFast(() => expect(element.textContent).toContain("1 automation(s) failed"));
+
+    eventListener?.({ type: "event", event: "cron", payload: {} });
+    await waitForFast(() => expect(element.textContent).not.toContain("automation(s) failed"));
   });
 });
 

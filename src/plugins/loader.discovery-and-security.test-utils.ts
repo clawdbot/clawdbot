@@ -47,6 +47,66 @@ afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
 
 describe("loadOpenClawPlugins", () => {
+  it("loads every entry in a multi-entry package pack under its derived id", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const packageDir = path.join(stateDir, "extensions", "pack");
+      mkdirSafe(packageDir);
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "pack",
+          version: "1.0.0",
+          openclaw: { extensions: ["./one.cjs", "./two.cjs"] },
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(packageDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "pack", configSchema: EMPTY_PLUGIN_SCHEMA }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(packageDir, "one.cjs"),
+        'module.exports = { id: "pack/one", register() {} };',
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(packageDir, "two.cjs"),
+        'module.exports = { id: "pack/two", register() {} };',
+        "utf8",
+      );
+
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+            allow: ["pack/one", "pack/two"],
+          },
+        },
+      });
+
+      expect(
+        registry.plugins
+          .filter((plugin) => plugin.id.startsWith("pack/"))
+          .map((plugin) => ({ id: plugin.id, status: plugin.status }))
+          .toSorted((left, right) => left.id.localeCompare(right.id)),
+      ).toEqual([
+        { id: "pack/one", status: "loaded" },
+        { id: "pack/two", status: "loaded" },
+      ]);
+      expect(
+        registry.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.message.includes("plugin id mismatch") ||
+            diagnostic.message.includes("duplicate plugin id"),
+        ),
+      ).toBe(false);
+    });
+  });
+
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -441,7 +501,11 @@ describe("loadOpenClawPlugins", () => {
           fs.writeFileSync(
             path.join(memoryLanceDir, "openclaw.plugin.json"),
             JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+              {
+                id: "memory-lancedb",
+                kind: "memory",
+                configSchema: { type: "object", additionalProperties: true },
+              },
               null,
               2,
             ),
@@ -457,7 +521,10 @@ describe("loadOpenClawPlugins", () => {
                 slots: { memory: "memory-lancedb" },
                 entries: {
                   "memory-core": { enabled: true },
-                  "memory-lancedb": { enabled: true },
+                  "memory-lancedb": {
+                    enabled: true,
+                    config: { dreaming: { enabled: false } },
+                  },
                 },
               },
             },
@@ -574,10 +641,13 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "shadow",
         bundledFilename: "shadow.cjs",
         loadRegistry: () => {
-          writeBundledPlugin({
+          const bundled = writeBundledPlugin({
             id: "shadow",
             body: simplePluginBody("shadow"),
             filename: "shadow.cjs",
+          });
+          updatePluginManifest(bundled.plugin, {
+            contracts: { agentToolResultMiddleware: ["codex"] },
           });
 
           const override = writePlugin({
@@ -599,7 +669,13 @@ describe("loadOpenClawPlugins", () => {
         },
         expectedLoadedOrigin: "config",
         expectedDisabledOrigin: "bundled",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
+          expectPluginSourcePrecedence(registry, scenario);
+          expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
+        },
       },
       {
         label: "bundled beats auto-discovered global duplicate",

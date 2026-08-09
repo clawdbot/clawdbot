@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Диктувати"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наживо"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Гілка"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Відкрити гілку"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Проведіть →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Утримуйте"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Торкніться"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Двічі торкніться"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Показати нові повідомлення"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запустіть Live, щоб побачити розмову тут."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нове"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введіть"</string>

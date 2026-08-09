@@ -2,13 +2,25 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+
+export const SessionToolOverridesSchema = closedObject({
+  mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+  mcpToolsDeny: Type.Optional(
+    Type.Record(Type.String({ minLength: 1 }), Type.Array(NonEmptyString)),
+  ),
+  skills: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+  webSearch: Type.Optional(Type.Boolean()),
+});
 
 /** Projected actor that caused a session node to be created. */
 export const SessionCreatedActorSchema = closedObject({
   type: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
   id: Type.Optional(NonEmptyString),
   label: Type.Optional(NonEmptyString),
+  /** Durable profile avatar route; absent for actors without a stored profile avatar. */
+  avatarUrl: Type.Optional(NonEmptyString),
 });
 
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
@@ -29,6 +41,13 @@ export const SessionRowSchema = Type.Object(
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
+    /** Stable non-sensitive facts derived from the canonical session route. */
+    classification: Type.Optional(SessionClassificationSchema),
+    agentId: Type.Optional(NonEmptyString),
+    accountId: Type.Optional(NonEmptyString),
+    peerKind: Type.Optional(SessionPeerKindSchema),
+    isMain: Type.Optional(Type.Boolean()),
+    isBackground: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
@@ -108,9 +127,12 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },
 );
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionRunStatus = NonNullable<SessionRow["status"]>;

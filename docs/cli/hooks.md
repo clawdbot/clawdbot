@@ -15,10 +15,13 @@ Related: [Hooks](/automation/hooks) - [Plugin hooks](/plugins/hooks)
 ## List hooks
 
 ```bash
+openclaw hooks --json
 openclaw hooks list [--eligible] [--json] [-v|--verbose]
 ```
 
-Lists hooks discovered from workspace, managed, extra, and bundled directories.
+Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
+`openclaw hooks list`. The command discovers hooks from workspace, managed,
+extra, and bundled directories.
 
 - `--eligible`: only hooks whose requirements are met.
 - `--json`: structured output.
@@ -96,13 +99,13 @@ Hook packs install through the unified plugins installer/updater; `openclaw hook
 
 ## Bundled hooks
 
-| Hook                  | Events                                            | What it does                                                                                       |
-| --------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                                  |
-| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during agent bootstrap |
-| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                             |
-| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                             |
-| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                              |
+| Hook                  | Events                                            | What it does                                                                            |
+| --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
+| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                  |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 
 Enable any bundled hook with `openclaw hooks enable <hook-name>`. Full details, config keys, and defaults: [Bundled hooks](/automation/hooks#bundled-hooks).
 

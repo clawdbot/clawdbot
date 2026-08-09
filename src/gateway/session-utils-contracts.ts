@@ -3,13 +3,19 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import type { buildSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
+import type { SubagentRunReadIndex } from "../agents/subagent-registry-queries.js";
+import type { SubagentRunReadRecord } from "../agents/subagent-registry.types.js";
 import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinking.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 
+export type SessionActorProfileIdentity = {
+  label?: string;
+  avatarUrl?: string;
+};
+
 export type SessionListRowContext = {
-  subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
+  subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
   storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingMetadataByModelRef: Map<
@@ -21,7 +27,8 @@ export type SessionListRowContext = {
   >;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
-  userProfileLabelById: Map<string, string | undefined>;
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>;
+  acpSessionMetaByEntry: Map<SessionEntry, SessionAcpMeta | undefined>;
 };
 
 export type SessionListRowContextProvider = () => SessionListRowContext;
@@ -34,6 +41,7 @@ export type GatewaySessionStoreTarget = {
 };
 
 export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
+  canonicalValidationError?: Error;
   store: Record<string, SessionEntry>;
 };
 

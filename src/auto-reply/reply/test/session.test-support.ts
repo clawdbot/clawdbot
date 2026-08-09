@@ -21,11 +21,16 @@ function projectSessionEntry(entry: SessionEntry): ProjectedSessionEntry {
 }
 
 export const initSessionState = async (
-  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx" | "commandAuthorized"> & {
     ctx: Record<string, unknown>;
+    commandAuthorized?: boolean;
   },
 ) => {
-  const result = await initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
+  const result = await initSessionStateRaw({
+    ...params,
+    commandAuthorized: params.commandAuthorized ?? true,
+    ctx: finalizeInboundContext(params.ctx),
+  });
   return { ...result, sessionEntry: projectSessionEntry(result.sessionEntry) };
 };
 

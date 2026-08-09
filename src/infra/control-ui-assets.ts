@@ -38,36 +38,29 @@ export async function resolveControlUiDistIndexHealth(
   };
 }
 
-function resolveControlUiRepoRoot(argv1: string | undefined = process.argv[1]): string | null {
-  if (!argv1) {
-    return null;
-  }
-  const normalized = path.resolve(argv1);
-  const parts = normalized.split(path.sep);
-  const srcIndex = parts.lastIndexOf("src");
-  if (srcIndex !== -1) {
-    const root = parts.slice(0, srcIndex).join(path.sep);
-    if (controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts"))) {
-      return root;
-    }
-  }
-
-  let dir = path.dirname(normalized);
-  for (let i = 0; i < 8; i++) {
-    if (
-      controlUiFsRuntime.existsSync(path.join(dir, "package.json")) &&
-      controlUiFsRuntime.existsSync(path.join(dir, "ui", "vite.config.ts"))
-    ) {
-      return dir;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-
-  return null;
+function resolveControlUiRepoRoot(opts: {
+  root?: string;
+  argv1?: string;
+  moduleUrl?: string;
+  cwd?: string;
+}): string | null {
+  const cwd = opts.cwd ?? process.cwd();
+  const roots = opts.root
+    ? [path.resolve(opts.root)]
+    : [
+        resolveOpenClawPackageRootSync({
+          argv1: opts.argv1 ?? process.argv[1],
+          moduleUrl: opts.moduleUrl ?? import.meta.url,
+          cwd,
+        }),
+        resolveOpenClawPackageRootSync({ cwd }),
+      ];
+  return (
+    roots.find(
+      (root): root is string =>
+        root !== null && controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts")),
+    ) ?? null
+  );
 }
 
 async function resolveControlUiDistIndexPath(
@@ -275,6 +268,56 @@ type EnsureControlUiAssetsResult = {
   message?: string;
 };
 
+type EnsureControlUiAssetsOptions = ControlUiRootResolveOptions & {
+  root?: string;
+  force?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  onBuildStart?: () => void;
+};
+
+export const CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS = 10 * 60_000;
+
+function controlUiAssetsFailure(message: string, built = false): EnsureControlUiAssetsResult {
+  return { ok: false, built, message };
+}
+
+function findMissingControlUiStartupAsset(indexPath: string): string | undefined {
+  let html: string;
+  try {
+    if (controlUiFsRuntime.statSync(indexPath).size > 256 * 1024) {
+      return "index.html exceeds its size limit";
+    }
+    html = controlUiFsRuntime.readFileSync(indexPath, "utf8");
+  } catch {
+    return "index.html";
+  }
+  let references = 0;
+  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
+    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
+    const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
+    if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
+      continue;
+    }
+    const marker = reference.lastIndexOf("assets/");
+    if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
+      continue;
+    }
+    const asset = reference.slice(marker);
+    if (++references > 128 || reference.split("/").includes("..")) {
+      return references > 128 ? "too many startup assets" : asset;
+    }
+    if (!controlUiFsRuntime.existsSync(path.join(path.dirname(indexPath), asset))) {
+      return asset;
+    }
+  }
+  return undefined;
+}
+
+export function isControlUiStartupAssetsReady(root: string): boolean {
+  return !findMissingControlUiStartupAsset(path.join(root, "index.html"));
+}
+
 function summarizeCommandOutput(text: string): string | undefined {
   const lines = normalizeStringEntries(text.split(/\r?\n/g));
   if (!lines.length) {
@@ -289,62 +332,115 @@ function summarizeCommandOutput(text: string): string | undefined {
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts?: { timeoutMs?: number },
+  opts: EnsureControlUiAssetsOptions = {},
 ): Promise<EnsureControlUiAssetsResult> {
-  const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const health = await resolveControlUiDistIndexHealth({
+    ...(opts.root ? { root: opts.root } : {}),
+    argv1,
+    moduleUrl: opts.moduleUrl,
+  });
   const indexFromDist = health.indexPath;
-  if (health.exists) {
+  let missingStartupAsset =
+    health.exists && indexFromDist ? findMissingControlUiStartupAsset(indexFromDist) : undefined;
+  if (!opts.force && health.exists && !missingStartupAsset) {
     return { ok: true, built: false };
   }
+  if (!opts.force && !opts.root) {
+    const detectedRoot = resolveControlUiRootSync({
+      argv1,
+      moduleUrl: opts.moduleUrl,
+      cwd: opts.cwd,
+      execPath: opts.execPath,
+    });
+    if (detectedRoot) {
+      missingStartupAsset = findMissingControlUiStartupAsset(path.join(detectedRoot, "index.html"));
+      if (!missingStartupAsset) {
+        return { ok: true, built: false };
+      }
+    }
+  }
 
-  const repoRoot = resolveControlUiRepoRoot(process.argv[1]);
+  const repoRoot = resolveControlUiRepoRoot({
+    root: opts.root,
+    argv1,
+    moduleUrl: opts.moduleUrl,
+    cwd: opts.cwd,
+  });
   if (!repoRoot) {
-    const hint = indexFromDist
-      ? `Missing Control UI assets at ${indexFromDist}`
-      : "Missing Control UI assets";
-    return {
-      ok: false,
-      built: false,
-      message: `${hint}. Build them with \`pnpm ui:build\` (auto-installs UI deps).`,
-    };
+    const hint = missingStartupAsset
+      ? `Incomplete Control UI assets${indexFromDist ? ` at ${indexFromDist}` : ""} (missing ${missingStartupAsset})`
+      : indexFromDist
+        ? `Missing Control UI assets at ${indexFromDist}`
+        : "Missing Control UI assets";
+    return controlUiAssetsFailure(
+      `${hint}. Reinstall OpenClaw to restore bundled Control UI assets.`,
+    );
   }
 
   const indexPath = resolveControlUiDistIndexPathForRoot(repoRoot);
-  if (controlUiFsRuntime.existsSync(indexPath)) {
+  if (
+    !opts.force &&
+    controlUiFsRuntime.existsSync(indexPath) &&
+    !findMissingControlUiStartupAsset(indexPath)
+  ) {
     return { ok: true, built: false };
   }
 
   const uiScript = path.join(repoRoot, "scripts", "ui.js");
   if (!controlUiFsRuntime.existsSync(uiScript)) {
-    return {
-      ok: false,
-      built: false,
-      message: `Control UI assets missing but ${uiScript} is unavailable.`,
-    };
+    return controlUiAssetsFailure(`Control UI assets missing but ${uiScript} is unavailable.`);
   }
 
-  runtime.log(
-    "Control UI assets missing; building them now (rerun `pnpm ui:build` after UI changes, or use `pnpm ui:dev` while developing the Control UI)…",
-  );
+  if (opts.signal?.aborted) {
+    return controlUiAssetsFailure("Control UI build canceled.");
+  }
 
-  const build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
-    cwd: repoRoot,
-    timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
-  });
+  if (opts.onBuildStart) {
+    opts.onBuildStart();
+  } else {
+    runtime.log(
+      "Control UI assets missing; building them now (rerun `pnpm ui:build` after UI changes, or use `pnpm ui:dev` while developing the Control UI)…",
+    );
+  }
+
+  let build: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+  try {
+    build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
+      cwd: repoRoot,
+      timeoutMs: opts.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return controlUiAssetsFailure(
+      `Control UI build failed: ${summarizeCommandOutput(message) ?? "unknown error"}`,
+    );
+  }
+  if (build.termination === "signal") {
+    return controlUiAssetsFailure("Control UI build canceled.");
+  }
+  if (build.termination === "timeout" || build.termination === "no-output-timeout") {
+    return controlUiAssetsFailure("Control UI build timed out.");
+  }
   if (build.code !== 0) {
-    return {
-      ok: false,
-      built: false,
-      message: `Control UI build failed: ${summarizeCommandOutput(build.stderr) ?? `exit ${build.code}`}`,
-    };
+    return controlUiAssetsFailure(
+      `Control UI build failed: ${summarizeCommandOutput(build.stderr) ?? `exit ${build.code}`}`,
+    );
   }
 
   if (!controlUiFsRuntime.existsSync(indexPath)) {
-    return {
-      ok: false,
-      built: true,
-      message: `Control UI build completed but ${indexPath} is still missing.`,
-    };
+    return controlUiAssetsFailure(
+      `Control UI build completed but ${indexPath} is still missing.`,
+      true,
+    );
+  }
+  const missingBuiltAsset = findMissingControlUiStartupAsset(indexPath);
+  if (missingBuiltAsset) {
+    return controlUiAssetsFailure(
+      `Control UI build completed but startup asset ${missingBuiltAsset} is missing.`,
+      true,
+    );
   }
 
   return { ok: true, built: true };

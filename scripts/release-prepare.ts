@@ -281,20 +281,11 @@ export function runReleasePrepareStep(
   progressStream.write(`\n[release-prepare] ${step.name}\n`);
   const result = spawnSync(step.command, step.args, {
     cwd,
-    encoding: json ? "utf8" : undefined,
     env: process.env,
-    stdio: json ? ["ignore", "pipe", "pipe"] : "inherit",
+    stdio: json ? ["ignore", process.stderr.fd, process.stderr.fd] : "inherit",
   });
   if (result.error) {
     throw result.error;
-  }
-  if (json) {
-    if (typeof result.stdout === "string" && result.stdout) {
-      process.stderr.write(result.stdout);
-    }
-    if (typeof result.stderr === "string" && result.stderr) {
-      process.stderr.write(result.stderr);
-    }
   }
   return result.status ?? 1;
 }

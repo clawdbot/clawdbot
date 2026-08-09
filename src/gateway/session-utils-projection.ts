@@ -3,12 +3,15 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { buildSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagent-registry-read.js";
 import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildStoreChildSessionIndex,
   getSingleRowChildSessionCandidates,
@@ -22,17 +25,20 @@ import { resolveConcreteSessionStorePath } from "./session-utils-store.js";
 export function buildSessionListRowContext(params: {
   store: Record<string, SessionEntry>;
   now: number;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
-  const subagentRuns = buildSubagentRunReadIndex(params.now);
+  const subagentRuns = buildSubagentSessionListReadIndex(params.now);
   return buildSessionListRowContextFromParts({
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    userProfileIdentityById: params.userProfileIdentityById,
   });
 }
 
 function buildSessionListRowContextFromParts(params: {
-  subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
+  subagentRuns: SessionListRowContext["subagentRuns"];
   storeChildSessionsByKey: Map<string, string[]>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   return {
     subagentRuns: params.subagentRuns,
@@ -41,14 +47,19 @@ function buildSessionListRowContextFromParts(params: {
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
-    userProfileLabelById: new Map(),
+    userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
+    acpSessionMetaByEntry: new Map(),
   };
 }
 
-export function buildSessionListRowMetadataContext(params: { now: number }): SessionListRowContext {
+export function buildSessionListRowMetadataContext(params: {
+  now: number;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
+}): SessionListRowContext {
   return buildSessionListRowContextFromParts({
-    subagentRuns: buildSubagentRunReadIndex(params.now),
+    subagentRuns: buildSubagentSessionListReadIndex(params.now),
     storeChildSessionsByKey: new Map(),
+    userProfileIdentityById: params.userProfileIdentityById,
   });
 }
 

@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 const appUri = "ui://conformance/app";
 const appModuleUrl =
-  "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@1.7.4/dist/src/app-with-deps.js";
+  "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@1.7.5/dist/src/app-with-deps.js";
 
 const appHtml = `<!doctype html>
 <meta charset="utf-8" />

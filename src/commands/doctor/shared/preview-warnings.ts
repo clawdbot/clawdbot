@@ -18,6 +18,7 @@ import type {
   ToolPolicyConfig,
   ToolsConfig,
 } from "../../../config/types.tools.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
@@ -710,6 +711,7 @@ export async function collectDoctorPreviewNotes(params: {
   env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
@@ -722,7 +724,15 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
   const { collectActiveToolSchemaProjectionWarnings } =
     await import("./active-tool-schema-warnings.js");
-  warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
+  warnings.push(
+    ...(await collectActiveToolSchemaProjectionWarnings({
+      cfg: params.cfg,
+      env,
+      ...(params.runWithPluginMetadataSnapshot
+        ? { runWithPluginMetadataSnapshot: params.runWithPluginMetadataSnapshot }
+        : {}),
+    })),
+  );
 
   const channelPluginRuntime = await import("./channel-plugin-blockers.js");
   const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(

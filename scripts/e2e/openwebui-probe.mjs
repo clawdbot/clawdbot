@@ -1,7 +1,10 @@
 // Probe script for OpenWebUI E2E connectivity.
 import { Agent, setGlobalDispatcher } from "undici";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response-text.mjs";
 
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
 const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
@@ -112,12 +115,10 @@ async function withRequestTimeout(label, timeoutMs, run) {
 }
 
 async function readBoundedResponseText(response, label, timeoutPromise) {
-  return await readBoundedResponseTextWithLimit(
-    response,
-    label,
-    responseBodyMaxBytes,
+  return await readBoundedResponseTextWithLimit(response, label, responseBodyMaxBytes, {
+    createTooLargeError: createBoundedResponseTooLargeError,
     timeoutPromise,
-  );
+  });
 }
 
 async function readBoundedResponseJson(response, label, timeoutPromise) {

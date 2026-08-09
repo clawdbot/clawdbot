@@ -21,7 +21,7 @@ const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_SETUP_GRACE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_MODE = "recent" as const;
-const DEFAULT_QMD_SEARCH_MODE = "search" as const;
+const DEFAULT_ACTIVE_MEMORY_MODE = "escalate" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
@@ -130,6 +130,7 @@ const RECALLED_CONTEXT_LINE_PATTERNS = [
 
 type ActiveRecallPluginConfig = {
   enabled?: boolean;
+  mode?: ActiveMemoryMode;
   agents?: string[];
   model?: string;
   modelFallback?: string;
@@ -163,15 +164,11 @@ type ActiveRecallPluginConfig = {
   circuitBreakerCooldownMs?: number;
   persistTranscripts?: boolean;
   transcriptDir?: string;
-  qmd?: {
-    searchMode?: ActiveMemoryQmdSearchMode;
-  };
 };
-
-type ActiveMemoryQmdSearchMode = "inherit" | "search" | "vsearch" | "query";
 
 type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
+  mode: ActiveMemoryMode;
   agents: string[];
   model?: string;
   modelFallback?: string;
@@ -207,9 +204,6 @@ type ResolvedActiveRecallPluginConfig = {
   circuitBreakerCooldownMs: number;
   persistTranscripts: boolean;
   transcriptDir: string;
-  qmd: {
-    searchMode: ActiveMemoryQmdSearchMode;
-  };
 };
 
 type ActiveRecallRecentTurn = {
@@ -303,6 +297,7 @@ type CachedActiveRecallResult = {
 };
 
 type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
+type ActiveMemoryMode = "escalate" | "always" | "off";
 
 type ActiveMemoryToggleEntry = {
   sessionKey: string;
@@ -352,6 +347,7 @@ export {
   ACTIVE_MEMORY_CONTEXT_HEADER,
   CACHE_SWEEP_INTERVAL_MS,
   DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+  DEFAULT_ACTIVE_MEMORY_MODE,
   DEFAULT_AGENT_ID,
   DEFAULT_CACHE_TTL_MS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
@@ -360,7 +356,6 @@ export {
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
   DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-  DEFAULT_QMD_SEARCH_MODE,
   DEFAULT_QUERY_MODE,
   DEFAULT_RECENT_ASSISTANT_CHARS,
   DEFAULT_RECENT_ASSISTANT_TURNS,
@@ -390,10 +385,10 @@ export {
 
 export type {
   ActiveMemoryChatType,
+  ActiveMemoryMode,
   ActiveMemoryFastMode,
   ActiveMemoryPartialTimeoutError,
   ActiveMemoryPromptStyle,
-  ActiveMemoryQmdSearchMode,
   ActiveMemorySearchDebug,
   ActiveMemoryThinkingLevel,
   ActiveMemoryToggleEntry,

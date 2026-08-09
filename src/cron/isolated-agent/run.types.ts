@@ -6,8 +6,13 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 
+/** Pre-run disposition returned when isolated cron work never enters an agent runner. */
+export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
+
 /** Final isolated cron turn result merged into service state and run logs. */
 export type RunCronAgentTurnResult = {
+  /** Typed pre-run rejection so callers never infer admission state from error prose. */
+  admissionDisposition?: CronAgentAdmissionDisposition;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
   /**

@@ -6,7 +6,6 @@ scenario:
     primary:
       - security.redaction-artifact-safety
   execution:
-    profiles: { "matrix:all": 64, "matrix:e2ee-smoke": 6 }
     kind: flow
     channel: matrix
     timeoutMs: 150000

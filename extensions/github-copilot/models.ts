@@ -3,7 +3,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -19,6 +19,7 @@ import {
   resolveCopilotTransportApi,
   resolveStaticCopilotModelOverride,
 } from "./model-metadata.js";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
 
 export const PROVIDER_ID = "github-copilot";
 
@@ -100,6 +101,10 @@ type CopilotApiModelEntry = {
   vendor?: string;
   preview?: boolean;
   model_picker_enabled?: boolean;
+  model_picker_category?: string;
+  policy?: {
+    state?: string;
+  };
   capabilities?: {
     type?: string;
     family?: string;
@@ -117,6 +122,84 @@ type CopilotApiModelEntry = {
     };
   };
 };
+
+type CopilotModelSelectionMetadata = {
+  category?: string;
+  pickerEnabled: boolean;
+  policyState?: string;
+  preview: boolean;
+  streaming?: boolean;
+  toolCalls: boolean;
+};
+
+const copilotModelSelectionMetadata = new WeakMap<object, CopilotModelSelectionMetadata>();
+
+function readCopilotModelSelectionMetadata(
+  model: CopilotCatalogModel,
+): CopilotModelSelectionMetadata | undefined {
+  return copilotModelSelectionMetadata.get(model);
+}
+
+export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolean {
+  const metadata = readCopilotModelSelectionMetadata(model);
+  return Boolean(
+    metadata?.pickerEnabled &&
+    metadata.policyState !== "disabled" &&
+    metadata.policyState !== "unconfigured",
+  );
+}
+
+function isCopilotCatalogModelSelectable(model: CopilotCatalogModel): boolean {
+  const metadata = readCopilotModelSelectionMetadata(model);
+  return Boolean(
+    isCopilotCatalogModelVisible(model) && metadata?.streaming !== false && metadata?.toolCalls,
+  );
+}
+
+const COPILOT_STARTER_CATEGORY_RANK = new Map<string, number>([
+  ["versatile", 0],
+  ["lightweight", 1],
+  ["powerful", 2],
+]);
+
+function compareCopilotStarterCandidates(
+  left: CopilotCatalogModel,
+  right: CopilotCatalogModel,
+): number {
+  const leftMetadata = readCopilotModelSelectionMetadata(left);
+  const rightMetadata = readCopilotModelSelectionMetadata(right);
+  const previewDelta =
+    Number(leftMetadata?.preview === true) - Number(rightMetadata?.preview === true);
+  if (previewDelta !== 0) {
+    return previewDelta;
+  }
+  const categoryDelta =
+    (COPILOT_STARTER_CATEGORY_RANK.get(leftMetadata?.category ?? "") ?? Number.MAX_SAFE_INTEGER) -
+    (COPILOT_STARTER_CATEGORY_RANK.get(rightMetadata?.category ?? "") ?? Number.MAX_SAFE_INTEGER);
+  if (categoryDelta !== 0) {
+    return categoryDelta;
+  }
+  const contextDelta = right.contextWindow - left.contextWindow;
+  if (contextDelta !== 0) {
+    return contextDelta;
+  }
+  const outputDelta = right.maxTokens - left.maxTokens;
+  if (outputDelta !== 0) {
+    return outputDelta;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+export function selectCopilotStarterModel(
+  models: readonly CopilotCatalogModel[],
+  preferredModelId: string,
+): CopilotCatalogModel | undefined {
+  const selectable = models.filter(isCopilotCatalogModelSelectable);
+  return (
+    selectable.find((model) => model.id === preferredModelId) ??
+    selectable.toSorted(compareCopilotStarterCandidates)[0]
+  );
+}
 
 const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
@@ -220,6 +303,14 @@ function mapCopilotApiModelToDefinition(
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),
   };
+  copilotModelSelectionMetadata.set(definition, {
+    category: normalizeOptionalLowercaseString(entry.model_picker_category),
+    pickerEnabled: entry.model_picker_enabled === true,
+    policyState: normalizeOptionalLowercaseString(entry.policy?.state),
+    preview: entry.preview === true,
+    streaming: supports?.streaming,
+    toolCalls: supports?.tool_calls === true,
+  });
   return definition;
 }
 
@@ -231,7 +322,7 @@ function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
 }
 
 type FetchCopilotModelCatalogParams = {
-  /** Short-lived Copilot API token (from `resolveCopilotApiToken`). */
+  /** GitHub source token accepted by the account's Copilot API endpoint. */
   copilotApiToken: string;
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
@@ -274,7 +365,7 @@ export async function fetchCopilotModelCatalog(
         Accept: "application/json",
         Authorization: `Bearer ${params.copilotApiToken}`,
         ...buildCopilotIdeHeaders(),
-        "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+        "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
       },
       signal: params.signal ?? controller?.signal,
     });

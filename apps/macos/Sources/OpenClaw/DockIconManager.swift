@@ -39,11 +39,11 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             } ?? []
 
             let hasVisibleWindows = !visibleWindows.isEmpty
-            if !userWantsDockHidden || hasVisibleWindows {
-                NSApp?.setActivationPolicy(.regular)
-            } else {
-                NSApp?.setActivationPolicy(.accessory)
-            }
+            let policy: NSApplication.ActivationPolicy = !userWantsDockHidden || hasVisibleWindows
+                ? .regular
+                : .accessory
+            guard NSApp.activationPolicy() != policy else { return }
+            NSApp.setActivationPolicy(policy)
         }
     }
 
@@ -53,6 +53,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 self.logger.warning("NSApp not ready, cannot show Dock icon")
                 return
             }
+            guard NSApp.activationPolicy() != .regular else { return }
             NSApp.setActivationPolicy(.regular)
         }
     }

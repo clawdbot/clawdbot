@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
-import type { CodexAppServerClient } from "./client.js";
-import type { CodexServerNotification, JsonValue } from "./protocol.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function modelList() {
   return {
@@ -37,7 +38,7 @@ function threadStartResult() {
       updatedAt: 1,
       status: { type: "idle" },
       cwd: "/tmp/finalizer",
-      cliVersion: "0.144.5",
+      cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -103,11 +104,11 @@ function createClientFactory(
     errorBeforeCompletion?: { message: string; willRetry: boolean };
     terminalStatus?: "completed" | "interrupted";
     assistantDelta?: string;
+    completeTurn?: boolean;
   } = {},
 ) {
   const methods: string[] = [];
-  const notificationHandlers: Array<(notification: CodexServerNotification) => void> = [];
-  const request = vi.fn(async (method: string, _params?: unknown) => {
+  const fixture = createFakeCodexAppServerClient(async (method: string, _params?: unknown) => {
     methods.push(method);
     if (method === "model/list") {
       return modelList();
@@ -125,16 +126,45 @@ function createClientFactory(
       return threadStartResult();
     }
     if (method === "mcpServerStatus/list") {
-      return { data: options.mcpServers ?? [], nextCursor: null };
+      return {
+        data: options.mcpServers ?? [
+          {
+            name: "inherited",
+            serverInfo: null,
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported",
+          },
+        ],
+        nextCursor: null,
+      };
     }
     if (method === "thread/inject_items") {
       return {};
     }
-    if (method === "turn/start") {
+    if (method === "turn/interrupt") {
       queueMicrotask(() => {
-        for (const handler of notificationHandlers) {
+        for (const handler of fixture.notifications) {
+          void handler({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-finalizer",
+              turn: { ...inProgressTurnResult().turn, status: "interrupted" },
+            },
+          });
+        }
+      });
+      return {};
+    }
+    if (method === "turn/start") {
+      if (options.completeTurn === false) {
+        return inProgressTurnResult();
+      }
+      queueMicrotask(() => {
+        for (const handler of fixture.notifications) {
           if (options.errorBeforeCompletion) {
-            handler({
+            void handler({
               method: "error",
               params: {
                 threadId: "thread-finalizer",
@@ -145,7 +175,7 @@ function createClientFactory(
             });
           }
           if (options.assistantDelta) {
-            handler({
+            void handler({
               method: "item/agentMessage/delta",
               params: {
                 threadId: "thread-finalizer",
@@ -155,7 +185,7 @@ function createClientFactory(
               },
             });
           }
-          handler({
+          void handler({
             method: "rawResponse/completed",
             params: {
               threadId: "thread-finalizer",
@@ -167,11 +197,11 @@ function createClientFactory(
                 cachedInputTokens: 2,
                 cacheWriteInputTokens: 1,
                 outputTokens: 4,
-                reasoningOutputTokens: 0,
+                reasoningOutputTokens: 3,
               },
             },
           });
-          handler({
+          void handler({
             method: "turn/completed",
             params: {
               threadId: "thread-finalizer",
@@ -189,25 +219,97 @@ function createClientFactory(
     }
     throw new Error(`unexpected request: ${method}`);
   });
-  const client = {
-    request,
-    addNotificationHandler: vi.fn((handler) => {
-      notificationHandlers.push(handler);
-      return () => {
-        const index = notificationHandlers.indexOf(handler);
-        if (index >= 0) {
-          notificationHandlers.splice(index, 1);
-        }
-      };
-    }),
-    addRequestHandler: vi.fn(() => () => undefined),
-    close: vi.fn(),
-  } as unknown as CodexAppServerClient;
+  const request = fixture.request;
+  const client = Object.assign(fixture.client, { close: vi.fn() });
   const factory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
   return { factory, methods, request };
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it("reports its own timeout with the configured bound", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 100,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "codex app-server hosted search turn timed out after 100ms",
+    });
+  });
+
+  it("keeps a caller abort distinct from its own timeout", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+    const caller = new AbortController();
+    const reason = new Error("caller cancelled hosted search");
+    caller.abort(reason);
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        signal: caller.signal,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "codex app-server hosted search turn aborted",
+    });
+  });
+
+  it("does not adopt a prior turn's timeout as its own", async () => {
+    const first = createClientFactory({ completeTurn: false });
+    let priorTimeout: unknown;
+    try {
+      await runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 100,
+        options: { clientFactory: first.factory },
+        taskLabel: "first hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find first query.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      });
+    } catch (error) {
+      priorTimeout = error;
+    }
+    expect(priorTimeout).toMatchObject({ name: "TimeoutError" });
+
+    const caller = new AbortController();
+    caller.abort(priorTimeout);
+    const second = createClientFactory({ completeTurn: false });
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        signal: caller.signal,
+        options: { clientFactory: second.factory },
+        taskLabel: "second hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find second query.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "codex app-server second hosted search turn aborted",
+    });
+  });
+
   it("continues after a retryable error notification", async () => {
     const fake = createClientFactory({
       errorBeforeCompletion: { message: "temporary upstream disconnect", willRetry: true },
@@ -297,6 +399,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         output: 4,
         cacheRead: 2,
         cacheWrite: 1,
+        reasoningTokens: 3,
         total: 12,
       },
     });
@@ -319,13 +422,18 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       dynamicTools: [],
       ephemeral: true,
       config: {
+        "agents.enabled": false,
         "features.hooks": false,
         "features.multi_agent": false,
+        "features.multi_agent_v2": false,
         "skills.include_instructions": false,
         include_environment_context: false,
         mcp_servers: { inherited: { enabled: false } },
       },
     });
+    const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnParams).not.toHaveProperty("cwd");
+    expect(turnParams).not.toHaveProperty("environments");
     expect(fake.request).toHaveBeenCalledWith(
       "thread/inject_items",
       { threadId: "thread-finalizer", items: historyItems },
@@ -334,7 +442,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   });
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
-    const fake = createClientFactory({ mcpServers: [{ name: "unexpected" }] });
+    const fake = createClientFactory({
+      mcpServers: [{ name: "unexpected", serverInfo: null, tools: {} }],
+    });
 
     await expect(
       runBoundedCodexAppServerTurn({
@@ -349,7 +459,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,
       }),
-    ).rejects.toThrow("Codex ring-zero MCP attestation found server unexpected");
+    ).rejects.toThrow(
+      "Codex restricted-tool-surface MCP attestation found unexpected server unexpected",
+    );
     expect(fake.methods).not.toContain("thread/inject_items");
     expect(fake.methods).not.toContain("turn/start");
   });

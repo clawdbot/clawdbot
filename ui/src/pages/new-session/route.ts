@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -11,13 +12,15 @@ async function loadNewSessionData(
   search: string,
 ): Promise<NewSessionRouteData> {
   const requestedLocation = newSessionLocationFromSearch(search);
+  const requestedAgentId = requestedLocation.agentId.trim();
   if (!requestedLocation.catalogId) {
-    return { ...requestedLocation, model: "", catalogLabel: "" };
+    return { ...requestedLocation, requestedAgentId, model: "", catalogLabel: "" };
   }
   const { resolveAgentId, resolveCreateTarget } = await import("./catalog-target.ts");
   const unresolved = (agentId = ""): NewSessionRouteData => ({
     ...requestedLocation,
     agentId,
+    requestedAgentId,
     model: "",
     catalogLabel: "",
   });
@@ -50,7 +53,6 @@ async function loadNewSessionData(
   const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
   const gatewayDefaultId =
     gateway.phase === "connected" && gateway.hello ? gateway.assistantAgentId : null;
-  const requestedAgentId = requestedLocation.agentId.trim();
   if (
     !agentsList &&
     requestedAgentId &&
@@ -77,8 +79,7 @@ async function loadNewSessionData(
 }
 
 export const page = definePage({
-  id: "new-session",
-  path: "/new",
+  ...routePageSpec("new-session"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: (context: ApplicationContext, { location }) =>
     loadNewSessionData(context, location.search),

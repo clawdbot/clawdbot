@@ -6,11 +6,12 @@ import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
-  type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   deliveryContextFromSession,
@@ -20,7 +21,7 @@ import {
   sessionDeliveryRoute,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,
@@ -63,11 +64,14 @@ export function buildAgentSessionPatch(params: {
   touchInteraction: boolean;
   failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
 }): AgentSessionPatchBuild {
-  const freshSpawnedBy = canonicalizeSpawnedByForAgent(
-    params.cfg,
-    params.sessionAgentId,
-    params.freshEntry?.spawnedBy,
-  );
+  const storedSpawnedBy = normalizeOptionalString(params.freshEntry?.spawnedBy);
+  const freshSpawnedBy = storedSpawnedBy
+    ? resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: storedSpawnedBy,
+        storeAgentId: params.sessionAgentId,
+      })
+    : undefined;
   const storedGroup = normalizeTrustedGroupMetadata(params.freshEntry);
   let inheritedGroup: TrustedGroupMetadata | undefined;
   if (
@@ -75,13 +79,19 @@ export function buildAgentSessionPatch(params: {
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
     try {
-      const parentEntry = loadSessionEntryReadOnly(freshSpawnedBy)?.entry;
+      const parentEntry = resolveSessionEntryAccessTarget({
+        cfg: params.cfg,
+        sessionKey: freshSpawnedBy,
+      }).entry;
       inheritedGroup = normalizeTrustedGroupMetadata({
         groupId: parentEntry?.groupId,
         groupChannel: parentEntry?.groupChannel,
         groupSpace: parentEntry?.space,
       });
-    } catch {
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
+        throw error;
+      }
       inheritedGroup = undefined;
     }
   }
@@ -136,6 +146,7 @@ export function buildAgentSessionPatch(params: {
         entry: params.freshEntry,
         storePath: params.storePath,
         agentId: params.sessionAgentId,
+        sessionKey: params.canonicalSessionKey,
       })
     : undefined;
   const freshSkipImplicitExpiry =
@@ -232,11 +243,11 @@ export function buildAgentSessionPatch(params: {
     ...(shouldClearRotatedState || shouldClearTerminalState
       ? {
           status: undefined,
+          lifecycleRunId: undefined,
           startedAt: undefined,
           endedAt: undefined,
           runtimeMs: undefined,
           abortedLastRun: undefined,
-          ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
         }
       : {}),
   };

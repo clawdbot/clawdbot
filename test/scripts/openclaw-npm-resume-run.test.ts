@@ -3,8 +3,8 @@ import {
   resolveOpenClawNpmResumeRun,
   runOpenClawNpmResumeGh,
   validateOpenClawNpmResumeRun,
-} from "../../scripts/openclaw-npm-resume-run.mjs";
-import type { OpenClawNpmResumeValidationInput } from "../../scripts/openclaw-npm-resume-run.mjs";
+} from "../../scripts/openclaw-npm-resume-run.mts";
+import type { OpenClawNpmResumeValidationInput } from "../../scripts/openclaw-npm-resume-run.mts";
 
 const SHA = "a".repeat(40);
 const TAG_OBJECT_SHA = "b".repeat(40);

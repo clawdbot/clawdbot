@@ -20,6 +20,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -53,8 +54,8 @@ export async function resolveAgentDeliveryPhase(params: {
   recipientThreadId?: string | number;
   bestEffortDeliver: boolean;
   runId: string;
-  client: GatewayRequestHandlerOptions["client"];
-  context: GatewayRequestHandlerOptions["context"];
+  client: AgentTurnPrincipal | null;
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
 }): Promise<AgentDeliveryPhaseResult | undefined> {
@@ -110,13 +111,15 @@ export async function resolveAgentDeliveryPhase(params: {
 
   if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
     try {
-      resolvedChannel = (
-        await resolveMessageChannelSelection({ cfg: params.cfgForAgent ?? params.cfg })
-      ).channel;
+      const selection = await resolveMessageChannelSelection({
+        cfg: params.cfgForAgent ?? params.cfg,
+      });
+      resolvedChannel = selection.channel;
       deliveryTargetMode = deliveryTargetMode ?? "implicit";
       effectivePlan = {
         ...deliveryPlan,
         resolvedChannel,
+        plugin: selection.plugin,
         deliveryTargetMode,
         resolvedAccountId,
       };
@@ -148,7 +151,8 @@ export async function resolveAgentDeliveryPhase(params: {
     resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
     deliveryTargetMode = undefined;
     resolvedTo = undefined;
-    effectivePlan = { ...deliveryPlan, resolvedChannel, resolvedTo, deliveryTargetMode };
+    const { plugin: _plugin, ...pluginFreePlan } = deliveryPlan;
+    effectivePlan = { ...pluginFreePlan, resolvedChannel, resolvedTo, deliveryTargetMode };
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
@@ -220,7 +224,7 @@ export async function resolveAgentDeliveryPhase(params: {
       : undefined;
   return {
     activeSessionAgentId,
-    deliveryPlan,
+    deliveryPlan: effectivePlan,
     resolvedChannel,
     deliveryTargetMode,
     resolvedAccountId,

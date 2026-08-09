@@ -7,7 +7,7 @@ import {
   buildTelegramEvidenceManifest,
   renderTelegramEvidenceHtml,
   writeTelegramEvidence,
-} from "../../scripts/mantis/build-telegram-evidence.mjs";
+} from "../../scripts/mantis/build-telegram-evidence.mts";
 import { loadEvidenceManifest } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
 const tempDirs: string[] = [];

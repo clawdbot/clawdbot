@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ป้อนตามคำบอก"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"สด"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เธรด"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"เปิดเธรด"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← ปัด →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กดค้าง"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แตะ"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แตะสองครั้ง"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"แสดงข้อความใหม่"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เริ่ม Live เพื่อดูการสนทนาที่นี่"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ใหม่"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พิมพ์"</string>

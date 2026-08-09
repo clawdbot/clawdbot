@@ -37,6 +37,7 @@ export type AgentRunRequest = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   acpTurnSource?: "manual_spawn";
   internalRuntimeHandoffId?: string;
+  internalExecutionIdentityRetry?: boolean;
   execApprovalFollowupExpectedSessionId?: string;
   internalEvents?: AgentInternalEvent[];
   suppressPromptPersistence?: boolean;
@@ -47,6 +48,7 @@ export type AgentRunRequest = {
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   timeout?: number;
   bestEffortDeliver?: boolean;
   cleanupBundleMcpOnRunEnd?: boolean;

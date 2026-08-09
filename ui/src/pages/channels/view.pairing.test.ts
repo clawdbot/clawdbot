@@ -64,17 +64,22 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
     configUiHints: {},
     configSaving: false,
     configFormDirty: false,
+    showAdvancedSettings: false,
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
     selectedChannel: null,
     wizard: { phase: "idle" },
     wizardMultiselect: [],
+    wizardTextValue: "",
+    wizardSecretVisible: false,
     setupBlockedByDirtyConfig: false,
     onShowDetail: () => undefined,
     onCloseDetail: () => undefined,
     onStartSetup: () => undefined,
     onWizardAnswer: () => undefined,
     onWizardToggleMultiselect: () => undefined,
+    onWizardTextInput: () => undefined,
+    onWizardToggleSecretVisibility: () => undefined,
     onWizardClose: () => undefined,
     onRefresh: () => undefined,
     onPairingRefresh: () => undefined,
@@ -88,6 +93,7 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
     onWhatsAppStart: () => undefined,
     onWhatsAppWait: () => undefined,
     onWhatsAppLogout: () => undefined,
+    onShowAdvancedSettings: () => undefined,
     onConfigPatch: () => undefined,
     onConfigSave: () => undefined,
     onConfigReload: () => undefined,
@@ -134,8 +140,36 @@ describe("channel DM access request views", () => {
     );
 
     expect(container.textContent).toContain("operator.pairing access");
+    expect(container.querySelector(".settings-status--warn")?.textContent).toContain(
+      "operator.pairing access",
+    );
+    expect(container.querySelector(".callout")).toBeNull();
     expect(container.textContent).not.toContain("+15551234567");
     expect(container.textContent).not.toContain("Alice");
+  });
+
+  it("renders notice and error feedback as status rows without nested callouts", () => {
+    const noticeContainer = renderInto(
+      renderChannelPairingQueue(createProps({ pairingNotice: "Request approved" })),
+    );
+    const notice = noticeContainer.querySelector('[role="status"]');
+
+    expect(notice?.textContent).toContain("Request approved");
+    expect(noticeContainer.querySelector(".callout")).toBeNull();
+
+    const errorContainer = renderInto(
+      renderChannelPairingQueue(createProps({ pairingError: "Approval failed" })),
+    );
+    const error = errorContainer.querySelector('[role="alert"]');
+
+    expect(error?.textContent).toContain("Approval failed");
+    expect(errorContainer.querySelector(".callout")).toBeNull();
+  });
+
+  it("uses settings controls for both pairing filters", () => {
+    const container = renderInto(renderChannelPairingQueue(createProps()));
+
+    expect(container.querySelectorAll("select.settings-select")).toHaveLength(2);
   });
 
   it("disables every request action while one mutation is active", () => {

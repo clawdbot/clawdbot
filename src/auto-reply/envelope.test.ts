@@ -64,6 +64,24 @@ describe("formatAgentEnvelope", () => {
     expect(body).toMatch(/\[WebChat Thu 2025-01-02 04:04:05 [^\]]+\] hello/);
   });
 
+  it("falls back to the host timezone for an invalid configured user timezone", () => {
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
+    const options = resolveEnvelopeFormatOptions({
+      agents: { defaults: { userTimezone: "Not/A_Timezone" } },
+    });
+    expect(options.timezone).toBe("local");
+    expect(formatEnvelopeTimestamp(ts, options)).toBe(
+      formatEnvelopeTimestamp(ts, { timezone: "local" }),
+    );
+  });
+
+  it("keeps the UTC fallback for an invalid explicit timezone option", () => {
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
+    expect(formatEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
+      formatEnvelopeTimestamp(ts, { timezone: "utc" }),
+    );
+  });
+
   it("omits timestamps when configured", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4);
     const body = formatAgentEnvelope({

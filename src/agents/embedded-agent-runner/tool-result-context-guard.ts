@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Installs context guards for oversized tool-result histories.
  */
@@ -19,12 +18,11 @@ import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
   getToolResultText,
-  invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
@@ -132,48 +130,24 @@ function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] 
   return changed ? stripped : messages;
 }
 
-function truncateTextToBudget(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-
-  if (maxChars <= 0) {
-    return formatContextLimitTruncationNotice(text.length);
-  }
-
-  let bodyBudget = maxChars;
-  for (let i = 0; i < 4; i += 1) {
-    const estimatedSuffix = formatContextLimitTruncationNotice(
-      Math.max(1, text.length - bodyBudget),
-    );
-    bodyBudget = Math.max(0, maxChars - estimatedSuffix.length);
-  }
-
-  let cutPoint = bodyBudget;
-  const newline = text.lastIndexOf("\n", cutPoint);
-  if (newline > bodyBudget * 0.7) {
-    cutPoint = newline;
-  }
-
-  const prefix = truncateUtf16Safe(text, cutPoint);
-  return prefix + formatContextLimitTruncationNotice(text.length - prefix.length);
-}
-
-function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
+function replaceToolResultContent(
+  msg: AgentMessage,
+  replacement: string | unknown[],
+): AgentMessage {
   const content = (msg as { content?: unknown }).content;
-  const replacementContent =
-    typeof content === "string" || content === undefined ? text : [{ type: "text", text }];
-
   const sourceRecord = msg as unknown as Record<string, unknown>;
   const { details: _details, ...rest } = sourceRecord;
   return {
     ...rest,
-    content: replacementContent,
+    content:
+      typeof replacement === "string" && !(typeof content === "string" || content === undefined)
+        ? [{ type: "text", text: replacement }]
+        : replacement,
   } as AgentMessage;
 }
 
-function estimateBudgetToTextBudget(maxChars: number): number {
-  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO));
+function estimateBudgetToRawChars(maxChars: number): number {
+  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 function truncateToolResultToChars(
@@ -189,88 +163,116 @@ function truncateToolResultToChars(
   if (estimatedChars <= maxChars) {
     return msg;
   }
+  let rawText = getToolResultText(msg);
+  const content = (msg as { content?: unknown }).content;
+  if (Array.isArray(content)) {
+    const isImage = (block: unknown) =>
+      Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image";
+    const isText = (block: unknown): block is { type: "text"; text: string } =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string";
+    const imageCount = content.filter(isImage).length;
+    if (imageCount > 0) {
+      const omissionNotice = (retainedImages: number) => {
+        const omittedImages = imageCount - retainedImages;
+        return (
+          `[${omittedImages} image${omittedImages === 1 ? "" : "s"} omitted from context` +
+          `${retainedImages === 0 ? "; no images fit the context limit" : ""}; rerun with fewer images]`
+        );
+      };
 
-  const rawText = getToolResultText(msg);
+      // Reserve images first; shared multi-block truncation preserves later text
+      // while the existing weighted estimator enforces the unchanged hard cap.
+      for (let retainedImages = imageCount; retainedImages >= 0; retainedImages -= 1) {
+        let seenImages = 0;
+        const retainedContent = content.filter(
+          (block) => !isImage(block) || ++seenImages <= retainedImages,
+        );
+        const notice =
+          retainedImages < imageCount
+            ? [{ type: "text", text: omissionNotice(retainedImages) }]
+            : [];
+        const reservedChars = estimateMessageCharsCached(
+          replaceToolResultContent(msg, [
+            ...retainedContent.filter((block) => !isText(block)),
+            ...notice,
+          ]),
+          cache,
+        );
+        const availableTextChars = maxChars - reservedChars;
+        if (availableTextChars < 0 || (availableTextChars === 0 && retainedContent.some(isText))) {
+          continue;
+        }
+        let textBudget = availableTextChars;
+        while (true) {
+          const bounded = truncateToolResultMessage(
+            replaceToolResultContent(msg, retainedContent),
+            textBudget,
+          );
+          const projectedContent = (bounded as { content: unknown[] }).content;
+          if (
+            retainedContent.some((block, index) => {
+              const projectedBlock = projectedContent[index];
+              return (
+                isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text)
+              );
+            })
+          ) {
+            break;
+          }
+          const projected = replaceToolResultContent(msg, [...projectedContent, ...notice]);
+          const projectedChars = estimateMessageCharsCached(projected, cache);
+          if (projectedChars <= maxChars) {
+            return projected;
+          }
+          const adjustedTextBudget = Math.floor(
+            (textBudget * availableTextChars) / (projectedChars - reservedChars),
+          );
+          if (adjustedTextBudget <= 0 || adjustedTextBudget >= textBudget) {
+            break;
+          }
+          textBudget = adjustedTextBudget;
+        }
+      }
+      rawText = omissionNotice(0) + (rawText ? `\n\n${rawText}` : "");
+    }
+  }
+
   if (!rawText) {
     const omittedChars = Math.max(
       1,
-      estimateBudgetToTextBudget(Math.max(estimatedChars - maxChars, 1)),
+      estimateBudgetToRawChars(Math.max(estimatedChars - maxChars, 1)),
     );
-    return replaceToolResultText(msg, formatContextLimitTruncationNotice(omittedChars));
+    return replaceToolResultContent(msg, formatContextLimitTruncationNotice(omittedChars));
   }
 
-  const textBudget = estimateBudgetToTextBudget(maxChars);
-  if (textBudget <= 0) {
-    return replaceToolResultText(msg, formatContextLimitTruncationNotice(rawText.length));
+  if (maxChars <= 0) {
+    return replaceToolResultContent(msg, formatContextLimitTruncationNotice(rawText.length));
   }
 
-  if (rawText.length <= textBudget) {
-    return replaceToolResultText(msg, rawText);
-  }
-
-  const truncatedText = truncateTextToBudget(rawText, textBudget);
-  return replaceToolResultText(msg, truncatedText);
+  const truncatedText = truncateToolResultText(rawText, maxChars, {
+    minKeepChars: 0,
+    minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
+    preserveImportantTail: false,
+  });
+  return replaceToolResultContent(msg, truncatedText);
 }
 
-function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map(
-    (msg) => ({ ...(msg as unknown as Record<string, unknown>) }) as unknown as AgentMessage,
-  );
-}
-
-function toolResultsNeedTruncation(params: {
+function enforceToolResultLimit(params: {
   messages: AgentMessage[];
   maxSingleToolResultChars: number;
-}): boolean {
+}): AgentMessage[] {
   const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
-  for (const message of messages) {
-    if (!isToolResultMessage(message)) {
-      continue;
-    }
-    if (estimateMessageCharsCached(message, estimateCache) > maxSingleToolResultChars) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function applyMessageMutationInPlace(
-  target: AgentMessage,
-  source: AgentMessage,
-  cache?: MessageCharEstimateCache,
-): void {
-  if (target === source) {
-    return;
-  }
-
-  const targetRecord = target as unknown as Record<string, unknown>;
-  const sourceRecord = source as unknown as Record<string, unknown>;
-  for (const key of Object.keys(targetRecord)) {
-    if (!(key in sourceRecord)) {
-      delete targetRecord[key];
-    }
-  }
-  Object.assign(targetRecord, sourceRecord);
-  if (cache) {
-    invalidateMessageCharsCacheEntry(cache, target);
-  }
-}
-
-function enforceToolResultLimitInPlace(params: {
-  messages: AgentMessage[];
-  maxSingleToolResultChars: number;
-}): void {
-  const { messages, maxSingleToolResultChars } = params;
-  const estimateCache = createMessageCharEstimateCache();
-
-  for (const message of messages) {
-    if (!isToolResultMessage(message)) {
-      continue;
-    }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
-    applyMessageMutationInPlace(message, truncated, estimateCache);
-  }
+  let changed = false;
+  const guarded = messages.map((message) => {
+    const next = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
+    changed ||= next !== message;
+    return next;
+  });
+  return changed ? guarded : messages;
 }
 
 function hasNewToolResultAfterFence(params: {
@@ -476,18 +478,10 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = toolResultsNeedTruncation({
+    const contextMessages = enforceToolResultLimit({
       messages: sourceMessages,
       maxSingleToolResultChars,
-    })
-      ? cloneMessagesForGuard(sourceMessages)
-      : sourceMessages;
-    if (contextMessages !== sourceMessages) {
-      enforceToolResultLimitInPlace({
-        messages: contextMessages,
-        maxSingleToolResultChars,
-      });
-    }
+    });
     if (params.midTurnPrecheck?.enabled) {
       const prePromptMessageCount = Math.max(
         0,

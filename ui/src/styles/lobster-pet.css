@@ -93,25 +93,359 @@ openclaw-lobster-pet[data-dex-complete]::after {
   opacity: 0.62;
 }
 
-/* Abyss: deep-sea navy with bioluminescent eye glow. */
-.lobster-pet--palette-abyss {
-  --lob-glint: #52f5e3;
-}
-
-.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(3),
-.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(4) {
-  filter: drop-shadow(0 0 2.5px rgba(82, 245, 227, 0.9));
-}
-
 /* Lumen: photophore running lights. They pulse and glow in the dark theme;
    daylight (light theme) washes them down to faint speckles. */
 .lobster-pet--palette-lumen {
   --lob-glint: #7ef5dd;
 }
 
+.lobster-pet--palette-magma {
+  --lob-glint: #ff8a5c;
+}
+
+.lobster-pet--palette-oilslick {
+  --lob-glint: #c084fc;
+}
+
+.lobster-pet--palette-aurora {
+  --lob-glint: #3ec9a0;
+}
+
+.lobster-pet--palette-nebula {
+  --lob-glint: #ff9de2;
+}
+
+.lobster-pet--palette-glass {
+  --lob-glint: #bfeaff;
+}
+
+.lobster-pet--palette-geode {
+  --lob-glint: #c9a6ff;
+  --lob-shell2: #241b38;
+}
+
+.lobster-pet--palette-phosphor {
+  --lob-glint: #3fff7d;
+}
+
+.lobster-pet--palette-heisenbug {
+  --lob-glint: #8be9fd;
+}
+
+.lobster-pet--palette-blueprint {
+  --lob-glint: #cfe3ff;
+}
+
+.lobster-pet--palette-clawtron {
+  --lob-glint: #ffb020;
+}
+
+.lobster-pet--palette-selene {
+  --lob-glint: #8fa8ff;
+}
+
+.lobster-pet--palette-eclipse {
+  --lob-glint: #ffd166;
+}
+
+.lobster-pet--palette-sourdough {
+  --lob-glint: #e6bc82;
+}
+
+.lobster-pet--palette-zombie {
+  --lob-glint: #b8d49a;
+}
+
+.lobster-pet--palette-plush {
+  --lob-glint: #ffb59e;
+}
+
+.lobster-pet--palette-disco {
+  --lob-glint: #cbd5e6;
+}
+
+.lobster-pet--palette-eclipse .lobster-pet__svg {
+  filter: drop-shadow(0 0 3px rgba(255, 209, 102, 0.72));
+}
+
+/* The cryptid is always photographed slightly out of focus. Its inner frame
+   drifts independently so the outer breathe/facing transform stays intact. */
+.lobster-pet--palette-cryptid .lobster-pet__svg {
+  filter: blur(1.1px) sepia(0.35) contrast(0.92);
+}
+
+.lob-cryptid-frame {
+  animation: lobster-pet-cryptid-sway 7s ease-in-out infinite alternate;
+  transform-origin: 60px 54px;
+}
+
+@keyframes lobster-pet-cryptid-sway {
+  from {
+    transform: translate(-1.5px, 0.5px) rotate(-0.8deg);
+  }
+  to {
+    transform: translate(1.5px, -0.5px) rotate(0.8deg);
+  }
+}
+
+/* Figlet's glyph art is terminal-light by default; light cards need real
+   ink or the text washes out (mood-style var passthrough carries it). */
+.lobster-pet--palette-ascii {
+  --lob-ascii-ink: #d8dee6;
+}
+
+:root[data-theme-mode="light"] .lobster-pet--palette-ascii {
+  --lob-ascii-ink: #46525e;
+}
+
+.lob-balloon-frame {
+  animation: lobster-pet-balloon-float 4.5s ease-in-out infinite alternate;
+  transform-origin: 60px 54px;
+}
+
+@keyframes lobster-pet-balloon-float {
+  from {
+    transform: translateY(-2px) rotate(-1.5deg);
+  }
+  to {
+    transform: translateY(2px) rotate(1.5deg);
+  }
+}
+
+.lob-portal-ring {
+  animation: lobster-pet-portal-pulse 4s ease-in-out infinite alternate;
+}
+
+.lob-portal-ring--blue {
+  color: #4a9df8;
+  filter: drop-shadow(0 0 4px #4a9df8);
+}
+
+.lob-portal-ring--orange {
+  color: #ff9a2e;
+  filter: drop-shadow(0 0 4px #ff9a2e);
+}
+
+@keyframes lobster-pet-portal-pulse {
+  from {
+    opacity: 0.68;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lob-skeleton__block {
+  animation: lobster-pet-skeleton-shimmer 1.8s ease-in-out infinite alternate;
+  animation-delay: calc(var(--i, 0) * 0.12s);
+}
+
+@keyframes lobster-pet-skeleton-shimmer {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lobster-pet--palette-blueprint .lob-antennae path {
+  stroke: #cfe3ff;
+  stroke-dasharray: 4 3;
+}
+
+/* Magma seams glow like cooling cracks. Offline pets lose both heat and pulse. */
+.lob-magma {
+  filter: drop-shadow(0 0 3px rgba(255, 106, 61, 0.9));
+  animation: lobster-pet-magma 3.8s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-magma {
+  0%,
+  100% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.lob-oilsheen {
+  animation: lobster-pet-oilslick 7s linear infinite;
+}
+
+@keyframes lobster-pet-oilslick {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+/* Aurora bands wander independently; only dark themes add the polar glow. */
+.lob-aurora__band1 {
+  animation: lobster-pet-aurora-east 6.4s ease-in-out infinite alternate;
+}
+
+.lob-aurora__band2 {
+  animation: lobster-pet-aurora-west 7.6s ease-in-out infinite alternate;
+}
+
+:root:not([data-theme-mode="light"]) .lob-aurora {
+  filter: drop-shadow(0 0 3px rgba(78, 207, 166, 0.55));
+}
+
+@keyframes lobster-pet-aurora-east {
+  to {
+    transform: translateX(3px);
+  }
+}
+
+@keyframes lobster-pet-aurora-west {
+  to {
+    transform: translateX(-3px);
+  }
+}
+
+.lobster-pet--palette-nebula .lob-twinkle,
+.lobster-pet--palette-geode .lob-twinkle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lobster-pet-twinkle 2s ease-in-out infinite;
+}
+
+.lobster-pet--palette-glass .lobster-pet__svg {
+  opacity: 0.38;
+}
+
+.lobster-pet--palette-glass .lob-glass-glints {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lobster-pet-twinkle 2s ease-in-out infinite;
+}
+
+/* Flicker owns opacity only. Breathe remains in the list because setting
+   animation here replaces the base svg animation rather than adding to it. */
+.lobster-pet--palette-phosphor .lobster-pet__svg {
+  animation:
+    lobster-pet-breathe 3.4s ease-in-out infinite,
+    lobster-pet-phosphor 3.2s linear infinite;
+  animation-delay: var(--lob-breathe-delay, 0s), 0s;
+}
+
+@keyframes lobster-pet-phosphor {
+  0%,
+  87%,
+  91%,
+  100% {
+    opacity: 1;
+  }
+  88%,
+  90% {
+    opacity: 0.78;
+  }
+}
+
+/* The glitch rides an inner group so its translate never fights the svg's
+   breathe/facing transform. Most of each cycle is intentionally quiet. */
+.lob-heisenbug-frame {
+  animation: lobster-pet-heisenbug 2.8s steps(1, end) infinite;
+}
+
+@keyframes lobster-pet-heisenbug {
+  0%,
+  88%,
+  100% {
+    transform: translate(0);
+  }
+  90% {
+    transform: translate(-2px, 1px);
+  }
+  93% {
+    transform: translate(2px, -1px);
+  }
+  96% {
+    transform: translate(-1px, 0);
+  }
+}
+
+.lob-led {
+  animation: lobster-pet-led 1.6s steps(1, end) infinite;
+}
+
+@keyframes lobster-pet-led {
+  0%,
+  55%,
+  100% {
+    opacity: 1;
+  }
+  56%,
+  72% {
+    opacity: 0.18;
+  }
+}
+
+/* Pixel idle motion stays inside the replacement geometry, preserving the
+   outer svg's facing and breathe transforms. */
+.lob-pixel-frame {
+  animation: lobster-pet-pixel-bob 0.9s steps(2, end) infinite;
+}
+
+@keyframes lobster-pet-pixel-bob {
+  50% {
+    transform: translateY(-1.5px);
+  }
+}
+
 .lob-lumen {
   filter: drop-shadow(0 0 3px rgba(126, 245, 221, 0.9));
   animation: lobster-pet-lumen 3.2s ease-in-out infinite;
+}
+
+.lob-bee-wings ellipse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lobster-pet-bee-wing-left 0.25s ease-in-out infinite alternate;
+}
+
+.lob-bee-wings ellipse:nth-child(2) {
+  animation-name: lobster-pet-bee-wing-right;
+}
+
+@keyframes lobster-pet-bee-wing-left {
+  from {
+    transform: rotate(-30deg);
+  }
+  to {
+    transform: rotate(-16deg);
+  }
+}
+
+@keyframes lobster-pet-bee-wing-right {
+  from {
+    transform: rotate(16deg);
+  }
+  to {
+    transform: rotate(30deg);
+  }
+}
+
+.lob-disco {
+  animation: lobster-pet-disco-sweep 6s linear infinite;
+}
+
+.lob-disco rect:nth-child(3n + 1) {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lobster-pet-twinkle 2.4s ease-in-out infinite;
+}
+
+.lob-disco rect:nth-child(3n + 4) {
+  animation-delay: 0.8s;
+}
+
+@keyframes lobster-pet-disco-sweep {
+  to {
+    filter: hue-rotate(360deg);
+  }
 }
 
 :root[data-theme-mode="light"] .lob-lumen {
@@ -140,6 +474,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation:
     lobster-pet-breathe 3.4s ease-in-out infinite,
     lobster-pet-iridesce 8s linear infinite;
+  animation-delay: var(--lob-breathe-delay, 0s), 0s;
 }
 
 @keyframes lobster-pet-iridesce {
@@ -152,9 +487,12 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* Shiny: saturated sheen plus twinkling sparks. The filter skips retro so
-   the sticker-outline halo survives; sparkle spans carry the show there. */
-.lobster-pet--shiny:not(.lobster-pet--palette-retro) .lobster-pet__svg {
+/* Shiny: saturated sheen plus twinkling sparks. The filter skips both retro
+   palettes so their sticker-outline halos survive; sparkle spans carry the show. */
+.lobster-pet--shiny:not(.lobster-pet--palette-retro):not(.lobster-pet--palette-goldenretro):not(
+    .lobster-pet--palette-cryptid
+  )
+  .lobster-pet__svg {
   filter: saturate(1.3) brightness(1.07);
 }
 
@@ -186,9 +524,34 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Retro: homage to the classic OpenClaw logo — white sticker outline around
    the whole sprite (the halo is two stacked 1px drop-shadows). */
-.lobster-pet--palette-retro .lobster-pet__svg {
+.lobster-pet--palette-retro .lobster-pet__svg,
+.lobster-pet--palette-goldenretro .lobster-pet__svg {
   filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
     drop-shadow(0 0 1.2px #f5f7fa);
+}
+
+.lobster-pet--palette-goldenretro .lobster-pet__svg {
+  animation:
+    lobster-pet-breathe 3.4s ease-in-out infinite,
+    lobster-pet-goldenretro-shimmer 4s ease-in-out infinite;
+  animation-delay: var(--lob-breathe-delay, 0s), 0s;
+}
+
+.lobster-pet--palette-goldenretro .lob-retro-claw-line {
+  stroke: #b8860b;
+}
+
+@keyframes lobster-pet-goldenretro-shimmer {
+  0%,
+  100% {
+    filter: saturate(1) brightness(1) drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+      drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 2px rgba(244, 184, 64, 0.75));
+  }
+  50% {
+    filter: saturate(1.25) brightness(1.12) drop-shadow(0 0 1.2px #f5f7fa)
+      drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+      drop-shadow(0 0 2px rgba(244, 184, 64, 0.75));
+  }
 }
 
 /* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
@@ -203,6 +566,34 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 .lobster-pet--palette-split .lob-antennae path:last-of-type {
   stroke: var(--lob-shell2);
+}
+
+.lobster-pet--palette-notexture .lob-claw--l path {
+  fill: #ff00dc;
+}
+
+.lobster-pet--palette-notexture .lob-claw--r path {
+  fill: #111111;
+}
+
+.lobster-pet--palette-notexture .lob-antennae path:first-of-type {
+  stroke: #ff00dc;
+}
+
+.lobster-pet--palette-notexture .lob-antennae path:last-of-type {
+  stroke: #111111;
+}
+
+.lobster-pet--palette-chimera .lob-claw--l path {
+  fill: var(--lob-chimera-l);
+}
+
+.lobster-pet--palette-chimera .lob-claw--r path {
+  fill: var(--lob-chimera-r);
+}
+
+.lobster-pet--palette-chimera .lob-antennae path {
+  stroke: var(--lob-antennae-color);
 }
 
 /* Disconnected pets lose their eye glow; declared after the palette glints so
@@ -223,6 +614,30 @@ openclaw-lobster-pet[data-dex-complete]::after {
   opacity: 0.4;
 }
 
+.lobster-pet--offline .lob-magma {
+  filter: none;
+  animation: none;
+  opacity: 0.35;
+}
+
+.lobster-pet--offline.lobster-pet--palette-phosphor .lobster-pet__svg {
+  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--lob-breathe-delay, 0s);
+}
+
+.lobster-pet--offline .lob-scanlines {
+  opacity: 0.05;
+}
+
+.lobster-pet--offline .lob-led {
+  animation: none;
+  opacity: 0.2;
+}
+
+.lobster-pet--offline.lobster-pet--palette-eclipse .lobster-pet__svg {
+  filter: none;
+}
+
 .lobster-pet__body {
   position: relative;
   width: 100%;
@@ -240,8 +655,9 @@ openclaw-lobster-pet[data-dex-complete]::after {
   transform-origin: 50% 100%;
 }
 
-.lobster-pet .lobster-pet__svg {
+:where(.lobster-pet) .lobster-pet__svg {
   animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--lob-breathe-delay, 0s);
 }
 
 .lob-claw {
@@ -834,7 +1250,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
     transform: rotate(2.5deg) scaleY(1);
   }
   55% {
-    transform: rotate(0deg) scaleY(0.8);
+    transform: rotate(0deg) scaleY(0.94);
   }
   70% {
     transform: rotate(0deg) scaleY(1.12);
@@ -918,6 +1334,27 @@ openclaw-lobster-pet[data-dex-complete]::after {
   openclaw-lobster-pet .lobster-bottle * {
     animation: none !important;
     transition: none !important;
+  }
+
+  .lob-magma,
+  .lob-oilsheen,
+  .lob-aurora__band1,
+  .lob-aurora__band2,
+  .lob-twinkle,
+  .lob-glass-glints,
+  .lob-heisenbug-frame,
+  .lob-cryptid-frame,
+  .lob-balloon-frame,
+  .lob-portal-ring,
+  .lob-skeleton__block,
+  .lob-led,
+  .lob-pixel-frame,
+  .lob-bee-wings ellipse,
+  .lob-disco,
+  .lob-disco rect,
+  .lobster-pet--palette-goldenretro .lobster-pet__svg,
+  .lobster-pet--palette-phosphor .lobster-pet__svg {
+    animation: none !important;
   }
 }
 
@@ -1070,7 +1507,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   display: inline-block;
   position: relative;
   width: 26px;
-  height: 23px;
+  aspect-ratio: 120 / 105;
 }
 
 .lobsterdex__mini .lobster-pet__svg {
@@ -1091,4 +1528,253 @@ openclaw-lobster-pet[data-dex-complete]::after {
   line-height: 1;
   color: #f4b840;
   pointer-events: none;
+}
+
+.lobsterdex__gallery {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.lobsterdex__open {
+  text-decoration: none;
+}
+
+.lobsterdex__tooltip {
+  display: grid;
+  max-width: 230px;
+  gap: 2px;
+}
+
+.lobsterdex__tooltip strong {
+  color: var(--text-strong);
+}
+
+.lobsterdex__tooltip span {
+  color: var(--muted);
+}
+
+/* ---- Lobsterdex full-page collection ---- */
+
+.lobsterdex-page {
+  display: grid;
+  gap: 22px;
+}
+
+.lobsterdex-page__header {
+  position: relative;
+  display: flex;
+  gap: 20px;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 18px 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(
+      circle at 12% 0%,
+      color-mix(in srgb, var(--accent) 13%, transparent),
+      transparent 42%
+    ),
+    var(--card);
+}
+
+.lobsterdex-page__header::after {
+  position: absolute;
+  right: 18px;
+  bottom: 0;
+  left: 18px;
+  height: 2px;
+  content: "";
+  background: transparent;
+}
+
+.lobsterdex-page__header--complete::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #f4b840 30%,
+    #f9d47a 50%,
+    #f4b840 70%,
+    transparent
+  );
+  opacity: 0.7;
+}
+
+.lobsterdex-page__header h2,
+.lobsterdex-page__card h3,
+.lobsterdex-page__header p,
+.lobsterdex-page__card p {
+  margin: 0;
+}
+
+.lobsterdex-page__header h2 {
+  font-size: 24px;
+  letter-spacing: -0.025em;
+}
+
+.lobsterdex-page__header p {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.lobsterdex-page__count {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--card) 75%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.lobsterdex-page__header--complete .lobsterdex-page__count {
+  border-color: color-mix(in srgb, #f4b840 55%, var(--border));
+  color: color-mix(in srgb, #f4b840 75%, var(--text));
+}
+
+.lobsterdex-page__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.lobsterdex-page__card {
+  position: relative;
+  display: grid;
+  grid-template-rows: 94px auto minmax(42px, auto) auto;
+  gap: 7px;
+  justify-items: center;
+  min-width: 0;
+  padding: 16px 13px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--card) 94%, white 6%), var(--card));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+  text-align: center;
+}
+
+.lobsterdex-page__card--highlight {
+  animation: lobsterdex-card-highlight 2s ease-out;
+}
+
+@keyframes lobsterdex-card-highlight {
+  0%,
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+  }
+  35% {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 0 22px color-mix(in srgb, var(--accent) 34%, transparent);
+  }
+}
+
+.lobsterdex-page__card--unseen {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.lobsterdex-page__sprite.lobster-pet {
+  position: relative;
+  bottom: auto;
+  left: auto;
+  width: 90px;
+  height: auto;
+  aspect-ratio: 120 / 105;
+  align-self: center;
+  transform: none;
+  pointer-events: none;
+}
+
+.lobsterdex-page__card h3 {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.lobsterdex-page__lore {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.lobsterdex-page__date {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.lobsterdex-page__dates {
+  min-height: 18px;
+}
+
+.lobsterdex-page__copy-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+  border: 0;
+  border-radius: 7px;
+  place-items: center;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition:
+    opacity 0.16s ease,
+    color 0.16s ease,
+    background 0.16s ease;
+}
+
+.lobsterdex-page__copy-link svg {
+  width: 15px;
+  height: 15px;
+}
+
+.lobsterdex-page__card:hover .lobsterdex-page__copy-link,
+.lobsterdex-page__card:focus-within .lobsterdex-page__copy-link {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch screens have no hover to reveal the control; keep it tappable in a
+   quieter resting state instead of unreachable. */
+@media (hover: none) {
+  .lobsterdex-page__copy-link {
+    opacity: 0.55;
+    pointer-events: auto;
+  }
+}
+
+.lobsterdex-page__copy-link:hover,
+.lobsterdex-page__copy-link:focus-visible {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 13%, var(--card));
+}
+
+.lobsterdex-page__star {
+  top: -1px;
+  right: 1px;
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
+}
+
+@media (max-width: 540px) {
+  .lobsterdex-page__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .lobsterdex-page__grid {
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  }
 }

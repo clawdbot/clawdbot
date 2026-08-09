@@ -1,3 +1,4 @@
+import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 
 export type CloudSessionCreateParams = SessionCreateParams & {
@@ -26,10 +27,6 @@ const STORAGE_PREFIX = "openclaw.new-session.cloud-recovery.v1:";
 
 function storageKey(gatewayUrl: string, recoveryScope: string): string {
   return `${STORAGE_PREFIX}${gatewayUrl}:${recoveryScope}`;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 const CLOUD_CREATE_STRING_FIELDS = [

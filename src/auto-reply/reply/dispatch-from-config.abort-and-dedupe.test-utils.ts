@@ -417,6 +417,46 @@ describe("dispatchReplyFromConfig", () => {
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-fast-abort");
   });
 
+  it("fast-resolves /approve before acquiring the active session operation", async () => {
+    setNoAbort();
+    mocks.tryFastApproveFromMessage.mockResolvedValue({
+      handled: true,
+      reply: { text: "✅ Approval allow-once submitted." },
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      Body: "/approve exec-1 allow-once",
+      BodyForCommands: "/approve exec-1 allow-once",
+      CommandBody: "/approve exec-1 allow-once",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "approve",
+        body: "/approve exec-1 allow-once",
+      },
+      SessionKey: "agent:main:imessage:direct:peer",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(mocks.tryFastApproveFromMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:imessage:direct:peer",
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "✅ Approval allow-once submitted.",
+    });
+  });
+
   it("reports when a fast abort is rejected during finalization", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
       handled: true,

@@ -1,6 +1,7 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
   resolveStatusRuntimeSnapshot,
@@ -372,6 +373,22 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("requests the typed exporter stability projection", async () => {
+    await resolveStatusGatewayDiagnosticsSafe({
+      config: { gateway: {} },
+      timeoutMs: 4321,
+      gatewayReachable: true,
+      type: "telemetry.exporter",
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "diagnostics.stability",
+      params: { limit: 1000, type: "telemetry.exporter" },
+      timeoutMs: 4321,
+      config: { gateway: {} },
+    });
+  });
+
   it("resolves daemon summaries together", async () => {
     await expect(resolveStatusServiceSummaries()).resolves.toEqual([
       { label: "LaunchAgent" },
@@ -408,5 +425,35 @@ describe("status-runtime-shared", () => {
       loadPluginSecurityCollectors: false,
       plugins: [{ id: "telegram" }],
     });
+  });
+
+  it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+        suppressHealthErrors: true,
+      }),
+    ).resolves.toMatchObject({
+      health: { error: "Error: gateway health probe timed out" },
+      lastHeartbeat: { ok: true },
+    });
+  });
+
+  it("does not suppress failed deep health probes for text status", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+      }),
+    ).rejects.toThrow("gateway health probe timed out");
   });
 });

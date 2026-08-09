@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateAgentIdentityParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolvePublicAgentAvatarSource } from "../../agents/identity-avatar.js";
@@ -11,23 +10,14 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { resolveGatewayAssistantAvatar } from "../assistant-avatar.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get"] = ({
   params,
   respond,
   context,
 }) => {
-  if (!validateAgentIdentityParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid agent.identity.get params: ${formatValidationErrors(
-          validateAgentIdentityParams.errors,
-        )}`,
-      ),
-    );
+  if (!assertValidParams(params, validateAgentIdentityParams, "agent.identity.get", respond)) {
     return;
   }
   const agentIdRaw = normalizeOptionalString(params.agentId) ?? "";
@@ -74,4 +64,8 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
     },
     undefined,
   );
+};
+
+export const agentIdentityHandlers: GatewayRequestHandlers = {
+  "agent.identity.get": agentIdentityGetHandler,
 };

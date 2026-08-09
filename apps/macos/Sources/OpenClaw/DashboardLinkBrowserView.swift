@@ -291,6 +291,7 @@ final class DashboardLinkBrowserView: NSView {
         configuration.websiteDataStore = websiteDataStore
         configuration.preferences.isElementFullscreenEnabled = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.preferences.tabFocusesLinks = true
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.setValue(true, forKey: "drawsBackground")
         return webView

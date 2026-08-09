@@ -20,7 +20,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`,
   `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
@@ -126,8 +126,7 @@ Other surfaces:
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
   Current usage-window providers: Claude (Anthropic), ClawRouter, Copilot
-  (GitHub), DeepSeek, Gemini (Google Gemini CLI), MiniMax, OpenAI, Xiaomi,
-  Xiaomi Token Plan, and z.ai.
+  (GitHub), DeepSeek, MiniMax, OpenAI, Xiaomi, Xiaomi Token Plan, and z.ai.
 
 Usage surfaces normalize common provider-native field aliases before
 display. For OpenAI-family Responses traffic, that includes both
@@ -212,7 +211,7 @@ For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
-[https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
+[https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
 ### Example: keep 1h cache warm with heartbeat
 

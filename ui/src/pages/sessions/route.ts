@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
@@ -55,9 +56,7 @@ async function loadSessionsRoute(
 }
 
 export const page = definePage({
-  id: "sessions",
-  path: "/sessions",
-  aliases: ["/settings/sessions"],
+  ...routePageSpec("sessions"),
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
     return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;

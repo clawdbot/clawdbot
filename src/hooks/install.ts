@@ -434,7 +434,7 @@ async function installHookPackageFromDir(
     };
   }
 
-  const resolvedHooks = [] as string[];
+  const resolvedHooks = new Set<string>();
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
     // Validate both lexical containment and realpath containment so archive
@@ -457,8 +457,12 @@ async function installHookPackageFromDir(
       };
     }
     const hookName = await resolveHookNameFromDir(hookDir);
-    resolvedHooks.push(hookName);
+    if (resolvedHooks.has(hookName)) {
+      return { ok: false, error: `duplicate hook name "${hookName}" in hook package` };
+    }
+    resolvedHooks.add(hookName);
   }
+  const hookNames = [...resolvedHooks];
 
   if (params.inspection === "package-kind") {
     const targetDirResult = resolveHookInstallTargetPath(hookPackId, params.hooksDir);
@@ -468,7 +472,7 @@ async function installHookPackageFromDir(
     return {
       ok: true,
       hookPackId,
-      hooks: resolvedHooks,
+      hooks: hookNames,
       packageKind,
       targetDir: targetDirResult.targetDir,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
@@ -504,7 +508,7 @@ async function installHookPackageFromDir(
     return {
       ok: true,
       hookPackId,
-      hooks: resolvedHooks,
+      hooks: hookNames,
       packageKind,
       targetDir,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
@@ -538,7 +542,7 @@ async function installHookPackageFromDir(
   return {
     ok: true,
     hookPackId,
-    hooks: resolvedHooks,
+    hooks: hookNames,
     packageKind,
     targetDir,
     version: typeof manifest.version === "string" ? manifest.version : undefined,

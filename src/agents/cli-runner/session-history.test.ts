@@ -1,9 +1,10 @@
-// Covers CLI session transcript loading and reseeding boundaries.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+// Covers CLI session transcript loading and reseeding boundaries.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -82,12 +83,7 @@ function createOversizedSessionTranscript(rootDir: string, sessionId: string): s
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectMessageFields(value: unknown, expected: { role: string; content?: unknown }) {
   const message = requireRecord(value, "message");

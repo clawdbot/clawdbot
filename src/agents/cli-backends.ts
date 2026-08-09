@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 import type {
   CliBackendConfig,
+  CliBackendLiveSessionRequirement,
   CliBackendRuntimeArtifactPolicy,
 } from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
@@ -57,10 +58,12 @@ export type ResolvedCliBackend = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -96,10 +99,12 @@ type FallbackCliBackendPolicy = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -162,10 +167,12 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
+    parseJsonlEvent: entry.backend.parseJsonlEvent,
     toolAvailabilityEnforcement: entry.backend.toolAvailabilityEnforcement,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
     runtimeArtifact: entry.backend.runtimeArtifact,
+    liveSessionRequirement: entry.backend.liveSessionRequirement,
   };
 }
 
@@ -359,6 +366,23 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
+/** Resolves setup-safe live-session protocol metadata without normalizing runtime config. */
+export function resolveCliBackendLiveSessionRequirement(
+  provider: string,
+): CliBackendLiveSessionRequirement | null {
+  const normalized = normalizeBackendKey(provider);
+  const entry =
+    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
+    cliBackendsDeps
+      .resolveRuntimeCliBackends()
+      .find((backend) => normalizeBackendKey(backend.id) === normalized);
+  if (!entry) {
+    return null;
+  }
+  const backend = "backend" in entry ? entry.backend : entry;
+  return backend.liveSessionRequirement ?? null;
+}
+
 /** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,
@@ -403,10 +427,12 @@ export function resolveCliBackendConfig(
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
+      parseJsonlEvent: registered.parseJsonlEvent,
       toolAvailabilityEnforcement: resolveToolAvailabilityEnforcement(registered),
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
       runtimeArtifact: registered.runtimeArtifact,
+      liveSessionRequirement: registered.liveSessionRequirement,
     };
   }
 
@@ -436,10 +462,12 @@ export function resolveCliBackendConfig(
     ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
     prepareExecution: fallbackPolicy.prepareExecution,
     resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
+    parseJsonlEvent: fallbackPolicy.parseJsonlEvent,
     toolAvailabilityEnforcement: fallbackPolicy.toolAvailabilityEnforcement,
     nativeToolMode: fallbackPolicy.nativeToolMode,
     sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
     runtimeArtifact: fallbackPolicy.runtimeArtifact,
+    liveSessionRequirement: fallbackPolicy.liveSessionRequirement,
   };
 }
 

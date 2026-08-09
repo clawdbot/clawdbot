@@ -278,6 +278,7 @@ export function resolveQaLabRunPlan(params: {
   scorecardReport: QaScorecardTaxonomyReport;
   defaultChannel?: string;
   supportsChannel?: (channel: string) => boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }): QaLabResolvedRunPlan {
   const { selection } = params;
   const explicitScenarioSelection = selection.scenarioIds !== null;
@@ -314,6 +315,7 @@ export function resolveQaLabRunPlan(params: {
       scenarios: membership.profileScenarios,
       runtimePairLanes: selection.runtimePairLane ? [selection.runtimePairLane] : [],
       runtimePair: selection.runtimePair !== null,
+      resolveModuleFlowSupport: params.resolveModuleFlowSupport,
     });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -367,6 +369,8 @@ export function resolveQaLabRunPlan(params: {
     channelDriver: selection.channelDriver,
     channel: selection.channel,
     defaultChannel: selection.channelDriver === "crabline" ? params.defaultChannel : undefined,
+    supportsChannel: params.supportsChannel,
+    resolveModuleFlowSupport: params.resolveModuleFlowSupport,
   });
   exclusions.push(
     ...profileExecution.excludedScenarios.map(({ scenario, reasons }) => ({
@@ -385,29 +389,7 @@ export function resolveQaLabRunPlan(params: {
       reasons: ["runtimePair requires execution.kind=flow"],
     })),
   );
-  let selectedScenarios = runtimePairSupport.selectedScenarios;
-  if (selection.channelDriver !== "qa-channel" && params.supportsChannel) {
-    const unsupportedChannelScenarios = selectedScenarios.flatMap((scenario) => {
-      const channel = effectiveChannelForScenario({
-        scenario,
-        selection,
-        defaultChannel: params.defaultChannel,
-      });
-      if (scenario.execution.kind !== "flow") {
-        return [];
-      }
-      return channel !== null && !params.supportsChannel?.(channel) ? [{ scenario, channel }] : [];
-    });
-    const unsupportedIds = new Set(unsupportedChannelScenarios.map(({ scenario }) => scenario.id));
-    exclusions.push(
-      ...unsupportedChannelScenarios.map(({ scenario, channel }) => ({
-        scenarioId: scenario.id,
-        executionKind: scenario.execution.kind,
-        reasons: [`unsupported ${selection.channelDriver} channel=${channel}`],
-      })),
-    );
-    selectedScenarios = selectedScenarios.filter((scenario) => !unsupportedIds.has(scenario.id));
-  }
+  const selectedScenarios = runtimePairSupport.selectedScenarios;
   if (membership.categories.length === 0) {
     errors.push(`QA run profile ${selection.profile} did not resolve any taxonomy categories.`);
   }

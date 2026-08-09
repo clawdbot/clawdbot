@@ -2,10 +2,14 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   appendRelayVoiceTranscript,
-  closeClientVoiceSession,
+  closeRelayVoiceSessionRecord,
   createOrResumeClientVoiceSession,
 } from "../talk/client-voice-session.js";
-import type { RelaySession } from "./talk-realtime-relay-state.js";
+import {
+  normalizeVoiceTranscriptText,
+  VOICE_TRANSCRIPT_QUEUE_POLICY,
+} from "../talk/voice-transcript.js";
+import { drainingRelaySessions, type RelaySession } from "./talk-realtime-relay-state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
 
@@ -63,31 +67,33 @@ export function ensureRelayVoiceSession(session: RelaySession): boolean {
   }
 }
 
-const MAX_PENDING_VOICE_TRANSCRIPTS = 40;
-
 export function enqueueRelayVoiceTranscript(
   session: RelaySession,
   role: "user" | "assistant",
   text: string,
-): void {
+): boolean {
+  const normalizedText = normalizeVoiceTranscriptText(text);
+  if (!normalizedText) {
+    return true;
+  }
   if (!session.sessionKey) {
     // Lazy-bound relays hear audio before talk.client.toolCall supplies the session
     // key; buffer bounded finals so the call's opening turns survive the binding.
     // Never-binding callers accept best-effort loss: they had no persistence before.
-    session.pendingVoiceTranscripts.push({ role, text });
-    if (session.pendingVoiceTranscripts.length > MAX_PENDING_VOICE_TRANSCRIPTS) {
+    session.pendingVoiceTranscripts.push({ role, text: normalizedText });
+    if (session.pendingVoiceTranscripts.length > VOICE_TRANSCRIPT_QUEUE_POLICY.maxPendingCount) {
       session.pendingVoiceTranscripts.shift();
     }
-    return;
+    return true;
   }
   if (!ensureRelayVoiceSession(session)) {
-    return;
+    return true;
   }
-  session.voiceTranscriptSeq += 1;
-  const entryId = String(session.voiceTranscriptSeq);
+  const transcriptSeq = session.voiceTranscriptSeq + 1;
+  const entryId = String(transcriptSeq);
   const sessionKey = session.sessionKey;
-  session.voiceTranscriptWrites = session.voiceTranscriptWrites
-    .then(async () => {
+  const admission = session.voiceTranscriptQueue.enqueue(
+    async () => {
       let lastError: unknown;
       for (const delayMs of RELAY_TRANSCRIPT_RETRY_DELAYS_MS) {
         if (delayMs > 0) {
@@ -102,7 +108,7 @@ export function enqueueRelayVoiceTranscript(
             voiceSessionId: session.id,
             entryId,
             role,
-            text,
+            text: normalizedText,
             ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
           });
           return;
@@ -111,21 +117,37 @@ export function enqueueRelayVoiceTranscript(
         }
       }
       throw lastError;
-    })
-    .catch((error: unknown) => {
-      logRelayVoiceFailure(session, "realtime relay transcript append failed", error);
-    });
+    },
+    { weight: normalizedText.length },
+  );
+  if (!admission.accepted) {
+    if (admission.reason === "overflow") {
+      session.failSession(VOICE_TRANSCRIPT_QUEUE_POLICY.overflowMessage);
+    }
+    return false;
+  }
+  session.voiceTranscriptSeq = transcriptSeq;
+  void admission.completion.catch((error: unknown) => {
+    logRelayVoiceFailure(session, "realtime relay transcript append failed", error);
+  });
+  return true;
 }
 
-export function closeRelayVoiceSession(session: RelaySession): void {
+export function closeRelayVoiceSession(session: RelaySession): Promise<void> {
+  if (session.voiceSessionClose) {
+    return session.voiceSessionClose;
+  }
+  session.voiceTranscriptQueue.seal();
   if (!session.sessionKey || !ensureRelayVoiceSession(session)) {
-    return;
+    session.voiceSessionClose = Promise.resolve();
+    return session.voiceSessionClose;
   }
   const sessionKey = session.sessionKey;
-  void session.voiceTranscriptWrites
+  session.voiceSessionClose = session.voiceTranscriptQueue
+    .flush()
     .then(async () => {
       const config = session.voiceConfig ?? session.context.getRuntimeConfig();
-      await closeClientVoiceSession({
+      await closeRelayVoiceSessionRecord({
         agentId: resolveRelayAgentId(session, sessionKey),
         sessionKey,
         voiceSessionId: session.id,
@@ -135,4 +157,9 @@ export function closeRelayVoiceSession(session: RelaySession): void {
     .catch((error: unknown) => {
       logRelayVoiceFailure(session, "realtime relay voice session close failed", error);
     });
+  drainingRelaySessions.add(session);
+  void session.voiceSessionClose.finally(() => {
+    drainingRelaySessions.delete(session);
+  });
+  return session.voiceSessionClose;
 }

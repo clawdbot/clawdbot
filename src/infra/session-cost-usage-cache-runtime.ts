@@ -13,11 +13,10 @@ import {
   resolveUsageCostAgentDir,
   resolveUsageCostCacheDatabasePath,
   resolveUsageCostPricingFingerprint,
-  type UsageCostRefreshResult,
 } from "./session-cost-usage-aggregation.js";
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
 import {
-  listUsageCountedTranscriptFiles,
+  listUsageCountedTranscriptStats,
   resolveUsageCostTranscriptFile,
   USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
 } from "./session-cost-usage-collection.js";
@@ -73,7 +72,7 @@ export async function loadCostUsageSummary(params: {
   });
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  const files = await listUsageCountedTranscriptFiles(params.agentId);
+  const files = await listUsageCountedTranscriptStats(params.agentId);
   return buildCostUsageSummaryFromRollups({
     rollups,
     files,
@@ -85,17 +84,6 @@ export async function loadCostUsageSummary(params: {
       usageCostRefreshes.has(databasePath) ||
       isSessionCostUsageRefreshRunning(params.agentId, databasePath),
   });
-}
-
-async function refreshCostUsageCache(params: {
-  config?: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  maxFiles?: number;
-  sessionFiles?: string[];
-  startMs?: number;
-}): Promise<UsageCostRefreshResult> {
-  return await refreshCostUsageCacheForAgent(params);
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -111,19 +99,19 @@ export async function loadCostUsageSummaryFromCache(params: {
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
   let rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  let files = await listUsageCountedTranscriptFiles(params.agentId);
+  let files = await listUsageCountedTranscriptStats(params.agentId);
   const staleFiles = getUsageCostStaleRollupFiles({ rollups, files });
   if (params.requestRefresh !== false && staleFiles.length > 0) {
     const cachedFiles = countUsableUsageCostRollups({ rollups, files });
     if (params.refreshMode === "sync-when-empty" && cachedFiles === 0) {
-      const result = await refreshCostUsageCache({
+      const result = await refreshCostUsageCacheForAgent({
         config: params.config,
         agentId: params.agentId,
         agentDir,
         startMs: params.startMs,
       });
       rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-      files = await listUsageCountedTranscriptFiles(params.agentId);
+      files = await listUsageCountedTranscriptStats(params.agentId);
       if (result === "refreshed" && getUsageCostStaleRollupFiles({ rollups, files }).length > 0) {
         requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
       }

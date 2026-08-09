@@ -39,12 +39,34 @@ const POWERSHELL_COMMAND_FLAGS = [
 ];
 const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
 const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
+const POWERSHELL_NO_PROFILE_FLAGS = new Set(expandPowerShellSwitchPrefixForms("noprofile", "nop"));
+const POWERSHELL_UNREVIEWED_STARTUP_FLAGS = new Set([
+  ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
+  ...expandPowerShellSwitchPrefixForms("configurationname", "config"),
+  ...expandPowerShellSwitchPrefixForms("custompipename", "cus"),
+  ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
+  ...expandPowerShellSwitchForms(["ea"]),
+  ...expandPowerShellSwitchPrefixForms("interactive", "i"),
+  ...expandPowerShellSwitchPrefixForms("login", "l"),
+  ...expandPowerShellSwitchPrefixForms("namedpipeservermode", "nam"),
+  ...expandPowerShellSwitchPrefixForms("noexit", "noe"),
+  ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
+  ...expandPowerShellSwitchForms(["pscf"]),
+  ...expandPowerShellSwitchPrefixForms("servermode", "s"),
+  ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("socketservermode", "so"),
+  ...expandPowerShellSwitchPrefixForms("sshservermode", "ssh"),
+  ...expandPowerShellSwitchPrefixForms("v2socketservermode", "v2so"),
+]);
+const POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS = new Set([
+  ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
+  ...expandPowerShellSwitchPrefixForms("ec", "e"),
+]);
 
 const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
   ...POWERSHELL_FILE_FLAGS,
-  ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
-  ...expandPowerShellSwitchPrefixForms("ec", "e"),
+  ...POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS,
 ]);
 
 const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
@@ -64,7 +86,7 @@ const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("version", "v"),
   ...expandPowerShellSwitchPrefixForms("windowstyle", "w"),
   ...expandPowerShellSwitchPrefixForms("workingdirectory", "w"),
-  ...expandPowerShellSwitchForms(["ea", "ep", "if", "of", "wd"]),
+  ...expandPowerShellSwitchForms(["ea", "ep", "if", "of", "pscf", "wd"]),
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
@@ -256,6 +278,40 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   });
 }
 
+/** Detect default PowerShell profiles or OS login startup before a command. */
+export function hasPowerShellProfileStartupBeforeInlineCommand(
+  argv: string[],
+  valueTokenIndex: number | null = resolvePowerShellInlineCommandMatch(argv).valueTokenIndex,
+): boolean {
+  let profilesDisabled = false;
+  // Positional scripts and bare sessions have no reviewable inline payload;
+  // never bind mutable script contents or future stdin to a command approval.
+  const commandFlagIndex = valueTokenIndex === null ? argv.length : valueTokenIndex - 1;
+  for (let index = 1; index < commandFlagIndex;) {
+    const rawToken = argv[index] ?? "";
+    if (rawToken === "--") {
+      return true;
+    }
+    if (rawToken === "-") {
+      return true;
+    }
+    if (!isPowerShellOptionToken(rawToken)) {
+      return true;
+    }
+    const token = normalizeLowercaseStringOrEmpty(rawToken);
+    if (POWERSHELL_UNREVIEWED_STARTUP_FLAGS.has(token)) {
+      return true;
+    }
+    if (POWERSHELL_NO_PROFILE_FLAGS.has(token)) {
+      profilesDisabled = true;
+    }
+    index += POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token) ? 2 : 1;
+  }
+
+  // A switch-only PowerShell invocation remains an interactive stdin reader.
+  return valueTokenIndex === null || !profilesDisabled;
+}
+
 /** Return true when a PowerShell flag consumes the rest of argv as command text. */
 export function isPowerShellInlineRestCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
@@ -264,6 +320,11 @@ export function isPowerShellInlineRestCommandFlag(token: string): boolean {
 /** Return true when a PowerShell flag treats the next token as script file text. */
 export function isPowerShellInlineFileCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+/** Return true when a PowerShell flag executes an opaque encoded command. */
+export function isPowerShellInlineEncodedCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
 /** Detect POSIX interactive startup before an inline command flag. */

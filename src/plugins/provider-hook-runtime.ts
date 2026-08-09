@@ -22,6 +22,7 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "./runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -34,7 +35,6 @@ import type {
 
 let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
-const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -43,7 +43,6 @@ type ProviderRuntimePluginLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
@@ -76,7 +75,6 @@ function resolveProviderRuntimePluginCacheKey(
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
     pluginMetadata:
       params.pluginMetadataSnapshot?.manifestRegistry.plugins
         .map((plugin) => plugin.id)
@@ -126,6 +124,17 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
   apiOwnerHint?: string;
 }): ProviderPlugin | undefined {
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedPlugin = scopedRegistry
+    ? findProviderRuntimePluginInRegistry({
+        registry: scopedRegistry,
+        provider: params.lookup.provider,
+        apiOwnerHint: params.apiOwnerHint,
+      })
+    : undefined;
+  if (scopedPlugin) {
+    return scopedPlugin;
+  }
   const activeRegistry = getLoadedRuntimePluginRegistry({
     env: params.lookup.env,
     workspaceDir: params.lookup.workspaceDir,
@@ -139,23 +148,6 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     : undefined;
   if (activePlugin) {
     return activePlugin;
-  }
-  for (const surface of PREPARED_PROVIDER_RUNTIME_SURFACES) {
-    const registry = getLoadedRuntimePluginRegistry({
-      env: params.lookup.env,
-      workspaceDir: params.lookup.workspaceDir,
-      surface,
-    });
-    const plugin = registry
-      ? findProviderRuntimePluginInRegistry({
-          registry,
-          provider: params.lookup.provider,
-          apiOwnerHint: params.apiOwnerHint,
-        })
-      : undefined;
-    if (plugin) {
-      return plugin;
-    }
   }
   return undefined;
 }
@@ -195,7 +187,6 @@ export function resolveProviderPluginsForHooks(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
@@ -206,7 +197,6 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     skipIfLoadInFlight: true,
   });
 }
@@ -237,7 +227,6 @@ export function resolveProviderRuntimePlugin(
       providerRefs,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
     return undefined;
@@ -255,7 +244,6 @@ export function resolveProviderRuntimePlugin(
         providerRefs: lookupScope.providerRefs,
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
-        bundledProviderVitestCompat: params.bundledProviderVitestCompat,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
         if (apiOwnerHint) {
@@ -357,7 +345,6 @@ export function ensureProviderRuntimePluginHandle(
       workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
       env: params.env ?? params.runtimeHandle?.env,
       applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-      bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
       pluginMetadataSnapshot:
         params.pluginMetadataSnapshot ?? params.runtimeHandle?.pluginMetadataSnapshot,
     });

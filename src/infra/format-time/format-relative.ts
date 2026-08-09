@@ -7,6 +7,7 @@
  * - `formatTimeAgo(durationMs)` — format a duration as "5m ago" / "5m" (for known elapsed time)
  * - `formatRelativeTimestamp(epochMs)` — format an epoch timestamp relative to now (handles future)
  */
+import { bucketRelativeTimeMs } from "@openclaw/normalization-core";
 
 type FormatTimeAgoOptions = {
   /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
@@ -79,24 +80,18 @@ export function formatRelativeTimestamp(
   const absDiff = Math.abs(diff);
   const isPast = diff >= 0;
 
-  const sec = Math.round(absDiff / 1000);
-  if (sec < 60) {
+  const { value, unit } = bucketRelativeTimeMs(absDiff);
+  if (unit === "second") {
     return isPast ? "just now" : "in <1m";
   }
-
-  const min = Math.round(sec / 60);
-  if (min < 60) {
-    return isPast ? `${min}m ago` : `in ${min}m`;
+  if (unit === "minute") {
+    return isPast ? `${value}m ago` : `in ${value}m`;
   }
-
-  const hr = Math.round(min / 60);
-  if (hr < 48) {
-    return isPast ? `${hr}h ago` : `in ${hr}h`;
+  if (unit === "hour") {
+    return isPast ? `${value}h ago` : `in ${value}h`;
   }
-
-  const day = Math.round(hr / 24);
-  if (!options?.dateFallback || day <= 7) {
-    return isPast ? `${day}d ago` : `in ${day}d`;
+  if (!options?.dateFallback || value <= 7) {
+    return isPast ? `${value}d ago` : `in ${value}d`;
   }
 
   // Fall back to short date display for old timestamps
@@ -107,6 +102,6 @@ export function formatRelativeTimestamp(
       ...(options.timezone ? { timeZone: options.timezone } : {}),
     }).format(new Date(timestampMs));
   } catch {
-    return `${day}d ago`;
+    return `${value}d ago`;
   }
 }

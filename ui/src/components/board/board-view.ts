@@ -78,6 +78,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
   @property({ attribute: false }) observer?: BoardObserverContext;
+  @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
 
@@ -137,7 +138,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (changed.has("activeTabId")) {
       this.focusName = "";
     }
-    if (this.gesture && (changed.has("snapshot") || changed.has("activeTabId"))) {
+    if (
+      this.gesture &&
+      (changed.has("snapshot") ||
+        changed.has("activeTabId") ||
+        (changed.has("active") && !this.active))
+    ) {
       this.cancelGesture();
     }
   }
@@ -297,7 +303,13 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     widget: BoardViewWidget,
     event: PointerEvent,
   ): void {
-    if (!this.canMutate || event.button !== 0 || this.gesture || this.mutationPending) {
+    if (
+      !this.active ||
+      !this.canMutate ||
+      event.button !== 0 ||
+      this.gesture ||
+      this.mutationPending
+    ) {
       return;
     }
     const snapshot = this.snapshot;
@@ -656,6 +668,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
                 .observer=${this.observer}
+                .active=${this.active}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}

@@ -1,6 +1,7 @@
 // Openclaw Cross Os Release Checks tests cover openclaw cross os release checks script behavior.
 import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
+  acquireManagedGatewayInstallerHostLease,
   buildCrossOsDiscordRoundtripNonces,
   buildCrossOsReleaseAgentSessionId,
   buildCrossOsReleaseSmokePluginAllowlist,
@@ -31,6 +33,7 @@ import {
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
   appendLatestNpmDebugLogTail,
+  assertManagedGatewayInstallerHostAvailable,
   buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
   buildInstallerSmokeScript,
@@ -39,6 +42,7 @@ import {
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
   dashboardHtmlMarkerStatus,
+  type GatewayHandle,
   CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
@@ -65,6 +69,7 @@ import {
   parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
   parseArgs,
+  parseManagedGatewayServiceInstalled,
   packageHasScript,
   readInstalledVersion,
   readBoundedCrossOsResponseText,
@@ -79,6 +84,8 @@ import {
   resolveInstalledPackageRootFromCliPath,
   resolveNpmPackTarballFileName,
   resolveNpmDebugLogDirs,
+  restartManualGatewayForDiscordSmoke,
+  resolveManagedGatewayInstallerEnv,
   resolvePackDestinationTarball,
   resolvePackageCandidatePackCommand,
   resolveProviderConfig,
@@ -104,9 +111,10 @@ import {
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
+  waitForGatewayWithStartupMigrationRestart,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -177,7 +185,159 @@ async function withTempDirAsync<T>(prefix: string, run: (dir: string) => Promise
   }
 }
 
+function createGatewayHandleFixture(params: {
+  dir: string;
+  name: string;
+  beforeLaunch?: string;
+  afterLaunch?: string;
+  appendOnWaitForClose?: string;
+  appendOnClose?: string;
+  exited: boolean;
+}) {
+  const logPath = join(params.dir, `${params.name}.log`);
+  const beforeLaunch = params.beforeLaunch ?? "";
+  writeFileSync(logPath, beforeLaunch);
+  if (params.afterLaunch) {
+    appendFileSync(logPath, params.afterLaunch);
+  }
+  const state = { closeCalls: 0, waitForCloseCalls: 0, order: [] as string[] };
+  const handle: GatewayHandle = {
+    child: {
+      exitCode: params.exited ? 1 : null,
+      signalCode: null,
+    } as GatewayHandle["child"],
+    closeLog: async () => {
+      state.closeCalls += 1;
+      state.order.push("closeLog");
+      if (params.appendOnClose) {
+        appendFileSync(logPath, params.appendOnClose);
+      }
+    },
+    launchLogOffset: Buffer.byteLength(beforeLaunch),
+    logPath,
+    waitForClose: async () => {
+      state.waitForCloseCalls += 1;
+      state.order.push("waitForClose");
+      if (params.appendOnWaitForClose) {
+        appendFileSync(logPath, params.appendOnWaitForClose);
+      }
+    },
+  };
+  return { handle, state };
+}
+
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("uses the host account identity for managed installer services", () => {
+    const env = resolveManagedGatewayInstallerEnv({
+      env: {
+        HOME: "C:\\temp\\lane",
+        USERPROFILE: "C:\\temp\\lane",
+        APPDATA: "C:\\temp\\lane\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\temp\\lane\\AppData\\Local",
+        OPENCLAW_HOME: "C:\\temp\\lane",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: "C:\\temp\\lane\\.openclaw",
+        OPENCLAW_CONFIG_PATH: "C:\\temp\\lane\\.openclaw\\openclaw.json",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (work)",
+        OPENCLAW_TASK_SCRIPT_NAME: "work.cmd",
+        OPENCLAW_TASK_SCRIPT: "C:\\temp\\work.cmd",
+        OPENCLAW_SERVICE_KIND: "node",
+        OpenClaw_Home: "C:\\temp\\case-variant",
+        openclaw_config_path: "C:\\temp\\case-variant\\openclaw.json",
+        OPENAI_API_KEY: "secret",
+      },
+      enabled: true,
+      accountHome: "C:\\Users\\runneradmin",
+      hostEnv: {
+        APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
+      },
+    });
+
+    expect(env).toMatchObject({
+      HOME: "C:\\Users\\runneradmin",
+      USERPROFILE: "C:\\Users\\runneradmin",
+      APPDATA: "C:\\Users\\runneradmin\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
+      OPENAI_API_KEY: "secret",
+    });
+    expect(env.OPENCLAW_HOME).toBeUndefined();
+    expect(env.OPENCLAW_PROFILE).toBeUndefined();
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
+    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBeUndefined();
+    expect(env.OPENCLAW_TASK_SCRIPT).toBeUndefined();
+    expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(
+      Object.keys(env).filter((key) =>
+        [
+          "OPENCLAW_HOME",
+          "OPENCLAW_PROFILE",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WINDOWS_TASK_NAME",
+          "OPENCLAW_TASK_SCRIPT_NAME",
+          "OPENCLAW_TASK_SCRIPT",
+          "OPENCLAW_SERVICE_KIND",
+        ].includes(key.toUpperCase()),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps isolated installer state when no managed service is used", () => {
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-installer" };
+
+    expect(resolveManagedGatewayInstallerEnv({ env, enabled: false })).toBe(env);
+  });
+
+  it("fails closed before borrowing an occupied managed-service account", () => {
+    expect(() =>
+      assertManagedGatewayInstallerHostAvailable({
+        accountHome: "C:\\Users\\runneradmin",
+        serviceInstalled: true,
+        pathExists: () => false,
+      }),
+    ).toThrow(/pristine host account/);
+    expect(() =>
+      assertManagedGatewayInstallerHostAvailable({
+        accountHome: "C:\\Users\\runneradmin",
+        serviceInstalled: false,
+        pathExists: (path) => path.endsWith(".openclaw"),
+      }),
+    ).toThrow(/pristine host account/);
+  });
+
+  it("requires a structured clean-service preflight result", () => {
+    expect(
+      parseManagedGatewayServiceInstalled({
+        exitCode: 0,
+        stdout: JSON.stringify({ service: { loaded: false } }),
+        stderr: "",
+      }),
+    ).toBe(false);
+    expect(() =>
+      parseManagedGatewayServiceInstalled({
+        exitCode: 1,
+        stdout: "",
+        stderr: "status failed",
+      }),
+    ).toThrow(/exit code 1/);
+  });
+
+  it("holds an exclusive managed-service host lease until release", () => {
+    withTempDir("openclaw-managed-host-", (accountHome) => {
+      const lease = acquireManagedGatewayInstallerHostLease(accountHome);
+
+      expect(() => acquireManagedGatewayInstallerHostLease(accountHome)).toThrow(
+        /exclusive access/,
+      );
+      lease.release();
+      const replacement = acquireManagedGatewayInstallerHostLease(accountHome);
+      replacement.release();
+    });
+  });
+
   it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
     expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
     expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
@@ -356,6 +516,232 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         requireRpc: false,
       }),
     ).toEqual(["gateway", "status"]);
+  });
+
+  it("restarts an exited manual gateway once after the exact startup migration refusal", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-restart-", async (dir) => {
+      const refusal =
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.";
+      const first = createGatewayHandleFixture({
+        dir,
+        name: "first",
+        appendOnWaitForClose: refusal,
+        exited: true,
+      });
+      const second = createGatewayHandleFixture({
+        dir,
+        name: "second",
+        exited: false,
+      });
+      const holder = { current: first.handle as GatewayHandle | null };
+      const firstError = new Error("first gateway exited");
+      let restartCalls = 0;
+
+      await waitForGatewayWithStartupMigrationRestart({
+        gatewayHolder: holder,
+        restartGateway: async () => {
+          restartCalls += 1;
+          return second.handle;
+        },
+        waitUntilReady: async (gateway) => {
+          if (gateway === first.handle) {
+            throw firstError;
+          }
+        },
+      });
+
+      expect(restartCalls).toBe(1);
+      expect(first.state.waitForCloseCalls).toBe(1);
+      expect(first.state.closeCalls).toBe(1);
+      expect(first.state.order).toEqual(["waitForClose", "closeLog"]);
+      expect(holder.current).toBe(second.handle);
+    });
+  });
+
+  it.each([
+    {
+      name: "generic child exit",
+      beforeLaunch: "",
+      afterLaunch: "gateway crashed before binding\n",
+    },
+    {
+      name: "paraphrased refusal",
+      beforeLaunch: "",
+      afterLaunch:
+        "OpenClaw plugin migration inputs changed during startup convergence: refusing to report the gateway ready.\n",
+    },
+    {
+      name: "stale refusal from an earlier launch",
+      beforeLaunch:
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n",
+      afterLaunch: "gateway crashed before binding\n",
+    },
+  ])("does not restart after $name", async ({ beforeLaunch, afterLaunch }) => {
+    await withTempDirAsync("openclaw-cross-os-gateway-no-restart-", async (dir) => {
+      const gateway = createGatewayHandleFixture({
+        dir,
+        name: "gateway",
+        beforeLaunch,
+        afterLaunch,
+        exited: true,
+      });
+      const holder = { current: gateway.handle as GatewayHandle | null };
+      const startupError = new Error("gateway exited");
+      let restartCalls = 0;
+
+      await expect(
+        waitForGatewayWithStartupMigrationRestart({
+          gatewayHolder: holder,
+          restartGateway: async () => {
+            restartCalls += 1;
+            return gateway.handle;
+          },
+          waitUntilReady: async () => {
+            throw startupError;
+          },
+        }),
+      ).rejects.toBe(startupError);
+
+      expect(restartCalls).toBe(0);
+      expect(gateway.state.waitForCloseCalls).toBe(1);
+      expect(gateway.state.closeCalls).toBe(1);
+      expect(holder.current).toBe(gateway.handle);
+    });
+  });
+
+  it("does not restart a live gateway after a readiness failure", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-live-", async (dir) => {
+      const gateway = createGatewayHandleFixture({
+        dir,
+        name: "gateway",
+        afterLaunch:
+          "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n",
+        exited: false,
+      });
+      const holder = { current: gateway.handle as GatewayHandle | null };
+      const readinessError = new Error("gateway readiness timed out");
+      let restartCalls = 0;
+
+      await expect(
+        waitForGatewayWithStartupMigrationRestart({
+          gatewayHolder: holder,
+          restartGateway: async () => {
+            restartCalls += 1;
+            return gateway.handle;
+          },
+          waitUntilReady: async () => {
+            throw readinessError;
+          },
+        }),
+      ).rejects.toBe(readinessError);
+
+      expect(restartCalls).toBe(0);
+      expect(gateway.state.waitForCloseCalls).toBe(0);
+      expect(gateway.state.closeCalls).toBe(0);
+    });
+  });
+
+  it("fails after a second startup migration refusal without looping", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-second-refusal-", async (dir) => {
+      const refusal =
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n";
+      const first = createGatewayHandleFixture({
+        dir,
+        name: "first",
+        afterLaunch: refusal,
+        exited: true,
+      });
+      const second = createGatewayHandleFixture({
+        dir,
+        name: "second",
+        afterLaunch: refusal,
+        exited: true,
+      });
+      const holder = { current: first.handle as GatewayHandle | null };
+      const secondError = new Error("second gateway exited");
+      let restartCalls = 0;
+
+      await expect(
+        waitForGatewayWithStartupMigrationRestart({
+          gatewayHolder: holder,
+          restartGateway: async () => {
+            restartCalls += 1;
+            return second.handle;
+          },
+          waitUntilReady: async (gateway) => {
+            if (gateway === first.handle) {
+              throw new Error("first gateway exited");
+            }
+            throw secondError;
+          },
+        }),
+      ).rejects.toBe(secondError);
+
+      expect(restartCalls).toBe(1);
+      expect(first.state.waitForCloseCalls).toBe(1);
+      expect(first.state.closeCalls).toBe(1);
+      expect(second.state.waitForCloseCalls).toBe(1);
+      expect(second.state.closeCalls).toBe(1);
+      expect(holder.current).toBe(second.handle);
+    });
+  });
+
+  it("routes the Discord manual relaunch through the bounded retry wait", async () => {
+    await withTempDirAsync("openclaw-cross-os-discord-gateway-", async (dir) => {
+      const previous = createGatewayHandleFixture({
+        dir,
+        name: "previous",
+        exited: false,
+      });
+      const started = createGatewayHandleFixture({
+        dir,
+        name: "started",
+        exited: false,
+      });
+      const lane = {
+        name: "installer-fresh",
+        rootDir: dir,
+        prefixDir: join(dir, "prefix"),
+        homeDir: join(dir, "home"),
+        stateDir: join(dir, "state"),
+        appDataDir: join(dir, "app-data"),
+        gatewayPort: 18_789,
+        phaseTimings: [],
+      };
+      const gatewayHolder = { current: previous.handle as GatewayHandle | null };
+      const gatewayLogPath = join(dir, "discord-gateway.log");
+      const statusLogPath = join(dir, "discord-status.log");
+      const calls: Array<{ name: string; params: unknown }> = [];
+
+      await restartManualGatewayForDiscordSmoke({
+        lane,
+        cliPath: join(dir, "openclaw"),
+        env: { OPENCLAW_HOME: lane.homeDir },
+        gatewayHolder,
+        gatewayLogPath,
+        statusLogPath,
+        operations: {
+          stopGateway: async (gateway) => {
+            calls.push({ name: "stop", params: gateway });
+          },
+          startGateway: async (params) => {
+            calls.push({ name: "start", params });
+            return started.handle;
+          },
+          waitForGateway: async (params) => {
+            calls.push({ name: "wait", params });
+          },
+        },
+      });
+
+      expect(gatewayHolder.current).toBe(started.handle);
+      expect(calls.map((call) => call.name)).toEqual(["stop", "start", "wait"]);
+      expect(calls[2]?.params).toMatchObject({
+        gatewayHolder,
+        gatewayLogPath,
+        logPath: statusLogPath,
+      });
+    });
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
@@ -580,6 +966,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
+    expect(resolveProviderConfig("openai", {})?.requiredCompanionPackages).toEqual([
+      "@openclaw/codex",
+    ]);
+    expect(resolveProviderConfig("anthropic", {})?.requiredCompanionPackages).toEqual([]);
+    expect(resolveProviderConfig("minimax", {})?.requiredCompanionPackages).toEqual([]);
   });
 
   it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {
@@ -604,7 +995,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "bonjour",
       "browser",
       "device-pair",
-      "phone-control",
       "talk-voice",
     ]);
     expect(allowlist).not.toContain("memory-core");
@@ -1001,12 +1391,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {
-    expect(buildWindowsPathBootstrapScript()).toContain("@($userPath, $machinePath, $env:Path)");
+    expect(buildWindowsPathBootstrapScript()).toContain("@($env:Path, $userPath, $machinePath)");
     const persistedOnlyScript = buildWindowsPathBootstrapScript({
       includeCurrentProcessPath: false,
     });
     expect(persistedOnlyScript).toContain("@($userPath, $machinePath)");
-    expect(persistedOnlyScript).not.toContain("@($userPath, $machinePath, $env:Path)");
+    expect(persistedOnlyScript).not.toContain("@($env:Path, $userPath, $machinePath)");
   });
 
   it("prefers the freshly installed Windows CLI under npm's prefix before PATH lookup", () => {
@@ -1413,6 +1803,115 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(log).toContain("err-old-err-recent");
     });
   });
+
+  it("keeps multibyte command output and error tails within the byte budget", async () => {
+    await withTempDirAsync("openclaw-cross-os-run-command-utf8-tail-", async (dir) => {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        ["-e", "process.stdout.write('a😀bbbb'); process.stderr.write('a😀cccc');"],
+        { cwd: dir, env: process.env, logPath, maxOutputBytes: 6 },
+      );
+
+      expect(result.stdout).toBe("bbbb");
+      expect(result.stderr).toBe("cccc");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(6);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(6);
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("a😀bbbb");
+      expect(log).toContain("a😀cccc");
+    });
+  });
+
+  it("keeps rolling multibyte command output and error tails within the byte budget", async () => {
+    await withTempDirAsync("openclaw-cross-os-run-command-utf8-rolling-", async (dir) => {
+      const logPath = join(dir, "command.log");
+      const script = [
+        "process.stdout.write('a😀');",
+        "process.stderr.write('a😀');",
+        "setTimeout(() => { process.stdout.write('bbbb'); process.stderr.write('cccc'); }, 25);",
+      ].join("");
+      const result = await runCommand(process.execPath, ["-e", script], {
+        cwd: dir,
+        env: process.env,
+        logPath,
+        maxOutputBytes: 7,
+      });
+
+      expect(result.stdout).toBe("bbbb");
+      expect(result.stderr).toBe("cccc");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(7);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(7);
+    });
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "preserves a UTF-8 character split across real %s chunks and its full log",
+    async (stream) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-split-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const script = [
+          `process.${stream}.write('A');`,
+          `process.${stream}.write(Buffer.from([0xf0, 0x9f]));`,
+          `setTimeout(() => { process.${stream}.write(Buffer.from([0x98, 0x80])); process.${stream}.write('Z'); }, 25);`,
+        ].join("");
+        const result = await runCommand(process.execPath, ["-e", script], {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 64,
+        });
+
+        expect(result[stream]).toBe("A😀Z");
+        expect(readFileSync(logPath, "utf8")).toContain("A😀Z");
+      });
+    },
+  );
+
+  it.each([1, 2, 3])(
+    "never exceeds a %i-byte command output budget with a truncated UTF-8 character",
+    async (maxOutputBytes) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-budget-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const result = await runCommand(
+          process.execPath,
+          ["-e", "process.stdout.write('😀'); process.stderr.write('😀');"],
+          { cwd: dir, env: process.env, logPath, maxOutputBytes },
+        );
+
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+      });
+    },
+  );
+
+  it.each([
+    { maxOutputBytes: 1, expected: "" },
+    { maxOutputBytes: 2, expected: "" },
+    { maxOutputBytes: 3, expected: "�" },
+  ])(
+    "bounds incomplete UTF-8 command output to $maxOutputBytes bytes",
+    async ({ maxOutputBytes, expected }) => {
+      await withTempDirAsync("openclaw-cross-os-run-command-utf8-incomplete-", async (dir) => {
+        const logPath = join(dir, "command.log");
+        const result = await runCommand(
+          process.execPath,
+          [
+            "-e",
+            "process.stdout.write(Buffer.from([0xf0])); process.stderr.write(Buffer.from([0xf0]));",
+          ],
+          { cwd: dir, env: process.env, logPath, maxOutputBytes },
+        );
+
+        expect(result.stdout).toBe(expected);
+        expect(result.stderr).toBe(expected);
+        expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+      });
+    },
+  );
 
   it("flushes command logs before resolving", async () => {
     await withTempDirAsync("openclaw-cross-os-run-command-flush-", async (dir) => {

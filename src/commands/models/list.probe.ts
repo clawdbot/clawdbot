@@ -25,6 +25,10 @@ import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import {
+  prepareInternalSessionEffectsSession,
+  removeInternalSessionEffectsSession,
+} from "../../agents/internal-session-effects.js";
+import {
   hasUsableCustomProviderApiKey,
   resolveEnvApiKey,
   resolveProviderEntryApiKeyBinding,
@@ -35,10 +39,7 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/m
 import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import {
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   coerceSecretRef,
@@ -718,12 +719,12 @@ async function probeTarget(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  sessionDir: string;
+  storePath: string;
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, storePath, target, timeoutMs, maxTokens } = params;
   // Marker credentials must be resolved by the runtime from config, but the
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
@@ -748,11 +749,10 @@ async function probeTarget(params: {
   }
   const model = target.model;
 
-  const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
-  const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
-  await fs.mkdir(sessionDir, { recursive: true });
+  const runId = `probe-${target.provider}-${crypto.randomUUID()}`;
   let isolatedAgentDir: string | null = null;
   let isolatedProfileId: string | undefined;
+  let sessionTarget: Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>> | undefined;
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
@@ -767,6 +767,12 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
+    sessionTarget = await prepareInternalSessionEffectsSession({
+      agentId,
+      cwd: workspaceDir,
+      runId,
+      storePath,
+    });
     // Any bound-value target runs in an empty agent dir so stored profiles are
     // absent and cannot satisfy the probe via failover. Direct values pin a
     // synthetic profile; marker values are resolved by the runtime from the
@@ -806,8 +812,9 @@ async function probeTarget(params: {
     }
     const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedAgent({
-      sessionId,
-      sessionFile,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+      sessionTarget,
       agentId,
       workspaceDir,
       agentDir: isolatedAgentDir ?? agentDir,
@@ -818,7 +825,7 @@ async function probeTarget(params: {
       authProfileId: isolatedProfileId ?? target.profileId,
       authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,
       timeoutMs,
-      runId: `probe-${crypto.randomUUID()}`,
+      runId,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
       thinkLevel: "off",
       reasoningLevel: "off",
@@ -836,6 +843,7 @@ async function probeTarget(params: {
       redactAuthProbeError(described.message),
     );
   } finally {
+    await removeInternalSessionEffectsSession(sessionTarget);
     if (isolatedAgentDir) {
       clearRuntimeAuthProfileStoreSnapshot(isolatedAgentDir);
       disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(isolatedAgentDir));
@@ -864,7 +872,7 @@ async function runTargetsWithConcurrency(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -882,7 +890,7 @@ async function runTargetsWithConcurrency(params: {
         agentId,
         agentDir,
         workspaceDir,
-        sessionDir,
+        storePath,
         target,
         timeoutMs,
         maxTokens,

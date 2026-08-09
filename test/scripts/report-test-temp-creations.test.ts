@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectTempCreationFindingsFromDiff,
   formatGithubWarning,
-} from "../../scripts/report-test-temp-creations.mjs";
+} from "../../scripts/report-test-temp-creations.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();

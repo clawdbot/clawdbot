@@ -4,20 +4,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
-import type { HealthSummary } from "../../../commands/health.types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { setAvatar } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
+import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
   buildGatewaySnapshotMock,
@@ -25,7 +31,9 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  adoptTailscaleProfileAvatarMock,
   ensureProfileForEmailMock,
+  resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -51,14 +59,27 @@ const {
       },
     },
   })),
+  adoptTailscaleProfileAvatarMock: vi.fn(),
   ensureProfileForEmailMock: vi.fn(),
+  resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
 vi.mock("../../../state/user-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../state/user-profiles.js")>();
+  adoptTailscaleProfileAvatarMock.mockImplementation(actual.adoptTailscaleProfileAvatar);
   ensureProfileForEmailMock.mockImplementation(actual.ensureProfileForEmail);
-  return { ...actual, ensureProfileForEmail: ensureProfileForEmailMock };
+  return {
+    ...actual,
+    adoptTailscaleProfileAvatar: adoptTailscaleProfileAvatarMock,
+    ensureProfileForEmail: ensureProfileForEmailMock,
+  };
+});
+
+vi.mock("./auth-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth-context.js")>();
+  resolveConnectAuthStateMock.mockImplementation(actual.resolveConnectAuthState);
+  return { ...actual, resolveConnectAuthState: resolveConnectAuthStateMock };
 });
 
 vi.mock("../../../config/config.js", () => ({
@@ -253,6 +274,7 @@ function attachGatewayHarness(options: {
     events: [],
     extraHandlers: {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
+    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
     send,
@@ -282,23 +304,30 @@ function attachGatewayHarness(options: {
     logWsControl,
     send,
     socketSend,
-    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
+    sendRequest: (
+      id: string,
+      method: string,
+      params: Record<string, unknown> = {},
+      traceparent?: string,
+    ) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method,
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
-    sendConnect: (id: string, params: Record<string, unknown>) => {
+    sendConnect: (id: string, params: Record<string, unknown>, traceparent?: string) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method: "connect",
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
@@ -307,6 +336,54 @@ function attachGatewayHarness(options: {
     },
   };
 }
+
+describe("WebSocket request trace context", () => {
+  const upstreamTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const upstreamSpanId = "00f067aa0ba902b7";
+  const upstreamTraceparent = `00-${upstreamTraceId}-${upstreamSpanId}-01`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not carry connect-frame trace context into later requests", async () => {
+    let observed: DiagnosticTraceContext | undefined;
+    vi.mocked(handleGatewayRequest).mockImplementation(async () => {
+      observed = getActiveDiagnosticTraceContext();
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-connect-trace",
+      connectNonce: "nonce-connect-trace",
+    });
+
+    harness.sendConnect(
+      "connect-1",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      },
+      upstreamTraceparent,
+    );
+    await waitForFast(() => {
+      expect(harness.client).not.toBeNull();
+    });
+
+    harness.sendRequest("untraced-1", "status.summary");
+
+    await waitForFast(() => {
+      expect(observed).toBeDefined();
+    });
+    expect(observed?.traceId).not.toBe(upstreamTraceId);
+  });
+});
 
 function connectTrustedProxyUser(connId: string) {
   loadConfigMock.mockImplementationOnce(() => ({
@@ -592,61 +669,156 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("projects a stable durable profile into presence and refreshes avatar state on reconnect", async () => {
-    await withOpenClawTestState({ label: "gateway-profile-presence" }, async () => {
-      const connect = async (suffix: string) => {
-        const connId = `conn-trusted-proxy-user-${suffix}`;
-        const harness = connectTrustedProxyUser(connId);
-        await waitForFast(() => {
-          expect(upsertPresenceMock).toHaveBeenCalledWith(connId, expect.anything());
-        });
-        const presence = upsertPresenceMock.mock.calls.find(([key]) => key === connId)?.[1] as {
-          user?: { id: string; email?: string; name?: string; avatarUrl?: string };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      await withOpenClawTestState({ label: "gateway-profile-presence" }, async () => {
+        const connect = async (suffix: string) => {
+          const connId = `conn-trusted-proxy-user-${suffix}`;
+          const harness = connectTrustedProxyUser(connId);
+          await waitForFast(() => {
+            expect(upsertPresenceMock).toHaveBeenCalledWith(connId, expect.anything());
+          });
+          const presence = upsertPresenceMock.mock.calls.find(([key]) => key === connId)?.[1] as {
+            user?: { id: string; email?: string; name?: string; avatarUrl?: string };
+          };
+          return { connId, harness, presence };
         };
-        return { connId, harness, presence };
-      };
 
-      const first = await connect("first");
-      const profileId = first.presence.user?.id;
-      expect(profileId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      );
-      expect(first.presence.user).toEqual({
-        id: profileId,
-        email: "alice@example.com",
-        name: "alice",
-        // Published route carries the profile revision (?v=<updatedAt>) so a
-        // reconnecting viewer's <img> refetches after an avatar upload instead
-        // of reusing the stale cached image for an unchanged URL.
-        avatarUrl: expect.stringMatching(
-          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
-        ),
+        const first = await connect("first");
+        const profileId = first.presence.user?.id;
+        expect(profileId).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+        );
+        expect(first.presence.user).toEqual({
+          id: profileId,
+          email: "alice@example.com",
+          name: "alice",
+          avatarUrl: expect.stringMatching(
+            new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+          ),
+        });
+        expect(first.harness.client).toMatchObject({
+          authenticatedUserId: "alice@example.com",
+          authenticatedUserProfile: {
+            profileId,
+            displayName: "alice",
+            hasAvatar: false,
+          },
+        });
+
+        expect(setAvatar(profileId!, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
+        const second = await connect("second");
+        const secondAvatarUrl = second.presence.user?.avatarUrl;
+        expect(second.presence.user).toEqual({
+          id: profileId,
+          email: "alice@example.com",
+          name: "alice",
+          avatarUrl: expect.stringMatching(
+            new RegExp(`^/api/users/${profileId}/avatar\\?v=[0-9a-f]{64}-png$`, "u"),
+          ),
+        });
+        expect(second.harness.client).toMatchObject({
+          authenticatedUserProfile: { profileId, hasAvatar: true },
+        });
+
+        expect(setAvatar(profileId!, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
+        const third = await connect("third");
+        expect(third.presence.user?.avatarUrl).not.toBe(secondAvatarUrl);
+        expect(third.presence.user?.avatarUrl).toMatch(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=[0-9a-f]{64}-png$`, "u"),
+        );
+
+        expect(ensureProfileForEmailMock).toHaveBeenCalledTimes(3);
+        expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
+          "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
+        );
       });
-      expect(first.harness.client).toMatchObject({
-        authenticatedUserId: "alice@example.com",
-        authenticatedUserProfile: {
-          profileId,
-          displayName: "alice",
-          hasAvatar: false,
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("registers a verified profile before detached Tailscale avatar adoption completes", async () => {
+    await withOpenClawTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
+      let resolveAvatar:
+        | ((profile: {
+            id: string;
+            displayName: string | null;
+            avatarMime: "image/png" | "image/jpeg" | "image/webp" | null;
+            mergedInto: string | null;
+            createdAt: number;
+            updatedAt: number;
+          }) => void)
+        | undefined;
+      adoptTailscaleProfileAvatarMock.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            resolveAvatar = resolve;
+          }),
+      );
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: {
+            login: "ada@github",
+            name: "Ada Lovelace",
+            profilePic: "https://avatars.example.test/ada.png",
+          },
         },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+        sharedAuthProvided: false,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-tailscale-avatar-detached",
+        connectNonce: "nonce-tailscale-avatar-detached",
       });
 
-      expect(setAvatar(profileId!, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
-      const second = await connect("second");
-      expect(second.presence.user).toEqual({
-        id: profileId,
-        email: "alice@example.com",
-        name: "alice",
-        avatarUrl: expect.stringMatching(
-          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
-        ),
+      harness.sendConnect("connect-tailscale-avatar-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
       });
-      expect(second.harness.client).toMatchObject({
-        authenticatedUserProfile: { profileId, hasAvatar: true },
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedUserIsTailscaleProvider: true,
+          authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
+        });
+        expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledOnce();
       });
-      expect(ensureProfileForEmailMock).toHaveBeenCalledTimes(2);
-      expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
-        "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
-      );
+      expect(harness.socketSend).toHaveBeenCalled();
+
+      const profile = (
+        harness.client as {
+          authenticatedUserProfile: { profileId: string; displayName: string; updatedAt: number };
+        }
+      ).authenticatedUserProfile;
+      expect(setAvatar(profile.profileId, new Uint8Array([7, 8, 9]), "image/png").ok).toBe(true);
+      resolveAvatar?.({
+        id: profile.profileId,
+        displayName: profile.displayName,
+        avatarMime: "image/png",
+        mergedInto: null,
+        createdAt: profile.updatedAt,
+        updatedAt: profile.updatedAt + 1,
+      });
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { hasAvatar: true, updatedAt: profile.updatedAt + 1 },
+        });
+      });
     });
   });
 
@@ -790,6 +962,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const rateLimiter: AuthRateLimiter = {
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs })),
       recordFailure: vi.fn(),
+      recordFailureAndDelay: vi.fn(async () => {}),
       reset: vi.fn(),
       size: vi.fn(() => 0),
       prune: vi.fn(),
@@ -918,6 +1091,106 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     } | null;
     expect(connectedClient?.connect?.scopes).toEqual(["operator.approvals"]);
     expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
+  });
+
+  it("retains handshake-attested locality for direct operator admission", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-local-operator-authority",
+      connectNonce: "nonce-local-operator-authority",
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-local-operator-authority", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.admin"],
+      caps: [],
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      clientIp?: string;
+      internal?: { isLocalClient?: true };
+    } | null;
+    expect(connectedClient?.clientIp).toBeUndefined();
+    expect(connectedClient?.internal?.isLocalClient).toBe(true);
+
+    const admission = resolveGatewayCronCreatorAuthorityAdmission({
+      runId: "local-operator-run",
+      resolvedSessionKey: "agent:main:main",
+      client: harness.client as never,
+      request: { message: "hello", idempotencyKey: "local-operator-run" },
+      hasRestoredCronContinuation: false,
+      isOneShotModelRun: false,
+      isRestartRecoveryResumeRun: false,
+    });
+    expect(admission).toEqual({ runId: "local-operator-run" });
+  });
+
+  it("does not carry local operator authority for an authenticated remote client", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-operator-authority",
+      connectNonce: "nonce-remote-operator-authority",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-remote-operator-authority", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.admin"],
+      caps: [],
+      auth: { token: "gateway-token" },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      clientIp?: string;
+      internal?: { isLocalClient?: true };
+    } | null;
+    expect(connectedClient?.clientIp).toBe("203.0.113.50");
+    expect(connectedClient?.internal?.isLocalClient).toBeUndefined();
+
+    const admission = resolveGatewayCronCreatorAuthorityAdmission({
+      runId: "remote-operator-run",
+      resolvedSessionKey: "agent:main:main",
+      client: harness.client as never,
+      request: { message: "hello", idempotencyKey: "remote-operator-run" },
+      hasRestoredCronContinuation: false,
+      isOneShotModelRun: false,
+      isRestartRecoveryResumeRun: false,
+    });
+    expect(admission).toBeUndefined();
   });
 
   it("marks operator approval clients with the server runtime token", async () => {
@@ -1150,6 +1423,30 @@ describe("resolvePinnedClientMetadata", () => {
         deviceFamilyMismatch: false,
         pinnedPlatform: pairedPlatform,
         pinnedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
+      });
+    },
+  );
+
+  it.each([
+    ["darwin", "macos", "Mac"],
+    ["win32", "windows", "Windows"],
+  ])(
+    "normalizes exact legacy node-host platform %s to canonical %s",
+    (legacyPlatform, canonicalPlatform, deviceFamily) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId: "node-host",
+          clientMode: "node",
+          claimedPlatform: legacyPlatform,
+          claimedDeviceFamily: deviceFamily,
+          pairedPlatform: legacyPlatform,
+          pairedDeviceFamily: deviceFamily,
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: canonicalPlatform,
+        pinnedDeviceFamily: deviceFamily,
       });
     },
   );

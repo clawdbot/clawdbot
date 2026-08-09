@@ -22,9 +22,9 @@ import {
   type OpenClawConfig as ProviderAuthConfig,
   type ProviderAuthResult,
   suggestOAuthProfileIdForLegacyDefault,
-  upsertAuthProfileWithLock,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildManifestModelProviderConfig,
@@ -33,6 +33,7 @@ import {
 import {
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
+  type ModelCompatConfig,
   modelCostsEqual,
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
@@ -65,8 +66,10 @@ import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
-import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
-import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
+import {
+  createClaudeSessionNodeInvokePolicies,
+  registerClaudeSessionDiscovery,
+} from "./session-catalog-registration.js";
 import { isAnthropicOAuthApiKey, wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
@@ -87,7 +90,6 @@ function classifyAnthropicFailoverDescriptor(value: string | undefined) {
       return undefined;
   }
 }
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-5";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
 const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
@@ -193,14 +195,6 @@ const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.ma
     : ref,
 );
 
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
 function normalizeAnthropicSetupTokenInput(value: string): string {
   return value.replaceAll(/\s+/g, "").trim();
 }
@@ -442,6 +436,30 @@ function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
   return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5";
 }
 
+// Lazily indexed manifest compat per provider so hand-built dynamic rows keep
+// catalog capability metadata even when the run's model registry is empty
+// (for example env-key-only runs without a generated models.json).
+let anthropicManifestCompatIndex: Map<string, ModelCompatConfig> | undefined;
+
+function resolveAnthropicManifestCompat(
+  provider: string,
+  modelId: string,
+): ModelCompatConfig | undefined {
+  if (!anthropicManifestCompatIndex) {
+    anthropicManifestCompatIndex = new Map();
+    const providers = manifest.modelCatalog?.providers ?? {};
+    for (const [providerId, catalog] of Object.entries(providers)) {
+      for (const model of catalog.models ?? []) {
+        const compat = (model as { compat?: ModelCompatConfig }).compat;
+        if (compat) {
+          anthropicManifestCompatIndex.set(`${providerId}/${model.id}`, compat);
+        }
+      }
+    }
+  }
+  return anthropicManifestCompatIndex.get(`${provider}/${modelId}`);
+}
+
 function buildAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -457,10 +475,21 @@ function buildAnthropicForwardCompatModel(
   }
   const provider =
     normalizedProvider === CLAUDE_CLI_BACKEND_ID ? CLAUDE_CLI_BACKEND_ID : PROVIDER_ID;
+  // This hand-built row replaces the catalog row when the runtime prefers
+  // plugin-resolved modern models, so it must carry the catalog's compat
+  // capability metadata (for example compat.codeMode) instead of dropping it.
+  // Registry compat wins when present (it may carry config overrides); the
+  // manifest index covers empty-registry runs such as env-key-only sessions.
+  const catalogModel = ctx.modelRegistry.find(provider, trimmedModelId) as
+    | Pick<ProviderRuntimeModel, "compat">
+    | null
+    | undefined;
+  const compat = catalogModel?.compat ?? resolveAnthropicManifestCompat(provider, trimmedModelId);
   return {
     id: trimmedModelId,
     name: trimmedModelId,
     provider,
+    ...(compat ? { compat } : {}),
     api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     reasoning: true,
@@ -595,10 +624,11 @@ function supportsAnthropicNativeMaxEffort(modelId: string): boolean {
   return supportsClaudeNativeMaxEffort({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
 }
 
-function hasConfiguredModelContextOverride(
+function hasConfiguredModelOverride(
   config: ProviderNormalizeResolvedModelContext["config"],
   provider: string,
   modelId: string,
+  override: "context" | "cost",
 ): boolean {
   const providers = config?.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -621,8 +651,10 @@ function hasConfiguredModelContextOverride(
         continue;
       }
       if (
-        (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
-        (typeof model?.contextWindow === "number" && model.contextWindow > 0)
+        override === "cost"
+          ? model?.cost !== undefined
+          : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+            (typeof model?.contextWindow === "number" && model.contextWindow > 0)
       ) {
         return true;
       }
@@ -645,7 +677,7 @@ function applyAnthropicFixedContextWindow(params: {
   if (fixedContextWindow === undefined) {
     return undefined;
   }
-  if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
+  if (hasConfiguredModelOverride(params.config, params.provider, params.modelId, "context")) {
     return undefined;
   }
   const exactContextWindow = isAnthropicExact1MClaude5Model(params.contractModelId);
@@ -842,8 +874,10 @@ function normalizeAnthropicResolvedModel(
       contractModelId,
       model: thinkingLevelModel,
     }) ?? thinkingLevelModel;
+  // Provider catalog defaults must not replace explicit operator pricing.
   const pricingModel =
-    normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID
+    normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID &&
+    !hasConfiguredModelOverride(ctx.config, ctx.provider, ctx.modelId, "cost")
       ? (applyAnthropicOpus5Cost({
           modelId: contractModelId,
           model: contextWindowModel,

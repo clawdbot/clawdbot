@@ -19,7 +19,7 @@ Use this for Control UI changes that need a real browser flow with deterministic
 - Target one E2E test in a Codex worktree:
 
 ```bash
-node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts
 ```
 
 - Run the whole local lane in a normal checkout:

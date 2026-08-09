@@ -1,4 +1,6 @@
 // Model Catalog Core helper module supports model catalog normalize behavior.
+import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
@@ -42,11 +44,6 @@ const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "d
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
-
-/** Narrow unknown catalog payloads to plain records. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Reject object keys that can mutate prototypes when copied into records. */
 function isBlockedObjectKey(key: string): boolean {
@@ -129,10 +126,6 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
 
 function normalizeNonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeStringOrNumber(value: unknown): string | number | undefined {
@@ -410,6 +403,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
     }
+  }
+
+  const codeMode = normalizeOptionalString(value.codeMode) ?? "";
+  if (codeMode === "preferred" || codeMode === "capable") {
+    compat.codeMode = codeMode;
   }
 
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";

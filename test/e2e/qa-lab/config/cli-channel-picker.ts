@@ -60,11 +60,15 @@ function parseOptions(args: string[]): ProducerOptions {
 }
 
 function buildCliStartup(repoRoot: string) {
-  const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup"], {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: "inherit",
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/build-all.mts", "cliStartup"],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
   if (result.error) {
     throw result.error;
   }
@@ -166,7 +170,10 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     await sendAndWait("\r", /Configure DM access policies now\?/u);
     await sendAndWait("\r", /Configuration updated\./u);
 
-    while (!exit) {
+    for (;;) {
+      if (exit) {
+        break;
+      }
       if (remainingMs() === 0) {
         throw new Error(`picker timed out after ${options.timeoutMs}ms`);
       }
@@ -182,7 +189,10 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     if (!exit) {
       child.kill("SIGTERM");
       const cleanupDeadline = Date.now() + 5_000;
-      while (!exit && Date.now() < cleanupDeadline) {
+      while (Date.now() < cleanupDeadline) {
+        if (exit) {
+          break;
+        }
         await delay(25);
       }
     }

@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession } from "../../agents/cli-session.js";
+import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
 import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
@@ -50,7 +50,7 @@ async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Prom
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
-  deliver?: (text: string) => Promise<void>;
+  deliver?: (text: string) => Promise<boolean | void>;
   startOrder?: AgentEventDeliveryStartOrder;
 }) {
   let lastText: string | undefined;
@@ -218,8 +218,9 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   };
 }
 
-export async function clearDroppedCliSessionBinding(params: {
+export async function clearCliSessionBindingForRun(params: {
   provider: string;
+  expectedSessionId?: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -228,6 +229,14 @@ export async function clearDroppedCliSessionBinding(params: {
   const updatedAt = Date.now();
   const clearEntry = (entry: SessionEntry | undefined) => {
     if (!entry) {
+      return;
+    }
+    // A later turn may already have adopted a replacement session; only the
+    // failed run that still owns this binding may clear it.
+    if (
+      params.expectedSessionId &&
+      getCliSessionBinding(entry, params.provider)?.sessionId !== params.expectedSessionId
+    ) {
       return;
     }
     clearCliSession(entry, params.provider);
@@ -422,7 +431,7 @@ type RunCliAgentWithLifecycleParams = {
    */
   onActivity?: () => void;
   preserveProgressCallbackStartOrder?: boolean;
-  onAssistantText?: (text: string) => Promise<void>;
+  onAssistantText?: (text: string) => Promise<boolean | void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;

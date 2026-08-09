@@ -16,9 +16,9 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Header for context attached to the immediately preceding user message. */
+/** Position-independent instructions for context belonging to the active user turn. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the immediately preceding user message.";
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 /** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -39,21 +39,37 @@ export function escapeInternalRuntimeContextDelimiters(value: string): string {
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
 }
 
+function delimitedTokenLinePattern(token: string): string {
+  return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
+}
+
 function findDelimitedTokenIndex(text: string, token: string, from: number): number {
-  const tokenRe = new RegExp(`(?:^|\\r?\\n)${escapeRegExp(token)}(?=\\r?\\n|$)`, "g");
+  const tokenRe = new RegExp(delimitedTokenLinePattern(token), "g");
   tokenRe.lastIndex = Math.max(0, from);
   const match = tokenRe.exec(text);
   if (!match) {
     return -1;
   }
-  const prefixLength = match[0].length - token.length;
-  return match.index + prefixLength;
+  return match.index + match[0].indexOf(token);
+}
+
+function stripStandaloneDelimitedTokenLines(text: string, token: string): string {
+  return text.replace(new RegExp(delimitedTokenLinePattern(token), "g"), "");
+}
+
+function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): number {
+  const lineStart = text.lastIndexOf("\n", tokenIndex - 1) + 1;
+  if (lineStart === 0) {
+    return 0;
+  }
+  return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
 }
 
 function extractDelimitedBlocks(
   text: string,
   begin: string,
   end: string,
+  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): { text: string; blocks: string[] } {
   let next = text;
   const blocks: string[] = [];
@@ -82,19 +98,37 @@ function extractDelimitedBlocks(
       cursor = nextEnd + end.length;
     }
 
-    const before = next.slice(0, start).trimEnd();
+    const blockStart = options.preserveSurroundingWhitespace
+      ? findDelimitedTokenLinePrefixStart(next, start)
+      : start;
+    const before = options.preserveSurroundingWhitespace
+      ? next.slice(0, blockStart)
+      : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
       return { text: before, blocks };
     }
-    const blockEnd = finish + end.length;
+    let blockEnd = finish + end.length;
+    while (next[blockEnd] === " " || next[blockEnd] === "\t") {
+      blockEnd += 1;
+    }
     blocks.push(next.slice(start, blockEnd).trim());
-    const after = next.slice(blockEnd).trimStart();
-    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
+    const after = options.preserveSurroundingWhitespace
+      ? next.slice(blockEnd)
+      : next.slice(blockEnd).trimStart();
+    next =
+      !options.preserveSurroundingWhitespace && before && after
+        ? `${before}${options.separator ?? "\n\n"}${after}`
+        : `${before}${after}`;
   }
 }
 
-function stripDelimitedBlock(text: string, begin: string, end: string): string {
-  return extractDelimitedBlocks(text, begin, end).text;
+function stripDelimitedBlock(
+  text: string,
+  begin: string,
+  end: string,
+  options?: { preserveSurroundingWhitespace?: boolean; separator?: string },
+): string {
+  return extractDelimitedBlocks(text, begin, end, options).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -178,11 +212,11 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
-function isRuntimeContextPromptHeader(line: string): boolean {
-  return (
-    line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER || line === OPENCLAW_RUNTIME_EVENT_HEADER
-  );
-}
+const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  "OpenClaw runtime context for the immediately preceding user message.",
+  OPENCLAW_RUNTIME_EVENT_HEADER,
+];
 
 function stripRuntimeContextPromptPreface(text: string): string {
   const lines = text.split(/\r?\n/);
@@ -193,7 +227,7 @@ function stripRuntimeContextPromptPreface(text: string): string {
     const line = lines[index] ?? "";
     const nextLine = lines[index + 1] ?? "";
     if (
-      isRuntimeContextPromptHeader(line.trim()) &&
+      RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
       nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
     ) {
       changed = true;
@@ -215,13 +249,20 @@ function stripRuntimeContextPromptPreface(text: string): string {
 }
 
 /** Remove protected and legacy runtime-context blocks from text. */
-export function stripInternalRuntimeContext(text: string): string {
+export function stripInternalRuntimeContext(
+  text: string,
+  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
+): string {
   if (!text) {
     return text;
   }
-  const withoutDelimitedBlocks = stripDelimitedBlock(
-    text,
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  const withoutDelimitedBlocks = stripStandaloneDelimitedTokenLines(
+    stripDelimitedBlock(
+      text,
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      INTERNAL_RUNTIME_CONTEXT_END,
+      options,
+    ),
     INTERNAL_RUNTIME_CONTEXT_END,
   );
   return stripRuntimeContextPromptPreface(
@@ -253,10 +294,9 @@ export function hasInternalRuntimeContext(text: string): boolean {
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
     text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
-    text.includes(
-      `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
-    ) ||
-    text.includes(`${OPENCLAW_RUNTIME_EVENT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`)
+    RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
+      text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),
+    )
   );
 }
 

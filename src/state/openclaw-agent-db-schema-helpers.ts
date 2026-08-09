@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
@@ -19,13 +21,21 @@ import {
   AGENT_V14_BOARD_SCHEMA_SQL,
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
+import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
+import {
+  STANDING_INTENTS_FTS_SHADOW_TABLES,
+  STANDING_INTENTS_FTS_TABLE,
+  STANDING_INTENTS_TABLE,
+} from "./openclaw-agent-standing-intents-schema.js";
 
 type ExistingAgentSchemaMeta = {
   agentId: string | null;
@@ -34,6 +44,16 @@ type ExistingAgentSchemaMeta = {
 };
 
 const AGENT_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
+  allowedMissingTables: [
+    MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+    MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+    CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
+    STANDING_INTENTS_TABLE,
+    STANDING_INTENTS_FTS_TABLE,
+    ...STANDING_INTENTS_FTS_SHADOW_TABLES,
+  ],
+  allowedMissingColumns: ["standing_intents.creator_sender"],
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
@@ -98,6 +118,19 @@ function repairAndAssertAgentSchemaGroup(
   assertOpenClawAgentSchemaContains(database, pathname, schemaSql);
 }
 
+const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
+const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
+
+/** Ensure the additive session-key contract table inside the caller's transaction. */
+export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw agent session-key contract schema markers are missing.");
+  }
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
+
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
@@ -122,8 +155,13 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
+  ensureSessionEntryValidityProjection(database);
+  ensureSessionKeyContractSchemaInTransaction(database);
+
   // v14 always owned the core schema. Board and collaboration groups were
   // lazy, but a partially present group still has to be complete and canonical.
+  // Keep this preflight before full CREATE IF NOT EXISTS convergence: otherwise
+  // a missing stable v14 table could be recreated empty and hide data loss.
   repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_V14_CORE_SCHEMA_SQL);
   if (hasAnyCanonicalTable(database, AGENT_V14_SESSION_SHARING_SCHEMA_SQL)) {
     repairAndAssertAgentSchemaGroup(
@@ -166,9 +204,7 @@ export function assertCanonicalAgentMediaPersistenceVersion(
   const isNewUnownedDatabase =
     userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
-    );
+    throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }
 }
 

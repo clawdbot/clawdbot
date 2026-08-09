@@ -27,6 +27,7 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
+const TYPED_PUBLIC_CONTRACT_REFERENCE_FILES = ["docs/plugins/sdk-entrypoints.md"] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
 const BUNDLED_PLUGIN_FACADE_LOADER_PATTERN =
   /\bload(?:Activated)?BundledPluginPublicSurfaceModuleSync\b/;
@@ -52,7 +53,6 @@ const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
 ]);
 const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
   "extensions/amazon-bedrock/register.sync.runtime.ts",
-  "extensions/deepinfra/index.ts",
   "extensions/github-copilot/index.ts",
   "extensions/google/index.ts",
   "extensions/lmstudio/index.ts",
@@ -64,7 +64,6 @@ const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
 ]);
 const LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES = new Set([
   "extensions/amazon-bedrock/openclaw.plugin.json",
-  "extensions/deepinfra/openclaw.plugin.json",
   "extensions/github-copilot/openclaw.plugin.json",
   "extensions/google/openclaw.plugin.json",
   "extensions/lmstudio/openclaw.plugin.json",
@@ -144,9 +143,39 @@ function collectPluginSdkPackageExports(): string[] {
   return subpaths.toSorted();
 }
 
-function collectPluginSdkSubpathReferences() {
+function collectTypedPluginSdkPackageExports(): Set<string> {
+  const packageJson = JSON.parse(fs.readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
+    exports?: Record<string, unknown>;
+  };
+  const typedSubpaths = new Set<string>();
+  for (const [key, value] of Object.entries(packageJson.exports ?? {})) {
+    if (
+      key.startsWith("./plugin-sdk/") &&
+      value &&
+      typeof value === "object" &&
+      "types" in value &&
+      typeof value.types === "string"
+    ) {
+      typedSubpaths.add(key.slice("./plugin-sdk/".length));
+    }
+  }
+  return typedSubpaths;
+}
+
+function collectPackExcludedPluginSdkDeclarations(): Set<string> {
+  const packageJson = readRootPackageJson();
+  return new Set(
+    (packageJson.files ?? [])
+      .map((entry) => /^!dist\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\.d\.ts$/u.exec(entry)?.[1])
+      .filter((subpath): subpath is string => Boolean(subpath)),
+  );
+}
+
+function collectPluginSdkSubpathReferences(
+  files: readonly string[] = PUBLIC_CONTRACT_REFERENCE_FILES,
+) {
   const references: Array<{ file: string; subpath: string }> = [];
-  for (const file of PUBLIC_CONTRACT_REFERENCE_FILES) {
+  for (const file of files) {
     const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
     for (const match of source.matchAll(PLUGIN_SDK_SUBPATH_PATTERN)) {
       const subpath = match[1];
@@ -436,11 +465,13 @@ function collectNewDeprecatedMemoryEmbeddingProviderApiFiles(): string[] {
 
 function collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(): string[] {
   const files: string[] = [];
-  const manifestFiles =
-    listGitTrackedFiles({
-      repoRoot: REPO_ROOT,
-      pathspecs: "extensions/**/openclaw.plugin.json",
-    }) ?? [];
+  const manifestFiles = listGitTrackedFiles({
+    repoRoot: REPO_ROOT,
+    pathspecs: "extensions/**/openclaw.plugin.json",
+  });
+  if (!manifestFiles) {
+    throw new Error("unable to list plugin manifests for the deprecated manifest guard");
+  }
   for (const repoRelativePath of manifestFiles) {
     const source = fs.readFileSync(resolve(REPO_ROOT, repoRelativePath), "utf8");
     if (
@@ -874,6 +905,25 @@ describe("plugin-sdk package contract guardrails", () => {
         `${reference.file} references openclaw/plugin-sdk/${reference.subpath}, but ${reference.subpath} is missing from ${missingFrom.join(" and ")}`,
       );
     }
+
+    expect(failures).toStrictEqual([]);
+  });
+
+  it("keeps SDK entrypoint guide imports on typed public package exports", () => {
+    const publicEntrypoints = new Set(publicPluginSdkEntrypoints);
+    const typedExports = collectTypedPluginSdkPackageExports();
+    const excludedDeclarations = collectPackExcludedPluginSdkDeclarations();
+    const failures = collectPluginSdkSubpathReferences(TYPED_PUBLIC_CONTRACT_REFERENCE_FILES)
+      .filter(
+        ({ subpath }) =>
+          !publicEntrypoints.has(subpath) ||
+          !typedExports.has(subpath) ||
+          excludedDeclarations.has(subpath),
+      )
+      .map(
+        ({ file, subpath }) =>
+          `${file} references openclaw/plugin-sdk/${subpath}, but its declaration is not included in the typed public package`,
+      );
 
     expect(failures).toStrictEqual([]);
   });

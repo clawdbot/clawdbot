@@ -1,28 +1,25 @@
-// OpenClaw operation tests cover rescue operation planning and execution.
 import fs from "node:fs/promises";
 import path from "node:path";
+// OpenClaw operation tests cover rescue operation planning and execution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
+import { runGatewayLifecycle } from "./operations-execution-helpers.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
 } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 type TestConfig = Record<string, unknown>;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -142,6 +139,28 @@ const mockConfig = vi.hoisted(() => {
     ),
   };
 });
+const mockDaemonRestart = vi.hoisted(() => vi.fn(async () => true));
+const mockScheduleGatewayRestart = vi.hoisted(() =>
+  vi.fn(() => ({
+    ok: true,
+    pid: process.pid,
+    signal: "SIGUSR1" as const,
+    delayMs: 0,
+    mode: "emit" as const,
+    coalesced: false,
+    cooldownMsApplied: 0,
+    emitHooksQueued: false,
+  })),
+);
+vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
+  runDaemonStart: vi.fn(async () => {}),
+  runDaemonStop: vi.fn(async () => {}),
+  runDaemonRestart: mockDaemonRestart,
+}));
+vi.mock("../infra/restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/restart.js")>()),
+  scheduleGatewaySigusr1Restart: mockScheduleGatewayRestart,
+}));
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
     command,
@@ -191,6 +210,8 @@ describe("parseSystemAgentOperation", () => {
 
   beforeEach(() => {
     mockConfig.reset();
+    mockDaemonRestart.mockClear();
+    mockScheduleGatewayRestart.mockClear();
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
@@ -340,140 +361,6 @@ describe("parseSystemAgentOperation", () => {
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
   });
 
-  it("parses channel listing and connect requests", () => {
-    expect(parseSystemAgentOperation("channels")).toEqual({ kind: "channel-list" });
-    expect(parseSystemAgentOperation("list channels")).toEqual({ kind: "channel-list" });
-    expect(parseSystemAgentOperation("connect telegram")).toEqual({
-      kind: "channel-setup",
-      channel: "telegram",
-    });
-    expect(parseSystemAgentOperation("connect to WhatsApp")).toEqual({
-      kind: "channel-setup",
-      channel: "whatsapp",
-    });
-    expect(parseSystemAgentOperation("link discord channel")).toEqual({
-      kind: "channel-setup",
-      channel: "discord",
-    });
-    // Starting the wizard is not a write; the wizard collects explicit answers.
-    expect(isPersistentSystemAgentOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
-      false,
-    );
-    expect(isPersistentSystemAgentOperation({ kind: "channel-list" })).toBe(false);
-  });
-
-  it("parses anchored setup switches and channel info", () => {
-    for (const input of [
-      "open setup wizard",
-      "setup wizard",
-      "menu setup",
-      "use the setup wizard",
-      "use the wizard",
-    ]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "open-setup", target: "guided" });
-    }
-    for (const input of ["open classic wizard", "open classic setup wizard", "classic setup"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "open-setup", target: "classic" });
-    }
-    expect(parseSystemAgentOperation("open channel wizard")).toEqual({
-      kind: "open-setup",
-      target: "channels",
-    });
-    expect(parseSystemAgentOperation("open channel wizard for Slack")).toEqual({
-      kind: "open-setup",
-      target: "channels",
-      channel: "slack",
-    });
-    expect(parseSystemAgentOperation("channel info Slack")).toEqual({
-      kind: "channel-info",
-      channel: "slack",
-    });
-    expect(parseSystemAgentOperation("about Telegram channel")).toEqual({
-      kind: "channel-info",
-      channel: "telegram",
-    });
-    expect(parseSystemAgentOperation("please open the setup wizard soon").kind).toBe("none");
-    expect(parseSystemAgentOperation("channel info slack please").kind).toBe("none");
-  });
-
-  it("prints one-shot setup pointers", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    for (const operation of [
-      { kind: "open-setup", target: "guided" } as const,
-      { kind: "open-setup", target: "classic" } as const,
-      { kind: "open-setup", target: "channels", channel: "slack" } as const,
-    ]) {
-      const result = await executeSystemAgentOperation(operation, runtime);
-      expect(result.applied).toBe(false);
-    }
-
-    const output = lines.join("\n");
-    expect(output).toContain("openclaw onboard`");
-    expect(output).toContain("openclaw onboard --classic");
-    expect(output).toContain("openclaw channels add --channel slack");
-  });
-
-  it("routes one-shot model setup through the verified OpenClaw flow", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    const result = await executeSystemAgentOperation({ kind: "model-setup" }, runtime);
-
-    expect(result.applied).toBe(false);
-    expect(lines.join("\n")).toContain("Exit OpenClaw and run `openclaw onboard`");
-    expect(lines.join("\n")).not.toContain("openclaw configure --section model");
-  });
-
-  it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const entries = [
-      {
-        id: "telegram",
-        meta: {
-          label: "Telegram",
-          blurb: "Telegram bot messaging.",
-          docsPath: "/channels/telegram",
-        },
-      },
-      {
-        id: "slack",
-        meta: {
-          label: "Slack",
-          blurb: "Slack app messaging.",
-          docsPath: "/channels/slack",
-        },
-      },
-    ];
-    const deps = {
-      listChannelSetupPlugins: () => [{ id: "slack" }],
-      resolveChannelSetupEntries: () => ({
-        entries,
-        installedCatalogEntries: [],
-        installableCatalogEntries: [],
-        installedCatalogById: new Map(),
-        installableCatalogById: new Map(),
-      }),
-      isChannelConfigured: (_cfg: unknown, channel: string) => channel === "slack",
-    } as never;
-
-    await executeSystemAgentOperation({ kind: "channel-info", channel: "slack" }, runtime, {
-      deps,
-    });
-    const knownOutput = lines.join("\n");
-    expect(knownOutput).toContain("Slack (slack)");
-    expect(knownOutput).toContain("Slack app messaging.");
-    expect(knownOutput).toContain("Configured: yes");
-    expect(knownOutput).toContain("Installed: yes");
-    expect(knownOutput).toContain("https://docs.openclaw.ai/channels/slack");
-    expect(knownOutput).toContain("open channel wizard for slack");
-
-    lines.length = 0;
-    await executeSystemAgentOperation({ kind: "channel-info", channel: "matrix" }, runtime, {
-      deps,
-    });
-    expect(lines.join("\n")).toContain("Known channels: slack, telegram");
-  });
-
   it("parses agent creation requests", () => {
     expect(
       parseSystemAgentOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),
@@ -578,7 +465,7 @@ describe("parseSystemAgentOperation", () => {
     const runGatewayRestart = vi.fn(async () => {});
 
     const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
-      deps: { runGatewayRestart },
+      deps: { runGatewayRestart, setupSurface: "gateway" },
     });
 
     expectRecordFields(result as unknown as Record<string, unknown>, {
@@ -587,6 +474,53 @@ describe("parseSystemAgentOperation", () => {
     });
     expect(lines.join("\n")).toContain("Plan: restart the Gateway");
     expect(runGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
+    mockConfig.setConfig({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://configured-remote-gateway.example:9443" },
+      },
+    });
+
+    await expect(runGatewayLifecycle("restart", "gateway")).resolves.toBe(true);
+
+    expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
+      reason: "gateway.restart.safe",
+      delayMs: 0,
+    });
+    expect(mockDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("preserves the standalone CLI Gateway restart route", async () => {
+    await runGatewayLifecycle("restart", "cli");
+
+    expect(mockDaemonRestart).toHaveBeenCalledExactlyOnceWith();
+    expect(mockScheduleGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { surface: "gateway" as const, summary: "Scheduled Gateway restart" },
+    { surface: "cli" as const, summary: "Restarted Gateway" },
+  ])("records an approved $surface restart truthfully", async ({ surface, summary }) => {
+    const tempDir = opTempDirs.make("openclaw-restart-scheduled-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const runGatewayRestart = vi.fn(async () => true);
+
+    const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
+      approved: true,
+      deps: { runGatewayRestart, setupSurface: surface },
+    });
+
+    expect(result.applied).toBe(true);
+    expect(runGatewayRestart).toHaveBeenCalledOnce();
+    if (surface === "gateway") {
+      expect(lines.join("\n")).toContain(summary);
+    }
+    expectAuditRecord(readLastAuditEntry(), { operation: "gateway.restart", summary }, {});
   });
 
   it("does not report or audit a gateway restart that returned false", async () => {

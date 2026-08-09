@@ -6,8 +6,11 @@ import type { RawData, WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import type { HttpHeader, JsonRpcRequest } from "./types.js";
 
-/** JSON-RPC error code used when a sandbox exec-server method is unknown. */
+/** JSON-RPC error code used when a sandbox filesystem resource does not exist. */
 export const JSON_RPC_NOT_FOUND = -32004;
+
+/** JSON-RPC error code used when a sandbox exec-server method is unsupported. */
+export const JSON_RPC_METHOD_NOT_FOUND = -32601;
 
 /** Protocol-level error carrying the JSON-RPC error code to send to the client. */
 export class JsonRpcProtocolError extends Error {

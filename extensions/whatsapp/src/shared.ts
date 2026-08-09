@@ -106,9 +106,9 @@ function createWhatsAppSetupWizardProxy(
 export function createWhatsAppPluginBase(params: {
   groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
-  setupContract?: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
+  isLinked: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isLinked"];
 }) {
   const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
     account: ResolvedWhatsAppAccount;
@@ -192,14 +192,15 @@ export function createWhatsAppPluginBase(params: {
       isEnabled: (account) => account.enabled,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
+      isLinked: params.isLinked,
       hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
-      unconfiguredReason: () => "not linked",
+      unconfiguredReason: () => "not configured",
+      unlinkedReason: () => "not linked",
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
           configured: Boolean(account.authDir),
           extra: {
-            linked: Boolean(account.authDir),
             dmPolicy: account.dmPolicy,
             allowFrom: account.allowFrom,
           },
@@ -211,8 +212,7 @@ export function createWhatsAppPluginBase(params: {
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
     doctor: whatsappDoctor,
-    setup: params.setup,
-    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
+    setupContract: params.setupContract,
     groups: params.groups,
   });
   return {
@@ -251,7 +251,7 @@ export function createWhatsAppPluginBase(params: {
     | "secrets"
     | "security"
     | "doctor"
-    | "setup"
+    | "setupContract"
     | "groups"
   >;
 }

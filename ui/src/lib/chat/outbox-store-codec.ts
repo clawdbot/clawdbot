@@ -1,9 +1,5 @@
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type {
-  ChatAttachment,
-  ChatQueueItem,
-  ChatQueueSkillWorkshopRevision,
-} from "./chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -22,7 +18,7 @@ export type StoredComposerSession = {
   updatedAt: number;
 };
 
-export function normalizeOptionalString(value: unknown): string | undefined {
+function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
@@ -55,29 +51,14 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-export function normalizeSkillWorkshopRevision(
-  value: unknown,
-): ChatQueueSkillWorkshopRevision | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const entry = value as Record<string, unknown>;
-  const proposalId = normalizeOptionalString(entry.proposalId);
-  if (!proposalId) {
-    return undefined;
-  }
-  const agentId = normalizeOptionalString(entry.agentId);
-  return {
-    proposalId,
-    ...(agentId ? { agentId: normalizeAgentId(agentId) } : {}),
-  };
-}
-
-function normalizeQueueItem(value: unknown): ChatQueueItem | null {
+export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const entry = value as Record<string, unknown>;
+  if (entry.skillWorkshopRevision !== undefined) {
+    return null;
+  }
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt =
@@ -130,6 +111,10 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   if (sendRunId) {
     item.sendRunId = sendRunId;
   }
+  const steerTargetRunId = normalizeOptionalString(entry.steerTargetRunId);
+  if (steerTargetRunId) {
+    item.steerTargetRunId = steerTargetRunId;
+  }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }
@@ -149,10 +134,6 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
   }
-  const skillWorkshopRevision = normalizeSkillWorkshopRevision(entry.skillWorkshopRevision);
-  if (skillWorkshopRevision) {
-    item.skillWorkshopRevision = skillWorkshopRevision;
-  }
   return item;
 }
 
@@ -165,7 +146,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
         .slice(0, MAX_RETAINED_QUEUE_ITEMS)
-        .map(normalizeQueueItem)
+        .map(normalizeStoredQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
   // v1 writers used bounded tombstones. Consume them while reading legacy

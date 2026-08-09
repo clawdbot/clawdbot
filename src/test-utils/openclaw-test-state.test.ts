@@ -5,6 +5,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
+  GATEWAY_STARTUP_MUTATED_ENV_KEYS,
+  snapshotGatewayStartupEnv,
+} from "../gateway/test-helpers.env.js";
+import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -12,7 +16,7 @@ import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "./env.js";
+import { setTestEnvValue, withEnvAsync } from "./env.js";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -31,6 +35,7 @@ describe("openclaw test state", () => {
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousGatewayStartupEnv = snapshotGatewayStartupEnv();
 
     const state = await createOpenClawTestState({
       label: "unit",
@@ -49,6 +54,9 @@ describe("openclaw test state", () => {
       expect(process.env.HOME).toBe(state.home);
       expect(process.env.OPENCLAW_HOME).toBe(state.home);
       expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({});
+      for (const key of GATEWAY_STARTUP_MUTATED_ENV_KEYS) {
+        setTestEnvValue(key, `mutated-${key}`);
+      }
     } finally {
       await state.cleanup();
     }
@@ -57,6 +65,7 @@ describe("openclaw test state", () => {
     expect(process.env.OPENCLAW_HOME).toBe(previousOpenClawHome);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
     expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfigPath);
+    expect(snapshotGatewayStartupEnv()).toEqual(previousGatewayStartupEnv);
     await expectPathMissing(state.root);
   });
 

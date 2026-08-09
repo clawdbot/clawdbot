@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
@@ -101,7 +102,7 @@ function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: stri
   if (bodyIndex <= 0) {
     return false;
   }
-  return targetSnippet.slice(0, bodyIndex).trimEnd().endsWith(":");
+  return sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
 }
 
 function extractTargetHeadingBodySnippet(

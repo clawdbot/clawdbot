@@ -25,21 +25,13 @@ export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
 });
 
 /** Creates a queued music-generation background task run. */
-export const createMusicGenerationTaskRun = (
-  ...params: Parameters<typeof musicGenerationTaskLifecycle.createTaskRun>
-) => musicGenerationTaskLifecycle.createTaskRun(...params);
+export const createMusicGenerationTaskRun = musicGenerationTaskLifecycle.createTaskRun;
 
 /** Records progress for an active music-generation task. */
-export const recordMusicGenerationTaskProgress = (
-  ...params: Parameters<typeof musicGenerationTaskLifecycle.recordTaskProgress>
-) => musicGenerationTaskLifecycle.recordTaskProgress(...params);
+export const recordMusicGenerationTaskProgress = musicGenerationTaskLifecycle.recordTaskProgress;
 
 /** Marks a music-generation task complete and stores generated attachment metadata. */
-export const completeMusicGenerationTaskRun = (
-  ...params: Parameters<typeof musicGenerationTaskLifecycle.completeTaskRun>
-) => musicGenerationTaskLifecycle.completeTaskRun(...params);
+export const completeMusicGenerationTaskRun = musicGenerationTaskLifecycle.completeTaskRun;
 
 /** Marks a music-generation task failed and emits task status updates. */
-export const failMusicGenerationTaskRun = (
-  ...params: Parameters<typeof musicGenerationTaskLifecycle.failTaskRun>
-) => musicGenerationTaskLifecycle.failTaskRun(...params);
+export const failMusicGenerationTaskRun = musicGenerationTaskLifecycle.failTaskRun;

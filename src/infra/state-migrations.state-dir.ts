@@ -4,7 +4,10 @@ import path from "node:path";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isWithinDir } from "./path-safety.js";
-import { migrateLegacyInstalledPluginIndex } from "./state-migrations.plugin-state.js";
+import {
+  migrateLegacyInstalledPluginIndex,
+  preflightLegacyInstalledPluginIndexMigration,
+} from "./state-migrations.plugin-state.js";
 import { migrateLegacyTaskStateSidecars } from "./state-migrations.storage.js";
 import type { MigrationLogger } from "./state-migrations.types.js";
 
@@ -238,6 +241,16 @@ export async function autoMigrateLegacyStateDir(params: {
       warnings,
       ...(notices.length > 0 ? { notices } : {}),
     };
+  }
+
+  if (legacyDir) {
+    const pluginInstallWarning = preflightLegacyInstalledPluginIndexMigration({
+      stateDir: legacyDir,
+    });
+    if (pluginInstallWarning) {
+      warnings.push(pluginInstallWarning);
+      return { migrated: false, skipped: false, changes, warnings };
+    }
   }
 
   try {

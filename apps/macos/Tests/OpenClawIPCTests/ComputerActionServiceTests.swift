@@ -127,6 +127,60 @@ struct ComputerActionServiceTests {
         }
     }
 
+    @Test func `capture grant distinguishes a stale accessibility grant`() {
+        let permissions = ComputerControlPermissionSnapshot(
+            accessibility: .missing,
+            postEvent: .granted,
+            screenCapture: .granted)
+
+        #expect(permissions.diagnostic == .accessibilityGrantMayBeStale)
+        #expect(permissions.diagnostic.detailText == """
+        OpenClaw may already appear enabled under System Settings → Privacy & Security → Accessibility. \
+        If so, the grant is pinned to an older build: select OpenClaw, remove it with −, then re-add \
+        /Applications/OpenClaw.app.
+        """)
+        #expect(permissions.inputAccess == .accessibilityGrantMayBeStale)
+        let error = self.validationError {
+            try ComputerActionService.validateInputPermissions(permissions)
+        }
+        if case .some(.accessibilityGrantMayBeStale) = error {} else {
+            Issue.record("expected stale Accessibility error, got \(String(describing: error))")
+        }
+    }
+
+    @Test func `missing accessibility and capture is a plain missing permission`() {
+        let permissions = ComputerControlPermissionSnapshot(
+            accessibility: .missing,
+            postEvent: .granted,
+            screenCapture: .missing)
+
+        #expect(permissions.diagnostic == .missing([.accessibility, .screenCapture]))
+        #expect(permissions.diagnostic.detailText == """
+        Missing: Accessibility, Screen Recording. \
+        Grant access in System Settings → Privacy & Security, then reopen OpenClaw.
+        """)
+        #expect(permissions.inputAccess == .accessibilityMissing)
+        let error = self.validationError {
+            try ComputerActionService.validateInputPermissions(permissions)
+        }
+        if case .some(.accessibilityNotTrusted) = error {} else {
+            Issue.record("expected missing Accessibility error, got \(String(describing: error))")
+        }
+    }
+
+    @Test func `post event denial remains distinct from accessibility denial`() {
+        let permissions = ComputerControlPermissionSnapshot(
+            accessibility: .granted,
+            postEvent: .missing,
+            screenCapture: .granted)
+
+        #expect(permissions.diagnostic == .missing([.postEvent]))
+        #expect(permissions.inputAccess == .postEventMissing)
+        #expect(throws: ComputerActionService.ComputerActionError.self) {
+            try ComputerActionService.validateInputPermissions(permissions)
+        }
+    }
+
     @Test func `coordinate input requires the current display frame identity`() throws {
         let currentFrameId = "display-frame:v1:current"
         let missing = OpenClawComputerActParams(

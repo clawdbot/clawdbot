@@ -23,6 +23,9 @@ type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
+  endpoint?: string;
+  useFipsEndpoint?: true;
+  useDualstackEndpoint?: true;
 };
 
 /** Default Bedrock embedding model used when no explicit model is configured. */
@@ -149,7 +152,7 @@ function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> 
 // ---------------------------------------------------------------------------
 
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
-const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
+const REGION_RE = /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\./;
 
 function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
@@ -306,8 +309,8 @@ if (process.env.VITEST === "true") {
 export async function createBedrockEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
-  const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
+  const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -320,7 +323,12 @@ export async function createBedrockEmbeddingProvider(
 
   const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
-    const sdk = new BedrockRuntimeClient({ region: client.region });
+    const sdk = new BedrockRuntimeClient({
+      region: client.region,
+      endpoint: client.endpoint,
+      useFipsEndpoint: client.useFipsEndpoint,
+      useDualstackEndpoint: client.useDualstackEndpoint,
+    });
     try {
       const res = await sdk.send(
         new InvokeModelCommand({
@@ -399,10 +407,16 @@ export async function createBedrockEmbeddingProvider(
 
 function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
   const spec = resolveSpec(model);
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
+  let endpoint =
+    normalizeOptionalString(options.remote?.baseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
+  let useFipsEndpoint: true | undefined;
+  let useDualstackEndpoint: true | undefined;
 
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
@@ -410,6 +424,36 @@ function resolveBedrockEmbeddingClient(
     normalizeOptionalString(process.env.AWS_REGION) ??
     normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
+
+  if (endpoint) {
+    const sdk = new BedrockRuntimeClient({ region });
+    try {
+      const normalizedEndpoint = new URL(endpoint).href;
+      for (const fips of [false, true]) {
+        for (const dualstack of [false, true]) {
+          const endpointModes = { Region: region, UseFIPS: fips, UseDualStack: dualstack };
+          try {
+            if (sdk.config.endpointProvider(endpointModes).url.href !== normalizedEndpoint) {
+              continue;
+            }
+          } catch {
+            // Unsupported hypothetical modes must not reject a valid custom endpoint.
+            continue;
+          }
+          // SDK-owned endpoints must retain their security modes and environment overrides.
+          endpoint = undefined;
+          useFipsEndpoint = fips || undefined;
+          useDualstackEndpoint = dualstack || undefined;
+          break;
+        }
+        if (!endpoint) {
+          break;
+        }
+      }
+    } finally {
+      sdk.destroy();
+    }
+  }
 
   let dimensions: number | undefined;
   if (options.outputDimensionality != null) {
@@ -423,7 +467,14 @@ function resolveBedrockEmbeddingClient(
     dimensions = spec?.dims;
   }
 
-  return { region, model, dimensions };
+  return {
+    region,
+    model,
+    dimensions,
+    ...(endpoint ? { endpoint } : {}),
+    ...(useFipsEndpoint ? { useFipsEndpoint } : {}),
+    ...(useDualstackEndpoint ? { useDualstackEndpoint } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

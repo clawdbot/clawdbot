@@ -4,12 +4,10 @@ import type {
   JsonSchemaValidator,
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
+import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import { Compile } from "typebox/compile";
 import { toErrorObject } from "../infra/errors.js";
-import {
-  findJsonSchemaShapeError,
-  normalizeJsonSchemaForTypeBox,
-} from "../shared/json-schema-defaults.js";
+import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 

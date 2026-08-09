@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dictar"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En vivo"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hilo"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Abrir hilo"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Desliza →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mantén pulsado"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toca"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toca dos veces"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mostrar mensajes nuevos"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inicia Live para ver la conversación aquí."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nuevo"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Escribir"</string>

@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
   loadExecApprovals,
@@ -16,7 +17,7 @@ import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-comma
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -140,14 +141,6 @@ export function createExecTool(
     agentId,
     resolveHostForParams,
   });
-  const autoReviewer =
-    defaults?.autoReviewer ??
-    createModelExecAutoReviewer({
-      cfg: defaults?.config,
-      agentId,
-      reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
-    });
-
   return {
     name: "exec",
     label: "exec",
@@ -160,6 +153,15 @@ export function createExecTool(
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      // Review cancellation belongs to this execution, never another call on the shared tool.
+      const autoReviewer =
+        defaults?.autoReviewer ??
+        createModelExecAutoReviewer({
+          cfg: defaults?.config,
+          agentId,
+          reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
+          signal,
+        });
       let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
@@ -547,6 +549,7 @@ export function createExecTool(
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
+      let toolAborted = false;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
@@ -560,6 +563,13 @@ export function createExecTool(
         run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
+        }
+        // Cancellation must win over foreground-to-background promotion while
+        // the child settles; detached background sessions keep their owner.
+        toolAborted = true;
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
         }
         run.kill();
       };
@@ -583,6 +593,14 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        const rejectIfAborted = () => {
+          if (!toolAborted) {
+            return false;
+          }
+          reject(createAbortError("Tool execution was aborted", { cause: signal?.reason }));
+          return true;
+        };
+
         const resolveRunning = () => {
           cleanupToolRunListeners();
           resolve({
@@ -606,7 +624,7 @@ export function createExecTool(
         };
 
         const onYieldNow = () => {
-          if (yielded) {
+          if (yielded || toolAborted) {
             return;
           }
           if (settledOutcome) {
@@ -616,6 +634,8 @@ export function createExecTool(
                 outcome: settledOutcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
               }),
             );
             return;
@@ -633,7 +653,7 @@ export function createExecTool(
           resolveRunning();
         };
 
-        if (allowBackground && yieldWindow !== null) {
+        if (!toolAborted && allowBackground && yieldWindow !== null) {
           if (yieldWindow === 0) {
             onYieldNow();
           } else {
@@ -646,7 +666,7 @@ export function createExecTool(
         run.promise
           .then((outcome) => {
             cleanupToolRunListeners();
-            if (yielded || run.session.backgrounded) {
+            if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
             resolve(
@@ -654,12 +674,14 @@ export function createExecTool(
                 outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
               }),
             );
           })
           .catch((err: unknown) => {
             cleanupToolRunListeners();
-            if (yielded || run.session.backgrounded) {
+            if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
             reject(err as Error);
@@ -668,3 +690,6 @@ export function createExecTool(
     },
   };
 }
+
+/** Default exec tool instance used by agent tool registries. */
+export const execTool = createExecTool();

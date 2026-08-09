@@ -207,6 +207,7 @@ export async function createPtyAdapter(params: {
   return {
     pid: pty.pid || undefined,
     stdin,
+    oomScoreWrapperSelected: preparedSpawn.wrapped,
     onStdout,
     onStderr,
     wait,

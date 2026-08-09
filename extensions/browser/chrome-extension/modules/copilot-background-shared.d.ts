@@ -21,7 +21,7 @@ export function archiveCopilotSession(
 
 export function selectCopilotPanelState(options: {
   paired: boolean;
-  shared: boolean;
+  accessible: boolean;
   abortPending: boolean;
   gatewayState: string;
 }): string;

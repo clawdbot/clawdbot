@@ -24,6 +24,8 @@ export default defineBundledChannelEntry({
   registerFull(api) {
     registerDiscordActivities(api);
     registerDiscordSubagentHooks(api);
+  },
+  registerCapabilities(api) {
     api.registerTranscriptSourceProvider(discordVoiceTranscriptsSourceProvider);
   },
 });

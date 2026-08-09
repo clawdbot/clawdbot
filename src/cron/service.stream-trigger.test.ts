@@ -239,7 +239,9 @@ describe("cron stream trigger composition", () => {
       });
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("boom") }),
+        expect.objectContaining({
+          payload: expect.objectContaining({ text: expect.stringContaining("boom") }),
+        }),
       );
     } finally {
       cron.stop();

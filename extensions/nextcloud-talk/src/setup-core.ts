@@ -6,7 +6,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,
@@ -35,7 +35,6 @@ type NextcloudSetupInput = ChannelSetupInput & {
   url?: string;
   password?: string;
 };
-type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -59,61 +58,15 @@ export function setNextcloudTalkAccountConfig(
   cfg: CoreConfig,
   accountId: string,
   updates: Record<string, unknown>,
+  clearFields?: readonly string[],
 ): CoreConfig {
   return patchScopedAccountConfig({
     cfg,
     channelKey: channel,
     accountId,
     patch: updates,
+    ...(clearFields ? { clearFields } : {}),
   }) as CoreConfig;
-}
-
-export function clearNextcloudTalkAccountFields(
-  cfg: CoreConfig,
-  accountId: string,
-  fields: string[],
-): CoreConfig {
-  const section = cfg.channels?.["nextcloud-talk"];
-  if (!section) {
-    return cfg;
-  }
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const nextSection = { ...section } as Record<string, unknown>;
-    for (const field of fields) {
-      delete nextSection[field];
-    }
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        "nextcloud-talk": nextSection as NextcloudTalkSection,
-      },
-    } as CoreConfig;
-  }
-
-  const currentAccount = section.accounts?.[accountId];
-  if (!currentAccount) {
-    return cfg;
-  }
-
-  const nextAccount = { ...currentAccount } as Record<string, unknown>;
-  for (const field of fields) {
-    delete nextAccount[field];
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      "nextcloud-talk": {
-        ...section,
-        accounts: {
-          ...section.accounts,
-          [accountId]: nextAccount as NonNullable<typeof section.accounts>[string],
-        },
-      },
-    },
-  } as CoreConfig;
 }
 
 async function promptNextcloudTalkAllowFrom(params: {
@@ -187,7 +140,7 @@ export const nextcloudTalkDmPolicy = createChannelDmPolicy({
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
 });
 
-export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
+const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: ({ input }) => {
@@ -217,8 +170,13 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
       if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
         return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";
       }
-      if (!setupInput.baseUrl) {
+      const normalizedBaseUrl = normalizeNextcloudTalkBaseUrl(setupInput.baseUrl);
+      if (!normalizedBaseUrl) {
         return "Nextcloud Talk requires --base-url.";
+      }
+      const baseUrlError = validateNextcloudTalkBaseUrl(normalizedBaseUrl);
+      if (baseUrlError) {
+        return baseUrlError;
       }
       return null;
     },
@@ -231,12 +189,6 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name: setupInput.name,
     });
-    const next = setupInput.useEnv
-      ? clearNextcloudTalkAccountFields(namedConfig as CoreConfig, accountId, [
-          "botSecret",
-          "botSecretFile",
-        ])
-      : namedConfig;
     const patch = {
       baseUrl: normalizeNextcloudTalkBaseUrl(setupInput.baseUrl),
       ...(setupInput.useEnv
@@ -247,7 +199,12 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
             ? { botSecret: setupInput.secret }
             : {}),
     };
-    return setNextcloudTalkAccountConfig(next as CoreConfig, accountId, patch);
+    return setNextcloudTalkAccountConfig(
+      namedConfig as CoreConfig,
+      accountId,
+      patch,
+      setupInput.useEnv ? ["botSecret", "botSecretFile"] : undefined,
+    );
   },
 };
 

@@ -1,5 +1,6 @@
 // Line plugin module implements actions behavior.
 import type { messagingApi } from "@line/bot-sdk";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type Action = messagingApi.Action;
@@ -66,10 +67,6 @@ const actionTypes = new Set([
   "richmenuswitch",
   "uri",
 ]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isLineAction(value: unknown): value is Action {
   return isRecord(value) && typeof value.type === "string" && actionTypes.has(value.type);

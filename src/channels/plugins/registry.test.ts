@@ -5,6 +5,7 @@ import type { PluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getChannelPlugin,
+  getLoadedChannelPlugin,
   listChannelPlugins,
   resolveChannelPluginRegistration,
 } from "./registry.js";
@@ -71,6 +72,41 @@ describe("listChannelPlugins", () => {
           label: "external fallback",
         },
       },
+    });
+  });
+
+  it("keeps the first channel implementation and provenance when channel ids collide", () => {
+    const registry = createEmptyPluginRegistry();
+    const firstPlugin = {
+      id: "duplicate",
+      meta: { label: "first" },
+    };
+    const secondPlugin = {
+      id: "duplicate",
+      meta: { label: "second" },
+    };
+    registry.channels = [
+      {
+        pluginId: "first-channel-plugin",
+        plugin: firstPlugin as never,
+        origin: "config",
+        source: "first",
+      },
+      {
+        pluginId: "second-channel-plugin",
+        plugin: secondPlugin as never,
+        origin: "bundled",
+        source: "second",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listChannelPlugins()).toEqual([firstPlugin]);
+    expect(getLoadedChannelPlugin("duplicate")).toBe(firstPlugin);
+    expect(getChannelPlugin("duplicate")).toBe(firstPlugin);
+    expect(resolveChannelPluginRegistration("duplicate")).toEqual({
+      plugin: firstPlugin,
+      origin: "config",
     });
   });
 

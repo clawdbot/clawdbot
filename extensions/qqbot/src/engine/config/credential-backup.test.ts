@@ -1,11 +1,15 @@
 // Qqbot tests cover credential backup plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installQQBotRuntimeForStateTests,
@@ -19,13 +23,7 @@ type CredentialBackup = {
   savedAt: string;
 };
 
-const createdDirs: string[] = [];
-
-function createTempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  createdDirs.push(dir);
-  return dir;
-}
+const tempWorkspaces: TempWorkspaceSync[] = [];
 
 async function useMockHome(homeDir: string): Promise<void> {
   vi.doMock("node:os", async (importOriginal) => {
@@ -73,8 +71,17 @@ function readCredentialRows(stateDir: string): CredentialBackup[] {
 describe("engine/config/credential-backup", () => {
   beforeEach(async () => {
     vi.resetModules();
-    const stateDir = createTempDir("qqbot-state-");
-    const homeDir = createTempDir("qqbot-home-");
+    const stateWorkspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-state-",
+    });
+    const homeWorkspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-home-",
+    });
+    tempWorkspaces.push(stateWorkspace, homeWorkspace);
+    const stateDir = stateWorkspace.dir;
+    const homeDir = homeWorkspace.dir;
     vi.stubEnv("HOME", homeDir);
     await useMockHome(homeDir);
     useStateDir(stateDir);
@@ -86,8 +93,8 @@ describe("engine/config/credential-backup", () => {
     vi.doUnmock("node:os");
     vi.resetModules();
     vi.unstubAllEnvs();
-    for (const dir of createdDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+    for (const workspace of tempWorkspaces.splice(0)) {
+      workspace.cleanup();
     }
   });
 
@@ -112,7 +119,12 @@ describe("engine/config/credential-backup", () => {
     const stateDirA = process.env.OPENCLAW_STATE_DIR!;
     saveCredentialBackup("default", "app-a", "secret-a");
 
-    const stateDirB = createTempDir("qqbot-state-b-");
+    const stateWorkspaceB = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-state-b-",
+    });
+    tempWorkspaces.push(stateWorkspaceB);
+    const stateDirB = stateWorkspaceB.dir;
     useStateDir(stateDirB);
     expect(loadCredentialBackup("default")).toBeNull();
     saveCredentialBackup("default", "app-b", "secret-b");

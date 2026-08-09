@@ -5,6 +5,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -12,19 +13,12 @@ import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
-import {
-  getGlobalHookRunner,
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
+import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -57,12 +51,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireApprovalRequestCall(label: string): {
   timeoutParams: Record<string, unknown>;
@@ -711,94 +700,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
-  it("runs trusted policies from the global hook registry after the active registry changes", async () => {
-    const evaluatePolicy = vi.fn(() => ({
-      block: true,
-      blockReason: "gateway registry policy blocked",
-    }));
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "gateway-policy",
-        pluginName: "Gateway Policy",
-        source: "test",
-        policy: {
-          id: "gateway-block",
-          description: "Gateway policy",
-          evaluate: evaluatePolicy,
-        },
-      },
-    ];
-    initializeGlobalHookRunner(gatewayRegistry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    runBeforeToolCallMock.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "deploy" },
-      toolCallId: "call-gateway-policy",
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toEqual({
-      blocked: true,
-      kind: "veto",
-      deniedReason: "plugin-before-tool-call",
-      reason: "gateway registry policy blocked",
-      params: { command: "deploy" },
-    });
-    expect(evaluatePolicy).toHaveBeenCalledTimes(1);
-    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-  });
-
-  it("runs pinned gateway trusted policies after a later global runner initialization", async () => {
-    const evaluatePolicy = vi.fn(() => ({
-      block: true,
-      blockReason: "pinned gateway policy blocked",
-    }));
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "gateway-policy",
-        pluginName: "Gateway Policy",
-        source: "test",
-        policy: {
-          id: "gateway-block",
-          description: "Gateway policy",
-          evaluate: evaluatePolicy,
-        },
-      },
-    ];
-    setActivePluginRegistry(gatewayRegistry);
-    initializeGlobalHookRunner(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    try {
-      const laterRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(laterRegistry);
-      initializeGlobalHookRunner(laterRegistry);
-      runBeforeToolCallMock.mockResolvedValue(undefined);
-
-      const result = await runBeforeToolCallHook({
-        toolName: "bash",
-        params: { command: "deploy" },
-        toolCallId: "call-pinned-gateway-policy",
-        ctx: { agentId: "main", sessionKey: "main" },
-      });
-
-      expect(result).toEqual({
-        blocked: true,
-        kind: "veto",
-        deniedReason: "plugin-before-tool-call",
-        reason: "pinned gateway policy blocked",
-        params: { command: "deploy" },
-      });
-      expect(evaluatePolicy).toHaveBeenCalledTimes(1);
-      expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-    } finally {
-      releasePinnedPluginChannelRegistry(gatewayRegistry);
-    }
-  });
-
   it("does not require skill_workshop lifecycle approval by default", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
@@ -905,5 +806,83 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     if (!result.blocked) {
       expect(result.params).toEqual({ file: "/etc/hosts" });
     }
+  });
+});
+
+describe("before_tool_call approval snapshots", () => {
+  it("detaches deferred approval params from mutable hook and caller objects", async () => {
+    const baseParams = { command: "safe", options: { cwd: "/safe" } };
+    const overrideParams = { env: { MODE: "safe" } };
+
+    const outcome = await resolveBeforeToolCallApprovalOutcome({
+      result: {
+        requireApproval: {
+          pluginId: "policy",
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+        params: overrideParams,
+      },
+      approvalMode: "defer",
+      toolName: "bash",
+      baseParams,
+    });
+
+    baseParams.options.cwd = "/unapproved";
+    overrideParams.env.MODE = "unapproved";
+
+    expect(outcome).toMatchObject({
+      blocked: false,
+      params: { command: "safe", options: { cwd: "/safe" } },
+      deferredApproval: {
+        baseParams: { command: "safe", options: { cwd: "/safe" } },
+        overrideParams: { env: { MODE: "safe" } },
+      },
+    });
+    if (!outcome || outcome.blocked || !outcome.deferredApproval) {
+      throw new Error("expected deferred approval outcome");
+    }
+    (outcome.params as typeof baseParams).options.cwd = "/outcome-mutated";
+    expect(outcome.deferredApproval.baseParams).toEqual({
+      command: "safe",
+      options: { cwd: "/safe" },
+    });
+  });
+
+  const sharedMemoryCases: Array<
+    [
+      string,
+      {
+        baseParams: Record<string, unknown>;
+        overrideParams?: Record<string, unknown>;
+      },
+    ]
+  > = [
+    ["base params", { baseParams: { shared: new Uint8Array(new SharedArrayBuffer(4)) } }],
+    [
+      "override params",
+      {
+        baseParams: { command: "safe" },
+        overrideParams: { shared: new Uint8Array(new SharedArrayBuffer(4)) },
+      },
+    ],
+  ];
+
+  it.each(sharedMemoryCases)("rejects shared memory in %s", async (_name, values) => {
+    await expect(
+      resolveBeforeToolCallApprovalOutcome({
+        result: {
+          requireApproval: {
+            pluginId: "policy",
+            title: "Needs approval",
+            description: "Approval needed",
+          },
+          params: values.overrideParams,
+        },
+        approvalMode: "defer",
+        toolName: "bash",
+        baseParams: values.baseParams,
+      }),
+    ).rejects.toThrow("before_tool_call mutable input isolation failed");
   });
 });

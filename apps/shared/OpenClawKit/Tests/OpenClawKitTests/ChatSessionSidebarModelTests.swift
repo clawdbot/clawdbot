@@ -383,6 +383,10 @@ struct ChatSessionSidebarModelTests {
         let data = try #require("""
         {
           "key": "agent:main:child",
+          "classification": "subagent",
+          "agentId": "main",
+          "isMain": false,
+          "isBackground": true,
           "parentSessionKey": "agent:main:main",
           "spawnedBy": "agent:main:controller",
           "childSessions": ["agent:main:grandchild"],
@@ -401,6 +405,10 @@ struct ChatSessionSidebarModelTests {
         let entry = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
 
         #expect(entry.parentSessionKey == "agent:main:main")
+        #expect(entry.classification == "subagent")
+        #expect(entry.agentId == "main")
+        #expect(entry.isMain == false)
+        #expect(entry.isBackground == true)
         #expect(entry.spawnedBy == "agent:main:controller")
         #expect(entry.childSessions == ["agent:main:grandchild"])
         #expect(entry.status == "running")
@@ -590,6 +598,54 @@ struct ChatSessionSidebarModelTests {
                 activeRunIds: ["run-1"]),
             to: sessions))
         #expect(sessions[0].observerDigest?.headline == "Projected")
+    }
+
+    @Test func `global reconnect rejects foreign and stale observer projections`() throws {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"],
+            observerDigest: .init(
+                agentId: "work",
+                runId: "run-work",
+                revision: 4,
+                updatedAt: 400,
+                headline: "Current work status",
+                health: "grinding"))
+
+        let foreign = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: "global",
+                agentId: "main",
+                reason: "run-progress",
+                observerDigest: .init(
+                    agentId: "main",
+                    runId: "run-work",
+                    revision: 9,
+                    updatedAt: 900,
+                    headline: "Foreign status",
+                    health: "done")),
+            to: [running],
+            activeAgentId: "work"))
+
+        let replayed = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: "global",
+                agentId: "work",
+                reason: "run-progress",
+                observerDigest: .init(
+                    agentId: "work",
+                    runId: "run-work",
+                    revision: 3,
+                    updatedAt: 1_000,
+                    headline: "Replayed work status",
+                    health: "on-track")),
+            to: foreign,
+            activeAgentId: "work"))
+
+        #expect(replayed[0].observerDigest?.headline == "Current work status")
+        #expect(replayed[0].observerDigest?.revision == 4)
     }
 
     @Test func `run rollover clears a stale digest before the replacement event`() throws {

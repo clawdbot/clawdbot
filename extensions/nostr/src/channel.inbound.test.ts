@@ -52,11 +52,12 @@ function createRuntimeHarness() {
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
     await dispatcherOptions.deliver({ text: "**Table:** [docs](https://example.com)" });
   });
+  const convertMarkdownTables = vi.fn((text: string) => text);
   const runtime = {
     channel: {
       text: {
         resolveMarkdownTableMode: vi.fn(() => "off"),
-        convertMarkdownTables: vi.fn((text: string) => text),
+        convertMarkdownTables,
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => true),
@@ -91,6 +92,7 @@ function createRuntimeHarness() {
     runtime,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
+    convertMarkdownTables,
   };
 }
 
@@ -226,5 +228,89 @@ describe("nostr inbound gateway path", () => {
     expect(sendReply).toHaveBeenCalledWith("Table: docs (https://example.com)");
 
     await cleanup.stop();
+  });
+
+  it.each([
+    {
+      name: "strips an internal tool-failure banner",
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      expected: "Done.",
+    },
+    {
+      name: "strips internal tool-call XML",
+      text: '<tool_call>{"name":"read","arguments":{"path":"private"}}</tool_call>Done.',
+      expected: "Done.",
+    },
+    {
+      name: "strips multiline tool-response scaffolding",
+      text: [
+        "Before",
+        "<function_response>",
+        "private output",
+        "</function_response>",
+        "After",
+      ].join("\n"),
+      expected: "Before\n\nAfter",
+    },
+    {
+      name: "does not send an internal-trace-only reply",
+      text: "⚠️ 🛠️ `search repos (agent)` failed",
+      expected: null,
+    },
+    {
+      name: "preserves ordinary visible prose",
+      text: "The relay has two active subscriptions.",
+      expected: "The relay has two active subscriptions.",
+    },
+  ])("$name before sending an inbound Nostr DM reply", async ({ text, expected }) => {
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text });
+      },
+    );
+    const { harness, cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
+      }),
+      cfg: {},
+    });
+    const options = mockCallArg(mocks.startNostrBus) as {
+      onMessage: (
+        senderPubkey: string,
+        text: string,
+        reply: (text: string) => Promise<void>,
+        meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
+      ) => Promise<void>;
+    };
+    const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    try {
+      await options.onMessage(
+        "sender-pubkey",
+        "hello from nostr",
+        sendReply,
+        { eventId: "event-123", createdAt: 1_710_000_000 },
+        lifecycle,
+      );
+
+      if (expected === null) {
+        expect(harness.convertMarkdownTables).not.toHaveBeenCalled();
+        expect(sendReply).not.toHaveBeenCalled();
+      } else {
+        expect(harness.convertMarkdownTables).toHaveBeenCalledWith(expected, "off");
+        expect(sendReply).toHaveBeenCalledWith(expected);
+      }
+    } finally {
+      await cleanup.stop();
+    }
   });
 });

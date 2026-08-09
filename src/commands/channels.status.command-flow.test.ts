@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
   listConfiguredAnnounceChannelIdsForConfig: vi.fn((_params: unknown) => ["discord"]),
   missingOfficialExternalChannels: new Set<string>(),
+  repairHintChannelIdCalls: [] as string[][],
   withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
 }));
 
@@ -46,19 +47,29 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
 }));
 
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
-    mocks.missingOfficialExternalChannels.has(channelId)
-      ? {
-          pluginId: channelId,
-          channelId,
-          label: "Feishu",
-          installSpec: "@openclaw/feishu",
-          installCommand: "openclaw plugins install @openclaw/feishu",
-          doctorFixCommand: "openclaw doctor --fix",
-          repairHint:
-            "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-        }
-      : null,
+  resolveMissingOfficialExternalChannelPluginRepairHints: ({
+    channelIds,
+  }: {
+    channelIds: string[];
+  }) => {
+    mocks.repairHintChannelIdCalls.push([...channelIds]);
+    return channelIds.flatMap((channelId) =>
+      mocks.missingOfficialExternalChannels.has(channelId)
+        ? [
+            {
+              pluginId: channelId,
+              channelId,
+              label: "Feishu",
+              installSpec: "@openclaw/feishu",
+              installCommand: "openclaw plugins install @openclaw/feishu",
+              doctorFixCommand: "openclaw doctor --fix",
+              repairHint:
+                "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+            },
+          ]
+        : [],
+    );
+  },
 }));
 
 vi.mock("./channels/shared.js", () => ({
@@ -208,6 +219,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.requireValidConfigSnapshot.mockReset();
     mocks.listChannelPlugins.mockReset();
     mocks.missingOfficialExternalChannels.clear();
+    mocks.repairHintChannelIdCalls.length = 0;
     mocks.listConfiguredAnnounceChannelIdsForConfig.mockClear();
     mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["discord"]);
     mocks.withProgress.mockClear();
@@ -334,6 +346,44 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     );
   });
 
+  it("resolves config-only repair hints only for the requested channel", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    const config = { channels: { feishu: { appId: "cli_xxx" }, matrix: { enabled: true } } };
+    mocks.requireValidConfigSnapshot.mockResolvedValue(config);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: config,
+      effectiveConfig: config,
+      diagnostics: [],
+    });
+    mocks.missingOfficialExternalChannels.add("feishu");
+    mocks.missingOfficialExternalChannels.add("matrix");
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const { runtime } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ channel: "feishu", probe: false }, runtime as never);
+
+    expect(mocks.repairHintChannelIdCalls).toEqual([["feishu"]]);
+  });
+
+  it("excludes visible channels from config-only repair-hint resolution", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+    const config = {
+      channels: { discord: { enabled: true }, feishu: { appId: "cli_xxx" } },
+    };
+    mocks.requireValidConfigSnapshot.mockResolvedValue(config);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: config,
+      effectiveConfig: config,
+      diagnostics: [],
+    });
+    mocks.missingOfficialExternalChannels.add("feishu");
+    const { runtime } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: false }, runtime as never);
+
+    expect(mocks.repairHintChannelIdCalls).toEqual([["feishu"]]);
+  });
+
   it("keeps JSON fallback structured without rendering config-only text", async () => {
     mocks.callGateway.mockRejectedValue(
       new Error(
@@ -381,7 +431,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.configuredChannels).toStrictEqual([]);
   });
 
-  it("includes explicitly configured channels in JSON config-only fallback", async () => {
+  it("treats all as no filter in JSON config-only fallback", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     mocks.requireValidConfigSnapshot.mockResolvedValue({
       channels: { clickclack: { enabled: true } },
@@ -394,7 +444,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["clickclack"]);
     const { runtime, logs } = createCapturingTestRuntime();
 
-    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+    await channelsStatusCommand({ channel: "all", json: true, probe: false }, runtime as never);
 
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.gatewayReachable).toBe(false);

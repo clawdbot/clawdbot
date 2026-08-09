@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import {
@@ -14,14 +15,17 @@ import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunne
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+export const WORKER_WORKSPACE_RSYNC_DESTINATION = "openclaw-rsync-destination";
 
 export type WorkerWorkspaceActionsOptions = {
   environmentId: string;
+  sharedHost?: boolean;
   ownerSignal: AbortSignal;
   isConnected: () => boolean;
   getPrepared: () => PreparedWorkerSsh | undefined;
   runner: { run(argv: string[], options: CommandOptions): Promise<SpawnResult> };
   tasks: Set<Promise<unknown>>;
+  bundleHash: string;
 };
 
 export function waitForQuiescenceRenewal(
@@ -57,7 +61,10 @@ export function workspaceSyncError(result: SpawnResult): Error {
   );
 }
 
-export function workerWorkspaceRsyncRemoteCommand(prepared: PreparedWorkerSsh): string {
+export function workerWorkspaceRsyncRemoteCommand(
+  prepared: PreparedWorkerSsh,
+  port = prepared.port,
+): string {
   return workerSshRemoteCommand([
     "ssh",
     ...workerSshOptions(prepared, { forwarding: "disabled" }),
@@ -65,13 +72,77 @@ export function workerWorkspaceRsyncRemoteCommand(prepared: PreparedWorkerSsh): 
     "-x",
     "-T",
     "-p",
-    String(prepared.port),
+    String(port),
   ]);
+}
+
+type WorkerWorkspaceRsyncReceiverMode = "accepted-next" | "git-pack" | "workspace-root";
+
+function workerWorkspaceRsyncReceiverPath(params: {
+  receiverEntryPath: string;
+  remoteWorkspaceDir: string;
+  canonicalHome: string;
+  remoteRelative: string;
+  mode: WorkerWorkspaceRsyncReceiverMode;
+  nonce: string;
+}): string {
+  const context = Buffer.from(
+    JSON.stringify([params.remoteWorkspaceDir, params.canonicalHome, params.remoteRelative]),
+  ).toString("base64url");
+  const command = ["node", params.receiverEntryPath, params.mode, context, params.nonce];
+  if (command.some((word) => !/^[A-Za-z0-9_./-]+$/u.test(word))) {
+    throw new Error("Worker workspace rsync receiver command is not shell-safe");
+  }
+  return command.join(" ");
+}
+
+export function createWorkerWorkspaceRsyncReceiverPathFactory(params: {
+  receiverEntryPath: string;
+  remoteWorkspaceDir: string;
+  canonicalHome: string;
+  remoteRelative: string;
+}): (mode: "git-pack" | "workspace-root") => string {
+  return (mode) =>
+    workerWorkspaceRsyncReceiverPath({
+      ...params,
+      mode,
+      nonce: randomBytes(16).toString("hex"),
+    });
+}
+
+export function workerAcceptedWorkspaceRsyncReceiverPath(params: {
+  receiverEntryPath: string;
+  remoteWorkspaceDir: string;
+  nonce: string;
+}): string {
+  const workspaceRootMarker = "/.openclaw-worker/workspaces/";
+  const markerIndex = params.remoteWorkspaceDir.lastIndexOf(workspaceRootMarker);
+  if (markerIndex < 1) {
+    throw new Error("Accepted workspace path is outside the managed workspace root");
+  }
+  const canonicalHome = params.remoteWorkspaceDir.slice(0, markerIndex);
+  const remoteRelative = params.remoteWorkspaceDir.slice(markerIndex + 1);
+  return workerWorkspaceRsyncReceiverPath({
+    receiverEntryPath: params.receiverEntryPath,
+    remoteWorkspaceDir: params.remoteWorkspaceDir,
+    canonicalHome,
+    remoteRelative,
+    mode: "accepted-next",
+    nonce: params.nonce,
+  });
+}
+
+export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(bundleHash)) {
+    throw new Error("Worker workspace rsync receiver bundle hash is invalid");
+  }
+  return `.openclaw-worker/${bundleHash}/dist/worker/workspace-rsync-receiver.js`;
 }
 
 export function workerWorkspaceSshArgv(
   prepared: PreparedWorkerSsh,
   remoteArgv: readonly string[],
+  port = prepared.port,
 ): string[] {
   return [
     "ssh",
@@ -80,7 +151,7 @@ export function workerWorkspaceSshArgv(
     "-x",
     "-T",
     "-p",
-    String(prepared.port),
+    String(port),
     "--",
     prepared.sshTarget,
     workerSshRemoteCommand(remoteArgv),
@@ -97,6 +168,7 @@ async function resolveRemoteWorkspaceBaseManifest(
     throw new Error("Worker workspace base manifest reference is invalid");
   }
   const resolved = await runWorkspaceCommand({
+    transportRetry: "idempotent",
     argv: [
       "node",
       "-e",
@@ -137,6 +209,7 @@ export async function verifyRemoteWorkspaceManifest(params: {
 }): Promise<void> {
   const expectedDigest = params.expectedRef.slice("sha256:".length);
   const verified = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
     argv: [
       "node",
       "-e",
@@ -212,18 +285,33 @@ export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest
   }
 }
 
-export function parseRemoteWorkspaceDirectory(stdout: string): string {
-  const lines = stdout.split(/\r?\n/u).filter(Boolean);
-  const directory = lines.length === 1 ? lines[0] : undefined;
-  if (
-    !directory ||
-    !path.posix.isAbsolute(directory) ||
-    path.posix.normalize(directory) !== directory ||
-    directory === "/"
-  ) {
-    throw new Error("Worker workspace setup returned an invalid remote directory");
+export function parseRemoteWorkspaceSetup(
+  stdout: string,
+  remoteRelative: string,
+): { canonicalHome: string; remoteWorkspaceDir: string } {
+  let response: unknown;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    throw new Error("Worker workspace setup returned an invalid response");
   }
-  return directory;
+  const record = isRecord(response) ? response : undefined;
+  const canonicalHome = record?.canonicalHome;
+  const remoteWorkspaceDir = record?.canonicalWorkspace;
+  if (
+    record?.tag !== "openclaw-workspace-setup-v1" ||
+    typeof canonicalHome !== "string" ||
+    !path.posix.isAbsolute(canonicalHome) ||
+    path.posix.normalize(canonicalHome) !== canonicalHome ||
+    typeof remoteWorkspaceDir !== "string" ||
+    !path.posix.isAbsolute(remoteWorkspaceDir) ||
+    path.posix.normalize(remoteWorkspaceDir) !== remoteWorkspaceDir ||
+    remoteWorkspaceDir === "/" ||
+    remoteWorkspaceDir !== path.posix.join(canonicalHome, remoteRelative)
+  ) {
+    throw new Error("Worker workspace setup returned an invalid response");
+  }
+  return { canonicalHome, remoteWorkspaceDir };
 }
 
 export function parseManifestRef(stdout: string): string {

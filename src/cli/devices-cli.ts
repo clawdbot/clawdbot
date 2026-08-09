@@ -1,6 +1,8 @@
 // Commander registration for device pairing and auth-token commands.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { isDevicesMachineOutput } from "./devices-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type DevicesRpcOpts = {
@@ -129,6 +131,8 @@ export function registerDevicesCli(program: Command) {
         await runDevicesRevokeCommand(opts);
       }),
   );
+
+  setCommandJsonMode(devices, "output", ({ argv }) => isDevicesMachineOutput(argv));
 
   applyParentDefaultHelpAction(devices);
 }
