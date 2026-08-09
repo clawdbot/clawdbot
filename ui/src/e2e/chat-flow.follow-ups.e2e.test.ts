@@ -80,9 +80,16 @@ suite.define(() => {
 
       const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.getByRole("button", { name: "More ways to start this task" }).count()).toBe(
-        0,
-      );
+      const moreActions = page.getByRole("button", { name: "More ways to start this task" });
+      expect(await moreActions.count()).toBe(1);
+      await moreActions.click();
+      await page
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+      expect(await page.getByText("Start locally", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Fix in this session", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Send to cloud", { exact: true }).count()).toBe(0);
+      await page.keyboard.press("Escape");
       await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })

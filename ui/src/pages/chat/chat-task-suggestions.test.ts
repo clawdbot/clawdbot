@@ -22,6 +22,7 @@ function renderSuggestion(
   const container = document.createElement("div");
   const onAccept = vi.fn();
   const onDismiss = vi.fn();
+  const onCopyPrompt = vi.fn();
   render(
     renderChatTaskSuggestions({
       suggestions: [suggestion],
@@ -32,11 +33,13 @@ function renderSuggestion(
       cloudProfiles: [],
       onAccept,
       onDismiss,
+      onCopyPrompt,
+      copiedIds: new Set<string>(),
       ...overrides,
     }),
     container,
   );
-  return { container, onAccept, onDismiss };
+  return { container, onAccept, onDismiss, onCopyPrompt };
 }
 
 function selectMenuItem(container: HTMLElement, item: Element) {
@@ -105,20 +108,25 @@ describe("chat task suggestions", () => {
     ]);
   });
 
-  it("copies the raw prompt from the menu without accepting", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    try {
-      const { container, onAccept } = renderSuggestion();
-      const copy = container.querySelector('wa-dropdown-item[value="copy-prompt"]');
-      expect(copy).not.toBeNull();
-      selectMenuItem(container, copy!);
-      await Promise.resolve();
-      expect(writeText).toHaveBeenCalledWith(suggestion.prompt);
-      expect(onAccept).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it("forwards copy-prompt without accepting, even without acceptance access", () => {
+    const { container, onAccept, onCopyPrompt } = renderSuggestion({
+      canAccept: false,
+      canAcceptModes: false,
+    });
+    const trigger = container.querySelector(".task-suggestion__menu-trigger");
+    expect(trigger?.hasAttribute("disabled")).toBe(false);
+    expect(container.querySelector('wa-dropdown-item[value="local"]')).toBeNull();
+    const copy = container.querySelector('wa-dropdown-item[value="copy-prompt"]');
+    expect(copy).not.toBeNull();
+    selectMenuItem(container, copy!);
+    expect(onCopyPrompt).toHaveBeenCalledWith(suggestion);
+    expect(onAccept).not.toHaveBeenCalled();
+  });
+
+  it("shows copied feedback while the suggestion id is marked copied", () => {
+    const { container } = renderSuggestion({ copiedIds: new Set([suggestion.id]) });
+    const copy = container.querySelector('wa-dropdown-item[value="copy-prompt"]');
+    expect(copy?.textContent?.trim()).toBe("Copied");
   });
 
   it("renders no card icon column", () => {
@@ -126,12 +134,15 @@ describe("chat task suggestions", () => {
     expect(container.querySelector(".task-suggestion__icon")).toBeNull();
   });
 
-  it("renders a worktree-only action when acceptance modes are not advertised", () => {
+  it("offers no acceptance-mode actions when modes are not advertised", () => {
     const { container, onAccept } = renderSuggestion({ canAcceptModes: false });
 
     expect(container.querySelector(".task-suggestion__start")).not.toBeNull();
-    expect(container.querySelector(".task-suggestion__menu")).toBeNull();
-    expect(container.querySelector(".task-suggestion__menu-trigger")).toBeNull();
+    // The menu itself stays: it carries the client-local Copy prompt action.
+    expect(container.querySelector('wa-dropdown-item[value="local"]')).toBeNull();
+    expect(container.querySelector('wa-dropdown-item[value="cloud"]')).toBeNull();
+    expect(container.querySelector('wa-dropdown-item[value="session"]')).toBeNull();
+    expect(container.querySelector('wa-dropdown-item[value="copy-prompt"]')).not.toBeNull();
 
     container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.click();
     expect(onAccept).toHaveBeenCalledWith(suggestion, "worktree", undefined);

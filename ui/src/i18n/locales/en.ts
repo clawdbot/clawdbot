@@ -4621,6 +4621,8 @@ export const en: TranslationMap = {
       startCloud: "Send to cloud · {profile}",
       startCloudGeneric: "Send to cloud",
       copyPrompt: "Copy prompt",
+      copyPromptFailed: "Couldn't copy the prompt to the clipboard",
+      promptCopied: "Copied",
       fixInSession: "Fix in this session",
       noCloudConfigured: "No cloud environment configured",
       showInstructions: "Show instructions",
