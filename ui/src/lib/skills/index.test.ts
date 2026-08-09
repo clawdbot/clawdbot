@@ -199,7 +199,7 @@ describe("loadSkills", () => {
     expect(state.clawhubVerdictsError).toBeNull();
   });
 
-  it("keys verdicts by canonical slug when the requested alias differs (#108647)", async () => {
+  it("keys verdicts by requested identity matching the linked skill (#108647)", async () => {
     const { state, request } = createState();
     request.mockImplementation(async (method: string) => {
       if (method === "skills.status") {
@@ -232,9 +232,9 @@ describe("loadSkills", () => {
               ok: true,
               decision: "pass",
               reasons: [],
-              // Requested with a version suffix; the canonical identity is
-              // carried separately.
-              requestedSlug: "agentreceipt@1.2.3",
+              // The gateway echoes the requested target identity; resolved
+              // fields never diverge (identity_mismatch otherwise).
+              requestedSlug: "agentreceipt",
               requestedVersion: "1.2.3",
               slug: "agentreceipt",
               version: "1.2.3",
@@ -249,7 +249,7 @@ describe("loadSkills", () => {
 
     await loadSkills(state);
 
-    // The map must be keyed by the canonical slug so verdictForSkill's
+    // The map must be keyed by the requested identity so verdictForSkill's
     // link.slug lookup hits instead of falling back to "Unavailable".
     expect(state.clawhubVerdicts).toEqual({
       "https://clawhub.ai\u0000\u0000agentreceipt\u00001.2.3": expect.objectContaining({
@@ -260,7 +260,7 @@ describe("loadSkills", () => {
     });
   });
 
-  it("keeps owner-qualified verdict keys when the requested alias differs (#108647)", async () => {
+  it("keeps owner-qualified verdict keys matching the linked skill (#108647)", async () => {
     const { state, request } = createState();
     request.mockImplementation(async (method: string) => {
       if (method === "skills.status") {
@@ -294,7 +294,7 @@ describe("loadSkills", () => {
               ok: true,
               decision: "pass",
               reasons: [],
-              requestedSlug: "agentreceipt@1.2.3",
+              requestedSlug: "agentreceipt",
               requestedOwnerHandle: "acme",
               requestedVersion: "1.2.3",
               slug: "agentreceipt",
