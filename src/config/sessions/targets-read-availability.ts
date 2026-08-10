@@ -5,7 +5,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { readSqliteSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -56,7 +56,7 @@ function readSessionStoreTargetSnapshot(params: {
       (database) => {
         const scopedAgentIds = new Set<string>();
         let hasUnscopedRow = false;
-        for (const sessionKey of readSqliteSessionEntryKeys(database)) {
+        for (const sessionKey of readSessionEntryKeys(database)) {
           const parsed = parseAgentSessionKey(sessionKey);
           if (parsed) {
             scopedAgentIds.add(normalizeAgentId(parsed.agentId));

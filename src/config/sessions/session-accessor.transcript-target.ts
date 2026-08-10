@@ -66,8 +66,6 @@ export function resolveSessionTranscriptDatabasePath(
   return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 }
 
-export { resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget };
-
 export function resolveSessionTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptReadTarget {
