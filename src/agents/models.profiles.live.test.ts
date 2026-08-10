@@ -24,7 +24,6 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { extractAssistantText } from "./embedded-agent-utils.js";
 import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
@@ -37,22 +36,6 @@ import {
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
-import {
-  buildLiveModelFileProbeContext,
-  buildLiveModelFileProbeRetryContext,
-  buildLiveModelImageProbeContext,
-  fileProbeTextMatches,
-  isLiveModelProbeEnabled,
-  LIVE_MODEL_FILE_PROBE_ENV,
-  LIVE_MODEL_FILE_PROBE_TOKEN,
-  LIVE_MODEL_IMAGE_PROBE_ENV,
-  modelSupportsImageInput,
-  runLiveModelImageProbeWithRetry,
-  shouldSkipLiveModelExtraProbes,
-  shouldSkipLiveModelFileProbe,
-  shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
-import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
@@ -73,6 +56,23 @@ import {
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
+import { appendPrioritizedDynamicLiveModels } from "./test-helpers/live-model-dynamic-candidates.js";
+import {
+  buildLiveModelFileProbeContext,
+  buildLiveModelFileProbeRetryContext,
+  buildLiveModelImageProbeContext,
+  fileProbeTextMatches,
+  isLiveModelProbeEnabled,
+  LIVE_MODEL_FILE_PROBE_ENV,
+  LIVE_MODEL_FILE_PROBE_TOKEN,
+  LIVE_MODEL_IMAGE_PROBE_ENV,
+  modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
+  shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
+} from "./test-helpers/live-model-turn-probes.js";
+import { createLiveTargetMatcher } from "./test-helpers/live-target-matcher.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());

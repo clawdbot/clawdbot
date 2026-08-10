@@ -143,6 +143,7 @@ jobs:
       mode: ${{ steps.inputs.outputs.mode }}
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
+      qa_live_scheduled: ${{ steps.inputs.outputs.qa_live_scheduled }}
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
@@ -430,10 +431,10 @@ jobs:
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
 
+          qa_filter_seen=false
           filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
           repo_live_suite_filter="$filter"
           if [[ -n "${filter// }" ]]; then
-            qa_filter_seen=false
             repo_filter_tokens=()
             matrix_selected=false
             buzz_selected=false
@@ -525,6 +526,12 @@ jobs:
             fi
           fi
 
+          qa_live_scheduled=false
+          if [[ "$RELEASE_RERUN_GROUP_INPUT" == "qa" || "$RELEASE_RERUN_GROUP_INPUT" == "qa-live" ]] ||
+            [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" && ( "$run_release_soak" == "true" || "$qa_filter_seen" == "true" ) ]]; then
+            qa_live_scheduled=true
+          fi
+
           cross_os_scheduled=false
           if [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" || "$RELEASE_RERUN_GROUP_INPUT" == "cross-os" ]]; then
             cross_os_scheduled=true
@@ -542,6 +549,7 @@ jobs:
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
+            printf 'qa_live_scheduled=%s\n' "$qa_live_scheduled"
             printf 'fail_fast=%s\n' "$fail_fast"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
@@ -572,6 +580,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
+          QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
           FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
@@ -593,6 +602,7 @@ jobs:
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- QA-live scheduled: \`${QA_LIVE_SCHEDULED}\`"
             echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
@@ -604,7 +614,7 @@ jobs:
             if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER// }" ]]; then
               echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
-            echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Buzz \`${{ steps.inputs.outputs.qa_live_buzz_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
+            echo "- QA-live lane eligibility: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Buzz \`${{ steps.inputs.outputs.qa_live_buzz_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
             if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
               echo "- Release package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             fi
@@ -1916,7 +1926,7 @@ jobs:
   qa_live_release_checks:
     name: Run QA Live Matrix catalog
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -1934,7 +1944,7 @@ jobs:
   qa_live_buzz_release_checks:
     name: Run QA Lab live Buzz lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -1954,7 +1964,7 @@ jobs:
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 210
     permissions:
@@ -2079,7 +2089,7 @@ jobs:
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2194,7 +2204,7 @@ jobs:
   qa_live_whatsapp_release_checks:
     name: Run QA Lab live WhatsApp lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2293,7 +2303,7 @@ jobs:
   qa_live_slack_release_checks:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2528,7 +2538,7 @@ jobs:
           QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result }}
           QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_buzz_release_checks.result }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
-          QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
+          QA_LIVE_TELEGRAM_SELECTED: ${{ needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
           QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
           QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}

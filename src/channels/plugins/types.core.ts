@@ -832,8 +832,6 @@ export type ChannelPollContext = {
   silent?: boolean;
   isAnonymous?: boolean;
   gatewayClientScopes?: readonly string[];
-  /** @internal Refresh durable timing before recipient-visible platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

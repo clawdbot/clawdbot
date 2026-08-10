@@ -712,8 +712,16 @@
                   "model": {
                     "type": "string"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "speed": {
                     "type": "number",
@@ -735,8 +743,16 @@
                   "baseUrl": {
                     "type": "string"
                   },
-                  "voiceId": {
+                  "speakerVoiceId": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
                   },
                   "modelId": {
                     "type": "string"
@@ -791,8 +807,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -829,8 +853,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"

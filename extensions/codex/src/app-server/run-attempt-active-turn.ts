@@ -95,6 +95,7 @@ export async function activateCodexAttemptTurn(
     resourceState.thread.threadId,
     activeTurnId,
     {
+      initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),

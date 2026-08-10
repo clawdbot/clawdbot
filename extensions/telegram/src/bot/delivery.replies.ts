@@ -254,7 +254,6 @@ async function deliverTextReply(params: {
   progress: DeliveryProgress;
   recordMessageId: (messageId: number) => void;
   quoteOnlyOnFirstChunk?: boolean;
-  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
@@ -279,7 +278,6 @@ async function deliverTextReply(params: {
     markDelivered,
     sendChunk: async ({ chunk, isFirstChunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
       const includeQuoteMetadata = params.quoteOnlyOnFirstChunk !== true || isFirstChunk;
-      await params.onPlatformSendDispatch?.();
       const messageId = await sendTelegramText(
         params.bot,
         params.chatId,
@@ -353,7 +351,6 @@ async function deliverMediaReply(params: {
   progress: DeliveryProgress;
   recordMessageId: (messageId: number) => void;
   textMode?: "html";
-  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
   let visibleFallbackText: string | undefined;
@@ -375,7 +372,6 @@ async function deliverMediaReply(params: {
     plainCaption?: string;
     shouldLog?: (err: unknown) => boolean;
   }) => {
-    await params.onPlatformSendDispatch?.();
     const delivery = await sendTelegramCaptionedMediaWithFallback({
       operation: options.sender.operation,
       requestParams: options.requestParams,
@@ -521,7 +517,6 @@ async function deliverMediaReply(params: {
           progress: createVoiceFallbackProgress(),
           recordMessageId: params.recordMessageId,
           quoteOnlyOnFirstChunk: true,
-          onPlatformSendDispatch: params.onPlatformSendDispatch,
         });
 
       await params.onVoiceRecording?.();
@@ -617,7 +612,6 @@ async function deliverMediaReply(params: {
           replyToMode: params.replyToMode,
           progress: params.progress,
           recordMessageId: params.recordMessageId,
-          onPlatformSendDispatch: params.onPlatformSendDispatch,
         });
         if (followUpMessageId === undefined) {
           visibleFallbackText = firstDeliveredCaption ?? "";
@@ -789,8 +783,6 @@ export async function deliverReplies(params: {
   promptContextSequence?: TelegramPromptContextProjectionSequence;
   /** Text is already prepared Telegram HTML and must not be parsed as Markdown again. */
   textMode?: "html";
-  /** @internal Claim delivery custody immediately before Telegram Bot API I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<{
   delivered: boolean;
 }> {
@@ -938,7 +930,6 @@ export async function deliverReplies(params: {
       );
       let firstDeliveredMessageId: number | undefined;
       if (reactionEmoji && typeof replyToId === "number") {
-        await params.onPlatformSendDispatch?.();
         const reactionResult = await reactMessageTelegram(params.chatId, replyToId, reactionEmoji, {
           cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
           token: params.token,
@@ -975,7 +966,6 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
           recordMessageId,
-          onPlatformSendDispatch: params.onPlatformSendDispatch,
         });
       } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
@@ -1003,7 +993,6 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
           recordMessageId,
-          onPlatformSendDispatch: params.onPlatformSendDispatch,
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;

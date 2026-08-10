@@ -32,7 +32,7 @@ Add `--json` for a machine-readable summary.
 
 - `--gateway-port` defaults to `18789`; only pass it to override.
 - `--skip-bootstrap` skips creating default workspace files, for automation that pre-seeds its own workspace.
-- `--secret-input-mode ref` stores new credentials as env-backed references (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`); set the provider env var when adding a credential or passing an inline key flag. Existing resolvable named profiles and their `env`, `file`, or `exec` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+- `--secret-input-mode ref` stores new credentials as env-backed references (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`); set the provider env var when adding a credential or passing an inline key flag. Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ```bash
 openclaw onboard --non-interactive --accept-risk \

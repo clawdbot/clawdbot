@@ -525,8 +525,8 @@ openclaw-chat-page {
   right: 0;
   bottom: calc(100% + 10px);
   z-index: 70;
-  width: min(340px, calc(100vw - 42px));
-  padding: 16px;
+  width: min(300px, calc(100vw - 42px));
+  padding: 12px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--popover) 96%, var(--card));
@@ -559,7 +559,7 @@ openclaw-chat-page {
 
 .context-usage__bar {
   height: 5px;
-  margin: 12px 0 15px;
+  margin: 8px 0 10px;
   overflow: hidden;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted) 22%, transparent);
@@ -684,40 +684,38 @@ openclaw-chat-page {
 }
 
 .context-usage__stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-  gap: 8px;
-  margin: 10px 0 0;
-}
-
-.context-usage__stats--cost {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  margin: 8px 0 0;
+  font-size: 12px;
 }
 
 .context-usage__stats div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
   min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 72%, transparent);
+}
+
+/* Trailing separator: on flex-wrap the dot stays at the end of the previous
+   line instead of orphaned at the start of the next one. */
+.context-usage__stats div:not(:last-child)::after {
+  margin-left: 2px;
+  color: var(--muted);
+  content: "·";
 }
 
 .context-usage__stats dt {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .context-usage__stats dd {
-  margin: 4px 0 0;
-  overflow: hidden;
+  margin: 0;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 700;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
 }
 
 .context-usage__provenance {

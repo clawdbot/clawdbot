@@ -1,6 +1,5 @@
 /** Persists restart-recoverable final delivery markers for agent runs. */
-import { randomUUID } from "node:crypto";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -27,20 +26,15 @@ type PersistPendingFinalDeliveryMarkerParams = {
 type PendingFinalDeliveryMarkerResult = {
   sessionEntry?: SessionEntry;
   pendingFinalDeliveryMarkerPersisted: boolean;
-  pendingFinalDeliveryIntentId?: string;
   hasSendableFinalPayload: boolean;
 };
 
 export async function persistPendingFinalDeliveryMarker(
   params: PersistPendingFinalDeliveryMarkerParams,
 ): Promise<PendingFinalDeliveryMarkerResult> {
-  const sendablePayloads = params.payloads.filter(
-    (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
-  );
-  const hasSendableFinalPayload = sendablePayloads.length > 0;
-  const recoverableText = buildRecoverablePendingFinalDeliveryText(
-    normalizePendingFinalRecoveryPayloads(params.payloads),
-  );
+  const recoveryPayloads = normalizePendingFinalRecoveryPayloads(params.payloads);
+  const hasSendableFinalPayload = normalizePendingFinalDeliveryPayloads(params.payloads).length > 0;
+  const recoverableText = buildRecoverablePendingFinalDeliveryText(recoveryPayloads);
 
   if (
     !params.deliver ||
@@ -48,7 +42,9 @@ export async function persistPendingFinalDeliveryMarker(
     !params.sessionKey ||
     params.suppressVisibleSessionEffects ||
     params.sessionReboundDuringRun ||
+    params.payloads.length === 0 ||
     isSubagentSessionKey(params.sessionKey) ||
+    !recoverableText ||
     !hasSendableFinalPayload
   ) {
     return {
@@ -68,8 +64,6 @@ export async function persistPendingFinalDeliveryMarker(
   }
 
   const now = Date.now();
-  const intentId = randomUUID();
-  const deliveryId = randomUUID();
   const persisted = await persistSessionEntry({
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -78,11 +72,8 @@ export async function persistPendingFinalDeliveryMarker(
     entry: {
       ...entry,
       pendingFinalDelivery: {
-        ...(recoverableText
-          ? { kind: "replayable" as const, text: recoverableText }
-          : { kind: "transport-only" as const }),
-        intentId,
-        deliveries: [{ id: deliveryId, state: "prepared" as const }],
+        kind: "replayable",
+        text: recoverableText,
         createdAt: now,
         ...(params.deliveryContext ? { context: params.deliveryContext } : {}),
       },
@@ -91,29 +82,13 @@ export async function persistPendingFinalDeliveryMarker(
     shouldPersist: (current) =>
       current?.sessionId === params.runOwnedSessionId && current.abortedLastRun !== true,
   });
-  const markerPersisted = persisted?.pendingFinalDelivery?.intentId === intentId;
-
-  if (markerPersisted) {
-    for (const payload of sendablePayloads) {
-      setReplyPayloadMetadata(payload, {
-        pendingFinalDeliveryCompletion: {
-          deliveryId,
-          intentId,
-          ...(entry.restartRecoveryDeliveryRunId
-            ? { recoveryRunId: entry.restartRecoveryDeliveryRunId }
-            : {}),
-          sessionId: params.runOwnedSessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-        },
-      });
-    }
-  }
+  const markerPersisted =
+    persisted?.pendingFinalDelivery?.kind === "replayable" &&
+    persisted.pendingFinalDelivery.text === recoverableText;
 
   return {
     sessionEntry: persisted,
     pendingFinalDeliveryMarkerPersisted: markerPersisted,
-    ...(markerPersisted ? { pendingFinalDeliveryIntentId: intentId } : {}),
     hasSendableFinalPayload,
   };
 }

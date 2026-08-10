@@ -86,7 +86,6 @@ vi.mock("../agents/command/session-store.runtime.js", async () => {
   const accessor = await import("../config/sessions/session-accessor.js");
   return {
     loadSessionEntry: accessor.loadSessionEntry,
-    loadSessionEntryReadOnly: accessor.loadSessionEntryReadOnly,
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
 });

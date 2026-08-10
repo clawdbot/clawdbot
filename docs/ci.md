@@ -164,7 +164,10 @@ PR max-lines checks derive the baseline from the checked-out synthetic merge tre
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
 gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
-gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
+VALIDATION_SHA="<full-commit-sha>"
+gh workflow run full-release-validation.yml --ref main \
+  -f ref="$VALIDATION_SHA" \
+  -f expected_sha="$VALIDATION_SHA"
 ```
 
 Gateway extended-stable runs npm preflight, Full Release Validation, and plugin
@@ -287,7 +290,16 @@ Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target (including Android), dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, dispatches `OpenClaw Performance` against the target SHA, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, Telegram, and gated Discord, WhatsApp, and Slack lanes (advisory maturity scorecard rendering is opt-in via `run_maturity_scorecard`). Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs. Its live agent proof sends visible progress, continues through randomized workspace reads and an exact artifact write, then sends completion.
+`Full Release Validation` is the manual release umbrella. Every run binds an
+exact Validation SHA + Tooling SHA tuple and rejects an `expected_sha` mismatch
+before child dispatch. Validation SHA maps to the Code SHA for product
+validation or the Release SHA for changelog-only validation; it is not a third
+release identity. Beta-publish maps to `release_profile=beta` with
+`run_release_soak=false`; its `all` run includes normal CI, Plugin Prerelease,
+package/install/cross-OS checks, performance, and QA parity, but excludes broad
+live/E2E and QA-live. Postpublish-confidence uses the exact published package
+with soak or explicit focused groups. Stable-publish maps to
+`release_profile=stable`.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -331,13 +343,10 @@ pnpm ci:full-release --sha <full-sha>
 ```
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
-helper pushes a temporary `release-ci/<sha>-...` branch at a trusted `main`
-workflow SHA, passes the requested target SHA through the workflow `ref` input,
-reuses strict exact-target evidence when available, verifies every child
-workflow `headSha` matches the trusted workflow SHA, and deletes the temporary
-branch when the run completes. Pass `-f reuse_evidence=false` to force fresh
-validation. The umbrella verifier also fails if any child workflow ran at a
-different workflow SHA.
+helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
+SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
+strict exact-target evidence when available, and verifies every child workflow
+`headSha` matches the Tooling SHA.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
@@ -355,17 +364,22 @@ CLI's own first-scenario cancellation.
 - `stable` adds the stable provider/backend set.
 - `full` runs the broad advisory provider/media matrix.
 
-The umbrella records the dispatched child run ids, and the final `Verify full validation` job re-checks current child run conclusions and appends slowest-job tables for each child run. If a child workflow is rerun and turns green, rerun only the parent verifier job to refresh the umbrella result and timing summary.
+The umbrella records dispatched child run ids, and `Verify full validation`
+checks them during that parent attempt. Parent cancellation or timeout leaves
+adopted exact children running; cancel one explicitly when it is no longer
+needed.
 
-For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `performance` for only the OpenClaw Performance child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix. For one failed cross-OS lane, combine `rerun_group=cross-os` with `cross_os_suite_filter`, for example `windows/packaged-upgrade`; long cross-OS commands emit heartbeat lines and packaged-upgrade summaries include per-phase timings. Selected Matrix and Telegram QA lanes block normal release validation, as does the core runtime-pair tool coverage gate. QA parity, runtime parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory.
+For recovery, classify product, harness/tooling/provenance,
+infrastructure/credential, and wrapper failures before editing. Only confirmed
+product failure changes the Code SHA. Use one diagnosis, one fix when needed,
+and one narrow `rerun_group` retry, then reassess; never widen automatically to
+`all`. Narrow evidence is not publish authorization by itself.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 
-Duplicate `Full Release Validation` runs for `ref=main` and `rerun_group=all`
-supersede the older umbrella. The parent monitor cancels any child workflow it
-has already dispatched when the parent is cancelled, so newer main validation
-does not sit behind a stale two-hour release-check run. Release branch/tag
-validation and focused rerun groups keep `cancel-in-progress: false`.
+Full Release Validation concurrency is keyed by Validation SHA, Tooling SHA,
+and rerun group with `cancel-in-progress: false`. Parent cancellation does not
+cancel adopted children.
 
 ## Live and E2E shards
 

@@ -2238,3 +2238,21 @@ CREATE TABLE IF NOT EXISTS model_catalog_remote (
   last_modified TEXT,
   checked_at INTEGER NOT NULL
 ) STRICT;
+
+-- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,
+-- which would allow duplicate team rows. This PK also avoids a rebuild for identity scope.
+CREATE TABLE IF NOT EXISTS secret_store_entries (
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('team', 'identity')),
+  scope_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('secret', 'env')),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  updated_by TEXT,
+  deleted_at_ms INTEGER,
+  CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
+  PRIMARY KEY (scope_kind, scope_id, name)
+) STRICT;
+CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
+  ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;

@@ -756,8 +756,6 @@ src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
 src/infra/backup-create.ts
 src/infra/clawhub-install-trust.ts
-src/infra/clawhub.test.ts
-src/infra/clawhub.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
 src/infra/device-pairing.ts

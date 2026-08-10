@@ -299,6 +299,7 @@ export function dispatchAgentRunFromGateway(params: {
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
+      Object.defineProperty(error, "cause", { value: err });
       const payload = {
         runId: params.runId,
         status: responseStatus,

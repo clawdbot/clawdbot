@@ -847,7 +847,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `network.dangerouslyAllowPrivateNetwork`: allow this account to connect to `localhost`, LAN/Tailscale IPs, or internal hostnames.
 - `proxy`: optional HTTP(S) proxy URL for Matrix traffic. Per-account override supported.
 - `userId`: full Matrix user ID (`@bot:example.org`).
-- `accessToken`: access token for token-based auth. Plaintext and SecretRef values supported across env/file/exec providers ([Secrets Management](/gateway/secrets)).
+- `accessToken`: access token for token-based auth. Plaintext and SecretRef values supported across env/file/exec/store providers ([Secrets Management](/gateway/secrets)).
 - `password`: password for password-based login. Plaintext and SecretRef values supported.
 - `deviceId`: explicit Matrix device ID.
 - `deviceName`: device display name used at password-login time.

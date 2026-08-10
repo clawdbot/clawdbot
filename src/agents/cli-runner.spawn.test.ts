@@ -363,6 +363,54 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("surfaces a node-placed Claude synthetic empty terminal through the shared parser", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        [
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: "No response requested." }],
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            session_id: "node-synthetic-empty",
+            result: "",
+          }),
+          "",
+        ].join("\n"),
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildClaudeLiveRunContext({
+      model: "claude-opus-4-8",
+      runId: "run-node-synthetic-empty",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      code: "cli_synthetic_no_response",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a truncated node stream that lost the terminal result", async () => {
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
       params.onProgress(

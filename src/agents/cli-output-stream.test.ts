@@ -98,6 +98,17 @@ function claudeTextDelta(text: string, index?: number | string) {
   });
 }
 
+function claudeSyntheticNoResponse(text = "No response requested.") {
+  return {
+    type: "assistant",
+    message: {
+      model: "<synthetic>",
+      role: "assistant",
+      content: [{ type: "text", text }],
+    },
+  };
+}
+
 describe("createCliJsonlStreamingParser", () => {
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name while incrementally streaming CLI JSONL",
@@ -168,6 +179,100 @@ describe("createCliJsonlStreamingParser", () => {
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
     expect(sessionIds).toEqual(["session-stream"]);
+  });
+
+  it("records Claude's exact synthetic empty terminal as a failure", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeSyntheticNoResponse(),
+        { type: "result", subtype: "success", session_id: "synthetic-empty", result: "" },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "synthetic-empty",
+      usage: undefined,
+      errorText: "Claude CLI returned a synthetic no-response result.",
+      terminalFailure: { reason: "synthetic_no_response" },
+    });
+  });
+
+  it.each([
+    {
+      name: "ordinary lookalike",
+      frames: [
+        {
+          ...claudeSyntheticNoResponse(),
+          message: { ...claudeSyntheticNoResponse().message, model: "claude-sonnet-4-6" },
+        },
+      ],
+      expectedText: "",
+    },
+    {
+      name: "different synthetic text",
+      frames: [claudeSyntheticNoResponse("No reply needed.")],
+      expectedText: "",
+    },
+    {
+      name: "real text",
+      frames: [claudeSyntheticNoResponse(), claudeTextDelta("real answer")],
+      expectedText: "real answer",
+    },
+    {
+      name: "tool activity",
+      frames: [
+        {
+          type: "assistant",
+          message: {
+            model: "claude-sonnet-4-6",
+            role: "assistant",
+            content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
+          },
+        },
+        claudeSyntheticNoResponse(),
+      ],
+      expectedText: "",
+    },
+  ])("does not classify $name as a synthetic empty terminal", ({ frames, expectedText }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        ...frames,
+        { type: "result", subtype: "success", session_id: "not-synthetic", result: "" },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: expectedText,
+      sessionId: "not-synthetic",
+      usage: undefined,
+    });
   });
 
   it.each([

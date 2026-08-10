@@ -314,7 +314,7 @@ struct OnboardingAISetupView: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(self.model.isBusy)
+            .disabled(!self.model.canSelectCandidate(kind: candidate.kind))
 
             if case let .failed(failure) = status {
                 OnboardingErrorDetails(text: failure.copyText)

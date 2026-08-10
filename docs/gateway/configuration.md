@@ -643,8 +643,10 @@ Neither file overrides existing env vars. You can also set inline env vars in co
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
-    vars: { GROQ_API_KEY: "gsk-..." },
+    vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
+      GROQ_API_KEY: "gsk-...",
+    },
   },
 }
 ```
@@ -683,7 +685,7 @@ Rules:
 
 </Accordion>
 
-<Accordion title="Secret refs (env, file, exec)">
+<Accordion title="Secret refs (env, file, exec, store)">
   For fields that support SecretRef objects, you can use:
 
 ```json5
@@ -716,7 +718,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets).
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 

@@ -34,8 +34,8 @@ OpenClaw handles failures in two stages:
   <Step title="Retry safe pure overload exhaustion">
     If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff while no tool execution or assistant output has started. After 30 seconds, send one status notice so the user is not left waiting silently.
   </Step>
-  <Step title="Throw FallbackSummaryError if exhausted">
-    If every candidate fails, throw a `FallbackSummaryError` with per-attempt detail and the soonest cooldown expiry when one is known.
+  <Step title="Throw FailoverError if exhausted">
+    If every candidate fails, throw a `FailoverError` with structured per-attempt detail and the soonest cooldown expiry when one is known.
   </Step>
 </Steps>
 
@@ -344,7 +344,7 @@ The active run carries its chosen candidate directly. Live reconciliation change
 
 Structured `model_fallback_decision` logs also include flat `fallbackStep*` fields when a candidate fails, is skipped, or a later fallback succeeds. These fields make the attempted transition explicit (`fallbackStepFromModel`, `fallbackStepToModel`, `fallbackStepFromFailureReason`, `fallbackStepFromFailureDetail`, `fallbackStepFinalOutcome`) so log and diagnostic exporters can reconstruct the primary failure even when the terminal fallback also fails.
 
-When every candidate fails, OpenClaw throws `FallbackSummaryError`. The outer reply runner can use that to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
+When every candidate fails, OpenClaw throws `FailoverError` with structured attempt records. The outer reply runner can use those records to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
 
 That cooldown summary is model-aware:
 

@@ -1417,7 +1417,10 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       outputMode: "jsonl",
       fallbackSessionId: turn.sessionId,
     });
-  if (output.errorText) {
+  const syntheticNoResponsePendingContinuation =
+    output.terminalFailure?.reason === "synthetic_no_response" &&
+    session.outstandingBackgroundTaskIds.size > 0;
+  if (output.errorText && !syntheticNoResponsePendingContinuation) {
     const error = createCliOutputFailoverError({
       output,
       provider: session.providerId,

@@ -340,8 +340,11 @@ export function createQaBusState() {
       const accountId = normalizeAccountId(input.accountId);
       const requestedCursor = input.cursor ?? 0;
       const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;
-      if (requestedCursor > acknowledgedCursor && requestedCursor <= cursor) {
-        acknowledgedPollCursors.set(accountId, requestedCursor);
+      // Fetch progress and completed work are separate facts. Missing
+      // acknowledgement means the consumer has not recorded new completion.
+      const completedCursor = input.acknowledgedCursor ?? 0;
+      if (completedCursor > acknowledgedCursor && completedCursor <= cursor) {
+        acknowledgedPollCursors.set(accountId, completedCursor);
       }
       // A restarted channel consumer begins at zero. Resume its account cursor
       // so retained events are not replayed, while still returning unacked work.

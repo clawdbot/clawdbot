@@ -42,14 +42,11 @@ export {
 export {
   classifyFailoverReason,
   isAuthErrorMessage,
-  isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
   isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isTransientHttpError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";

@@ -26,10 +26,12 @@ type CliProcessDiagnostics = {
   useResume: boolean;
 };
 
-export type CliTerminalFailure = {
-  reason: "max_turns";
-  limit?: number;
-};
+export type CliTerminalFailure =
+  | {
+      reason: "max_turns";
+      limit?: number;
+    }
+  | { reason: "synthetic_no_response" };
 
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {

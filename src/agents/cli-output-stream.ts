@@ -48,12 +48,29 @@ export const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
+const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
 
 export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
 } satisfies CliStreamJsonOutputLimits);
+
+function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  const message = parsed.message;
+  if (message.model !== "<synthetic>" || !Array.isArray(message.content)) {
+    return false;
+  }
+  return (
+    message.content.length === 1 &&
+    isRecord(message.content[0]) &&
+    message.content[0].type === "text" &&
+    message.content[0].text === "No response requested."
+  );
+}
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
 export function frameBoundedCliJsonlChunk(
@@ -158,6 +175,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let sawCustomJsonlEvent = false;
   let sawGeminiStructuredOutput = false;
   let sawTerminalResult = false;
+  let sawClaudeSyntheticNoResponse = false;
   const toolTracker = createToolUseTracker();
   const outputLimits = CLI_STREAM_JSON_OUTPUT_LIMITS;
   // Classification is keyed on consumer presence so reclassified pre-tool text
@@ -353,6 +371,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parsed.type === "assistant" && isRecord(parsed.message)) {
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
+      if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {
+        sawClaudeSyntheticNoResponse = true;
+      }
     }
     const geminiErrorText = isGeminiStreamJsonDialect(params)
       ? readGeminiCliStreamJsonError(parsed)
@@ -436,9 +457,22 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       } else if (!nextText) {
         text = previousText;
       }
+      const syntheticNoResponse =
+        sawClaudeSyntheticNoResponse &&
+        parsed.subtype === "success" &&
+        !text &&
+        toolTracker.pendingByIndex.size === 0 &&
+        toolTracker.startedIds.size === 0 &&
+        toolTracker.resultDeliveredIds.size === 0;
       output = {
         ...result,
         text,
+        ...(syntheticNoResponse
+          ? {
+              errorText: CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR,
+              terminalFailure: { reason: "synthetic_no_response" as const },
+            }
+          : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
@@ -512,6 +546,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         onToolUseStart: params.onToolUseStart,
         onToolResult: params.onToolResult,
       });
+    }
+    if (claudeStreamJson || params.onToolUseStart || params.onToolResult) {
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,
