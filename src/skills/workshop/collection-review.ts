@@ -8,6 +8,7 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
@@ -219,20 +220,27 @@ function resolveCollectionReviewIdentity(
   env?: NodeJS.ProcessEnv,
 ) {
   const model = resolveCollectionReviewModel(config, agentId);
-  if (!model.authProfileId) {
-    return { ...model, authIdentity: `ambient:${model.provider}` };
-  }
-  const credential = loadAuthProfileStoreForRuntime(resolveAgentDir(config, agentId, env), {
+  const store = loadAuthProfileStoreForRuntime(resolveAgentDir(config, agentId, env), {
     allowKeychainPrompt: false,
     config,
     readOnly: true,
     syncExternalCli: false,
-  }).profiles[model.authProfileId];
+  });
+  const profileId =
+    model.authProfileId ??
+    resolveAuthProfileOrder({
+      cfg: config,
+      store,
+      provider: model.provider,
+      forModel: model.model,
+      readinessMode: "execution",
+    })[0];
+  const credential = profileId ? store.profiles[profileId] : undefined;
   return {
     ...model,
     authIdentity: credential
       ? sha256Hex(stableStringify(credential))
-      : `missing:${agentId}:${model.authProfileId}`,
+      : `unresolved:${agentId}:${profileId ?? model.provider}`,
   };
 }
 

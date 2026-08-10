@@ -18,10 +18,15 @@ import {
 } from "./collection-review.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
+const authStoresByAgentDir = vi.hoisted(() => new Map<string, unknown>());
 const runWithGatewayIndependentRootWorkAdmission = vi.hoisted(() =>
   vi.fn(async (run: () => Promise<unknown>) => await run()),
 );
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreForRuntime: (agentDir: string) =>
+    authStoresByAgentDir.get(agentDir) ?? { version: 1, profiles: {} },
+}));
 vi.mock("../../process/gateway-work-admission.js", () => ({
   runWithGatewayIndependentRootWorkAdmission,
 }));
@@ -30,6 +35,7 @@ const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
 beforeEach(async () => {
+  authStoresByAgentDir.clear();
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-collection-review-state-",
@@ -242,6 +248,20 @@ describe("skill collection review", () => {
       { name: "alpha", description: "Alpha procedure" },
       { name: "beta", description: "Beta procedure" },
     ]);
+    const sharedStore = {
+      version: 1,
+      profiles: {
+        "openai:shared": { type: "api_key", provider: "openai", key: "shared-key" },
+      },
+    };
+    authStoresByAgentDir.set(
+      path.join(testState.stateDir, "agents", "alpha-agent", "agent"),
+      sharedStore,
+    );
+    authStoresByAgentDir.set(
+      path.join(testState.stateDir, "agents", "beta-agent", "agent"),
+      sharedStore,
+    );
     runEmbeddedAgent.mockImplementation(async (params) => {
       expect(params.prompt).toContain("alpha");
       expect(params.prompt).toContain("beta");
@@ -297,12 +317,24 @@ describe("skill collection review", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
-  it("skips a shared workspace whose agents use different models", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-collection-review-shared-models-");
+  it("skips same-model shared agents with different implicit auth profiles", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-shared-auth-");
     await writeWorkspaceSkills(workspaceDir, [
       { name: "alpha", description: "Alpha procedure" },
       { name: "beta", description: "Beta procedure" },
     ]);
+    authStoresByAgentDir.set(path.join(testState.stateDir, "agents", "alpha-agent", "agent"), {
+      version: 1,
+      profiles: {
+        "openai:alpha": { type: "api_key", provider: "openai", key: "alpha-key" },
+      },
+    });
+    authStoresByAgentDir.set(path.join(testState.stateDir, "agents", "beta-agent", "agent"), {
+      version: 1,
+      profiles: {
+        "openai:beta": { type: "api_key", provider: "openai", key: "beta-key" },
+      },
+    });
     const onError = vi.fn();
 
     await runScheduledSkillCollectionReviews({
@@ -314,13 +346,11 @@ describe("skill collection review", () => {
               default: true,
               workspace: workspaceDir,
               skills: ["alpha"],
-              model: "openai/gpt-5.5",
             },
             {
               id: "beta-agent",
               workspace: workspaceDir,
               skills: ["beta"],
-              model: "openai/gpt-5.6-sol",
             },
           ],
         },
