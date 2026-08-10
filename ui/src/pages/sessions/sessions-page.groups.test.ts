@@ -98,7 +98,7 @@ describe("sessions page new group", () => {
 
     // The session was deleted while the catalog write was in flight; patching
     // its key now would recreate the entry the operator just removed.
-    page.result = { count: 0, sessions: [] } as SessionsListResult;
+    page.result = { count: 0, sessions: [] } as unknown as SessionsListResult;
     landCatalogWrite();
     await created;
 
