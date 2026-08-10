@@ -25,6 +25,12 @@ import {
   type ToolResultContentBlock,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
+import {
+  createStreamingJsonPreviewState,
+  finalizeStreamingJsonPreview,
+  pushStreamingJsonPreview,
+  type StreamingJsonPreviewState,
+} from "@openclaw/ai/internal/runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -35,12 +41,8 @@ import {
   calculateCost,
   clampReasoning,
   createHttpProxyAgentsForTarget,
-  createStreamingJsonPreviewState,
-  finalizeStreamingJsonPreview,
   parseStreamingJson,
-  pushStreamingJsonPreview,
   sanitizeSurrogates,
-  type StreamingJsonPreviewState,
   transformMessages,
   type Api,
   type AssistantMessage,
