@@ -62,6 +62,10 @@ import {
 } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import {
+  clearOpenClawStateDatabaseReadinessForTest,
+  publishOpenClawStateDatabaseReadiness,
+} from "./openclaw-state-db-readiness.js";
 import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -136,7 +140,9 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
     if (!cached) {
       return;
     }
-    evictCachedOpenClawStateDatabase(cached);
+    if (evictCachedOpenClawStateDatabase(cached)) {
+      publishOpenClawStateDatabaseReadiness(pathname, "inactive");
+    }
   },
 });
 
@@ -155,12 +161,18 @@ export function recordOpenClawStateDatabaseOpenFailure(
   error: Error,
   generation?: SqliteFileGeneration,
 ): boolean {
-  return terminalOpenLatch.record(pathname, error, generation);
+  const recorded = terminalOpenLatch.record(pathname, error, generation);
+  if (recorded) {
+    publishOpenClawStateDatabaseReadiness(pathname, "failed");
+  }
+  return recorded;
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
 export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
   terminalOpenLatch.clear(pathname);
+  const cached = cachedDatabases.get(path.resolve(pathname));
+  publishOpenClawStateDatabaseReadiness(pathname, cached?.db.isOpen ? "active" : "inactive");
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
@@ -168,6 +180,7 @@ function assertOpenClawStateDatabaseOpenAllowed(options: OpenClawStateDatabaseOp
   const pathname = resolveDatabasePath(options);
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
+    publishOpenClawStateDatabaseReadiness(pathname, "failed");
     throw terminalFailure;
   }
 }
@@ -194,6 +207,7 @@ export function assertOpenClawStateDatabaseFreshOpenAllowed(
     // The process latch and daily verifier still cover known damage.
   }
   if (quarantineFailure) {
+    publishOpenClawStateDatabaseReadiness(pathname, "failed");
     throw quarantineFailure;
   }
 }
@@ -633,6 +647,7 @@ export function openOpenClawStateDatabase(
     }
   });
   terminalOpenLatch.clear(pathname);
+  publishOpenClawStateDatabaseReadiness(pathname, "active");
   return database;
 }
 
@@ -722,6 +737,7 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
     database.db.close();
   }
   cachedDatabases.delete(resolvedPath);
+  publishOpenClawStateDatabaseReadiness(resolvedPath, "inactive");
   return true;
 }
 
@@ -732,6 +748,7 @@ export function closeOpenClawStateDatabase(): void {
     if (database.db.isOpen) {
       database.db.close();
     }
+    publishOpenClawStateDatabaseReadiness(database.path, "inactive");
   }
   cachedDatabases.clear();
 }
@@ -745,4 +762,5 @@ export function isOpenClawStateDatabaseOpen(): boolean {
 export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();
+  clearOpenClawStateDatabaseReadinessForTest();
 }
