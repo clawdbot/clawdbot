@@ -339,7 +339,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime now names its error exports explicitly.
       // -1: candidate continuation names one more re-export explicitly.
       // -1: upstream's infra-runtime excludes the internal system-event receipt API.
-      78,
+      // +1: upstream's runtime-doctor barrel re-exports runtime-doctor-migrations.
+      79,
       env,
     ),
   };
