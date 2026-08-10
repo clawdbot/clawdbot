@@ -18,13 +18,6 @@ import {
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import {
-  addSubagentRunForTests,
-  leasePendingAgentSteeringItems,
-  releasePendingAgentSteeringItems,
-  resetSubagentRegistryForTests,
-} from "../../subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   type AttemptContextEngine,
