@@ -14,7 +14,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
@@ -36,6 +35,11 @@ import {
 import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
+  resolveAgentExecutionPlacement,
+  type AgentExecutionPlacement,
+  type AgentExecutionPlacementRequest,
+} from "../../execution-backends.js";
+import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
   formatAcpInheritedToolAllowError,
@@ -43,7 +47,6 @@ import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "../../inherited-tool-deny.js";
-import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
@@ -54,7 +57,6 @@ import {
   prepareSpawnThreadBinding,
   resolveSpawnAdmission,
   resolveSpawnMode,
-  resolveSpawnSandboxError,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
@@ -95,11 +97,6 @@ import {
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
-import {
-  resolveAgentExecutionPlacement,
-  type AgentExecutionPlacement,
-  type AgentExecutionPlacementRequest,
-} from "../../execution-backends.js";
 
 type SpawnAcpMode = "run" | "session";
 type SpawnAcpSandboxMode = "inherit" | "require";
@@ -194,24 +191,7 @@ const ACP_SPAWN_ACCEPTED_NOTE =
 const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
 
-export function resolveAcpSpawnRuntimePolicyError(params: {
-  cfg: OpenClawConfig;
-  requesterSessionKey?: string;
-  requesterSandboxed?: boolean;
-  sandbox?: SpawnAcpSandboxMode;
-}): string | undefined {
-  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const requesterRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: params.requesterSessionKey,
-  });
-  const requesterSandboxed = params.requesterSandboxed === true || requesterRuntime.sandboxed;
-  return resolveSpawnSandboxError({
-    backend: "acp",
-    requesterSandboxed,
-    sandbox: sandboxMode,
-  });
-}
+export { resolveAcpSpawnRuntimePolicyError } from "./acp-spawn-policy.js";
 
 function createAcpSpawnFailure(params: {
   status: "forbidden" | "error";
