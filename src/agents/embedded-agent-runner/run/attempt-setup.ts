@@ -22,11 +22,6 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import {
-  DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
-  ensureGlobalUndiciDispatcherStreamTimeouts,
-  ensureGlobalUndiciEnvProxyDispatcher,
-} from "../../../infra/net/undici-global-dispatcher.js";
 import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -68,6 +63,7 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -659,19 +655,5 @@ export function remapInjectedContextFilesToWorkspace(params: {
               : path.join(params.targetWorkspaceDir, relative),
         }
       : file;
-  });
-}
-
-/**
- * Configures HTTP timeout defaults for embedded-agent attempt runtime calls.
- */
-
-/** Configures process-wide Undici proxy and stream timeout behavior for one embedded attempt. */
-export function configureEmbeddedAttemptHttpRuntime(params: { timeoutMs: number }): void {
-  // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
-  // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
-  ensureGlobalUndiciEnvProxyDispatcher();
-  ensureGlobalUndiciDispatcherStreamTimeouts({
-    timeoutMs: Math.max(params.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS),
   });
 }

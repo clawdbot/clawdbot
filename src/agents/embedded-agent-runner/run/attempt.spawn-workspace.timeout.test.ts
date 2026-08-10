@@ -14,7 +14,7 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
   ensureGlobalUndiciEnvProxyDispatcher: mocks.ensureGlobalUndiciEnvProxyDispatcher,
 }));
 
-import { configureEmbeddedAttemptHttpRuntime } from "./attempt-setup.js";
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 
 describe("runEmbeddedAttempt undici timeout wiring", () => {
   beforeEach(() => {
