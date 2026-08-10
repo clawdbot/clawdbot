@@ -426,7 +426,7 @@ export async function handleAgentExecutionError(params: {
   const rateLimitOrOverloadedCopy =
     !hasFallbackAttempts || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(
-          failoverReason === "overloaded" ? "overloaded" : message,
+          isFailoverError(err) && failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
   const userFacingMessage = isTransientHttp

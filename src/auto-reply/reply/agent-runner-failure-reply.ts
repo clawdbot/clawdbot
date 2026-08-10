@@ -29,7 +29,7 @@ import {
   type ProviderRequestFacet,
 } from "../../agents/failover/request-error-facets.js";
 import type { FailoverClassification } from "../../agents/failover/signal.js";
-import { isProviderAuthError } from "../../agents/model-auth.js";
+import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -212,7 +212,8 @@ function extractCodexUsageLimitErrorMessage(
   if (!message) {
     return undefined;
   }
-  return message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+  const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+  return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
 }
 
 type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
@@ -638,7 +639,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const rateLimitOrOverloadedCopy =
     !hasFallbackAttempts || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(
-          failoverReason === "overloaded" ? "overloaded" : message,
+          isFailoverError(params.err) && failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
 
