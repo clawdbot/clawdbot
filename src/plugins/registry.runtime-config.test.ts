@@ -644,6 +644,11 @@ describe("plugin registry runtime config scope", () => {
     ).resolves.toEqual({ ok: true });
     expect(runEmbeddedAgent).toHaveBeenLastCalledWith({
       ...runParams,
+      preparedRunAdmission: expect.objectContaining({
+        admit: expect.any(Function),
+        close: expect.any(Function),
+        operationalRunInstance: expect.objectContaining({ runId: runParams.runId }),
+      }),
       skillWorkshopCollectionReconcile: undefined,
     });
     await expect(
