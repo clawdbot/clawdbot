@@ -24,6 +24,10 @@ describe("coercion helper declaration AST guard", () => {
       "function readOptionalString() {}",
       "function normalizeString() {}",
       "const asString = (value: unknown) => String(value);",
+      "function asObject() {}",
+      "const readOptionalString = normalizeOptionalString;",
+      "const optionalString = helpers.readStringValue;",
+      "const asObject = helpers.asOptionalRecord;",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -39,6 +43,10 @@ describe("coercion helper declaration AST guard", () => {
       { file: "src/example.ts", kind: "function", line: 12, name: "readOptionalString" },
       { file: "src/example.ts", kind: "function", line: 13, name: "normalizeString" },
       { file: "src/example.ts", kind: "variable", line: 14, name: "asString" },
+      { file: "src/example.ts", kind: "function", line: 15, name: "asObject" },
+      { file: "src/example.ts", kind: "variable", line: 16, name: "readOptionalString" },
+      { file: "src/example.ts", kind: "variable", line: 17, name: "optionalString" },
+      { file: "src/example.ts", kind: "variable", line: 18, name: "asObject" },
     ]);
   });
 
@@ -51,6 +59,8 @@ describe("coercion helper declaration AST guard", () => {
       "const object = { optionalString() {}, toError: () => new Error() };",
       "values.map(function readString(value) { return value; });",
       "const aliasWithInternalName = function isRecord(value) { return value; };",
+      "const asRecord = raw as Record<string, unknown>;",
+      "const optionalString = value as string;",
       "// function asRecord() {}",
       'const fixture = "function toError() {}";',
     ].join("\n");

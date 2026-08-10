@@ -11,6 +11,7 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
 const BANNED_HELPER_NAMES = new Set([
+  "asObject",
   "asRecord",
   "asString",
   "isRecord",
@@ -43,6 +44,7 @@ const GENERATED_BROWSER_RUNTIME_PATHS = new Set([
 ]);
 
 export type BannedCoercionHelperName =
+  | "asObject"
   | "asRecord"
   | "asString"
   | "isRecord"
@@ -198,6 +200,24 @@ function unwrapCallableInitializer(expression: ts.Expression) {
   return current;
 }
 
+function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression | undefined {
+  let current = expression;
+  while (true) {
+    if (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
+      current = current.expression;
+      continue;
+    }
+    if (ts.isSatisfiesExpression(current)) {
+      current = current.expression;
+      continue;
+    }
+    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+      return undefined;
+    }
+    return current;
+  }
+}
+
 /** Returns true for tracked source files governed by the declaration guard. */
 export function isGovernedCoercionHelperPath(filePath: string) {
   return (
@@ -234,7 +254,13 @@ export function findBannedCoercionHelperDeclarations(
       node.initializer
     ) {
       const initializer = unwrapCallableInitializer(node.initializer);
-      if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+      const aliasInitializer = unwrapDirectAliasInitializer(node.initializer);
+      if (
+        ts.isArrowFunction(initializer) ||
+        ts.isFunctionExpression(initializer) ||
+        (aliasInitializer !== undefined &&
+          (ts.isIdentifier(aliasInitializer) || ts.isPropertyAccessExpression(aliasInitializer)))
+      ) {
         declarations.push({
           file,
           kind: "variable",
