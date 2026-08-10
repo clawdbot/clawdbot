@@ -177,7 +177,7 @@ function gmailOptionsFromCommon(
   };
 }
 
-function tailscaleModeOption(value: unknown) {
+function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
   if (value === undefined || value === null) {
     return undefined;
   }
