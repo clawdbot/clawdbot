@@ -1443,7 +1443,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       agentId: "main",
       env: suiteFixtureEnv,
       leafEntryId: "copied-leaf",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       storePath: suiteDatabasePath,
     });
     expect(switched.status).toBe("created");
