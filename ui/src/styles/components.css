@@ -1578,7 +1578,8 @@ openclaw-chat-session-rail {
 /* Narrow panes cannot hold two columns, so the companion becomes a full-height
    sheet on the pane's trailing edge. It still covers the thread, but it reads as
    a surface that took the pane over rather than a card floating above it — the
-   docked column below is the shape this degrades from. */
+   docked column below is the shape this degrades from. The shadow and blur the
+   base rule gives the pill are card cues, so the sheet drops them too. */
 .chat-session-rail--expanded {
   display: flex;
   top: 0;
@@ -1589,6 +1590,8 @@ openclaw-chat-session-rail {
   overflow: hidden;
   border-width: 0 0 0 1px;
   border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .chat-session-rail__header {
@@ -1815,7 +1818,10 @@ openclaw-chat-session-rail {
 
 .chat-session-rail__pr-checks,
 .chat-session-rail__timestamp,
-.chat-session-rail__hint,
+.chat-session-rail__hint {
+  color: var(--muted);
+}
+
 .chat-session-rail__thread {
   display: flex;
   flex: 1 1 auto;
@@ -1989,8 +1995,6 @@ openclaw-chat-session-rail {
   position: static;
   width: 100%;
   height: 100%;
-  box-shadow: none;
-  backdrop-filter: none;
   animation: none;
 }
 

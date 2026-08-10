@@ -390,6 +390,8 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         <article class="chat-session-rail__exchange">
                           <div class="chat-session-rail__question">What should I check next?</div>
                           <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
+                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
+                          <div class="chat-session-rail__hint">The companion is already answering a question.</div>
                         </article>
                       </div>
                       <footer class="chat-session-rail__composer">
@@ -2891,6 +2893,40 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }));
       expect(rail.position).toBe("static");
       expect(rail.width).toBeCloseTo(400, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps rail metadata out of the scrolling thread's layout", async () => {
+    const page = await openFixture(1024, 768, { sessionRailBody: LONG_SESSION_RAIL_BODY });
+    try {
+      const styles = await page.evaluate(() => {
+        const read = (selector: string) => {
+          const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
+          return {
+            minHeight: style.minHeight,
+            overflowY: style.overflowY,
+            borderTopWidth: style.borderTopWidth,
+          };
+        };
+        return {
+          thread: read(".chat-session-rail__thread"),
+          timestamp: read(".chat-session-rail__timestamp"),
+          hint: read(".chat-session-rail__hint"),
+        };
+      });
+
+      // Timestamps and hints are metadata inside an exchange. Sharing the
+      // thread's rule would give each one a 96px scrolling bordered box; the
+      // selector list has silently merged before.
+      expect(styles.thread.minHeight).toBe("96px");
+      expect(styles.thread.overflowY).toBe("auto");
+      for (const metadata of [styles.timestamp, styles.hint]) {
+        expect(metadata.minHeight).toBe("0px");
+        expect(metadata.overflowY).toBe("visible");
+        expect(metadata.borderTopWidth).toBe("0px");
+      }
     } finally {
       await closeBrowserPage(page);
     }
