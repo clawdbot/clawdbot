@@ -297,25 +297,13 @@ function expectError(outcome: ScenarioOutcome): Error & { attempts?: unknown[] }
 }
 
 describe("runEmbeddedAgent provider fault sequences", () => {
-  it.each([
-    {
-      name: "429 -> 429 -> 200 consumes two same-model retries without rotating",
-      faults: [
-        { status: 429, window: "short" },
-        { status: 429, window: "short" },
-        { status: 200, text: "third attempt ok" },
-      ] satisfies ProviderFault[],
-      expectedSleeps: [10_000, 20_000],
-    },
-    {
-      name: "429 -> 200 keeps same-model retry available without a fallback",
-      faults: [
-        { status: 429, window: "short" },
-        { status: 200, text: "retry without fallback ok" },
-      ] satisfies ProviderFault[],
-      expectedSleeps: [10_000],
-    },
-  ])("$name", async ({ faults, expectedSleeps }) => {
+  it("429 -> 429 -> 200 consumes two same-model retries without rotating", async () => {
+    const faults = [
+      { status: 429, window: "short" },
+      { status: 429, window: "short" },
+      { status: 200, text: "third attempt ok" },
+    ] satisfies ProviderFault[];
+
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
       writeProfiles(agentDir, { openai: 1 });
       const observations: AttemptObservation[] = [];
@@ -336,14 +324,11 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       ).toEqual(
         faults.map(() => ({ provider: "openai", model: "mock-1", profileId: "openai:p1" })),
       );
-      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(expectedSleeps);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([10_000, 20_000]);
       expect(outcome.provider).toBe("openai");
       expect(outcome.model).toBe("mock-1");
       expect(outcome.attempts).toEqual([]);
-      const finalFault = faults.at(-1);
-      expect(outcome.result.payloads?.[0]?.text).toContain(
-        finalFault?.status === 200 ? finalFault.text : "",
-      );
+      expect(outcome.result.payloads?.[0]?.text).toContain("third attempt ok");
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();

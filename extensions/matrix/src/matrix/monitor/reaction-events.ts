@@ -129,6 +129,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
       approvalKind: params.target.approvalKind,
       decision: params.target.decision,
       channel: "matrix",
+      accountId: params.accountId,
       senderId: params.senderId,
     });
     // Retire every delivered anchor; losing surfaces also need the canonical

@@ -22,6 +22,7 @@ import {
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -91,6 +92,11 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import {
+  type PreparedGatewaySessionLifecycle,
+  type PrepareGatewaySessionLifecycle,
+  rollbackGatewaySessionPreparation,
+} from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
@@ -1001,8 +1007,9 @@ export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
   spawnedCwd?: string;
-  /** Managed worktree adopted by this reset; cleared together with spawnedCwd. */
-  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Prepares session-owned resources while the target lifecycle fence is held. */
+  prepareLifecycle?: PrepareGatewaySessionLifecycle;
+  onLifecycleCleanupError?: (error: unknown) => void;
   /** Bind session exec to host=node with this node id; caller scope-checks. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */
@@ -1077,6 +1084,13 @@ export async function performGatewaySessionReset(params: {
   if (!resetTarget.ok) {
     return resetTarget;
   }
+  const reportLifecycleCleanupError = (error: unknown) => {
+    if (params.onLifecycleCleanupError) {
+      params.onLifecycleCleanupError(error);
+      return;
+    }
+    logVerbose(`session lifecycle resource cleanup failed: ${String(error)}`);
+  };
   const initialResetEntry = loadSessionEntry(
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
@@ -1149,6 +1163,8 @@ export async function performGatewaySessionReset(params: {
   let admittedWorkReleased = true;
   let resetPreparationError: ReturnType<typeof errorShape> | undefined;
   let preparedResetSessionId: string | undefined;
+  let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
+  let lifecyclePreparationCommitted = false;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
     identities: resetLifecycleIdentities,
@@ -1220,6 +1236,19 @@ export async function performGatewaySessionReset(params: {
         identities: resetLifecycleIdentities,
         timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
       });
+      if (admittedWorkReleased && params.prepareLifecycle) {
+        const prepared = await params.prepareLifecycle({
+          agentId: resetTarget.target.agentId,
+          entry: currentEntry,
+          key: resetTarget.target.canonicalKey,
+          storePath: resetTarget.storePath,
+        });
+        if (!prepared.ok) {
+          resetPreparationError = prepared.error;
+          return;
+        }
+        preparedLifecycle = prepared.value;
+      }
     },
     run: async () => {
       const { cfg, target, storePath, requestedAgentId } = resetTarget;
@@ -1307,6 +1336,9 @@ export async function performGatewaySessionReset(params: {
         };
       }
       const hadExistingEntry = Boolean(entry);
+      const detachedWorktreeId = params.clearSpawnedCwd
+        ? normalizeOptionalString(entry?.worktree?.id)
+        : undefined;
       const resetLifecycleRevision = entry?.lifecycleRevision;
       const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -1579,10 +1611,10 @@ export async function performGatewaySessionReset(params: {
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
-              : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
+              : (preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? currentEntry?.spawnedCwd),
             worktree: params.clearSpawnedCwd
               ? undefined
-              : (params.worktree ?? currentEntry?.worktree),
+              : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
             ...creationStamp,
             forkSource: currentEntry?.forkSource,
@@ -1696,6 +1728,7 @@ export async function performGatewaySessionReset(params: {
       });
       const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
         await lifecyclePromise;
+      lifecyclePreparationCommitted = !resetSkipped;
       if (!resetSkipped) {
         const resetSessionKey = target.canonicalKey ?? params.key;
         handleSessionStateSessionReset(resetSessionKey);
@@ -1746,6 +1779,15 @@ export async function performGatewaySessionReset(params: {
           reason: "session-reset",
         });
       }
+      if (!resetSkipped && detachedWorktreeId) {
+        // Preserve reset notifications and unbinding order, but finalize the exact
+        // old checkout before the fence opens to same-key successors.
+        try {
+          await managedWorktrees.removeIfLossless(detachedWorktreeId);
+        } catch (error) {
+          reportLifecycleCleanupError(error);
+        }
+      }
       return {
         ok: true,
         key: target.canonicalKey,
@@ -1754,6 +1796,14 @@ export async function performGatewaySessionReset(params: {
         agentId: target.agentId,
         storePath,
       };
+    },
+    finalize: async () => {
+      if (!lifecyclePreparationCommitted) {
+        await rollbackGatewaySessionPreparation({
+          prepared: preparedLifecycle,
+          onError: reportLifecycleCleanupError,
+        });
+      }
     },
   });
 }

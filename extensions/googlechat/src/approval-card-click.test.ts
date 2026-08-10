@@ -165,6 +165,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "googlechat",
+      accountId: "default",
       senderId: "users/123",
     });
     expect(updateGoogleChatMessage).toHaveBeenCalledWith({

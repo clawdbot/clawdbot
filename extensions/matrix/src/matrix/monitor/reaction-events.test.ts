@@ -193,6 +193,7 @@ describe("matrix approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -263,6 +264,7 @@ describe("matrix approval reactions", () => {
       approvalKind: "exec",
       decision: "deny",
       channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -291,6 +293,7 @@ describe("matrix approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -327,6 +330,7 @@ describe("matrix approval reactions", () => {
       approvalKind: "plugin",
       decision: "allow-once",
       channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();

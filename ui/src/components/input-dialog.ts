@@ -10,6 +10,18 @@ type InputDialogOptions = {
   submitLabel?: string;
   cancelLabel?: string;
   signal?: AbortSignal;
+  /**
+   * Trims the value and blocks submission while it is empty. Callers that treat
+   * an empty entry as meaningful (clearing a custom session label) leave this
+   * off and keep receiving the raw value.
+   */
+  requireValue?: boolean;
+  /**
+   * Runs the operation the dialog was opened for. `null` resolves the dialog; a
+   * message keeps it open with the typed value, so a rejected attempt stays
+   * visible and retryable instead of discarding what the operator wrote.
+   */
+  submit?: (value: string) => Promise<string | null>;
 };
 
 let inputActive = false;
@@ -22,6 +34,15 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
   document.body.append(host);
   return new Promise((resolve) => {
     let settled = false;
+    let submitting = false;
+    let failure: string | null = null;
+    // Tracked so the submit button can reflect an empty required field. It flips
+    // only across the empty boundary, never per keystroke: the value binding is
+    // constant, so the input stays uncontrolled and keeps its caret and IME
+    // composition across the repaints this triggers.
+    let blockedEmpty =
+      options.requireValue === true && (options.defaultValue ?? "").trim().length === 0;
+
     const finish = (value: string | null) => {
       if (settled) {
         return;
@@ -33,53 +54,125 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       resolve(value);
     };
     const handleAbort = () => finish(null);
-    const submit = (event: SubmitEvent) => {
-      event.preventDefault();
-      const form = event.currentTarget;
-      if (!(form instanceof HTMLFormElement)) {
+    const inputElement = () => host.querySelector<HTMLInputElement>('input[name="value"]');
+
+    const handleInput = (event: Event) => {
+      if (options.requireValue !== true) {
         return;
       }
-      const input = form.elements.namedItem("value");
-      if (input instanceof HTMLInputElement) {
-        finish(input.value);
+      const empty = (event.target as HTMLInputElement).value.trim().length === 0;
+      if (empty !== blockedEmpty) {
+        blockedEmpty = empty;
+        paint();
       }
     };
+
+    async function handleSubmit(event: Event) {
+      event.preventDefault();
+      if (submitting) {
+        return;
+      }
+      const raw = inputElement()?.value;
+      if (raw === undefined) {
+        return;
+      }
+      const value = options.requireValue === true ? raw.trim() : raw;
+      if (options.requireValue === true && value.length === 0) {
+        return;
+      }
+      if (!options.submit) {
+        finish(value);
+        return;
+      }
+      submitting = true;
+      failure = null;
+      paint();
+      // A thrown operation still has to produce a visible outcome: without this
+      // the dialog would stay disabled forever and wedge every later request.
+      // The call itself is inside the try, so a callback that throws before it
+      // returns a promise is caught too.
+      let message: string | null;
+      try {
+        message = await options.submit(value);
+      } catch (error) {
+        message = String(error);
+      }
+      if (settled) {
+        return;
+      }
+      submitting = false;
+      if (message === null) {
+        finish(value);
+        return;
+      }
+      failure = message;
+      paint();
+      inputElement()?.focus();
+    }
+
+    // A pending submit owns the dialog: dismissing it here would strand that
+    // result and hide whether the operation landed.
+    function handleCancel(event: Event) {
+      if (submitting) {
+        event.preventDefault();
+        return;
+      }
+      finish(null);
+    }
+
     options.signal?.addEventListener("abort", handleAbort, { once: true });
     const label = options.label ?? options.title;
-    render(
-      html`
-        <openclaw-modal-dialog
-          label=${options.title}
-          description=${label}
-          @modal-cancel=${() => finish(null)}
-        >
-          <form class="exec-approval-card" @submit=${submit}>
-            <div class="exec-approval-header">
-              <div class="exec-approval-title">${options.title}</div>
-            </div>
-            <label class="field">
-              <span>${label}</span>
-              <input
-                name="value"
-                type="text"
-                autocomplete="off"
-                .value=${options.defaultValue ?? ""}
-                autofocus
-              />
-            </label>
-            <div class="exec-approval-actions">
-              <button type="submit" class="btn primary">
-                ${options.submitLabel ?? t("common.save")}
-              </button>
-              <button type="button" class="btn" @click=${() => finish(null)}>
-                ${options.cancelLabel ?? t("common.cancel")}
-              </button>
-            </div>
-          </form>
-        </openclaw-modal-dialog>
-      `,
-      host,
-    );
+
+    function paint() {
+      render(
+        html`
+          <openclaw-modal-dialog
+            label=${options.title}
+            description=${label}
+            @modal-cancel=${handleCancel}
+          >
+            <form class="exec-approval-card" @submit=${handleSubmit}>
+              <div class="exec-approval-header">
+                <div class="exec-approval-title">${options.title}</div>
+              </div>
+              <label class="field input-dialog__field">
+                <span>${label}</span>
+                <input
+                  name="value"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  .value=${options.defaultValue ?? ""}
+                  ?disabled=${submitting}
+                  aria-invalid=${failure ? "true" : nothing}
+                  @input=${handleInput}
+                  autofocus
+                />
+              </label>
+              ${failure
+                ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
+                : nothing}
+              <div class="exec-approval-actions">
+                <button type="submit" class="btn primary" ?disabled=${submitting || blockedEmpty}>
+                  ${options.submitLabel ?? t("common.save")}
+                </button>
+                <button
+                  type="button"
+                  class="btn"
+                  ?disabled=${submitting}
+                  @click=${() => finish(null)}
+                >
+                  ${options.cancelLabel ?? t("common.cancel")}
+                </button>
+              </div>
+            </form>
+          </openclaw-modal-dialog>
+        `,
+        host,
+      );
+    }
+
+    paint();
   });
 }
 
