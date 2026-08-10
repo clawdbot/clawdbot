@@ -582,6 +582,7 @@ async function clearLegacyEmbeddedAcpMetadata(params: {
 
 export async function upsertAcpSessionMeta(params: {
   sessionKey: string;
+  agentId?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
@@ -599,6 +600,7 @@ export async function upsertAcpSessionMeta(params: {
   }
   const storeEntry = readSessionEntryFromStore({
     sessionKey,
+    agentId: params.agentId,
     cfg: params.cfg,
     env: params.env,
     clone: false,

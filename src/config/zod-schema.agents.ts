@@ -22,7 +22,7 @@ const AgentEntryConfigSchema = z.preprocess(
     }
     return value;
   },
-  AgentEntrySchema.omit({ id: true }),
+  AgentEntrySchema.omit({ id: true }).extend({ default: z.boolean().optional() }),
 );
 
 export const AgentsSchema = z
@@ -38,11 +38,27 @@ export const AgentsSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (Object.keys(value.entries ?? {}).length === 0) {
+    const entries = Object.entries(value.entries ?? {});
+    if (entries.length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["entries"],
         message: "agents.entries must contain at least one configured agent",
+      });
+    }
+    const marked = entries.filter(([, entry]) => entry.default === true);
+    if (marked.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: `agents.entries must contain at most one default=true entry (found ${marked.length})`,
+      });
+    }
+    if (value.ownership === "explicit" && marked.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message: "agents.ownership=explicit cannot be combined with a legacy default=true marker",
       });
     }
   })

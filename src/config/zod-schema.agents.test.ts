@@ -14,14 +14,27 @@ describe("agent roster ownership", () => {
     ).toBe(true);
   });
 
-  it("rejects the retired default marker", () => {
-    const result = AgentsSchema.safeParse({ entries: { alpha: { default: true } } });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(
-        expect.objectContaining({ path: ["entries", "alpha"] }),
-      );
-    }
+  it("accepts one legacy default marker", () => {
+    expect(
+      AgentsSchema.safeParse({ entries: { alpha: { default: true }, beta: {} } }).success,
+    ).toBe(true);
+  });
+
+  it("rejects multiple legacy default markers", () => {
+    expect(
+      AgentsSchema.safeParse({
+        entries: { alpha: { default: true }, beta: { default: true } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a legacy marker with explicit ownership", () => {
+    expect(
+      AgentsSchema.safeParse({
+        ownership: "explicit",
+        entries: { alpha: { default: true }, beta: {} },
+      }).success,
+    ).toBe(false);
   });
 });
 

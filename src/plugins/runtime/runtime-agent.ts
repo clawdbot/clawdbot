@@ -262,6 +262,7 @@ async function createSessionEntry(
           const persisted = await upsertAcpSessionMeta({
             cfg: params.cfg,
             sessionKey: context.key,
+            agentId: context.agentId,
             mutate: () => meta,
           });
           if (!persisted?.acp) {
@@ -510,6 +511,7 @@ async function createSessionEntry(
             await upsertAcpSessionMeta({
               cfg: params.cfg,
               sessionKey: callbackContext.key,
+              agentId: callbackContext.agentId,
               mutate: () => null,
             });
           }
