@@ -244,10 +244,18 @@ async function restoreArchivedSessions(
  * deliberately get none: the first is a rare shared-resource action and the
  * second destroys the only copy of uncommitted work.
  */
-function sessionDeleteSkipPreference(): ConfirmDialogSkipPreference {
+function sessionDeleteSkipPreference(
+  scope: SidebarSessionMutationScope,
+): ConfirmDialogSkipPreference {
   return {
     skipped: loadSettings().sessionDeleteConfirm === false,
-    remember: () => void patchSettings({ sessionDeleteConfirm: false }),
+    remember: () => {
+      patchSettings({ sessionDeleteConfirm: false });
+      // A mounted Settings -> Appearance rereads settings only on this
+      // notification; without it its toggle keeps showing the stale value
+      // while deletes already skip the prompt.
+      scope.context.theme.refresh();
+    },
   };
 }
 
@@ -264,7 +272,7 @@ export async function deleteSessionsBatch(
     message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
     confirmLabel: t("common.delete"),
     danger: true,
-    skipPreference: sessionDeleteSkipPreference(),
+    skipPreference: sessionDeleteSkipPreference(scope),
   });
   // A reconnect or a replaced sessions capability can land while the modal is
   // open, so the captured scope is revalidated before any delete leaves here.
@@ -675,7 +683,7 @@ export async function deleteSession(
     message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
     confirmLabel: t("common.delete"),
     danger: true,
-    skipPreference: sessionDeleteSkipPreference(),
+    skipPreference: sessionDeleteSkipPreference(scope),
   });
   if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;

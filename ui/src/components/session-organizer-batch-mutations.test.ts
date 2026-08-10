@@ -7,7 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { patchSettings } from "../app/settings.ts";
+import { loadSettings, patchSettings } from "../app/settings.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   answerConfirmDialog,
@@ -84,11 +84,12 @@ function createHarness(
     },
   } as ApplicationGatewaySnapshot;
   const refreshReplacement = vi.fn(async () => undefined);
+  const refreshTheme = vi.fn();
   const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
   const deleteOne = vi.fn(async () => ({ deleted: true }));
   const scope = {
     epoch: 1,
-    context: { agents: { state: { agentsList: null } } },
+    context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
     gateway: { snapshot },
     sessions: {
       refreshReplacement,
@@ -97,7 +98,7 @@ function createHarness(
     } as unknown as SessionCapability,
     client,
     selectedAgentId: "main",
-  } as SidebarSessionMutationScope;
+  } as unknown as SidebarSessionMutationScope;
   const publishSessionMutationError = vi.fn();
   const pruneSidebarSessionEntry = vi.fn();
   const replaceCurrentSession = vi.fn();
@@ -118,6 +119,7 @@ function createHarness(
     pruneSidebarSessionEntry,
     publishSessionMutationError,
     refreshReplacement,
+    refreshTheme,
     replaceCurrentSession,
     request,
     // Stands in for a reconnect or agent switch landing while a confirm is open.
@@ -521,6 +523,27 @@ describe("session organizer destructive confirmations", () => {
     expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
     answerConfirmDialog(actions, "cancel");
     await pending;
+  });
+
+  it("refreshes the appearance settings view when the operator opts out", async () => {
+    const harness = createHarness(destructiveHarness);
+
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    const actions = await waitForConfirmDialogActions();
+    const skip = actions
+      .closest("openclaw-modal-dialog")
+      ?.querySelector<HTMLInputElement>('.exec-approval-skip input[type="checkbox"]');
+    if (!skip) {
+      throw new Error("expected the skip checkbox");
+    }
+    skip.checked = true;
+    skip.dispatchEvent(new Event("change"));
+    answerConfirmDialog(actions, "confirm");
+    await pending;
+
+    // A mounted Settings -> Appearance only rereads settings on this signal.
+    expect(harness.refreshTheme).toHaveBeenCalledOnce();
+    expect(loadSettings().sessionDeleteConfirm).toBe(false);
   });
 
   it("never opens the stop confirm for a reclaim target with an active run", async () => {

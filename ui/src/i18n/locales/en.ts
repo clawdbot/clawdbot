@@ -1541,7 +1541,7 @@ export const en: TranslationMap = {
       liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
       deleteConfirm: "Confirm before deleting sessions",
       deleteConfirmHint:
-        "Ask before deleting a session or a selection. Stopping cloud workers and removing preserved worktrees always ask.",
+        "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
     },
     sessionObserver: {
       title: "Session observer",
