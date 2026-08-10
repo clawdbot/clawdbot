@@ -1166,6 +1166,7 @@ export function applyExtraParamsToAgent(
       workspaceDir,
       agentId,
       nativeWebSearchAllowedByToolPolicy,
+      webSearchEnabled: options?.nativeWebSearchPolicyContext?.webSearchEnabled,
       provider,
       modelId,
       extraParams: effectiveExtraParams,

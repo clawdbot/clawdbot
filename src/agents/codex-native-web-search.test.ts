@@ -9,6 +9,7 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
   resolveCodexNativeWebSearchConfig,
+  resolveGlobalWebSearchEnabled,
   isCodexNativeWebSearchRelevant,
   shouldSuppressManagedWebSearchTool,
 } from "./codex-native-web-search.js";
@@ -382,6 +383,32 @@ describe("Codex native web-search payload helpers", () => {
       { type: "function", name: "read" },
       { type: "web_search", external_web_access: false },
     ]);
+  });
+
+  it("treats session enable as global override before native activation", () => {
+    const globalDisabledConfig = {
+      tools: {
+        web: {
+          search: {
+            enabled: false,
+            openaiCodex: { enabled: true, mode: "live" as const },
+          },
+        },
+      },
+    } as const;
+    expect(
+      resolveGlobalWebSearchEnabled({
+        webSearchEnabled: true,
+        config: globalDisabledConfig,
+      }),
+    ).toBe(true);
+    const activation = resolveCodexNativeSearchActivation({
+      config: globalDisabledConfig,
+      webSearchEnabled: true,
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+    });
+    expect(activation.state).toBe("native_active");
   });
 
   it("does not inject a duplicate native web_search tool", () => {

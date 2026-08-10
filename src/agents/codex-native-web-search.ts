@@ -14,6 +14,7 @@ export {
   buildCodexNativeWebSearchTool,
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
+  resolveGlobalWebSearchEnabled,
   shouldSuppressManagedWebSearchTool,
 } from "./codex-native-web-search-core.js";
 export {

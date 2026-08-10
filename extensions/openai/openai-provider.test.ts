@@ -191,6 +191,7 @@ function runWrappedPayloadCase(params: {
   cfg?: Record<string, unknown>;
   agentId?: string;
   nativeWebSearchAllowedByToolPolicy?: boolean;
+  webSearchEnabled?: boolean;
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
@@ -209,6 +210,7 @@ function runWrappedPayloadCase(params: {
     agentDir: "/tmp/openai-provider-test",
     agentId: params.agentId,
     nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
+    webSearchEnabled: params.webSearchEnabled,
     streamFn: baseStreamFn,
   } as never);
 
@@ -2466,6 +2468,32 @@ describe("buildOpenAIProvider", () => {
 
     expect(disabled.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
     expect(proxied.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+  });
+
+  it("injects native OpenAI web search when session enables search against a global disable", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: { tools: { web: { search: { enabled: false } } } },
+      webSearchEnabled: true,
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
   });
 
   it("keeps managed web_search when another search provider is configured", () => {

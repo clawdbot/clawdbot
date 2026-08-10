@@ -248,6 +248,8 @@ export type ProviderPrepareExtraParamsContext = {
   workspaceDir?: string;
   agentId?: string;
   nativeWebSearchAllowedByToolPolicy?: boolean;
+  /** Session tri-state override; `true` wins over global `tools.web.search.enabled: false`. */
+  webSearchEnabled?: boolean;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;

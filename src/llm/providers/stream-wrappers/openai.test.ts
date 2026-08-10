@@ -474,6 +474,47 @@ describe("createCodexNativeWebSearchWrapper", () => {
 
     expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
   });
+
+  it("injects native web_search when session enables search against a global disable", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", name: "read" }],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      webSearchEnabled: true,
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              openaiCodex: { enabled: true, mode: "live" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "web_search", external_web_access: true },
+    ]);
+  });
 });
 
 describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {

@@ -35,12 +35,23 @@ function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefin
   return normalized === "" || normalized === "auto" || normalized === "openai";
 }
 
+function resolveGlobalWebSearchEnabled(params: {
+  webSearchEnabled?: boolean;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    params.webSearchEnabled === true ||
+    (params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false)
+  );
+}
+
 function shouldEnableOpenAINativeWebSearch(params: {
   config?: OpenClawConfig;
+  webSearchEnabled?: boolean;
   model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
 }): boolean {
   return (
-    params.config?.tools?.web?.search?.enabled !== false &&
+    resolveGlobalWebSearchEnabled(params) &&
     shouldUseOpenAINativeWebSearchProvider(params.config) &&
     isOpenAINativeWebSearchEligibleModel(params.model)
   );
@@ -88,6 +99,7 @@ export function createOpenAINativeWebSearchWrapper(
     config?: OpenClawConfig;
     agentId?: string;
     nativeWebSearchAllowedByToolPolicy?: boolean;
+    webSearchEnabled?: boolean;
   },
 ): StreamFn {
   return createPayloadPatchStreamWrapper(
@@ -98,7 +110,11 @@ export function createOpenAINativeWebSearchWrapper(
     {
       shouldPatch: ({ model }) =>
         params.nativeWebSearchAllowedByToolPolicy !== false &&
-        shouldEnableOpenAINativeWebSearch({ config: params.config, model }),
+        shouldEnableOpenAINativeWebSearch({
+          config: params.config,
+          webSearchEnabled: params.webSearchEnabled,
+          model,
+        }),
     },
   );
 }

@@ -153,6 +153,7 @@ export function buildProviderStreamFamilyHooks(
             agentDir: ctx.agentDir,
             agentId: ctx.agentId,
             nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
+            webSearchEnabled: ctx.webSearchEnabled,
           });
           nextStreamFn = createOpenAIStringContentWrapper(nextStreamFn);
           return createOpenAIResponsesContextManagementWrapper(

@@ -637,6 +637,7 @@ export function createCodexNativeWebSearchWrapper(
     senderUsername?: string | null;
     senderE164?: string | null;
     nativeWebSearchAllowedByToolPolicy?: boolean;
+    webSearchEnabled?: boolean;
     codeModeToolSurfaceEnabled?: boolean;
   },
 ): StreamFn {
@@ -689,6 +690,7 @@ export function createCodexNativeWebSearchWrapper(
 
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
+      webSearchEnabled: params.webSearchEnabled,
       modelProvider: readStringValue(model.provider),
       modelApi: readStringValue(model.api),
       modelId: readStringValue(model.id),

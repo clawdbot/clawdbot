@@ -99,6 +99,19 @@ export function hasAvailableCodexAuth(params: {
   return false;
 }
 
+/** Resolves whether web search is enabled from session tri-state and global config. */
+export function resolveGlobalWebSearchEnabled(params: {
+  webSearchEnabled?: boolean;
+  config?: OpenClawConfig;
+}): boolean {
+  // Session enable (`webSearchEnabled: true`) must win over a global
+  // tools.web.search.enabled=false, matching Control UI session overrides.
+  return (
+    params.webSearchEnabled === true ||
+    (params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false)
+  );
+}
+
 /** Resolves whether native search is active or why managed search should remain. */
 export function resolveCodexNativeSearchActivation(params: {
   webSearchEnabled?: boolean;
@@ -121,11 +134,7 @@ export function resolveCodexNativeSearchActivation(params: {
   senderE164?: string | null;
   agentDir?: string;
 }): CodexNativeSearchActivation {
-  // Session enable (`webSearchEnabled: true`) must win over a global
-  // tools.web.search.enabled=false, matching Control UI session overrides.
-  const globalWebSearchEnabled =
-    params.webSearchEnabled === true ||
-    (params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false);
+  const globalWebSearchEnabled = resolveGlobalWebSearchEnabled(params);
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
   const hasRequiredAuth =
