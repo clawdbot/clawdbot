@@ -57,22 +57,27 @@ vi.mock("./embeddings.js", () => ({
 
 type ChunkRow = { id: string; start_line: number; text: string; updated_at: number };
 
-function sessionMessageLine(role: "user" | "assistant", text: string): string {
+function sessionMessageLine(
+  role: "user" | "assistant",
+  text: string,
+  senderIsOwner = false,
+): string {
   return JSON.stringify({
     type: "message",
     message: {
       role,
       timestamp: "2026-07-01T10:00:00.000Z",
       content: [{ type: "text", text }],
+      ...(role === "user" && senderIsOwner ? { __openclaw: { senderIsOwner: true } } : {}),
     },
   });
 }
 
-function transcriptTurns(from: number, to: number): string {
+function transcriptTurns(from: number, to: number, senderIsOwner = false): string {
   const lines: string[] = [];
   for (let turn = from; turn <= to; turn += 1) {
     const id = String(turn).padStart(3, "0");
-    lines.push(sessionMessageLine("user", `turn ${id} question about topic-${id}`));
+    lines.push(sessionMessageLine("user", `turn ${id} question about topic-${id}`, senderIsOwner));
     lines.push(sessionMessageLine("assistant", `turn ${id} answer covering topic-${id}`));
   }
   return lines.join("\n") + "\n";
@@ -232,6 +237,45 @@ describe("memory session chunk-delta sync", () => {
     if (ftsCount !== null) {
       expect(ftsCount).toBe(after.length);
     }
+  });
+
+  it("refreshes provenance when retained session text changes trust classification", async () => {
+    const { manager, sessionFile } = await setUpManager(".state-delta-provenance");
+    const text = "sender trust rewrite keeps this rendered text identical";
+    await fs.writeFile(sessionFile, `${sessionMessageLine("user", text, true)}\n`, "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    const before = readSessionChunkRows(manager);
+    expect(before).toHaveLength(1);
+    await expect(manager.search(text, { maxResults: 1, minScore: 0 })).resolves.toMatchObject([
+      {
+        provenance: {
+          originClass: "owner",
+          sessionKind: "interactive",
+          observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
+        },
+      },
+    ]);
+
+    embedState.batches = [];
+    // senderIsOwner is provenance-only input: rendered text, chunk hashes, and
+    // chunk ids remain unchanged while the source hash becomes dirty.
+    await fs.writeFile(sessionFile, `${sessionMessageLine("user", text)}\n`, "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    expect(readSessionChunkRows(manager)).toStrictEqual(before);
+    expect(embedState.batches).toEqual([]);
+    await expect(manager.search(text, { maxResults: 1, minScore: 0 })).resolves.toMatchObject([
+      {
+        provenance: {
+          originClass: "untrusted",
+          sessionKind: "interactive",
+          observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
+        },
+      },
+    ]);
   });
 
   it("heals derived-row drift written through a second manager", async () => {

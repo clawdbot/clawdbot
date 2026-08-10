@@ -105,14 +105,19 @@ type IndexedMemoryChunk = MemoryChunk & {
   projectKey: string | null;
 };
 
+type SessionRetainedChunk = {
+  id: string;
+  provenance: MemoryEntryProvenance;
+};
+
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
   /** Chunks that still need embedding and insertion; only new chunks for a session delta. */
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
-  /** Unchanged session rows to retain while the writer derives stale rows transactionally. */
-  sessionKeepIds?: string[];
+  /** Unchanged session rows whose current provenance is refreshed by the delta writer. */
+  sessionRetainedChunks?: SessionRetainedChunk[];
 };
 
 function resolveChunkRecallMetadata(params: {
@@ -975,16 +980,48 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: IndexedMemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
-    sessionKeepIds?: string[],
+    sessionRetainedChunks?: SessionRetainedChunk[],
   ): void {
     const now = Date.now();
     const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
+    const provenanceUpsert = this.db.prepare(
+      `INSERT INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
+         chunk_id, origin_class, session_kind, observed_at, supersedes_key
+       ) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(chunk_id) DO UPDATE SET
+         origin_class=excluded.origin_class,
+         session_kind=excluded.session_kind,
+         observed_at=excluded.observed_at,
+         supersedes_key=excluded.supersedes_key
+       WHERE origin_class IS NOT excluded.origin_class
+          OR session_kind IS NOT excluded.session_kind
+          OR observed_at IS NOT excluded.observed_at
+          OR supersedes_key IS NOT excluded.supersedes_key`,
+    );
+    const upsertChunkProvenance = (
+      id: string,
+      provenance: MemoryEntryProvenance | undefined,
+    ): void => {
+      const resolved = provenance ?? {
+        originClass: "untrusted" as const,
+        sessionKind: "unknown" as const,
+        observedAt: now,
+      };
+      provenanceUpsert.run(
+        id,
+        resolved.originClass,
+        resolved.sessionKind,
+        resolved.observedAt,
+        resolved.supersedesKey ?? null,
+      );
+    };
     let keepRowsMissing = false;
     let staleCount = 0;
     runSqliteImmediateTransactionSync(this.db, () => {
-      if (sessionKeepIds) {
+      if (sessionRetainedChunks) {
         // Resolve staleness from live rows under the write lock. A writer that
         // commits after planning cannot leave an unknown row behind.
+        const sessionKeepIds = sessionRetainedChunks.map((chunk) => chunk.id);
         const insertIds = chunks.map((chunk) => this.chunkRowId(source, entry.path, chunk, model));
         const desiredIds = new Set([...sessionKeepIds, ...insertIds]);
         const liveIds = new Set(
@@ -1013,6 +1050,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             requireVectors: model !== "fts-only",
             requireExactFts: true,
           });
+        // Chunk identity intentionally excludes session provenance. Refresh it
+        // under the same lock so a trust-only transcript rewrite cannot retain
+        // stale owner/agent provenance while advancing the source hash.
+        for (const retained of sessionRetainedChunks) {
+          if (liveIds.has(retained.id)) {
+            upsertChunkProvenance(retained.id, retained.provenance);
+          }
+        }
       } else {
         this.clearIndexedFileData(entry.path, source);
       }
@@ -1053,29 +1098,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                project_key=excluded.project_key`,
           )
           .run(id, chunk.importance, chunk.triggers, chunk.projectKey);
-        const provenance = chunk.provenance ?? {
-          originClass: "untrusted" as const,
-          sessionKind: "unknown" as const,
-          observedAt: now,
-        };
-        this.db
-          .prepare(
-            `INSERT INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
-               chunk_id, origin_class, session_kind, observed_at, supersedes_key
-             ) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(chunk_id) DO UPDATE SET
-               origin_class=excluded.origin_class,
-               session_kind=excluded.session_kind,
-               observed_at=excluded.observed_at,
-               supersedes_key=excluded.supersedes_key`,
-          )
-          .run(
-            id,
-            provenance.originClass,
-            provenance.sessionKind,
-            provenance.observedAt,
-            provenance.supersedesKey ?? null,
-          );
+        upsertChunkProvenance(id, chunk.provenance);
         if (vectorReady && embedding.length > 0) {
           replaceMemoryVectorRow({
             db: this.db,
@@ -1114,12 +1137,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
-    if (sessionKeepIds) {
+    if (sessionRetainedChunks) {
       log.debug("memory sync: incremental session chunk delta", {
         path: entry.path,
         new: chunks.length,
         stale: staleCount,
-        kept: sessionKeepIds.length,
+        kept: sessionRetainedChunks.length,
       });
     }
   }
@@ -1145,7 +1168,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     model: string,
     hasProvider: boolean,
     chunks: IndexedMemoryChunk[],
-  ): { newChunks: IndexedMemoryChunk[]; keepIds: string[] } | null {
+  ): { newChunks: IndexedMemoryChunk[]; retainedChunks: SessionRetainedChunk[] } | null {
     const existing = this.db
       .prepare(
         `SELECT id, embedding = '[]' AS empty_embedding
@@ -1167,7 +1190,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const existingById = new Map(existing.map((row) => [row.id, row]));
     const newChunks: IndexedMemoryChunk[] = [];
-    const keepIds: string[] = [];
+    const retainedChunks: SessionRetainedChunk[] = [];
     for (const [id, chunk] of desired) {
       const row = existingById.get(id);
       if (!row) {
@@ -1175,9 +1198,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       } else if (hasProvider && row.empty_embedding) {
         newChunks.push(chunk);
       } else {
-        keepIds.push(id);
+        retainedChunks.push({
+          id,
+          provenance: expectDefined(chunk.provenance, "session chunk provenance"),
+        });
       }
     }
+    const keepIds = retainedChunks.map((chunk) => chunk.id);
 
     // Managers in the gateway and CLI share this SQLite index. These probes
     // must run for every plan; process-local cache state cannot prove parity.
@@ -1205,7 +1232,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     ) {
       return null;
     }
-    return { newChunks, keepIds };
+    return { newChunks, retainedChunks };
   }
 
   private hasSessionKeepDerivedRows(params: {
@@ -1380,7 +1407,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           entry,
           source: options.source,
           chunks: delta.newChunks,
-          sessionKeepIds: delta.keepIds,
+          sessionRetainedChunks: delta.retainedChunks,
         };
       }
     }
@@ -1524,7 +1551,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           item.chunks,
           fileEmbeddings,
           vectorReady,
-          item.sessionKeepIds,
+          item.sessionRetainedChunks,
         );
       }
       prepared = [];
@@ -1595,7 +1622,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         prepared?.chunks ?? [],
         [],
         false,
-        prepared?.sessionKeepIds,
+        prepared?.sessionRetainedChunks,
       );
       return;
     }
@@ -1641,7 +1668,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       prepared.chunks,
       embeddings,
       vectorReady,
-      prepared.sessionKeepIds,
+      prepared.sessionRetainedChunks,
     );
   }
 }
