@@ -121,7 +121,7 @@ suite.define(() => {
         await page.getByRole("heading", { name: "Team secrets" }).waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
-        const addDialog = page.locator('openclaw-modal-dialog[label="Add team value"]');
+        const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
         await addDialog.getByLabel("Name", { exact: true }).fill("SERVICE_URL");
         await addDialog.getByLabel("Value", { exact: true }).fill("https://service.test");
         await capture(page, "02-add-dialog.png");
@@ -129,7 +129,7 @@ suite.define(() => {
         await page.getByRole("status").getByText("Saved SERVICE_URL.").waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
-        const secretDialog = page.locator('openclaw-modal-dialog[label="Add team value"]');
+        const secretDialog = page.locator('openclaw-modal-dialog[label="Add"]');
         await secretDialog.getByLabel("Name", { exact: true }).fill("SERVICE_API_KEY");
         expect(await secretDialog.locator('input[type="checkbox"]').isChecked()).toBe(true);
         await secretDialog.getByLabel("Value", { exact: true }).fill("super-secret-material");
@@ -144,13 +144,13 @@ suite.define(() => {
           .fill('BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test');
         await bulkDialog.getByText("1 secrets detected").waitFor();
         await capture(page, "03-bulk-add-dialog.png");
-        await bulkDialog.getByRole("button", { name: "Save entries" }).click();
+        await bulkDialog.getByRole("button", { name: "Save", exact: true }).click();
         await page.getByRole("status").getByText("Saved 2 entries.").waitFor();
 
         const bulkRow = page.getByRole("row", { name: /BULK_URL/u });
-        await bulkRow.getByRole("button", { name: "Actions for BULK_URL" }).click();
+        await bulkRow.getByRole("button", { name: "Actions: BULK_URL" }).click();
         await bulkRow.locator('wa-dropdown-item[value="delete"]').click();
-        const confirm = page.locator('openclaw-modal-dialog[label="Delete team value?"]');
+        const confirm = page.locator('openclaw-modal-dialog[label="Delete"]');
         await confirm.getByRole("button", { name: "Delete", exact: true }).click();
         await page.getByRole("status").getByText("Deleted BULK_URL.").waitFor();
         expect(await page.getByRole("row", { name: /BULK_URL/u }).count()).toBe(0);

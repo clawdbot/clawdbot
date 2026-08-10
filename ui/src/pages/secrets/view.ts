@@ -81,7 +81,7 @@ function renderEntryMenu(props: SecretsStoreViewProps, entry: SecretStoreEntry):
         slot="trigger"
         type="button"
         class="btn btn--sm btn--ghost secrets-store__menu-trigger"
-        aria-label=${t("secretsStore.actionsFor", { name: entry.name })}
+        aria-label=${`${t("secretsStore.actions")}: ${entry.name}`}
         title=${t("secretsStore.actions")}
         ?disabled=${props.busy}
       >
@@ -110,8 +110,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
     return html`
       <div class="secrets-store__empty">
         ${renderSettingsEmpty(t("secretsStore.empty"))}
-        <p>${t("secretsStore.emptyHint")}</p>
-        ${renderDocsLink(DOCS_URL, t("secretsStore.readDocs"))}
+        ${renderDocsLink(DOCS_URL, t("common.docs"))}
       </div>
     `;
   }
@@ -172,7 +171,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
   const editing = props.dialogMode === "edit";
   return html`
     <openclaw-modal-dialog
-      label=${editing ? t("secretsStore.editTitle") : t("secretsStore.addTitle")}
+      label=${editing ? t("secretsStore.edit") : t("secretsStore.add")}
       description=${t("secretsStore.secretHint")}
       @modal-cancel=${props.onCloseDialog}
     >
@@ -185,12 +184,8 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
         }}
       >
         <div class="secrets-store-dialog__header">
-          <h2>${editing ? t("secretsStore.editTitle") : t("secretsStore.addTitle")}</h2>
-          <p>
-            ${editing && props.draft.kind === "secret"
-              ? t("secretsStore.replaceHint")
-              : t("secretsStore.secretHint")}
-          </p>
+          <h2>${editing ? t("secretsStore.edit") : t("secretsStore.add")}</h2>
+          <p>${t("secretsStore.secretHint")}</p>
         </div>
         <label class="secrets-store-field">
           <span>${t("secretsStore.name")}</span>
@@ -255,7 +250,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
   }
   return html`
     <openclaw-modal-dialog
-      label=${t("secretsStore.bulkTitle")}
+      label=${t("secretsStore.bulkAdd")}
       description=${t("secretsStore.bulkHint")}
       @modal-cancel=${props.onCloseBulk}
     >
@@ -268,7 +263,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
         }}
       >
         <div class="secrets-store-dialog__header">
-          <h2>${t("secretsStore.bulkTitle")}</h2>
+          <h2>${t("secretsStore.bulkAdd")}</h2>
           <p>${t("secretsStore.bulkHint")}</p>
         </div>
         <label class="secrets-store-field">
@@ -288,7 +283,6 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
         </label>
         <div class="secrets-store-bulk__summary" aria-live="polite">
           ${t("secretsStore.secretCount", { count: String(props.bulkSecretCount) })}
-          <span>${t("secretsStore.entryCount", { count: String(props.bulkEntryCount) })}</span>
         </div>
         <label class="secrets-store-checkbox">
           <input
@@ -300,7 +294,6 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
           />
           <span>
             <strong>${t("secretsStore.autoDetect")}</strong>
-            <small>${t("secretsStore.autoDetectHint")}</small>
           </span>
         </label>
         ${props.bulkInvalidNames.length
@@ -317,7 +310,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
             type="submit"
             ?disabled=${props.busy || !props.bulkEntryCount || props.bulkInvalidNames.length > 0}
           >
-            ${props.busy ? t("common.saving") : t("secretsStore.bulkSave")}
+            ${props.busy ? t("common.saving") : t("common.save")}
           </button>
           <button class="btn" type="button" ?disabled=${props.busy} @click=${props.onCloseBulk}>
             ${t("common.cancel")}
@@ -374,7 +367,6 @@ export function renderSecretsStore(props: SecretsStoreViewProps): TemplateResult
         ${renderSettingsSection(
           {
             title: t("secretsStore.teamTitle"),
-            description: t("secretsStore.teamDescription"),
             actions,
             count: props.entries.length,
           },

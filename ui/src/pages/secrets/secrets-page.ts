@@ -262,7 +262,7 @@ class SecretsPage extends OpenClawLightDomElement {
     if (
       !this.canDelete ||
       !(await showConfirmDialog({
-        title: t("secretsStore.deleteTitle"),
+        title: t("common.delete"),
         message: t("secretsStore.deleteConfirm", { name: entry.name }),
         confirmLabel: t("common.delete"),
         danger: true,
