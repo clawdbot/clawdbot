@@ -135,7 +135,12 @@ describe("executeAgentTurn: lifecycle progress", () => {
       name: "read",
       phase: "start",
       status: "running",
+      summary: undefined,
+      progressText: undefined,
+      meta: undefined,
       commandBearing: false,
+      approvalId: undefined,
+      approvalSlug: undefined,
     });
   });
 
@@ -227,7 +232,12 @@ describe("executeAgentTurn: lifecycle progress", () => {
       name: "bash",
       phase: "start",
       status: "running",
+      summary: undefined,
+      progressText: undefined,
+      meta: undefined,
       commandBearing: false,
+      approvalId: undefined,
+      approvalSlug: undefined,
     });
   });
 
