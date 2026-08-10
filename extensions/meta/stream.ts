@@ -22,9 +22,9 @@ function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamF
     if (model.provider !== "meta") {
       return;
     }
-    // The catalog limit is the no-override request default. Preserve an explicit
-    // caller or provider payload cap while filling the direct stream path gap.
-    if (!options?.maxTokens && payload.max_output_tokens === undefined) {
+    // Responses treats zero as an unset caller cap. Restore the catalog limit
+    // without changing provider-selected behavior when the caller omits the field.
+    if (options?.maxTokens === 0 && payload.max_output_tokens === undefined) {
       payload.max_output_tokens = model.maxTokens;
     }
     if (!model.reasoning) {

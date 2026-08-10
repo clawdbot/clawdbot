@@ -144,7 +144,7 @@ describe("meta provider", () => {
     });
   });
 
-  it("maps the catalog output cap to Responses when no caller override is set", async () => {
+  it("preserves the provider-selected output cap when the caller omits it", async () => {
     const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
     let capturedPayload: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async () => completedSseResponse());
@@ -173,8 +173,7 @@ describe("meta provider", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(model.maxTokens).toBe(131072);
-    expect(capturedPayload?.max_output_tokens).toBe(model.maxTokens);
+    expect(capturedPayload).not.toHaveProperty("max_output_tokens");
   });
 
   it("preserves Meta replay fields through canonical simple-completion aliases", async () => {
@@ -258,10 +257,10 @@ describe("meta provider", () => {
     expect(result.stopReason).toBe("stop");
     expect(sourceModelApi).toBe("openai-responses");
     expect(capturedPayload).toMatchObject({
-      max_output_tokens: 131072,
       store: false,
       include: ["reasoning.encrypted_content"],
     });
+    expect(capturedPayload).not.toHaveProperty("max_output_tokens");
   });
 
   it.each([
@@ -269,7 +268,7 @@ describe("meta provider", () => {
       label: "an omitted override",
       callerMaxTokens: undefined,
       prepopulatedMaxOutputTokens: undefined,
-      expectedMaxOutputTokens: 131072,
+      expectedMaxOutputTokens: undefined,
     },
     {
       label: "a positive caller override",

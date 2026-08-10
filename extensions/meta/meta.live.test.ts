@@ -82,7 +82,7 @@ async function expectLiveCompletion(params: {
   context: Context;
   expectedText: string | RegExp;
   expectImagePayload?: boolean;
-  useCatalogMaxTokens?: boolean;
+  useZeroMaxTokens?: boolean;
   emitRedactedCapProof?: boolean;
   emitRedactedImageProof?: boolean;
 }): Promise<void> {
@@ -91,7 +91,7 @@ async function expectLiveCompletion(params: {
     context,
     expectedText,
     expectImagePayload = false,
-    useCatalogMaxTokens = false,
+    useZeroMaxTokens = false,
     emitRedactedCapProof = false,
     emitRedactedImageProof = false,
   } = params;
@@ -100,7 +100,7 @@ async function expectLiveCompletion(params: {
   let responseStatus: number | undefined;
   const stream = await resolveLiveStreamFn(modelId)(model, context, {
     apiKey: MODEL_API_KEY,
-    ...(useCatalogMaxTokens ? {} : { maxTokens: LIVE_TEST_MAX_OUTPUT_TOKENS }),
+    maxTokens: useZeroMaxTokens ? 0 : LIVE_TEST_MAX_OUTPUT_TOKENS,
     reasoning: "high",
     onPayload: (payload) => {
       capturedPayload = payload as Record<string, unknown>;
@@ -128,7 +128,7 @@ async function expectLiveCompletion(params: {
   } else {
     expect(assistantText).toMatch(expectedText);
   }
-  if (useCatalogMaxTokens) {
+  if (useZeroMaxTokens) {
     expect(model.maxTokens).toBe(131072);
     expect(capturedPayload?.max_output_tokens).toBe(model.maxTokens);
     expect(responseStatus).toBe(200);
@@ -138,6 +138,7 @@ async function expectLiveCompletion(params: {
     console.info(
       `[meta:catalog-cap:live] ${JSON.stringify({
         model: modelId,
+        callerMaxTokens: 0,
         requestedMaxOutputTokens: model.maxTokens,
         observedMaxOutputTokens: capturedPayload?.max_output_tokens,
         httpStatus: responseStatus,
@@ -196,7 +197,7 @@ async function expectLiveCatalogCapCompletion(modelId: string): Promise<void> {
       ],
     },
     expectedText: /CATALOG_CAP_OK/i,
-    useCatalogMaxTokens: true,
+    useZeroMaxTokens: true,
     emitRedactedCapProof: true,
   });
 }
@@ -245,7 +246,7 @@ describeLive("meta plugin live", () => {
     120_000,
   );
 
-  it("uses the 131072 catalog output cap for muse-spark-1.2 without an override", async () => {
+  it("uses the 131072 catalog output cap for muse-spark-1.2 when maxTokens is zero", async () => {
     await expectLiveCatalogCapCompletion("muse-spark-1.2");
   }, 120_000);
 
@@ -268,7 +269,7 @@ describeContributorLive("meta contributor plugin live", () => {
     await expectLiveTextCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
   }, 120_000);
 
-  it("uses the 131072 catalog output cap for contributor without an override", async () => {
+  it("uses the 131072 catalog output cap for contributor when maxTokens is zero", async () => {
     await expectLiveCatalogCapCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
   }, 120_000);
 
