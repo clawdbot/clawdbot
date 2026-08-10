@@ -35,6 +35,7 @@ function completeResult(params?: {
       didSendViaMessagingTool: () => false,
       getAcceptedSessionSpawns: () => [],
       getAssistantTurnCount: () => 0,
+      getAssistantTurnsWithUsage: () => 0,
       getCompactionCount: () => 0,
       getHeartbeatToolResponse: () => undefined,
       getItemLifecycle: () => undefined,

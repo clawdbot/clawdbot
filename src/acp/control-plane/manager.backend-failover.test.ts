@@ -33,6 +33,7 @@ describe("ACP manager backend failover helpers", () => {
         code: "ACP_TURN_FAILED",
         error: "backend temporarily overloaded",
         sawOutput: false,
+        promptSubmissionState: "not_submitted",
       }),
     ).toBe(true);
     expect(
@@ -41,6 +42,25 @@ describe("ACP manager backend failover helpers", () => {
         code: "ACP_TURN_FAILED",
         error: "backend temporarily overloaded",
         sawOutput: true,
+        promptSubmissionState: "not_submitted",
+      }),
+    ).toBe(false);
+    expect(
+      isFailoverWorthyBackendError({
+        backend: "primary",
+        code: "ACP_TURN_FAILED",
+        error: "backend temporarily overloaded",
+        sawOutput: false,
+        promptSubmissionState: "unknown",
+      }),
+    ).toBe(false);
+    expect(
+      isFailoverWorthyBackendError({
+        backend: "primary",
+        code: "ACP_TURN_FAILED",
+        error: "backend temporarily overloaded",
+        sawOutput: false,
+        promptSubmissionState: "submitted",
       }),
     ).toBe(false);
     expect(
@@ -49,6 +69,7 @@ describe("ACP manager backend failover helpers", () => {
         code: "ACP_BACKEND_MISSING",
         error: "backend unavailable",
         sawOutput: false,
+        promptSubmissionState: "not_submitted",
       }),
     ).toBe(false);
   });

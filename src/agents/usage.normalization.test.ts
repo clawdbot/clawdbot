@@ -3,7 +3,12 @@
  * Protects cache read/write and session total prompt-token calculations.
  */
 import { describe, expect, it } from "vitest";
-import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
+import {
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  resolveNormalizedUsageObservedBuckets,
+} from "./usage.js";
 
 describe("normalizeUsage", () => {
   it("normalizes Anthropic-style snake_case usage", () => {
@@ -87,6 +92,104 @@ describe("normalizeUsage", () => {
 
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
+  });
+
+  it("treats runtime placeholder zeros as unobserved", () => {
+    expect(
+      normalizeUsage({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        tokenCountsOrigin: "runtime-placeholder",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves provider-reported all-zero usage", () => {
+    expect(
+      normalizeUsage({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+      }),
+    ).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+  });
+
+  it("preserves authoritative provider-billed zero and partial metadata", () => {
+    const billedZero = normalizeUsage({
+      input: 0,
+      output: 0,
+      cost: { total: 0, totalOrigin: "provider-billed" },
+    });
+    expect(billedZero?.providerBilledCost).toEqual({
+      totalUsd: 0,
+      coverage: "complete",
+    });
+
+    expect(
+      normalizeUsage({
+        input: 1,
+        providerBilledCost: { totalUsd: 0.25, coverage: "partial" },
+      })?.providerBilledCost,
+    ).toEqual({
+      totalUsd: 0.25,
+      coverage: "partial",
+    });
+  });
+
+  it("retains provider-billed cost even when token buckets are unavailable", () => {
+    expect(
+      normalizeUsage({
+        cost: { total: 0.5, totalOrigin: "provider-billed" },
+      }),
+    ).toEqual({
+      input: undefined,
+      output: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+      providerBilledCost: { totalUsd: 0.5, coverage: "complete" },
+    });
+  });
+
+  it("retains explicit bucket provenance through structural zeros", () => {
+    const usage = normalizeUsage({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      tokenCountsObserved: ["input", "output", "total"],
+    });
+
+    expect(usage).toBeDefined();
+    expect(resolveNormalizedUsageObservedBuckets(usage!)).toEqual(
+      new Set(["input", "output", "total"]),
+    );
+  });
+
+  it("preserves explicit empty provenance after provider authority is revoked", () => {
+    const usage = normalizeUsage({
+      input: 12,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      totalTokens: 21,
+      tokenCountsObserved: [],
+    });
+
+    expect(usage?.tokenCountsObserved).toEqual([]);
+    expect(resolveNormalizedUsageObservedBuckets(usage!)).toEqual(new Set());
   });
 
   it("guards against empty/zero usage overwrites", () => {

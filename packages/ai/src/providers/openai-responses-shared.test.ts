@@ -1423,6 +1423,18 @@ describe("processResponsesStream", () => {
 
   it("preserves failed terminal response details", async () => {
     const output = createAssistantOutput();
+    const failedModel = {
+      ...nativeOpenAIModel,
+      cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 },
+    };
+    const applyServiceTierPricing = vi.fn((usage: AssistantMessage["usage"]) => {
+      usage.cost.input *= 0.5;
+      usage.cost.output *= 0.5;
+      usage.cost.cacheRead *= 0.5;
+      usage.cost.cacheWrite *= 0.5;
+      usage.cost.total =
+        usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+    });
 
     await expect(
       processResponsesStream(
@@ -1431,6 +1443,68 @@ describe("processResponsesStream", () => {
             type: "response.failed",
             response: {
               id: "resp_failed",
+              model: "gpt-5.5-failed-snapshot",
+              status: "failed",
+              service_tier: "flex",
+              usage: {
+                input_tokens: 100,
+                output_tokens: 20,
+                total_tokens: 120,
+                input_tokens_details: { cached_tokens: 25, cache_write_tokens: 10 },
+                output_tokens_details: { reasoning_tokens: 7 },
+              },
+              error: { code: "server_error", message: "provider failed" },
+            },
+          },
+        ]),
+        output,
+        new AssistantMessageEventStream(),
+        failedModel,
+        {
+          serviceTier: "priority",
+          resolveServiceTier: (responseTier, requestTier) => responseTier ?? requestTier,
+          applyServiceTierPricing,
+        },
+      ),
+    ).rejects.toThrow("server_error: provider failed");
+
+    expect(output).toMatchObject({
+      responseId: "resp_failed",
+      responseModel: "gpt-5.5-failed-snapshot",
+      usage: {
+        input: 65,
+        output: 20,
+        cacheRead: 25,
+        cacheWrite: 10,
+        reasoningTokens: 7,
+        totalTokens: 120,
+        tokenCountsObserved: [
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite",
+          "reasoningTokens",
+          "total",
+        ],
+      },
+      stopReason: "stop",
+    });
+    expect(output.usage.cost.total).toBeCloseTo(0.000058125, 12);
+    expect(applyServiceTierPricing).toHaveBeenCalledWith(output.usage, "flex");
+  });
+
+  it("does not fabricate usage for a failed terminal response without usage", async () => {
+    const output = createAssistantOutput();
+    output.usage.tokenCountsOrigin = "runtime-placeholder";
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_without_usage",
+              model: "gpt-5.5-failed-snapshot",
               status: "failed",
               error: { code: "server_error", message: "provider failed" },
             },
@@ -1443,9 +1517,19 @@ describe("processResponsesStream", () => {
     ).rejects.toThrow("server_error: provider failed");
 
     expect(output).toMatchObject({
-      responseId: "resp_failed",
-      stopReason: "stop",
+      responseId: "resp_failed_without_usage",
+      responseModel: "gpt-5.5-failed-snapshot",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
+        totalTokens: 0,
+      },
     });
+    expect(output.usage).not.toHaveProperty("tokenCountsObserved");
+    expect(output.usage).not.toHaveProperty("reasoningTokens");
   });
 
   it("rejects streams that end without a terminal response event", async () => {

@@ -70,6 +70,20 @@ export const WorkerTranscriptUsageSchema = closedObject({
   output: Type.Number({ minimum: 0 }),
   cacheRead: Type.Number({ minimum: 0 }),
   cacheWrite: Type.Number({ minimum: 0 }),
+  tokenCountsOrigin: Type.Optional(Type.Literal("runtime-placeholder")),
+  tokenCountsObserved: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("input"),
+        Type.Literal("output"),
+        Type.Literal("cacheRead"),
+        Type.Literal("cacheWrite"),
+        Type.Literal("reasoningTokens"),
+        Type.Literal("total"),
+      ]),
+      { maxItems: 6 },
+    ),
+  ),
   contextUsage: Type.Optional(
     Type.Union([
       closedObject({
@@ -80,6 +94,7 @@ export const WorkerTranscriptUsageSchema = closedObject({
       closedObject({ state: Type.Literal("unavailable") }),
     ]),
   ),
+  reasoningTokens: Type.Optional(Type.Number({ minimum: 0 })),
   totalTokens: Type.Number({ minimum: 0 }),
   cost: closedObject({
     input: Type.Number({ minimum: 0 }),

@@ -273,6 +273,12 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Runtime-created structural zero; no provider token counts were observed. */
+  tokenCountsOrigin?: "runtime-placeholder";
+  /** Token buckets actually observed when structural fields fill a partial snapshot. */
+  tokenCountsObserved?: Array<
+    "input" | "output" | "cacheRead" | "cacheWrite" | "reasoningTokens" | "total"
+  >;
   /** Whether the provider reported a cache-read/write token split. */
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
@@ -281,6 +287,8 @@ export interface Usage {
   contextUsage?:
     | { state: "available"; promptTokens: number; totalTokens: number }
     | { state: "unavailable" };
+  /** Provider-reported reasoning subset of output tokens when available. */
+  reasoningTokens?: number;
   totalTokens: number;
   cost: {
     input: number;
@@ -316,6 +324,8 @@ export interface UserMessage {
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
+  /** Runtime-authored terminal message that did not come from a provider turn. */
+  messageOrigin?: "runtime-synthetic";
   api: Api;
   provider: Provider;
   model: string;

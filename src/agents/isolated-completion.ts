@@ -15,6 +15,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { normalizeCliModel } from "./cli-runner/helpers.js";
+import { beginActiveAgentCommandModelCall } from "./command/run-accounting.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -31,6 +32,7 @@ import {
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
 import type { UsageLike } from "./usage.js";
+import { normalizeUsage } from "./usage.js";
 
 type RunIsolatedCompletionParams = {
   config?: OpenClawConfig;
@@ -148,35 +150,57 @@ async function runCliIsolatedCompletion(params: {
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
       const sessionId = `isolated-completion-${Date.now()}`;
-      const result = await runCliAgent({
-        sessionId,
-        sessionFile: path.join(dir, "session.json"),
-        workspaceDir: params.workspaceDir,
-        cwd: dir,
-        agentDir: params.agentDir,
-        agentId: params.agentId,
+      const accounting = beginActiveAgentCommandModelCall();
+      const result = await (async () => {
+        try {
+          return await runCliAgent({
+            sessionId,
+            sessionFile: path.join(dir, "session.json"),
+            workspaceDir: params.workspaceDir,
+            cwd: dir,
+            agentDir: params.agentDir,
+            agentId: params.agentId,
+            config: params.request.config,
+            prompt: params.request.prompt,
+            extraSystemPrompt: params.request.systemPrompt,
+            timeoutMs: params.request.timeoutMs,
+            runId: sessionId,
+            provider: params.provider,
+            modelProvider: params.modelProvider,
+            model: params.request.model,
+            // The CLI runner treats a supplied profile as exact; it auto-selects only
+            // when this field is absent. This path has no embedded-run fallback loop.
+            authProfileId: params.request.authProfileId,
+            thinkLevel: params.request.thinkLevel,
+            streamParams: params.request.streamParams,
+            abortSignal: params.request.abortSignal,
+            executionMode: "side-question",
+            cliToolAvailability: { native: [], openClaw: [] },
+            disableTools: true,
+            disableCliLiveSession: true,
+            cleanupCliLiveSessionOnRunEnd: true,
+            cleanupBundleMcpOnRunEnd: true,
+            requireExplicitMessageTarget: true,
+            isolatedCompletion: true,
+          });
+        } catch (error) {
+          accounting?.settle({
+            outcome: "failed",
+            provider: params.modelProvider,
+            model: params.request.model,
+            config: params.request.config,
+            agentDir: params.agentDir,
+          });
+          throw error;
+        }
+      })();
+      accounting?.settle({
+        outcome: "completed",
+        provider: params.modelProvider,
+        model: result.meta?.agentMeta?.model ?? params.request.model,
+        usage: normalizeUsage(result.meta?.agentMeta?.usage),
         config: params.request.config,
-        prompt: params.request.prompt,
-        extraSystemPrompt: params.request.systemPrompt,
-        timeoutMs: params.request.timeoutMs,
-        runId: sessionId,
-        provider: params.provider,
-        modelProvider: params.modelProvider,
-        model: params.request.model,
-        // The CLI runner treats a supplied profile as exact; it auto-selects only
-        // when this field is absent. This path has no embedded-run fallback loop.
-        authProfileId: params.request.authProfileId,
-        thinkLevel: params.request.thinkLevel,
-        streamParams: params.request.streamParams,
-        abortSignal: params.request.abortSignal,
-        executionMode: "side-question",
-        cliToolAvailability: { native: [], openClaw: [] },
-        disableTools: true,
-        disableCliLiveSession: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-        cleanupBundleMcpOnRunEnd: true,
-        requireExplicitMessageTarget: true,
-        isolatedCompletion: true,
+        agentDir: params.agentDir,
       });
       if (hasCliSideEffectEvidence(result)) {
         throw new IsolatedCompletionError(
@@ -424,9 +448,34 @@ export async function runIsolatedCompletion(
         thinkLevel: request.thinkLevel,
         streamParams: request.streamParams,
       };
-      const result = await harness.runIsolatedCompletion(
-        prepareIsolatedHarnessParams(harness, harnessParams),
-      );
+      const accounting = beginActiveAgentCommandModelCall();
+      const result = await (async () => {
+        try {
+          return await harness.runIsolatedCompletion!(
+            prepareIsolatedHarnessParams(harness, harnessParams),
+          );
+        } catch (error) {
+          accounting?.settle({
+            outcome: "failed",
+            provider,
+            model: request.model,
+            config,
+            agentDir,
+          });
+          throw error;
+        }
+      })();
+      accounting?.settle({
+        outcome:
+          result.assistant.stopReason === "error" || result.assistant.stopReason === "aborted"
+            ? "failed"
+            : "completed",
+        provider: result.assistant.provider,
+        model: result.assistant.model,
+        usage: normalizeUsage(result.assistant.usage),
+        config,
+        agentDir,
+      });
       return {
         text: requireIsolatedAssistantText(result.assistant),
         provider: result.assistant.provider,

@@ -9,6 +9,7 @@ import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../age
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
+import { resolveEmbeddedRunAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
   applySecretRefHeaderSentinels,
@@ -554,7 +555,9 @@ export async function maybeCompactAgentHarnessSession(
         }
       : handoffCompactParams;
   if (shouldCompactAfterContextEngine) {
+    resolveEmbeddedRunAccountingObservers(params)?.onOpaqueWork?.("native_harness_compaction");
     return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
   }
+  resolveEmbeddedRunAccountingObservers(params)?.onOpaqueWork?.("native_harness_compaction");
   return harness.compact?.(resolvedCompactParams);
 }

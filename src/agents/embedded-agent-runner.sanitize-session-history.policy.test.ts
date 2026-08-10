@@ -11,7 +11,7 @@ import {
   sanitizeSnapshotChangedOpenAIReasoning,
   sanitizeWithOpenAIResponses,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
+import { makePlaceholderUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
 
@@ -77,7 +77,7 @@ describe("sanitizeSessionHistory e2e smoke", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "answer" }],
-        usage: makeZeroUsageSnapshot(),
+        usage: makePlaceholderUsageSnapshot(),
       },
     ]);
   });

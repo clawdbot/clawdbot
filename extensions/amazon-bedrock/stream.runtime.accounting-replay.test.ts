@@ -434,8 +434,74 @@ describe("Bedrock token usage", () => {
       output: 5,
       cacheRead: 70,
       cacheWrite: 10,
+      tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
       totalTokens: 105,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
+    });
+  });
+
+  it("keeps partial Bedrock usage numeric without inventing context authority", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          metadata: {
+            usage: {
+              inputTokens: 20,
+              outputTokens: 5,
+              totalTokens: 25,
+              cacheReadInputTokens: 70,
+            },
+          },
+        },
+        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+      ]),
+    } as never);
+
+    const result = await streamBedrockForTest(bedrockModel({}), {
+      messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+    } as never).result();
+
+    expect(result.usage).toMatchObject({
+      input: 20,
+      output: 5,
+      cacheRead: 70,
+      cacheWrite: 0,
+      tokenCountsObserved: ["input", "output", "cacheRead"],
+      totalTokens: 95,
+      contextUsage: { state: "unavailable" },
+    });
+  });
+
+  it("keeps a complete all-zero Bedrock usage snapshot authoritative", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          metadata: {
+            usage: {
+              inputTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheWriteInputTokens: 0,
+            },
+          },
+        },
+        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+      ]),
+    } as never);
+
+    const result = await streamBedrockForTest(bedrockModel({}), {
+      messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+    } as never).result();
+
+    expect(result.usage).toMatchObject({
+      tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
+      totalTokens: 0,
+      contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
     });
   });
 

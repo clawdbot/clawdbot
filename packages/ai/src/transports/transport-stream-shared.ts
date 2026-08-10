@@ -16,6 +16,9 @@ type TransportUsage = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  tokenCountsOrigin?: Usage["tokenCountsOrigin"];
+  tokenCountsObserved?: Usage["tokenCountsObserved"];
+  reasoningTokens?: number;
   contextUsage?: ContextUsage;
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
@@ -106,6 +109,7 @@ export function createEmptyTransportUsage(): TransportUsage {
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
+    tokenCountsOrigin: "runtime-placeholder",
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

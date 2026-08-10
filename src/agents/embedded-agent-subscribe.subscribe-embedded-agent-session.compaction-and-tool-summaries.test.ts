@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
+import { makePlaceholderUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
 
@@ -177,7 +177,7 @@ describe("fenced output and compaction retries", () => {
     }
 
     const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
-    expect(usage).toEqual(makeZeroUsageSnapshot());
+    expect(usage).toEqual(makePlaceholderUsageSnapshot());
   });
 });
 

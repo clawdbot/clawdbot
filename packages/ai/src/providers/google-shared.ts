@@ -33,6 +33,7 @@ import type {
   Tool,
   ToolCall,
   StreamOptions,
+  Usage,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
@@ -409,6 +410,7 @@ export function createGoogleAssistantOutput<T extends GoogleApiType>(
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
@@ -758,6 +760,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     candidatesTokenCount: 0,
     thoughtsTokenCount: 0,
   };
+  const observedUsageFields = new Set<keyof typeof knownUsage>();
   const toolCallIds = new Set<string>();
   for (const block of blocks) {
     if (block.type === "toolCall") {
@@ -790,24 +793,65 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
-    if (chunk.usageMetadata) {
+    if (
+      chunk.usageMetadata &&
+      Object.values(chunk.usageMetadata).some(
+        (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+      )
+    ) {
       for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
         const value = chunk.usageMetadata[field];
-        if (typeof value === "number") {
-          knownUsage[field] = value;
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+          knownUsage[field] = Math.max(knownUsage[field], value);
+          observedUsageFields.add(field);
         }
       }
       const promptTokens = knownUsage.promptTokenCount;
       const cacheRead = knownUsage.cachedContentTokenCount;
       const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
+      const reasoningObserved = observedUsageFields.has("thoughtsTokenCount");
+      const inputObserved =
+        observedUsageFields.has("promptTokenCount") &&
+        observedUsageFields.has("cachedContentTokenCount") &&
+        observedUsageFields.has("toolUsePromptTokenCount");
+      const outputObserved =
+        observedUsageFields.has("candidatesTokenCount") &&
+        observedUsageFields.has("thoughtsTokenCount");
+      const observed: NonNullable<Usage["tokenCountsObserved"]> = [
+        ...(inputObserved ? (["input"] as const) : []),
+        ...(outputObserved ? (["output"] as const) : []),
+        ...(observedUsageFields.has("cachedContentTokenCount") ? (["cacheRead"] as const) : []),
+        ...(reasoningObserved ? (["reasoningTokens"] as const) : []),
+      ];
+      const input = Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens;
+      const bucketTotal = input + outputTokens + cacheRead;
+      const reportedTotal =
+        typeof chunk.usageMetadata.totalTokenCount === "number" &&
+        Number.isFinite(chunk.usageMetadata.totalTokenCount) &&
+        chunk.usageMetadata.totalTokenCount >= 0
+          ? chunk.usageMetadata.totalTokenCount
+          : undefined;
+      const totalTokens = Math.max(bucketTotal, reportedTotal ?? 0);
+      const completeBucketsObserved = inputObserved && outputObserved;
+      const totalConflict =
+        reportedTotal !== undefined &&
+        (reportedTotal < bucketTotal || (completeBucketsObserved && reportedTotal !== bucketTotal));
+      if (
+        !totalConflict &&
+        ((reportedTotal !== undefined && totalTokens === reportedTotal) ||
+          (reportedTotal === undefined && completeBucketsObserved))
+      ) {
+        observed.push("total");
+      }
       params.output.usage = {
-        input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
+        input,
         output: outputTokens,
         cacheRead,
         cacheWrite: 0,
-        totalTokens:
-          chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
+        tokenCountsObserved: observed,
+        ...(reasoningObserved ? { reasoningTokens: knownUsage.thoughtsTokenCount } : {}),
+        totalTokens,
         cost: {
           input: 0,
           output: 0,

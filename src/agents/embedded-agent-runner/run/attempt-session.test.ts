@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentSessionAccounting } from "../../sessions/agent-session-accounting.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { bindEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -265,6 +267,48 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
     });
+  });
+
+  it("binds command prompt admission without extending the session factory contract", async () => {
+    const onAgentSubmission = vi.fn(() => ({ settle: vi.fn() }));
+    const onOpaqueWork = vi.fn();
+    const fixture = createInput();
+    bindEmbeddedRunAccountingObservers(fixture.input.attempt, {
+      onAgentSubmission,
+      onOpaqueWork,
+    });
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    const sessionOptions = hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[0];
+    expect(sessionOptions).toBeDefined();
+    const accounting = resolveAgentSessionAccounting(sessionOptions as object);
+    expect(accounting?.onAgentSubmission).toBe(onAgentSubmission);
+    accounting?.onCoreCompactionInvocation?.();
+    accounting?.onExtensionCompactionInvocation?.();
+    expect(onOpaqueWork).toHaveBeenCalledWith("session_core_compaction");
+    expect(onOpaqueWork).toHaveBeenCalledWith("session_extension_compaction");
+    expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
+      contextOverflowRecoveryOwner: "caller",
+    });
+  });
+
+  it("keeps all session compaction exact when model-call instrumentation is available", async () => {
+    const onModelCall = vi.fn(() => ({ settle: vi.fn() }));
+    const onOpaqueWork = vi.fn();
+    const fixture = createInput();
+    bindEmbeddedRunAccountingObservers(fixture.input.attempt, {
+      onModelCall,
+      onOpaqueWork,
+    });
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    const sessionOptions = hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[0];
+    const accounting = resolveAgentSessionAccounting(sessionOptions as object);
+    expect(accounting?.onCoreCompactionInvocation).toBeUndefined();
+    expect(accounting?.onExtensionCompactionInvocation).toBeUndefined();
+    expect(onOpaqueWork).not.toHaveBeenCalled();
   });
 
   it("publishes session ownership before activation can fail", async () => {

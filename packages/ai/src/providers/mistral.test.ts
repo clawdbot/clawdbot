@@ -1,4 +1,8 @@
-import { toolCallFromJSON, type ToolCall } from "@mistralai/mistralai/models/components";
+import {
+  toolCallFromJSON,
+  UsageInfo$inboundSchema,
+  type ToolCall,
+} from "@mistralai/mistralai/models/components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
@@ -123,6 +127,30 @@ function mistralToolStream(responseId: string, ...chunks: ToolCall[][]) {
           },
         };
       }
+    },
+  };
+}
+
+function mistralUsageEvents(
+  usage: Record<string, unknown>,
+  responseId = "response-usage",
+): Array<{ data: Record<string, unknown> }> {
+  return [
+    {
+      data: {
+        id: responseId,
+        model: "mistral-small-latest",
+        usage,
+        choices: [{ finishReason: "stop", delta: { content: "ok", toolCalls: [] } }],
+      },
+    },
+  ];
+}
+
+function mistralUsageStream(usage: Record<string, unknown>) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield* mistralUsageEvents(usage);
     },
   };
 }
@@ -625,6 +653,176 @@ describe("Mistral provider", () => {
       output: 10,
       cacheRead: 64,
       cacheWrite: 0,
+      tokenCountsObserved: ["input", "output", "cacheRead", "total"],
+      totalTokens: 110,
+    });
+  });
+
+  it("keeps positive core usage honest when Mistral omits the cache split", async () => {
+    mistralMockState.streamResult = mistralUsageStream({
+      promptTokens: 100,
+      completionTokens: 10,
+      totalTokens: 110,
+    });
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.usage).toMatchObject({
+      input: 100,
+      output: 10,
+      cacheRead: 0,
+      tokenCountsObserved: ["output", "total"],
+      totalTokens: 110,
+    });
+  });
+
+  it("does not claim core usage presence after the SDK defaults missing fields to zero", async () => {
+    const decodedUsage = UsageInfo$inboundSchema.parse({});
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "response-defaulted-usage",
+            model: "mistral-small-latest",
+            usage: decodedUsage,
+            choices: [{ finishReason: "stop", delta: { content: "ok", toolCalls: [] } }],
+          },
+        };
+      },
+    };
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
+      totalTokens: 0,
+    });
+    expect(result.usage).not.toHaveProperty("tokenCountsObserved");
+  });
+
+  it.each([
+    ["positive", 64],
+    ["zero", 0],
+  ] as const)(
+    "observes a direct top-level %s Mistral cache count",
+    async (_label, cachedTokens) => {
+      mistralMockState.streamResult = mistralUsageStream({
+        promptTokens: 100,
+        completionTokens: 10,
+        totalTokens: 110,
+        cached_tokens: cachedTokens,
+      });
+
+      const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+      expect(result.usage).toMatchObject({
+        input: 100 - cachedTokens,
+        output: 10,
+        cacheRead: cachedTokens,
+        tokenCountsObserved: ["input", "output", "cacheRead", "total"],
+        totalTokens: 110,
+      });
+    },
+  );
+
+  it("clamps a stale Mistral total without preserving aggregate authority", async () => {
+    mistralMockState.streamResult = mistralUsageStream({
+      promptTokens: 100,
+      completionTokens: 10,
+      totalTokens: 50,
+      cached_tokens: 20,
+    });
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.usage).toMatchObject({
+      input: 80,
+      output: 10,
+      cacheRead: 20,
+      tokenCountsObserved: ["input", "output", "cacheRead"],
+      totalTokens: 110,
+    });
+  });
+
+  it("does not let an SDK-defaulted usage chunk erase prior Mistral facts", async () => {
+    const defaultedUsage = UsageInfo$inboundSchema.parse({});
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield* mistralUsageEvents({
+          promptTokens: 100,
+          completionTokens: 10,
+          totalTokens: 110,
+          cached_tokens: 20,
+        });
+        yield* mistralUsageEvents(defaultedUsage, "response-defaulted-tail");
+      },
+    };
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.usage).toMatchObject({
+      input: 80,
+      output: 10,
+      cacheRead: 20,
+      tokenCountsObserved: ["input", "output", "cacheRead", "total"],
+      totalTokens: 110,
+    });
+  });
+
+  it("does not let a lower positive Mistral tail regress cumulative usage", async () => {
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield* mistralUsageEvents({
+          promptTokens: 100,
+          completionTokens: 10,
+          totalTokens: 110,
+          cached_tokens: 20,
+        });
+        yield* mistralUsageEvents(
+          {
+            promptTokens: 80,
+            completionTokens: 5,
+            totalTokens: 90,
+            cached_tokens: 10,
+          },
+          "response-stale-tail",
+        );
+      },
+    };
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.usage).toMatchObject({
+      input: 80,
+      output: 10,
+      cacheRead: 20,
+      tokenCountsObserved: ["input", "output", "cacheRead", "total"],
+      totalTokens: 110,
+    });
+  });
+
+  it.each([
+    ["negative", -1],
+    ["greater than prompt", 120],
+  ] as const)("does not claim a %s Mistral cache split", async (_label, cachedTokens) => {
+    mistralMockState.streamResult = mistralUsageStream({
+      promptTokens: 100,
+      completionTokens: 10,
+      totalTokens: 110,
+      cached_tokens: cachedTokens,
+    });
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.usage).toMatchObject({
+      input: 100,
+      output: 10,
+      cacheRead: 0,
+      tokenCountsObserved: ["output", "total"],
       totalTokens: 110,
     });
   });

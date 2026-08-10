@@ -23,6 +23,7 @@ const EMPTY_USAGE = {
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+  tokenCountsOrigin: "runtime-placeholder",
   totalTokens: 0,
   cost: {
     input: 0,

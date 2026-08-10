@@ -66,12 +66,15 @@ function registerTestContextEngine(id: string, factory: ContextEngineFactory) {
   });
 }
 
-const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
-  compactEmbeddedAgentSessionDirectMock: vi.fn(),
-}));
+const { compactEmbeddedAgentSessionDirectMock, copyEmbeddedRunAccountingObserversMock } =
+  vi.hoisted(() => ({
+    compactEmbeddedAgentSessionDirectMock: vi.fn(),
+    copyEmbeddedRunAccountingObserversMock: vi.fn((_source: object, target: object) => target),
+  }));
 
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
   compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectMock,
+  copyEmbeddedRunAccountingObservers: copyEmbeddedRunAccountingObserversMock,
 }));
 
 function installCompactRuntimeSpy() {
@@ -231,6 +234,10 @@ describe("Engine contract tests", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     compactEmbeddedAgentSessionDirectMock.mockReset();
+    copyEmbeddedRunAccountingObserversMock.mockReset();
+    copyEmbeddedRunAccountingObserversMock.mockImplementation(
+      (_source: object, target: object) => target,
+    );
     clearMemoryPluginState();
   });
 
@@ -289,6 +296,13 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeParams.tokenBudget).toBe(4096);
     expect(compactRuntimeParams.currentTokenCount).toBe(12345);
     expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
+    expect(copyEmbeddedRunAccountingObserversMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        currentTokenCount: 12345,
+      }),
+      compactRuntimeParams,
+    );
     expect(result).toEqual({
       ok: true,
       compacted: false,

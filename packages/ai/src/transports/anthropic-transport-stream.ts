@@ -175,6 +175,9 @@ type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    tokenCountsOrigin?: Usage["tokenCountsOrigin"];
+    tokenCountsObserved?: Usage["tokenCountsObserved"];
+    reasoningTokens?: number;
     cacheWrite1h?: number;
     contextUsage?: ContextUsage;
     totalTokens: number;

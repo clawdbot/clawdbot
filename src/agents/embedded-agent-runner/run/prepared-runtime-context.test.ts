@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./accounting-observers.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import { bindRunToPreparedModelRuntime } from "./prepared-runtime-context.js";
 
@@ -23,6 +27,8 @@ describe("bindRunToPreparedModelRuntime", () => {
       workspaceDir: "/tmp/committed-workspace",
       config: committedConfig,
     } as PreparedModelRuntimeSnapshot;
+    const observers = { onRuntimeSelected: () => {} };
+    bindEmbeddedRunAccountingObservers(runParams, observers);
 
     const result = bindRunToPreparedModelRuntime({
       runParams,
@@ -45,6 +51,7 @@ describe("bindRunToPreparedModelRuntime", () => {
         workspaceDir: "/tmp/committed-workspace",
       }),
     );
+    expect(resolveEmbeddedRunAccountingObservers(result.runParams)).toBe(observers);
     expect(result.workspaceResolution).toEqual({
       agentId: "committed-agent",
       agentIdSource: "explicit",

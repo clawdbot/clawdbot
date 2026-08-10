@@ -17,6 +17,7 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
+import { resolveEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import {
   finalizeAttemptContextEngineTurn,
@@ -131,6 +132,10 @@ export async function completeEmbeddedAttemptAfterTurn(
             withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
             config: attempt.config,
             agentId: runtime.sessionAgentId,
+            onDeferredMaintenance: () =>
+              resolveEmbeddedRunAccountingObservers(attempt)?.onOpaqueWork?.(
+                "deferred_context_engine_maintenance",
+              ),
           }),
         sessionManager: transcript.sessionManager,
         config: attempt.config,

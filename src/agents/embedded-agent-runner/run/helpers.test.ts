@@ -188,17 +188,32 @@ describe("resolveNextSameModelRateLimitRetryCount", () => {
 });
 
 describe("resolveLatestCallUsage", () => {
-  it("preserves the previous exact call across a zero-usage retry", () => {
+  it("preserves the previous exact call across an observed all-zero retry", () => {
     const previous = { input: 12, output: 3, total: 15 };
+    const current = { input: 0, output: 0, total: 0 };
 
     expect(
       resolveLatestCallUsage({
-        currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, undefined],
+        currentAttemptCandidates: [current, undefined],
         carriedCandidates: [previous],
       }),
     ).toEqual({
-      currentAttempt: undefined,
+      currentAttempt: current,
       latest: previous,
+    });
+  });
+
+  it("accepts an observed all-zero call when no stronger snapshot exists", () => {
+    const current = { input: 0, output: 0, total: 0 };
+
+    expect(
+      resolveLatestCallUsage({
+        currentAttemptCandidates: [current],
+        carriedCandidates: [],
+      }),
+    ).toEqual({
+      currentAttempt: current,
+      latest: current,
     });
   });
 
@@ -254,7 +269,7 @@ describe("buildUsageAgentMetaFields", () => {
     expect(fields.promptTokens).toBe(180);
   });
 
-  it("keeps cumulative usage and the latest call distinct across a zero-usage retry", () => {
+  it("keeps cumulative usage and the latest positive call distinct across a zero retry", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {
       input: 100,
@@ -282,6 +297,20 @@ describe("buildUsageAgentMetaFields", () => {
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
   });
 
+  it("publishes an observed all-zero terminal call when it is the only snapshot", () => {
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator: createUsageAccumulator(),
+      lastAssistantUsage: { input: 0, output: 0, total: 0 },
+      lastRunPromptUsage: undefined,
+    });
+
+    expect(fields.lastCallUsage).toEqual({
+      input: 0,
+      output: 0,
+      total: 0,
+    });
+  });
+
   it("does not derive a prompt override from unavailable context usage", () => {
     const usageAccumulator = createUsageAccumulator();
     const latestCallUsage = {
@@ -304,7 +333,7 @@ describe("buildUsageAgentMetaFields", () => {
     expect(fields.promptTokens).toBeUndefined();
   });
 
-  it("does not label aggregate attempt usage as last-call usage", () => {
+  it("does not label aggregate attempt usage as last-call usage without an observation", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {
       input: 497_720,
@@ -315,7 +344,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      lastAssistantUsage: undefined,
       lastRunPromptUsage: undefined,
     });
 

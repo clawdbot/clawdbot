@@ -30,9 +30,7 @@ import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
-import { modelKey, resolveThinkingDefault } from "../model-selection.js";
-import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
-import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
+import { modelKey } from "../model-selection.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
   isAgentRunDirectAbortReason,
@@ -42,12 +40,6 @@ import {
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import { measureAgentStartup } from "../startup-timing.js";
 import {
-  hasResolvedThinkingCatalogEntry,
-  normalizeThinkingCatalogProviders,
-  resolveCandidateThinkingLevel,
-  resolveEffectiveAgentRuntime,
-} from "../thinking-runtime.js";
-import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
@@ -55,6 +47,8 @@ import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
+import type { RunAccountingAccumulator } from "./run-accounting.types.js";
+import { createEmbeddedAttemptCandidateThinkingResolver } from "./run-embedded-attempt-thinking.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
 import { persistSessionEntry, resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
@@ -63,7 +57,7 @@ import type { AgentCommandOpts } from "./types.js";
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
-export async function runEmbeddedAgentAttempt(params: {
+type RunEmbeddedAgentAttemptParams = {
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
@@ -77,7 +71,10 @@ export async function runEmbeddedAgentAttempt(params: {
   modelSelection: EmbeddedModelSelection;
   embeddedSessionState: EmbeddedSessionState;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
-}) {
+  commandRunAccounting?: RunAccountingAccumulator;
+};
+
+export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptParams) {
   const {
     cfg,
     body,
@@ -122,8 +119,18 @@ export async function runEmbeddedAgentAttempt(params: {
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
   } = params.modelSelection;
-  let thinkingCatalog = params.modelSelection.thinkingCatalog;
-  let attemptedThinkingCatalogHydration = false;
+  const resolveCandidateThinkLevel = createEmbeddedAttemptCandidateThinkingResolver({
+    cfg,
+    pluginsEnabled,
+    sessionAgentId,
+    sessionKey,
+    workspaceDir,
+    modelManifestContext,
+    defaultProvider,
+    defaultModel,
+    immutableThinkLevel,
+    initialCatalog: params.modelSelection.thinkingCatalog,
+  });
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -215,11 +222,11 @@ export async function runEmbeddedAgentAttempt(params: {
   );
 
   let result: AgentAttemptResult;
-  let fallbackProvider = provider;
-  let fallbackModel = model;
-  let fallbackExhausted = false;
+  let fallbackProvider = provider,
+    fallbackModel = model;
+  let fallbackExhausted = false,
+    liveSwitchRetries = 0;
   let terminal: EmbeddedAgentRunEntryTerminal;
-  let liveSwitchRetries = 0;
   let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
   const fastModeStartedAtMs = Date.now();
   const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
@@ -335,188 +342,134 @@ export async function runEmbeddedAgentAttempt(params: {
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
-          attemptMediaTaskIds = sessionKey
-            ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
-            : new Set<string>();
-          attemptLifecycleState.lifecycleError = undefined;
-          attemptLifecycleState.lifecycleFinishing = false;
-          attemptLifecycleState.lifecycleEnded = false;
-          const isAutoFallbackPrimaryProbeCandidate =
-            autoFallbackPrimaryProbe &&
-            providerOverride === autoFallbackPrimaryProbe.provider &&
-            modelOverride === autoFallbackPrimaryProbe.model;
-          const attemptSessionEntry =
-            autoFallbackPrimaryProbe &&
-            providerOverride === autoFallbackPrimaryProbe.fallbackProvider &&
-            !isAutoFallbackPrimaryProbeCandidate
-              ? sessionEntry
-              : sessionEntryForAttempt;
-          if (isAutoFallbackPrimaryProbeCandidate) {
-            markAutoFallbackPrimaryProbe({ probe: autoFallbackPrimaryProbe, sessionKey });
-          }
-          await params.opts.onActiveModelSelected?.({
+          const candidateAccounting = params.commandRunAccounting?.beginCandidate({
             provider: providerOverride,
             model: modelOverride,
           });
-          const fastModeState = resolveFastModeState({
-            cfg,
-            provider: providerOverride,
-            model: modelOverride,
-            agentId: sessionAgentId,
-            sessionEntry,
-          });
-          const fastMode = params.opts.fastMode ?? fastModeState.mode;
-          const configuredAuthProfileId =
-            providerOverride === defaultProvider && modelOverride === defaultModel
-              ? configuredDefaultAuthProfileId
-              : undefined;
-          const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-            provider: providerOverride,
-            entry: attemptSessionEntry,
-            cfg,
-          });
-          const candidateRuntime = resolveEffectiveAgentRuntime({
-            cfg,
-            provider: providerOverride,
-            modelId: modelOverride,
-            agentId: sessionAgentId,
-            sessionKey,
-            sessionEntry: attemptSessionEntry,
-          });
-          const candidateConfiguredThinkLevel =
-            immutableThinkLevel ??
-            resolveConfiguredThinkingDefault({
-              cfg,
-              provider: providerOverride,
-              model: modelOverride,
-            });
-          if (
-            pluginsEnabled &&
-            candidateConfiguredThinkLevel !== "off" &&
-            !attemptedThinkingCatalogHydration &&
-            !hasResolvedThinkingCatalogEntry({
-              catalog: thinkingCatalog,
-              provider: providerOverride,
-              model: modelOverride,
-            })
-          ) {
-            attemptedThinkingCatalogHydration = true;
-            const { loadPreparedModelCatalogSnapshot } =
-              await import("../model-catalog.runtime.js");
-            const runtimeCatalog = normalizeThinkingCatalogProviders(
-              (
-                await loadPreparedModelCatalogSnapshot({
-                  config: cfg,
-                  agentId: sessionAgentId,
-                  workspaceDir,
-                })
-              ).entries,
-            );
-            const allowedRuntimeCatalog = createModelVisibilityPolicy({
-              cfg,
-              catalog: runtimeCatalog,
-              defaultProvider,
-              defaultModel,
-              agentId: sessionAgentId,
-              allowManifestNormalization: true,
-              allowPluginNormalization: true,
-              ...modelManifestContext,
-            }).allowedCatalog;
-            if (allowedRuntimeCatalog.length > 0) {
-              thinkingCatalog = allowedRuntimeCatalog;
+          let candidateOutcome: "returned" | "threw" = "threw";
+          try {
+            attemptMediaTaskIds = sessionKey
+              ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+              : new Set<string>();
+            attemptLifecycleState.lifecycleError = undefined;
+            attemptLifecycleState.lifecycleFinishing = false;
+            attemptLifecycleState.lifecycleEnded = false;
+            const isAutoFallbackPrimaryProbeCandidate =
+              autoFallbackPrimaryProbe &&
+              providerOverride === autoFallbackPrimaryProbe.provider &&
+              modelOverride === autoFallbackPrimaryProbe.model;
+            const attemptSessionEntry =
+              autoFallbackPrimaryProbe &&
+              providerOverride === autoFallbackPrimaryProbe.fallbackProvider &&
+              !isAutoFallbackPrimaryProbeCandidate
+                ? sessionEntry
+                : sessionEntryForAttempt;
+            if (isAutoFallbackPrimaryProbeCandidate) {
+              markAutoFallbackPrimaryProbe({ probe: autoFallbackPrimaryProbe, sessionKey });
             }
-          }
-          const candidateRequestedThinkLevel =
-            candidateConfiguredThinkLevel ??
-            resolveThinkingDefault({
+            await params.opts.onActiveModelSelected?.({
+              provider: providerOverride,
+              model: modelOverride,
+            });
+            const fastModeState = resolveFastModeState({
               cfg,
               provider: providerOverride,
               model: modelOverride,
-              catalog: thinkingCatalog,
-              agentRuntime: candidateRuntime,
-            });
-          const candidateThinkLevel =
-            resolveCandidateThinkingLevel({
-              cfg,
-              provider: providerOverride,
-              modelId: modelOverride,
-              level: candidateRequestedThinkLevel,
-              catalog: thinkingCatalog,
               agentId: sessionAgentId,
-              sessionKey,
+              sessionEntry,
+            });
+            const fastMode = params.opts.fastMode ?? fastModeState.mode;
+            const configuredAuthProfileId =
+              providerOverride === defaultProvider && modelOverride === defaultModel
+                ? configuredDefaultAuthProfileId
+                : undefined;
+            const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+              provider: providerOverride,
+              entry: attemptSessionEntry,
+              cfg,
+            });
+            const candidateThinkLevel = await resolveCandidateThinkLevel({
+              provider: providerOverride,
+              model: modelOverride,
               sessionEntry: attemptSessionEntry,
-              agentRuntime: candidateRuntime,
-            }) ?? candidateRequestedThinkLevel;
-          effectiveTurnThinkLevel = candidateThinkLevel;
-          return attemptExecutionRuntime.runAgentAttempt({
-            providerOverride,
-            modelOverride,
-            configuredAuthProfileId,
-            modelFallbacksOverride: effectiveFallbacksOverride,
-            originalProvider: provider,
-            cfg,
-            sessionEntry: attemptSessionEntry,
-            agentHarnessRuntimeOverride,
-            sessionId,
-            sessionKey,
-            ...(attemptSessionTarget ? { sessionTarget: attemptSessionTarget } : {}),
-            sessionAgentId,
-            sessionFile: attemptSessionFile,
-            workspaceDir,
-            cwd,
-            body,
-            transcriptBody,
-            isFallbackRetry: runOptions.isFallbackRetry,
-            resolvedThinkLevel: candidateThinkLevel,
-            fastMode,
-            fastModeStartedAtMs,
-            fastModeAutoOnSeconds:
-              fastMode === "auto"
-                ? (params.opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
-                : fastModeState.fastAutoOnSeconds,
-            isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-            timeoutMs,
-            runTimeoutOverrideMs,
-            runId,
-            lifecycleGeneration,
-            opts:
-              executionAttribution === params.opts.executionAttribution
-                ? params.opts
-                : { ...params.opts, executionAttribution },
-            runContext,
-            spawnedBy,
-            messageChannel,
-            skillsSnapshot,
-            resolvedVerboseLevel,
-            agentDir,
-            authProfileProvider: providerForAuthProfileValidation,
-            sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
-            storePath: params.suppressVisibleSessionEffects ? undefined : storePath,
-            pluginsEnabled,
-            ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-            sessionHasHistory:
-              !isNewSession ||
-              (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
-            fallbackRuntimeState,
-            suppressPromptPersistenceOnRetry:
-              suppressUserTurnPersistence ||
-              userTurnTranscriptRecorder.hasPersisted() ||
-              userTurnTranscriptRecorder.isBlocked() ||
-              (runOptions.isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
-            userTurnTranscriptRecorder,
-            contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
-            onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
-            onLifecycleGenerationChanged: (nextLifecycleGeneration, nextAttribution) => {
-              lifecycleGeneration = nextLifecycleGeneration;
-              executionAttribution = nextAttribution ?? executionAttribution;
-              // Outer cleanup owns the run context, so publish before the attempt can reject.
-              params.onLifecycleGenerationChanged(nextLifecycleGeneration, nextAttribution);
-            },
-            onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
-            deferTerminalLifecycle: true,
-          });
+            });
+            effectiveTurnThinkLevel = candidateThinkLevel;
+            const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
+              commandRunAccounting: candidateAccounting,
+              providerOverride,
+              modelOverride,
+              configuredAuthProfileId,
+              modelFallbacksOverride: effectiveFallbacksOverride,
+              originalProvider: provider,
+              cfg,
+              sessionEntry: attemptSessionEntry,
+              agentHarnessRuntimeOverride,
+              sessionId,
+              sessionKey,
+              ...(attemptSessionTarget ? { sessionTarget: attemptSessionTarget } : {}),
+              sessionAgentId,
+              sessionFile: attemptSessionFile,
+              workspaceDir,
+              cwd,
+              body,
+              transcriptBody,
+              isFallbackRetry: runOptions.isFallbackRetry,
+              resolvedThinkLevel: candidateThinkLevel,
+              fastMode,
+              fastModeStartedAtMs,
+              fastModeAutoOnSeconds:
+                fastMode === "auto"
+                  ? (params.opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                  : fastModeState.fastAutoOnSeconds,
+              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+              timeoutMs,
+              runTimeoutOverrideMs,
+              runId,
+              lifecycleGeneration,
+              opts:
+                executionAttribution === params.opts.executionAttribution
+                  ? params.opts
+                  : { ...params.opts, executionAttribution },
+              runContext,
+              spawnedBy,
+              messageChannel,
+              skillsSnapshot,
+              resolvedVerboseLevel,
+              agentDir,
+              authProfileProvider: providerForAuthProfileValidation,
+              sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
+              storePath: params.suppressVisibleSessionEffects ? undefined : storePath,
+              pluginsEnabled,
+              ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              sessionHasHistory:
+                !isNewSession ||
+                (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
+              fallbackRuntimeState,
+              suppressPromptPersistenceOnRetry:
+                suppressUserTurnPersistence ||
+                userTurnTranscriptRecorder.hasPersisted() ||
+                userTurnTranscriptRecorder.isBlocked() ||
+                (runOptions.isFallbackRetry &&
+                  attemptLifecycleState.currentTurnUserMessagePersisted),
+              userTurnTranscriptRecorder,
+              contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+              onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
+              onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
+              onLifecycleGenerationChanged: (nextLifecycleGeneration, nextAttribution) => {
+                lifecycleGeneration = nextLifecycleGeneration;
+                executionAttribution = nextAttribution ?? executionAttribution;
+                // Outer cleanup owns the run context, so publish before the attempt can reject.
+                params.onLifecycleGenerationChanged(nextLifecycleGeneration, nextAttribution);
+              },
+              onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
+              deferTerminalLifecycle: true,
+            });
+            candidateOutcome = "returned";
+            return candidateResult;
+          } finally {
+            candidateAccounting?.settle(candidateOutcome);
+          }
         },
       });
       result = fallbackResult.result;
@@ -705,5 +658,3 @@ export async function runEmbeddedAgentAttempt(params: {
     terminal,
   };
 }
-
-export type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;

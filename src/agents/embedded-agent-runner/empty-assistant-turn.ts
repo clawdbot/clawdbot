@@ -17,6 +17,7 @@ type UsageFieldMap = {
   total?: unknown;
   totalTokens?: unknown;
   total_tokens?: unknown;
+  tokenCountsOrigin?: unknown;
 };
 
 // Upstream agent runtimes should normalize Anthropic zero-token empty `stop`
@@ -34,6 +35,9 @@ function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
     return false;
   }
   const typed = usage as UsageFieldMap;
+  if (typed.tokenCountsOrigin === "runtime-placeholder") {
+    return false;
+  }
   const input = readFiniteTokenCount(typed.input);
   const output = readFiniteTokenCount(typed.output);
   const cacheRead = readFiniteTokenCount(typed.cacheRead);

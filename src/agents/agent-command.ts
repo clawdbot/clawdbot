@@ -43,6 +43,11 @@ import {
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
 } from "./command/prepare.js";
+import {
+  bindAgentCommandRunAccounting,
+  runWithAgentCommandAccounting,
+} from "./command/run-accounting.js";
+import type { RunAccountingAccumulator } from "./command/run-accounting.types.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
@@ -71,6 +76,7 @@ async function agentCommandInternal(
   prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
   initialOpts: AgentCommandOpts,
   admissionIngress: AgentCommandAdmissionIngress,
+  commandRunAccounting: RunAccountingAccumulator | undefined,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
@@ -501,6 +507,7 @@ async function agentCommandInternal(
         modelSelection,
         embeddedSessionState,
         trackInternalModelRunTarget,
+        commandRunAccounting,
       });
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();
@@ -527,6 +534,7 @@ async function agentCommandInternal(
         onTerminalDeliveryEvidenceChanged: (evidence) => {
           restartRecoveryTerminalDeliveryEvidence = evidence;
         },
+        commandRunAccounting,
       });
       sessionEntry = finalized.sessionEntry;
       runOwnedSessionId = finalized.runOwnedSessionId;
@@ -597,6 +605,7 @@ async function agentCommandInternal(
 async function agentCommandWithAdmissionIngress(
   opts: AgentCommandOpts,
   admissionIngress: AgentCommandAdmissionIngress,
+  commandRunAccounting: RunAccountingAccumulator | undefined,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
@@ -605,7 +614,14 @@ async function agentCommandWithAdmissionIngress(
     runtime,
     deps,
     run: async (prepared, resolvedDeps) =>
-      await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
+      await agentCommandInternal(
+        prepared,
+        prepared.opts,
+        admissionIngress,
+        commandRunAccounting,
+        runtime,
+        resolvedDeps,
+      ),
   });
 }
 
@@ -615,7 +631,17 @@ export async function agentCommand(
   deps?: CliDeps,
 ) {
   const { localIngress } = executionIdentity;
-  return await agentCommandWithAdmissionIngress(opts, localIngress, runtime, deps);
+  return await runWithAgentCommandAccounting(async (commandRunAccounting) => {
+    const result = await agentCommandWithAdmissionIngress(
+      opts,
+      localIngress,
+      commandRunAccounting,
+      runtime,
+      deps,
+    );
+    bindAgentCommandRunAccounting(result?.meta, commandRunAccounting.project());
+    return result;
+  });
 }
 
 export async function agentCommandFromSystem(
@@ -625,7 +651,7 @@ export async function agentCommandFromSystem(
   deps?: CliDeps,
 ) {
   const ingress = executionIdentity.systemIngress(admission.boundary);
-  return await agentCommandWithAdmissionIngress(opts, ingress, runtime, deps);
+  return await agentCommandWithAdmissionIngress(opts, ingress, undefined, runtime, deps);
 }
 
 async function agentCommandFromIngressInternal(
@@ -642,7 +668,7 @@ async function agentCommandFromIngressInternal(
     trustedAttribution,
   );
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    const result = await runWithAgentCommandRecoveryOwner({
+    const commandResult = await runWithAgentCommandRecoveryOwner({
       lifecycleGeneration,
       mode: "claim",
       opts: {
@@ -657,16 +683,17 @@ async function agentCommandFromIngressInternal(
           prepared,
           prepared.opts,
           { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+          undefined,
           runtime,
           deps,
         ),
     });
 
-    if (result) {
-      emitIngressModelUsageDiagnostic(result, internalOpts);
+    if (commandResult) {
+      emitIngressModelUsageDiagnostic(commandResult, internalOpts);
     }
 
-    return result;
+    return commandResult;
   });
 }
 

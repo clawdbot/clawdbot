@@ -275,6 +275,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
+          tokenCountsOrigin: "runtime-placeholder",
           totalTokens: 0,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },

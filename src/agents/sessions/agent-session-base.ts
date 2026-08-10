@@ -9,6 +9,10 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import {
+  type AgentSubmissionObserver,
+  resolveAgentSessionAccounting,
+} from "./agent-session-accounting.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -109,6 +113,9 @@ export abstract class AgentSessionBase {
   protected baseToolsOverride?: Record<string, AgentTool>;
   protected sessionStartEvent: SessionStartEvent;
   protected withExternalSessionWriteLock?: AgentSessionWriteLockRunner;
+  protected onAgentSubmission?: AgentSubmissionObserver;
+  protected onCoreCompactionInvocation?: () => void;
+  protected onExtensionCompactionInvocation?: () => void;
   protected extensionUIContext?: ExtensionUIContext;
   protected extensionCommandContextActions?: ExtensionCommandContextActions;
   protected extensionAbortHandler?: () => void;
@@ -150,6 +157,10 @@ export abstract class AgentSessionBase {
       reason: "startup",
     };
     this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    const accounting = resolveAgentSessionAccounting(config);
+    this.onAgentSubmission = accounting?.onAgentSubmission;
+    this.onCoreCompactionInvocation = accounting?.onCoreCompactionInvocation;
+    this.onExtensionCompactionInvocation = accounting?.onExtensionCompactionInvocation;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
   }
 

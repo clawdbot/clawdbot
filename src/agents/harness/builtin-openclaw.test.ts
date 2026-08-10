@@ -1,5 +1,9 @@
 // Built-in OpenClaw harness tests cover logical thinking-mode boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "../embedded-agent-runner/run/accounting-observers.js";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
@@ -49,6 +53,12 @@ describe("createOpenClawAgentHarness", () => {
   });
 
   it("enforces a tool-free settled-turn finalization", async () => {
+    const onAgentSubmission = vi.fn();
+    const onModelCall = vi.fn();
+    const onModelCallInstrumentationInstalled = vi.fn();
+    const onAttemptObserved = vi.fn();
+    const onRuntimeSelected = vi.fn();
+    const onOpaqueWork = vi.fn();
     const attempt = {
       prompt: "finalize",
       disableTools: false,
@@ -59,6 +69,14 @@ describe("createOpenClawAgentHarness", () => {
       trigger: "heartbeat",
       onPartialReply: vi.fn(),
     } as never;
+    bindEmbeddedRunAccountingObservers(attempt, {
+      onAgentSubmission,
+      onModelCall,
+      onModelCallInstrumentationInstalled,
+      onAttemptObserved,
+      onRuntimeSelected,
+      onOpaqueWork,
+    });
     const harness = createOpenClawAgentHarness();
 
     await harness.finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
@@ -74,6 +92,14 @@ describe("createOpenClawAgentHarness", () => {
       }),
     );
     const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(resolveEmbeddedRunAccountingObservers(finalizationAttempt)?.onAgentSubmission).toBe(
+      onAgentSubmission,
+    );
+    expect(resolveEmbeddedRunAccountingObservers(finalizationAttempt)).toEqual({
+      onAgentSubmission,
+      onModelCall,
+      onModelCallInstrumentationInstalled,
+    });
     expect(finalizationAttempt).not.toHaveProperty("extraSystemPrompt");
     expect(finalizationAttempt).not.toHaveProperty("skillsSnapshot");
     expect(finalizationAttempt).not.toHaveProperty("currentInboundContext");

@@ -15,6 +15,11 @@ import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import {
+  beginActiveAgentCommandSubmission,
+  markActiveAgentCommandNoModelWork,
+  markActiveAgentCommandOpaqueWork,
+} from "./run-accounting.js";
+import {
   loadAcpPolicyRuntime,
   loadAcpRuntimeErrorsRuntime,
   loadAcpSessionIdentifiersRuntime,
@@ -77,6 +82,23 @@ export async function runAcpAgentCommand(params: {
   let stopReason: string | undefined;
   let resultStatus: "completed" | "cancelled" | undefined;
   let terminalOutcome: "blocked" | undefined;
+  const promptSubmission = {
+    state: "not_submitted" as "not_submitted" | "unknown" | "submitted",
+  };
+  const agentSubmission: {
+    handle: ReturnType<typeof beginActiveAgentCommandSubmission>;
+  } = { handle: undefined };
+  let executionStarted = false;
+  const observePromptSubmissionState = (state: "not_submitted" | "unknown" | "submitted") => {
+    promptSubmission.state = state;
+    if (state !== "submitted" || executionStarted) {
+      return;
+    }
+    executionStarted = true;
+    agentSubmission.handle = beginActiveAgentCommandSubmission();
+    markActiveAgentCommandOpaqueWork("acp_runtime");
+    params.opts.onExecutionStarted?.();
+  };
   try {
     const {
       resolveAcpAgentPolicyError,
@@ -102,58 +124,70 @@ export async function runAcpAgentCommand(params: {
 
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-    await params.acpManager.runTurn({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      provenance: params.provenance,
-      text: params.body,
-      attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
-      mode: "prompt",
-      requestId: params.runId,
-      signal: params.opts.abortSignal,
-      onLifecycle: (event) => {
-        if (event.type === "prompt_submitted") {
-          params.opts.onExecutionStarted?.();
-          attemptExecutionRuntime.emitAcpPromptSubmitted({
-            runId: params.runId,
-            sessionKey: params.sessionKey,
-            at: event.at,
-          });
-        }
-      },
-      onEvent: (event) => {
-        if (event.type !== "text_delta") {
-          attemptExecutionRuntime.emitAcpRuntimeEvent({
-            runId: params.runId,
-            toolTracker: acpToolTracker,
-            sessionKey: params.sessionKey,
-            agentId: params.sessionAgentId,
-            abortSignal: params.opts.abortSignal,
-            event,
-          });
-        }
-        if (event.type === "done") {
-          stopReason = event.stopReason;
-          resultStatus = event.status;
-          return;
-        }
-        if (
-          event.type !== "text_delta" ||
-          (event.stream && event.stream !== "output") ||
-          !event.text
-        ) {
-          return;
-        }
-        const visibleUpdate = visibleTextAccumulator.consume(event.text);
-        if (visibleUpdate) {
-          attemptExecutionRuntime.emitAcpAssistantDelta({
-            runId: params.runId,
-            text: visibleUpdate.text,
-            delta: visibleUpdate.delta,
-          });
-        }
-      },
-    });
+    try {
+      await params.acpManager.runTurn({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        provenance: params.provenance,
+        text: params.body,
+        attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
+        mode: "prompt",
+        requestId: params.runId,
+        signal: params.opts.abortSignal,
+        onPromptSubmissionState: observePromptSubmissionState,
+        onLifecycle: (event) => {
+          if (event.type === "prompt_submitted") {
+            attemptExecutionRuntime.emitAcpPromptSubmitted({
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              at: event.at,
+            });
+          }
+        },
+        onEvent: (event) => {
+          if (event.type !== "text_delta") {
+            attemptExecutionRuntime.emitAcpRuntimeEvent({
+              runId: params.runId,
+              toolTracker: acpToolTracker,
+              sessionKey: params.sessionKey,
+              agentId: params.sessionAgentId,
+              abortSignal: params.opts.abortSignal,
+              event,
+            });
+          }
+          if (event.type === "done") {
+            stopReason = event.stopReason;
+            resultStatus = event.status;
+            return;
+          }
+          if (
+            event.type !== "text_delta" ||
+            (event.stream && event.stream !== "output") ||
+            !event.text
+          ) {
+            return;
+          }
+          const visibleUpdate = visibleTextAccumulator.consume(event.text);
+          if (visibleUpdate) {
+            attemptExecutionRuntime.emitAcpAssistantDelta({
+              runId: params.runId,
+              text: visibleUpdate.text,
+              delta: visibleUpdate.delta,
+            });
+          }
+        },
+      });
+      agentSubmission.handle?.settle("completed");
+    } catch (error) {
+      agentSubmission.handle?.settle("failed");
+      throw error;
+    } finally {
+      if (promptSubmission.state === "unknown") {
+        markActiveAgentCommandOpaqueWork("acp_runtime");
+      } else if (promptSubmission.state === "not_submitted") {
+        markActiveAgentCommandNoModelWork();
+      }
+    }
     if (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason)) {
       throw params.opts.abortSignal?.reason;
     }

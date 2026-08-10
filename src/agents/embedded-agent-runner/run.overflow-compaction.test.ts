@@ -4,6 +4,10 @@ import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./run/accounting-observers.js";
+import {
   compactEmbeddedRunForRecovery,
   createEmbeddedRunCompactionRuntime,
 } from "./run/compaction-runtime.js";
@@ -70,14 +74,19 @@ describe("compactEmbeddedRunForRecovery", () => {
       authProfileProviderForAuth: "openai",
       providerForAuth: "openai",
     } satisfies AgentRuntimeAuthPlan;
+    const observers = { onOpaqueWork: vi.fn() };
+    const runParams = bindEmbeddedRunAccountingObservers(
+      {
+        ...baseRunParams,
+        modelSelectionLocked: true,
+        modelFallbacksOverride: [],
+      },
+      observers,
+    );
 
     const result = await compactEmbeddedRunForRecovery(
       {
-        runParams: {
-          ...baseRunParams,
-          modelSelectionLocked: true,
-          modelFallbacksOverride: [],
-        },
+        runParams,
         state: createEmbeddedRunContextRecoveryState(),
         contextEngine,
         contextTokenBudget: 200_000,
@@ -142,6 +151,11 @@ describe("compactEmbeddedRunForRecovery", () => {
         promptCache,
       },
     });
+    expect(
+      resolveEmbeddedRunAccountingObservers(
+        (compactInput as { runtimeContext: object }).runtimeContext,
+      ),
+    ).toBe(observers);
   });
 });
 

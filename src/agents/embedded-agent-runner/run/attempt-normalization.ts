@@ -11,6 +11,7 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
+import { resolveEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -31,6 +32,7 @@ import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
+  buildTraceToolSummary,
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
 } from "./run-attempt-result.js";
@@ -103,7 +105,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
     input;
   const params = runInput.runParams;
   const runtime = preparedRuntime.snapshot();
-  const attempt = normalizeEmbeddedRunAttemptResult(dispatchedAttempt.rawAttempt);
+  const rawAttempt = dispatchedAttempt.rawAttempt as typeof dispatchedAttempt.rawAttempt & {
+    assistantTurns?: unknown;
+    toolMetas?: unknown;
+  };
+  const assistantTurnsObserved = typeof rawAttempt.assistantTurns === "number";
+  const toolsObserved = Array.isArray(rawAttempt.toolMetas);
+  const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
   await sessionPromptState.waitForCurrentUserMessagePersistence();
   sessionPromptState.suppressNextUserMessagePersistence = sessionPromptState.activePrompt.persisted;
   if (dispatchedAttempt.cancellationRequested) {
@@ -168,6 +176,29 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
+  resolveEmbeddedRunAccountingObservers(params)?.onAttemptObserved?.({
+    provider: runtime.effectiveModel.provider,
+    model: runtime.effectiveModel.id,
+    config: params.config,
+    agentDir: params.agentDir,
+    usage: attemptUsage,
+    assistantTurns: attempt.assistantTurns,
+    assistantTurnsObserved,
+    ...(typeof attempt.assistantTurnsWithUsage === "number"
+      ? { assistantTurnsWithUsage: attempt.assistantTurnsWithUsage }
+      : {}),
+    toolSummary: toolsObserved
+      ? (buildTraceToolSummary({
+          toolMetas: attempt.toolMetas,
+          fallbackHadFailure: Boolean(attempt.lastToolError),
+        }) ?? { calls: 0, tools: [] })
+      : undefined,
+    toolsObserved,
+    codeModeEngaged: attempt.codeModeEngaged,
+    codeModeStats: attempt.codeModeStats,
+    codeModeLifecycleObserved:
+      attempt.codeModeStats?.bridgeLifecycle.unresolvedAtExtraction !== undefined,
+  });
   const lastRunPromptUsage = callUsage.latest;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,

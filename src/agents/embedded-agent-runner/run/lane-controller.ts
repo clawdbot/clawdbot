@@ -14,6 +14,7 @@ import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.
 import { rebindAgentExecutionAttribution } from "../../agent-execution-attribution.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
+import { copyEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -154,11 +155,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         const attribution = params.attribution
           ? rebindAgentExecutionAttribution(params.attribution, lifecycleGeneration)
           : undefined;
-        params = {
+        params = copyEmbeddedRunAccountingObservers(params, {
           ...params,
           lifecycleGeneration,
           ...(attribution ? { attribution } : {}),
-        };
+        });
         options.setParams(params);
       }
       // Queue waits can outlive durable harness and placement bindings.

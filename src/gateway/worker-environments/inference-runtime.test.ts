@@ -458,6 +458,17 @@ describe("worker inference provider runtime", () => {
   it("projects provider terminal messages onto the closed worker schema", async () => {
     const runtime = setup();
     const message = finalMessage();
+    message.messageOrigin = "runtime-synthetic";
+    message.usage.tokenCountsObserved = [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "reasoningTokens",
+      "total",
+    ];
+    message.usage.contextUsage = { state: "available", promptTokens: 16, totalTokens: 23 };
+    message.usage.reasoningTokens = 4;
     Object.assign(message.content[0]!, { providerScratch: "text-state" });
     Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
     Object.assign(message.usage, { providerScratch: { requestId: "private" } });
@@ -469,6 +480,41 @@ describe("worker inference provider runtime", () => {
     expect(JSON.stringify(outcome)).not.toContain("providerScratch");
     expect(JSON.stringify(outcome)).not.toContain("partialArgs");
     expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+    expect(outcome).toMatchObject({
+      type: "done",
+      message: {
+        messageOrigin: "runtime-synthetic",
+        usage: {
+          tokenCountsObserved: [
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "reasoningTokens",
+            "total",
+          ],
+          contextUsage: { state: "available", promptTokens: 16, totalTokens: 23 },
+          reasoningTokens: 4,
+        },
+      },
+    });
+
+    const placeholderRuntime = setup();
+    const placeholder = finalMessage();
+    placeholder.usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    placeholderRuntime.stream.mockImplementation(() => providerStream(placeholder));
+    await expect(placeholderRuntime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+      message: { usage: { tokenCountsOrigin: "runtime-placeholder" } },
+    });
   });
 
   it("rejects an incomplete final argument stream", async () => {

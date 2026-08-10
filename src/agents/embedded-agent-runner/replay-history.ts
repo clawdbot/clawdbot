@@ -57,8 +57,10 @@ import {
 } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
+  makePlaceholderUsageSnapshot,
   makeZeroUsageSnapshot,
   normalizeUsage,
+  resolveNormalizedUsageObservedBuckets,
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
@@ -468,8 +470,9 @@ function isStreamErrorSentinelContent(content: readonly unknown[]): boolean {
 function normalizeAssistantUsageSnapshot(usage: unknown) {
   const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
   if (!normalized) {
-    return makeZeroUsageSnapshot();
+    return makePlaceholderUsageSnapshot();
   }
+  const observedBuckets = [...resolveNormalizedUsageObservedBuckets(normalized)];
   const input = normalized.input ?? 0;
   const output = normalized.output ?? 0;
   const cacheRead = normalized.cacheRead ?? 0;
@@ -481,8 +484,12 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
     output,
     cacheRead,
     cacheWrite,
+    ...(observedBuckets.length < 6 ? { tokenCountsObserved: observedBuckets } : {}),
     ...(normalized.contextUsage ? { contextUsage: { ...normalized.contextUsage } } : {}),
     totalTokens,
+    ...(normalized.reasoningTokens !== undefined
+      ? { reasoningTokens: normalized.reasoningTokens }
+      : {}),
     ...(cost ? { cost } : {}),
   };
 }
@@ -547,7 +554,19 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       message.usage && typeof message.usage === "object"
         ? (message.usage as { contextUsage?: unknown }).contextUsage
         : undefined;
+    const rawTokenCountsOrigin =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { tokenCountsOrigin?: unknown }).tokenCountsOrigin
+        : undefined;
+    const rawTokenCountsObserved =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { tokenCountsObserved?: unknown }).tokenCountsObserved
+        : undefined;
     const normalizedContextUsage = normalizedUsage.contextUsage;
+    const normalizedUsageProvenance = normalizedUsage as {
+      tokenCountsOrigin?: unknown;
+      tokenCountsObserved?: unknown;
+    };
     const contextUsageMatches =
       normalizedContextUsage === undefined
         ? rawContextUsage === undefined
@@ -571,6 +590,10 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
       (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
       (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      (message.usage as { reasoningTokens?: unknown }).reasoningTokens ===
+        normalizedUsage.reasoningTokens &&
+      rawTokenCountsOrigin === normalizedUsageProvenance.tokenCountsOrigin &&
+      isDeepStrictEqual(rawTokenCountsObserved, normalizedUsageProvenance.tokenCountsObserved) &&
       contextUsageMatches &&
       ((normalizedCost &&
         usageCost &&

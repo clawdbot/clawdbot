@@ -273,6 +273,7 @@ export function streamProxy(
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
@@ -402,6 +403,7 @@ export function streamProxy(
       const errorMessage = error instanceof Error ? error.message : String(error);
       const reason = options.signal?.aborted ? "aborted" : "error";
       partial.stopReason = reason;
+      partial.messageOrigin = "runtime-synthetic";
       partial.errorMessage = errorMessage;
       stream.push({
         type: "error",

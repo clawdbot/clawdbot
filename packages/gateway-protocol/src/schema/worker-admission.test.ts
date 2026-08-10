@@ -24,6 +24,7 @@ import {
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
   validateWorkerInferenceStartParams,
+  validateWorkerInferenceTerminalOutcome,
 } from "./worker-inference.js";
 
 const bundleHash = "a".repeat(64);
@@ -368,6 +369,42 @@ describe("worker protocol schemas", () => {
     ]) {
       expect(validateWorkerInferenceStartParams(candidate)).toBe(false);
     }
+  });
+
+  it("accepts additive terminal usage provenance and synthetic origin", () => {
+    expect(
+      validateWorkerInferenceTerminalOutcome({
+        type: "done",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "synthetic terminal" }],
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-test",
+          messageOrigin: "runtime-synthetic",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 0,
+            cacheWrite: 0,
+            tokenCountsObserved: [
+              "input",
+              "output",
+              "cacheRead",
+              "cacheWrite",
+              "reasoningTokens",
+              "total",
+            ],
+            contextUsage: { state: "available", promptTokens: 2, totalTokens: 5 },
+            reasoningTokens: 1,
+            totalTokens: 5,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      }),
+    ).toBe(true);
   });
 
   it.each([

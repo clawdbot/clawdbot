@@ -176,6 +176,12 @@ export type AcpRuntimeTurnResult =
 
 export interface AcpRuntimeTurn {
   readonly requestId: string;
+  /**
+   * Plugin-facing authority for the model-facing prompt submission boundary.
+   * Missing, pending, or rejected observation is unknown. This promise must not
+   * reject or replace the terminal turn result.
+   */
+  readonly promptSubmission?: Promise<"not_submitted" | "unknown" | "submitted">;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
   /** Requests backend cancellation while keeping result/error reporting adapter-owned. */

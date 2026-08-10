@@ -10,6 +10,7 @@ export function createFailureMessage(
   return {
     role: "assistant",
     content: [{ type: "text", text: "" }],
+    messageOrigin: "runtime-synthetic",
     api: model.api,
     provider: model.provider,
     model: model.id,
@@ -21,6 +22,7 @@ export function createFailureMessage(
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },

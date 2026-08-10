@@ -8,6 +8,10 @@ import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-r
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { createAgentExecutionAttribution } from "../../agent-execution-attribution.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./accounting-observers.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 
@@ -131,6 +135,8 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       runId: "queued-across-restart",
       attribution,
     });
+    const observers = { onAgentSubmission: () => ({ settle: () => {} }) };
+    bindEmbeddedRunAccountingObservers(state.getParams(), observers);
     const run = state.controller.enqueueGlobal(async () => completedResult);
 
     const currentGeneration = rotateAgentEventLifecycleGeneration();
@@ -139,6 +145,7 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
 
     expect(state.getLifecycleGeneration()).toBe(currentGeneration);
     expect(state.getParams().lifecycleGeneration).toBe(currentGeneration);
+    expect(resolveEmbeddedRunAccountingObservers(state.getParams())).toBe(observers);
     expect(state.getParams().attribution).toEqual({
       ...attribution,
       lifecycleGeneration: currentGeneration,

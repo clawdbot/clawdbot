@@ -10,6 +10,7 @@ import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
   normalizeUsage,
+  resolveNormalizedUsageObservedBuckets,
   type ContextUsage,
   type NormalizedUsage,
 } from "../../usage.js";
@@ -195,10 +196,17 @@ export function resolveLatestCallUsage(params: {
   currentAttempt: NormalizedUsage | undefined;
   latest: NormalizedUsage | undefined;
 } {
-  const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  const currentNonzero = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  const carriedNonzero = params.carriedCandidates.find(hasNonzeroUsage);
+  const currentObserved = params.currentAttemptCandidates.find(
+    (usage) => usage && resolveNormalizedUsageObservedBuckets(usage).size > 0,
+  );
+  const carriedObserved = params.carriedCandidates.find(
+    (usage) => usage && resolveNormalizedUsageObservedBuckets(usage).size > 0,
+  );
   return {
-    currentAttempt,
-    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+    currentAttempt: currentNonzero ?? currentObserved,
+    latest: currentNonzero ?? carriedNonzero ?? currentObserved ?? carriedObserved,
   };
 }
 
@@ -213,7 +221,12 @@ export function buildUsageAgentMetaFields(params: {
     ? lastAssistantUsage
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
-      : undefined;
+      : lastAssistantUsage && resolveNormalizedUsageObservedBuckets(lastAssistantUsage).size > 0
+        ? lastAssistantUsage
+        : params.lastRunPromptUsage &&
+            resolveNormalizedUsageObservedBuckets(params.lastRunPromptUsage).size > 0
+          ? params.lastRunPromptUsage
+          : undefined;
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastRunPromptUsage,
   });

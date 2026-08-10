@@ -180,6 +180,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
     if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+      this.onExtensionCompactionInvocation?.();
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
         preparation,
@@ -203,8 +204,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     if (!compactionResult) {
-      const runCoreCompaction = () =>
-        compact(
+      const runCoreCompaction = () => {
+        this.onCoreCompactionInvocation?.();
+        return compact(
           preparation,
           model,
           auth.apiKey,
@@ -214,6 +216,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           this.thinkingLevel,
           this.agent.streamFn,
         );
+      };
       let result = await runCoreCompaction();
       // Automatic core compaction owns one retry for invalid summary output.
       // Manual, provider-error, and extension-owned paths keep their own policy.

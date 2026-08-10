@@ -49,6 +49,7 @@ export function projectWorkerInferenceTerminalMessage(params: {
     api: params.modelIdentity.api,
     provider: params.modelIdentity.provider,
     model: params.modelIdentity.model,
+    ...(params.message.messageOrigin ? { messageOrigin: params.message.messageOrigin } : {}),
     ...(params.message.responseModel ? { responseModel: params.message.responseModel } : {}),
     ...(params.message.responseId ? { responseId: params.message.responseId } : {}),
     usage: {
@@ -56,6 +57,8 @@ export function projectWorkerInferenceTerminalMessage(params: {
       output: usage.output,
       cacheRead: usage.cacheRead,
       cacheWrite: usage.cacheWrite,
+      ...(usage.tokenCountsOrigin ? { tokenCountsOrigin: usage.tokenCountsOrigin } : {}),
+      ...(usage.tokenCountsObserved ? { tokenCountsObserved: [...usage.tokenCountsObserved] } : {}),
       ...(usage.contextUsage?.state === "available"
         ? {
             contextUsage: {
@@ -67,6 +70,7 @@ export function projectWorkerInferenceTerminalMessage(params: {
         : usage.contextUsage?.state === "unavailable"
           ? { contextUsage: { state: usage.contextUsage.state } }
           : {}),
+      ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
       totalTokens: usage.totalTokens,
       cost: {
         input: usage.cost.input,

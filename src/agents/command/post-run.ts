@@ -20,7 +20,8 @@ import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
-import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
+import type { RunAccountingAccumulator } from "./run-accounting.types.js";
+import type { runEmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
   loadCliCompactionRuntime,
   loadDeliveryRuntime,
@@ -29,6 +30,8 @@ import {
 import { clearPendingFinalDelivery, persistSessionEntry } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
+
+type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -55,6 +58,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   onTerminalDeliveryEvidenceChanged: (
     evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
+  commandRunAccounting?: RunAccountingAccumulator;
 }) {
   const {
     cfg,
@@ -284,6 +288,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
           agentAccountId: runContext.accountId,
           senderIsOwner: params.opts.senderIsOwner,
           thinkLevel: effectiveTurnThinkLevel,
+          onCompactionExecutionStarted: () =>
+            params.commandRunAccounting?.markOpaqueWork("post_turn_compaction"),
           extraSystemPrompt: params.opts.extraSystemPrompt,
         });
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);

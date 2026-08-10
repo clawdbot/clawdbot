@@ -19,7 +19,14 @@ describe("mapResponsesTerminalUsage", () => {
         total_tokens: 110,
         input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
       }),
-    ).toEqual({ input: 50, output: 10, cacheRead: 20, cacheWrite: 30, totalTokens: 110 });
+    ).toEqual({
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
+      totalTokens: 110,
+    });
   });
 
   it("derives totalTokens from the buckets when the payload omits it", () => {
@@ -28,6 +35,7 @@ describe("mapResponsesTerminalUsage", () => {
       output: 12,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsObserved: ["output"],
       totalTokens: 42,
     });
   });
@@ -41,7 +49,51 @@ describe("mapResponsesTerminalUsage", () => {
         total_tokens: 7,
         input_tokens_details: { cached_tokens: 4 },
       }),
-    ).toEqual({ input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 });
+    ).toEqual({
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 0,
+      tokenCountsObserved: ["output", "cacheRead"],
+      totalTokens: 9,
+    });
+  });
+
+  it("keeps a complete all-zero usage snapshot authoritative", () => {
+    expect(
+      mapResponsesTerminalUsage({
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens_details: { reasoning_tokens: 0 },
+      }),
+    ).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tokenCountsObserved: [
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite",
+        "reasoningTokens",
+        "total",
+      ],
+      totalTokens: 0,
+    });
+  });
+
+  it("does not mark a conflicting clamped total as observed without complete splits", () => {
+    expect(
+      mapResponsesTerminalUsage({
+        input_tokens: 2,
+        output_tokens: 5,
+        total_tokens: 7,
+        input_tokens_details: { cached_tokens: 4 },
+      })?.tokenCountsObserved,
+    ).toEqual(["output", "cacheRead"]);
   });
 });
 

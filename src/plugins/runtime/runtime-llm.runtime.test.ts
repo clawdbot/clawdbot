@@ -1,6 +1,8 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentCommandAccounting } from "../../agents/command/run-accounting.js";
+import type { AgentCommandRunAccountingSnapshot } from "../../agents/command/run-accounting.types.js";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
@@ -134,6 +136,31 @@ function primeCompletionMocks() {
       cost: { total: 0.0042 },
     },
   });
+}
+
+async function captureDirectCompletionAccounting<T>(run: () => Promise<T>): Promise<{
+  result?: T;
+  error?: unknown;
+  snapshot: AgentCommandRunAccountingSnapshot;
+}> {
+  let result: T | undefined;
+  let error: unknown;
+  let snapshot: AgentCommandRunAccountingSnapshot | undefined;
+  await runWithAgentCommandAccounting(async (accounting) => {
+    const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-5.5" });
+    candidate.selectRuntime("embedded");
+    candidate.markModelCallInstrumentationInstalled();
+    try {
+      result = await run();
+      candidate.settle("returned");
+    } catch (caught) {
+      error = caught;
+      candidate.settle("threw");
+    }
+    snapshot = accounting.project();
+  });
+  expect(snapshot).toBeDefined();
+  return { result, error, snapshot: snapshot! };
 }
 
 describe("runtime.llm.complete", () => {
@@ -646,6 +673,79 @@ describe("runtime.llm.complete", () => {
       },
     );
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
+  });
+
+  it("accounts direct completion admission, terminal failure, and retained usage", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+    const success = await captureDirectCompletionAccounting(() =>
+      llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+    );
+
+    expect(success.error).toBeUndefined();
+    expect(success.snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 1, failed: 0 },
+      usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, total: 25 },
+    });
+
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [],
+      stopReason: "error",
+      usage: {
+        input: 3,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 4,
+      },
+    });
+    const providerFailure = await captureDirectCompletionAccounting(() =>
+      llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+    );
+
+    expect(providerFailure.error).toBeUndefined();
+    expect(providerFailure.snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 0, failed: 1 },
+      usage: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0, total: 4 },
+    });
+  });
+
+  it("accounts admitted direct throws but not pre-dispatch rejection", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+    hoisted.completeWithPreparedSimpleCompletionModel.mockRejectedValueOnce(
+      new Error("provider unavailable"),
+    );
+
+    const admittedThrow = await captureDirectCompletionAccounting(() =>
+      llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+    );
+    expect(admittedThrow.error).toMatchObject({ message: "provider unavailable" });
+    expect(admittedThrow.snapshot.modelCalls).toEqual({
+      total: 1,
+      completed: 0,
+      failed: 1,
+    });
+
+    const denied = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: false },
+    });
+    const rejectedBeforeDispatch = await captureDirectCompletionAccounting(() =>
+      denied.complete({ messages: [{ role: "user", content: "Ping" }] }),
+    );
+    expect(rejectedBeforeDispatch.error).toMatchObject({
+      code: "LLM_COMPLETION_NOT_AUTHORIZED",
+    });
+    expect(rejectedBeforeDispatch.snapshot.modelCalls).toEqual({
+      total: 0,
+      completed: 0,
+      failed: 0,
+    });
   });
 
   it("preserves the completion options shape when reasoning is omitted", async () => {

@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
+import { resolveAgentCommandRunAccounting } from "./command/run-accounting.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
@@ -21,6 +22,7 @@ type ProviderModelNormalizationParams = { provider: string; context: { modelId: 
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
 type RunAgentAttempt = typeof runAgentAttempt;
 type CliCompactionParams = {
+  onCompactionExecutionStarted?: () => void;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -313,6 +315,18 @@ function readLifecyclePhases(): Array<string | undefined> {
     .map(([event]) => event as { stream?: string; data?: { phase?: string } })
     .filter((event) => event.stream === "lifecycle")
     .map((event) => event.data?.phase);
+}
+
+async function captureCommandError(run: () => Promise<unknown>): Promise<Error> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected agent command to fail");
 }
 
 const COMPACTION_ERROR =
@@ -685,23 +699,42 @@ describe("agentCommand compaction transcript rotation", () => {
       expect(params.sessionEntry).toMatchObject({
         pendingFinalDelivery: { kind: "replayable", text },
       });
+      params.onCompactionExecutionStarted?.();
       abortController.abort(createAgentRunRestartAbortError());
       throw new Error(COMPACTION_ERROR);
     });
 
-    await expect(
-      agentCommand({
-        message: "room message",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: true,
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toThrow("agent run aborted for restart");
+    const error = await captureCommandError(
+      async () =>
+        await agentCommand({
+          message: "room message",
+          sessionId,
+          sessionKey,
+          cwd: state.workspaceDir,
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+          deliver: true,
+          abortSignal: abortController.signal,
+        }),
+    );
+
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("agent run aborted for restart"),
+    );
+    expect(resolveAgentCommandRunAccounting(error)).toMatchObject({
+      coverage: {
+        usage: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["post_turn_compaction"]),
+        },
+        providerTransport: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["post_turn_compaction"]),
+        },
+      },
+    });
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({
@@ -906,21 +939,41 @@ describe("agentCommand compaction transcript rotation", () => {
     const sessionId = "no-delivery-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "local final" }));
-    state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
+      params.onCompactionExecutionStarted?.();
+      throw new Error(COMPACTION_ERROR);
+    });
 
-    await expect(
-      agentCommand({
-        message: "local model run",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: false,
-      }),
-    ).rejects.toThrow("Summarization failed: Connection error");
+    const error = await captureCommandError(
+      async () =>
+        await agentCommand({
+          message: "local model run",
+          sessionId,
+          sessionKey,
+          cwd: state.workspaceDir,
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+          deliver: false,
+        }),
+    );
 
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("Summarization failed: Connection error"),
+    );
+    expect(resolveAgentCommandRunAccounting(error)).toMatchObject({
+      coverage: {
+        usage: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["post_turn_compaction"]),
+        },
+        providerTransport: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["post_turn_compaction"]),
+        },
+      },
+    });
     expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
   });
 

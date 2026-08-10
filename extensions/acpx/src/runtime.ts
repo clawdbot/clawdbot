@@ -20,7 +20,7 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
-  type AcpRuntimeTurn,
+  type AcpRuntimeTurn as AcpxRuntimeTurn,
   type AcpRuntimeTurnResult,
   type SessionAgentOptions,
 } from "acpx/runtime";
@@ -28,7 +28,12 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpRuntime,
+  type AcpRuntimeErrorCode,
+  type AcpRuntimeTurn as OpenClawAcpRuntimeTurn,
+} from "../runtime-api.js";
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import {
@@ -1555,7 +1560,7 @@ export class AcpxRuntime implements AcpRuntime {
     }
   }
 
-  startTurn(input: OpenClawRuntimeTurnInput): AcpRuntimeTurn {
+  startTurn(input: OpenClawRuntimeTurnInput): OpenClawAcpRuntimeTurn {
     const readCodexTurnFailureStderr = () =>
       this.readCodexTurnFailureStderr({
         handle: input.handle,
@@ -1567,9 +1572,10 @@ export class AcpxRuntime implements AcpRuntime {
       this.resolveDelegateForHandle(input.handle),
     ]).then(async ([, command, delegate]) => {
       try {
+        const turn: AcpxRuntimeTurn = delegate.startTurn(withOpenClawManagedTurnTimeout(input));
         return {
           command,
-          turn: delegate.startTurn(withOpenClawManagedTurnTimeout(input)),
+          turn,
         };
       } catch (error) {
         if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
@@ -1584,9 +1590,13 @@ export class AcpxRuntime implements AcpRuntime {
         });
       }
     });
-
     return {
       requestId: input.requestId,
+      // acpx@0.13.0 does not expose a model-facing prompt submission boundary.
+      promptSubmission: turnPromise.then(
+        () => "unknown" as const,
+        () => "not_submitted" as const,
+      ),
       events: {
         async *[Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
           const { command, turn } = await turnPromise;

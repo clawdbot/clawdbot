@@ -34,6 +34,7 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
   return {
     role: "assistant",
     content: [],
+    messageOrigin: "runtime-synthetic",
     api: model.api,
     provider: model.provider,
     model: model.id,
@@ -42,6 +43,7 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },

@@ -2,6 +2,8 @@
 // reviewer prompt isolation, and timeout resolution.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { runWithAgentCommandAccounting } from "./command/run-accounting.js";
+import type { AgentCommandRunAccountingSnapshot } from "./command/run-accounting.types.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 
 const input = {
@@ -29,6 +31,16 @@ function createReviewerHarness(decision: "allow" | "ask" = "allow") {
   }));
   const complete = vi.fn(async () => ({
     stopReason: "stop" as const,
+    provider: "openrouter",
+    model: "reviewer",
+    usage: {
+      input: 11,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      totalTokens: 14,
+    },
     content: [
       {
         type: "text" as const,
@@ -260,6 +272,57 @@ describe("parseExecAutoReviewResponse", () => {
 });
 
 describe("createModelExecAutoReviewer", () => {
+  it("records actual model completion exactly in the active command accounting scope", async () => {
+    const { reviewer, complete } = createReviewerHarness();
+    let snapshot: AgentCommandRunAccountingSnapshot | undefined;
+
+    await runWithAgentCommandAccounting(async (accounting) => {
+      await reviewer(input);
+      snapshot = accounting.project();
+    });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 1, failed: 0 },
+      usage: { input: 11, output: 3, total: 14 },
+      coverage: {
+        modelCalls: { state: "complete" },
+        usage: { state: "complete" },
+        providerTransport: {
+          state: "unavailable",
+          reasons: ["not_instrumented"],
+        },
+      },
+    });
+    expect(snapshot?.opaqueWork).toBeUndefined();
+  });
+
+  it("does not mark exec review work when model preparation rejects the call", async () => {
+    const complete = vi.fn();
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+          error: "review model unavailable",
+        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+    let coverage: { usage: unknown; providerTransport: unknown } | undefined;
+
+    await runWithAgentCommandAccounting(async (accounting) => {
+      await reviewer(input);
+      coverage = accounting.project().coverage;
+    });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(coverage).toMatchObject({
+      usage: { state: "unavailable", reasons: ["not_observed"] },
+      providerTransport: { state: "unavailable", reasons: ["not_instrumented"] },
+    });
+  });
+
   it("uses the configured exec reviewer model for review calls", async () => {
     const prepare = vi.fn(async () => ({
       selection: {

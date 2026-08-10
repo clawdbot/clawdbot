@@ -39,6 +39,10 @@ export type ResponsesThinkingBlock = ThinkingContent & {
   [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
 
+type ResponsesTerminalResponse = Extract<
+  ResponseStreamEvent,
+  { type: "response.completed" | "response.failed" | "response.incomplete" }
+>["response"];
 type TerminalOutput = {
   content: Array<TextContent | ThinkingContent | ToolCall>;
   usage: Usage & { reasoningTokens?: number };
@@ -270,15 +274,7 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const finalizeResponse = (
-    response: Extract<
-      ResponseStreamEvent,
-      { type: "response.completed" | "response.incomplete" }
-    >["response"],
-    terminalEventType: "response.completed" | "response.incomplete",
-  ) => {
-    params.markFinalized();
-    backfillReasoning(response.output ?? []);
+  const applyResponseAccounting = (response: ResponsesTerminalResponse) => {
     output.responseId = response.id || output.responseId;
     output.responseModel = response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
@@ -297,6 +293,17 @@ export function createResponsesTerminalController(params: {
         : (response.service_tier ?? options.serviceTier);
       options.applyServiceTierPricing(output.usage, tier);
     }
+  };
+  const finalizeResponse = (
+    response: Extract<
+      ResponseStreamEvent,
+      { type: "response.completed" | "response.incomplete" }
+    >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
+  ) => {
+    params.markFinalized();
+    backfillReasoning(response.output ?? []);
+    applyResponseAccounting(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
       terminalEventType,
@@ -306,5 +313,5 @@ export function createResponsesTerminalController(params: {
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
   };
-  return { finalizeResponse, recoverTerminalOutput };
+  return { applyResponseAccounting, finalizeResponse, recoverTerminalOutput };
 }

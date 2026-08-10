@@ -601,8 +601,12 @@ describe("streamProxy", () => {
 
     expect(events.at(-1)?.type).toBe("error");
     await expect(stream.result()).resolves.toMatchObject({
+      messageOrigin: "runtime-synthetic",
       stopReason: "error",
       errorMessage: "Proxy stream ended before terminal event",
+      usage: {
+        tokenCountsOrigin: "runtime-placeholder",
+      },
     });
   });
 });
@@ -711,8 +715,12 @@ describe("streamProxy loopback /api/stream", () => {
       authorization: "Bearer token",
     });
     expect(result).toMatchObject({
+      messageOrigin: "runtime-synthetic",
       stopReason: "error",
       errorMessage: "Proxy error: 502 Bad Gateway",
+      usage: {
+        tokenCountsOrigin: "runtime-placeholder",
+      },
     });
   });
 
@@ -733,8 +741,12 @@ describe("streamProxy loopback /api/stream", () => {
       authorization: "Bearer token",
     });
     expect(result).toMatchObject({
+      messageOrigin: "runtime-synthetic",
       stopReason: "error",
       errorMessage: `Proxy error: ${error}`,
+      usage: {
+        tokenCountsOrigin: "runtime-placeholder",
+      },
     });
   });
 
@@ -754,8 +766,12 @@ describe("streamProxy loopback /api/stream", () => {
     controller.abort();
 
     expect(await resultWithinMs(stream, 1_500)).toMatchObject({
+      messageOrigin: "runtime-synthetic",
       stopReason: "aborted",
       errorMessage: "Request aborted by user",
+      usage: {
+        tokenCountsOrigin: "runtime-placeholder",
+      },
     });
   });
 });

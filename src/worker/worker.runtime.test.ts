@@ -102,11 +102,22 @@ function assistantMessage(
     api: "openai-responses",
     provider: MODEL_REF.provider,
     model: MODEL_REF.model,
+    messageOrigin: "runtime-synthetic",
     usage: {
       input: 2,
       output: 3,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsObserved: [
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite",
+        "reasoningTokens",
+        "total",
+      ],
+      contextUsage: { state: "available", promptTokens: 2, totalTokens: 5 },
+      reasoningTokens: 1,
       totalTokens: 5,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
@@ -805,6 +816,22 @@ describe("worker runtime", () => {
         .map((message) => message.role),
     ).toEqual(["user", "assistant"]);
     const lastTranscript = gateway.transcriptRequests.at(-1);
+    const assistant = lastTranscript?.messages.find((message) => message.role === "assistant");
+    expect(assistant).toMatchObject({
+      messageOrigin: "runtime-synthetic",
+      usage: {
+        tokenCountsObserved: [
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite",
+          "reasoningTokens",
+          "total",
+        ],
+        contextUsage: { state: "available", promptTokens: 2, totalTokens: 5 },
+        reasoningTokens: 1,
+      },
+    });
     expect(result).toMatchObject({
       transcriptLeafId: `leaf-${lastTranscript?.seq}`,
       transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
@@ -994,7 +1021,13 @@ describe("worker runtime", () => {
         .flatMap((request) => request.messages)
         .toReversed()
         .find((entry) => entry.role === "assistant");
-      expect(assistant).toMatchObject({ stopReason });
+      expect(assistant).toMatchObject({
+        messageOrigin: "runtime-synthetic",
+        stopReason,
+        usage: {
+          tokenCountsOrigin: "runtime-placeholder",
+        },
+      });
       const lifecycle = gateway.liveEventRequests
         .map((request) => request.event)
         .toReversed()

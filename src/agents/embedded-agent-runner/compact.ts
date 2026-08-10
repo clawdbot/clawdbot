@@ -49,6 +49,7 @@ import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparat
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
+import { copyEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -119,7 +120,10 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
 export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const paramsBase = copyEmbeddedRunAccountingObservers(
+    paramsInput,
+    applyAgentRunSessionTargetIdentity(paramsInput),
+  );
   const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(paramsBase.agentHarnessId);
   if (paramsBase.modelSelectionLocked === true && lockedHarnessRuntime !== "openclaw") {
     return {
@@ -135,14 +139,14 @@ export async function compactEmbeddedAgentSessionDirect(
     ...paramsBase,
     missingSessionKey: "resolve-existing",
   });
-  const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
+  const requestedParams = copyEmbeddedRunAccountingObservers(paramsBase, {
     ...paramsBase,
     agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: runSessionTarget.sessionKey,
     sessionTarget: runSessionTarget,
     sessionFile: runSessionTarget.sessionKey,
-  };
+  }) satisfies CompactEmbeddedAgentSessionParamsWithSessionFile;
   const requestedAgentIds = resolveSessionAgentIds({
     sessionKey: requestedParams.sessionKey,
     config: requestedParams.config,
@@ -240,14 +244,14 @@ export async function compactEmbeddedAgentSessionDirect(
     });
     // Fallback policy and every attempt consume the same generation as model/auth discovery.
     // A reload may have committed while session targeting was resolved above.
-    const params: PreparedCompactEmbeddedAgentSessionParams = {
+    const params = copyEmbeddedRunAccountingObservers(requestedParams, {
       ...requestedParams,
       config: preparedModelRuntime.config,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
       workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
-    };
+    }) satisfies PreparedCompactEmbeddedAgentSessionParams;
     const compactPrepared = async () => {
       if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
         return await compactEmbeddedAgentSessionDirectOnce(params);
@@ -321,17 +325,19 @@ export async function compactEmbeddedAgentSessionDirect(
           const preservesPrimaryAuth =
             isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
           const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-          return await compactEmbeddedAgentSessionDirectOnce({
-            ...params,
-            provider,
-            model,
-            authProfileId,
-            authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-            // The primary attempt retains its already prepared atomic plan. An
-            // actual fallback may change route/auth class and must rebuild it.
-            runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
-            runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
-          });
+          return await compactEmbeddedAgentSessionDirectOnce(
+            copyEmbeddedRunAccountingObservers(params, {
+              ...params,
+              provider,
+              model,
+              authProfileId,
+              authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+              // The primary attempt retains its already prepared atomic plan. An
+              // actual fallback may change route/auth class and must rebuild it.
+              runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
+              runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
+            }),
+          );
         },
       });
       return fallbackResult.result;

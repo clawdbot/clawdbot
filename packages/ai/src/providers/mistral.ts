@@ -27,6 +27,7 @@ import type {
   ThinkingContent,
   Tool,
   ToolCall,
+  Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
@@ -249,6 +250,7 @@ function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
@@ -390,7 +392,7 @@ function resolveMistralPromptCacheKey(options?: MistralOptions): string | undefi
   return options?.promptCacheKey?.trim() || options?.sessionId?.trim() || undefined;
 }
 
-function readMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
+function readMistralCachedPromptTokens(usage: unknown): number | undefined {
   const record = usage as {
     promptTokensDetails?: { cachedTokens?: unknown } | null;
     prompt_tokens_details?: { cached_tokens?: unknown } | null;
@@ -402,9 +404,11 @@ function readMistralCachedPromptTokens(usage: unknown, promptTokens: number): nu
     record.prompt_tokens_details?.cached_tokens ??
     record.cachedTokens ??
     record.cached_tokens;
-  const cachedTokens =
-    typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens) ? rawCachedTokens : 0;
-  return Math.min(promptTokens, Math.max(0, cachedTokens));
+  return typeof rawCachedTokens === "number" &&
+    Number.isFinite(rawCachedTokens) &&
+    rawCachedTokens >= 0
+    ? rawCachedTokens
+    : undefined;
 }
 
 async function consumeChatStream(
@@ -415,6 +419,10 @@ async function consumeChatStream(
 ): Promise<void> {
   let currentBlock: TextContent | ThinkingContent | null = null;
   let terminalFinishReason: string | undefined;
+  let knownPromptTokens: number | undefined;
+  let knownCompletionTokens: number | undefined;
+  let knownTotalTokens: number | undefined;
+  let knownCachedPromptTokens: number | undefined;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlockIdentity = {
@@ -603,16 +611,61 @@ async function consumeChatStream(
     output.responseId ||= chunk.id;
 
     if (chunk.usage) {
-      const promptTokens = chunk.usage.promptTokens || 0;
-      const cachedPromptTokens = readMistralCachedPromptTokens(chunk.usage, promptTokens);
-      output.usage.input = Math.max(0, promptTokens - cachedPromptTokens);
-      output.usage.output = chunk.usage.completionTokens || 0;
-      output.usage.cacheRead = cachedPromptTokens;
-      output.usage.cacheWrite = 0;
-      output.usage.totalTokens =
-        chunk.usage.totalTokens ||
-        output.usage.input + output.usage.output + output.usage.cacheRead;
-      calculateCost(model, output.usage);
+      const promptTokens = chunk.usage.promptTokens;
+      const completionTokens = chunk.usage.completionTokens;
+      const totalTokens = chunk.usage.totalTokens;
+      const cachedPromptTokens = readMistralCachedPromptTokens(chunk.usage);
+      if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
+        knownPromptTokens = Math.max(knownPromptTokens ?? 0, promptTokens);
+      }
+      if (
+        typeof completionTokens === "number" &&
+        Number.isFinite(completionTokens) &&
+        completionTokens > 0
+      ) {
+        knownCompletionTokens = Math.max(knownCompletionTokens ?? 0, completionTokens);
+      }
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+        knownTotalTokens = Math.max(knownTotalTokens ?? 0, totalTokens);
+      }
+      if (
+        cachedPromptTokens !== undefined &&
+        (knownPromptTokens === undefined || cachedPromptTokens <= knownPromptTokens)
+      ) {
+        knownCachedPromptTokens = Math.max(knownCachedPromptTokens ?? 0, cachedPromptTokens);
+      }
+      const promptObserved = knownPromptTokens !== undefined;
+      const outputObserved = knownCompletionTokens !== undefined;
+      const cacheObserved =
+        knownCachedPromptTokens !== undefined &&
+        (knownPromptTokens === undefined || knownCachedPromptTokens <= knownPromptTokens);
+      const reportedTotalObserved = knownTotalTokens !== undefined;
+      const projectedPromptTokens = knownPromptTokens ?? 0;
+      const projectedCompletionTokens = knownCompletionTokens ?? 0;
+      const projectedCachedPromptTokens = cacheObserved ? (knownCachedPromptTokens ?? 0) : 0;
+      const input = Math.max(0, projectedPromptTokens - projectedCachedPromptTokens);
+      const bucketTotal = input + projectedCompletionTokens + projectedCachedPromptTokens;
+      const projectedTotal = Math.max(knownTotalTokens ?? 0, bucketTotal);
+      const observed: NonNullable<Usage["tokenCountsObserved"]> = [
+        ...(promptObserved && cacheObserved ? (["input"] as const) : []),
+        ...(outputObserved ? (["output"] as const) : []),
+        ...(cacheObserved ? (["cacheRead"] as const) : []),
+        ...(reportedTotalObserved && projectedTotal === knownTotalTokens
+          ? (["total"] as const)
+          : []),
+      ];
+      // Mistral SDK 2.5 defaults absent core usage fields to zero while decoding.
+      // Positive core counts prove presence; zero remains ambiguous without raw extensions.
+      if (observed.length > 0) {
+        delete output.usage.tokenCountsOrigin;
+        output.usage.tokenCountsObserved = observed;
+        output.usage.input = input;
+        output.usage.output = projectedCompletionTokens;
+        output.usage.cacheRead = projectedCachedPromptTokens;
+        output.usage.cacheWrite = 0;
+        output.usage.totalTokens = projectedTotal;
+        calculateCost(model, output.usage);
+      }
     }
 
     const choice = chunk.choices[0];

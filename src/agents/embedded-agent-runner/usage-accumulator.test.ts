@@ -65,7 +65,7 @@ describe("usage-accumulator", () => {
       expect(acc.total).toBe(251_490);
     });
 
-    it("ignores undefined or zero-only usage", () => {
+    it("preserves explicit zero-only usage while ignoring undefined", () => {
       const acc = createUsageAccumulator();
 
       mergeUsageIntoAccumulator(acc, undefined);
@@ -77,7 +77,59 @@ describe("usage-accumulator", () => {
         total: 0,
       });
 
-      expect(acc).toEqual(createUsageAccumulator());
+      expect(toNormalizedUsage(acc)).toEqual({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+        tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
+      });
+    });
+
+    it("intersects observed bucket provenance across aggregated calls", () => {
+      const acc = createUsageAccumulator();
+
+      mergeUsageIntoAccumulator(acc, {
+        input: 100,
+        output: 20,
+        cacheRead: 0,
+        total: 120,
+      });
+      mergeUsageIntoAccumulator(acc, {
+        input: 80,
+        output: 10,
+        total: 90,
+      });
+
+      expect(toNormalizedUsage(acc)).toEqual({
+        input: 180,
+        output: 30,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 210,
+        tokenCountsObserved: ["input", "output", "total"],
+      });
+    });
+
+    it("preserves provider-billed subtotals without claiming missing call coverage", () => {
+      const acc = createUsageAccumulator();
+
+      mergeUsageIntoAccumulator(acc, {
+        input: 10,
+        output: 2,
+        providerBilledCost: { totalUsd: 0.1, coverage: "complete" },
+      });
+      mergeUsageIntoAccumulator(acc, {
+        input: 5,
+        output: 1,
+      });
+
+      expect(toNormalizedUsage(acc)).toMatchObject({
+        input: 15,
+        output: 3,
+        providerBilledCost: { totalUsd: 0.1, coverage: "partial" },
+      });
     });
   });
 
@@ -230,10 +282,11 @@ describe("usage-accumulator", () => {
         cacheRead: 246_000,
         cacheWrite: 5_000,
         total: 251_490,
+        tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite"],
       });
     });
 
-    it("omits zero fields", () => {
+    it("keeps buckets unknown when an earlier provider call omits them", () => {
       const acc = createUsageAccumulator();
       mergeUsageIntoAccumulator(acc, { input: 100, output: 50 });
 
@@ -243,6 +296,34 @@ describe("usage-accumulator", () => {
         cacheRead: undefined,
         cacheWrite: undefined,
         total: 150,
+        tokenCountsObserved: ["input", "output"],
+      });
+
+      mergeUsageIntoAccumulator(acc, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+      expect(toNormalizedUsage(acc)).toEqual({
+        input: 100,
+        output: 50,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 150,
+        tokenCountsObserved: ["input", "output"],
+      });
+    });
+
+    it("serializes observed buckets in canonical order across JSON round trips", () => {
+      const acc = createUsageAccumulator();
+      mergeUsageIntoAccumulator(acc, {
+        tokenCountsObserved: ["total", "cacheRead", "input", "output"],
+        input: 10,
+        output: 2,
+        cacheRead: 3,
+        total: 15,
+      });
+
+      const serialized = JSON.stringify(toNormalizedUsage(acc));
+      const roundTripped = JSON.parse(serialized) as unknown;
+      expect(roundTripped).toMatchObject({
+        tokenCountsObserved: ["input", "output", "cacheRead", "total"],
       });
     });
   });

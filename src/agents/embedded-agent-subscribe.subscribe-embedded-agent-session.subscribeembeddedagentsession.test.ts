@@ -272,6 +272,129 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it("preserves observed zero buckets in cumulative usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message: { role: "assistant", usage } });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      total: 120,
+    });
+  });
+
+  it("records an observed all-zero usage snapshot when it is the only call", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", usage: makeZeroUsageSnapshot() },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+  });
+
+  it("does not promote a structural zero snapshot to authoritative usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        partial: { usage: makeZeroUsageSnapshot() },
+      },
+    });
+    emit({ type: "message_end", message: { role: "assistant" } });
+
+    expect(subscription.getUsageTotals()).toBeUndefined();
+    expect(subscription.getLastAssistantUsage()).toBeUndefined();
+  });
+
+  it("does not treat a bucket as exact when a later provider call omits it", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const emitUsage = (usage: Record<string, number>) => {
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({ type: "message_end", message: { role: "assistant", usage } });
+    };
+
+    emitUsage({ input: 100, output: 20, cacheRead: 0, totalTokens: 120 });
+    emitUsage({ input: 80, output: 10, totalTokens: 90 });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 180,
+      output: 30,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 210,
+    });
+  });
+
+  it("counts assistant turns with usage independently from completed assistant turns", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", usage: { input: 100, output: 20, totalTokens: 120 } },
+    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message: { role: "assistant" } });
+
+    expect(subscription.getAssistantTurnCount()).toBe(2);
+    expect(subscription.getAssistantTurnsWithUsage()).toBe(1);
+  });
+
+  it("counts repeated message_end delivery once", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const message = {
+      role: "assistant" as const,
+      usage: { input: 100, output: 20, totalTokens: 120 },
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message });
+    emit({ type: "message_end", message });
+
+    expect(subscription.getAssistantTurnCount()).toBe(1);
+    expect(subscription.getAssistantTurnsWithUsage()).toBe(1);
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+    });
+  });
+
   it("emits cumulative run output usage once per completed assistant message", () => {
     const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "usage-event-run",
@@ -354,6 +477,149 @@ describe("subscribeEmbeddedAgentSession", () => {
       input: 100,
       output: 20,
       total: 120,
+    });
+  });
+
+  it("preserves partial provider-billed cost when terminal usage supplies token counts", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        providerBilledCost: {
+          totalUsd: 0.25,
+          coverage: "partial",
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: {
+          input: 100,
+          output: 20,
+          totalTokens: 120,
+        },
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+      providerBilledCost: {
+        totalUsd: 0.25,
+        coverage: "partial",
+      },
+    });
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 100,
+      output: 20,
+      total: 120,
+      providerBilledCost: {
+        totalUsd: 0.25,
+        coverage: "partial",
+      },
+    });
+  });
+
+  it("preserves token counts when terminal metadata later supplies only provider cost", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        usage: {
+          input: 100,
+          output: 20,
+          totalTokens: 120,
+        },
+      },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        providerBilledCost: {
+          totalUsd: 0.25,
+          coverage: "partial",
+        },
+      },
+    });
+    emit({ type: "message_end", message: { role: "assistant" } });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+      providerBilledCost: {
+        totalUsd: 0.25,
+        coverage: "partial",
+      },
+    });
+  });
+
+  it("finalizes three rapid usage snapshots while prior delivery is blocked", async () => {
+    let releaseDelivery!: () => void;
+    const deliveryBlocked = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    let flushes = 0;
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      blockReplyBreak: "message_end",
+      onBlockReplyFlush: () => {
+        flushes += 1;
+        return flushes === 1 ? deliveryBlocked : undefined;
+      },
+    });
+    const emitUsage = (input: number, output: number) => {
+      const usage = { input, output, totalTokens: input + output };
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "done", usage },
+      });
+      emit({ type: "message_end", message: { role: "assistant" } });
+    };
+
+    emitUsage(10, 1);
+    emitUsage(20, 2);
+    emitUsage(30, 3);
+
+    expect(subscription.getAssistantTurnCount()).toBe(3);
+    expect(subscription.getAssistantTurnsWithUsage()).toBe(3);
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 60,
+      output: 6,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 66,
+    });
+
+    releaseDelivery();
+    await subscription.waitForPendingEvents();
+    expect(subscription.getAssistantTurnCount()).toBe(3);
+    expect(subscription.getAssistantTurnsWithUsage()).toBe(3);
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 60,
+      output: 6,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 66,
     });
   });
 

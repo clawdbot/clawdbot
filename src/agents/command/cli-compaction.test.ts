@@ -706,11 +706,17 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
 
     const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
+    const onCompactionExecutionStarted = vi.fn();
     await expect(
-      scenario.run({ sessionEntry: lockedEntry, sessionStore: { [sessionKey]: lockedEntry } }),
+      scenario.run({
+        sessionEntry: lockedEntry,
+        sessionStore: { [sessionKey]: lockedEntry },
+        onCompactionExecutionStarted,
+      }),
     ).rejects.toThrow("CLI compaction cannot replace a model-locked native harness runtime");
     expect(compactAgentHarnessSession).not.toHaveBeenCalled();
     expect(compactCalls).toHaveLength(1);
+    expect(onCompactionExecutionStarted).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -903,10 +909,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
     const { compactCalls, maintenance, recordCliCompactionInStore, sessionKey } = scenario;
-    const updatedEntry = await scenario.run();
+    const onCompactionExecutionStarted = vi.fn();
+    const updatedEntry = await scenario.run({ onCompactionExecutionStarted });
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(1);
+    expect(onCompactionExecutionStarted).toHaveBeenCalledTimes(2);
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1134,6 +1142,22 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
   });
 
+  it("does not note compaction execution when the transcript remains under budget", async () => {
+    const scenario = await prepareCompactionScenario({
+      suffix: "under-budget",
+      tmpDir,
+      sessionEntry: { totalTokens: 600 },
+    });
+    const onCompactionExecutionStarted = vi.fn();
+
+    await expect(scenario.run({ onCompactionExecutionStarted })).resolves.toBe(
+      scenario.sessionEntry,
+    );
+
+    expect(onCompactionExecutionStarted).not.toHaveBeenCalled();
+    expect(scenario.compactCalls).toHaveLength(0);
+  });
+
   it("skips compaction when backend declares ownsNativeCompaction and has no harness endpoint", async () => {
     const compactAgentHarnessSession = vi.fn();
     const scenario = await prepareCompactionScenario({
@@ -1150,10 +1174,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
     const { compactCalls, recordCliCompactionInStore, sessionEntry } = scenario;
-    const updatedEntry = await scenario.run();
+    const onCompactionExecutionStarted = vi.fn();
+    const updatedEntry = await scenario.run({ onCompactionExecutionStarted });
 
     expect(compactAgentHarnessSession).not.toHaveBeenCalled();
     expect(compactCalls).toHaveLength(0);
+    expect(onCompactionExecutionStarted).not.toHaveBeenCalled();
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
     expect(updatedEntry).toBe(sessionEntry);
   });
@@ -1172,9 +1198,11 @@ describe("runCliTurnCompactionLifecycle", () => {
         }),
       },
     });
-    await scenario.run();
+    const onCompactionExecutionStarted = vi.fn();
+    await scenario.run({ onCompactionExecutionStarted });
 
     expect(scenario.compactCalls).toHaveLength(1);
+    expect(onCompactionExecutionStarted).toHaveBeenCalledOnce();
   });
 
   it("still uses native harness path when backend declares ownsNativeCompaction and has agentHarnessId", async () => {
@@ -1204,10 +1232,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
     const { compactCalls, recordCliCompactionInStore } = scenario;
-    await scenario.run();
+    const onCompactionExecutionStarted = vi.fn();
+    await scenario.run({ onCompactionExecutionStarted });
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);
+    expect(onCompactionExecutionStarted).toHaveBeenCalledOnce();
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
   });
 });

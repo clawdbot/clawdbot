@@ -295,6 +295,8 @@ describe("consumeGoogleGenerateContentStream", () => {
       input: 8,
       output: 7,
       cacheRead: 2,
+      reasoningTokens: 4,
+      tokenCountsObserved: ["output", "cacheRead", "reasoningTokens", "total"],
       totalTokens: 17,
     });
     expect(output.usage.cost.total).toBeGreaterThan(0);
@@ -313,6 +315,7 @@ describe("consumeGoogleGenerateContentStream", () => {
       },
       expectedInput: 13,
       expectedTotal: 19,
+      expectedObserved: ["input", "output", "cacheRead", "reasoningTokens", "total"],
     },
     {
       name: "derives the total when Google omits its optional aggregate",
@@ -324,8 +327,9 @@ describe("consumeGoogleGenerateContentStream", () => {
       },
       expectedInput: 8,
       expectedTotal: 14,
+      expectedObserved: ["output", "cacheRead", "reasoningTokens"],
     },
-  ])("$name", async ({ usageMetadata, expectedInput, expectedTotal }) => {
+  ])("$name", async ({ usageMetadata, expectedInput, expectedTotal, expectedObserved }) => {
     const { output } = await consumeGoogleFixture([
       googleResponse({ finishReason: FinishReason.STOP, usageMetadata }),
     ]);
@@ -334,6 +338,8 @@ describe("consumeGoogleGenerateContentStream", () => {
       input: expectedInput,
       output: 4,
       cacheRead: 2,
+      reasoningTokens: 1,
+      tokenCountsObserved: expectedObserved,
       totalTokens: expectedTotal,
       cost: { input: expectedInput / 1_000_000 },
     });
@@ -356,7 +362,45 @@ describe("consumeGoogleGenerateContentStream", () => {
       }),
     ]);
 
-    expect(output.usage).toMatchObject({ input: 66, output: 15, cacheRead: 40, totalTokens: 121 });
+    expect(output.usage).toMatchObject({
+      input: 66,
+      output: 15,
+      cacheRead: 40,
+      reasoningTokens: 3,
+      tokenCountsObserved: ["input", "output", "cacheRead", "reasoningTokens", "total"],
+      totalTokens: 121,
+    });
+  });
+
+  it("keeps later stale Google component counts from regressing the cumulative snapshot", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        usageMetadata: {
+          promptTokenCount: 20,
+          cachedContentTokenCount: 4,
+          toolUsePromptTokenCount: 2,
+          candidatesTokenCount: 12,
+          thoughtsTokenCount: 3,
+          totalTokenCount: 37,
+        },
+      }),
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          candidatesTokenCount: 5,
+          thoughtsTokenCount: 1,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      input: 18,
+      output: 15,
+      cacheRead: 4,
+      reasoningTokens: 3,
+      tokenCountsObserved: ["input", "output", "cacheRead", "reasoningTokens", "total"],
+      totalTokens: 37,
+    });
   });
 
   it("never reports negative input when Google only provides sparse cached-token facts", async () => {
@@ -367,7 +411,151 @@ describe("consumeGoogleGenerateContentStream", () => {
       }),
     ]);
 
-    expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
+    expect(output.usage).toMatchObject({
+      input: 6,
+      cacheRead: 40,
+      tokenCountsObserved: ["cacheRead"],
+    });
+  });
+
+  it("keeps a complete all-zero Google snapshot authoritative", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          promptTokenCount: 0,
+          cachedContentTokenCount: 0,
+          toolUsePromptTokenCount: 0,
+          candidatesTokenCount: 0,
+          thoughtsTokenCount: 0,
+          totalTokenCount: 0,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      reasoningTokens: 0,
+      tokenCountsObserved: ["input", "output", "cacheRead", "reasoningTokens", "total"],
+      totalTokens: 0,
+    });
+    expect(output.usage).not.toHaveProperty("tokenCountsOrigin");
+  });
+
+  it("keeps invalid-only Google usage as a runtime placeholder", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          promptTokenCount: -1,
+          candidatesTokenCount: Number.NaN,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      tokenCountsOrigin: "runtime-placeholder",
+      totalTokens: 0,
+    });
+    expect(output.usage).not.toHaveProperty("tokenCountsObserved");
+  });
+
+  it("does not invent Google reasoning authority when thoughts usage is absent", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          promptTokenCount: 10,
+          cachedContentTokenCount: 2,
+          candidatesTokenCount: 3,
+          totalTokenCount: 13,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      input: 8,
+      output: 3,
+      cacheRead: 2,
+      tokenCountsObserved: ["cacheRead", "total"],
+      totalTokens: 13,
+    });
+    expect(output.usage).not.toHaveProperty("reasoningTokens");
+  });
+
+  it("clamps a conflicting Google total without claiming partial total authority", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          candidatesTokenCount: 5,
+          thoughtsTokenCount: 2,
+          totalTokenCount: 0,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      output: 7,
+      reasoningTokens: 2,
+      tokenCountsObserved: ["output", "reasoningTokens"],
+      totalTokens: 7,
+    });
+  });
+
+  it("derives an authoritative Google total from complete buckets over a conflicting aggregate", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          promptTokenCount: 10,
+          cachedContentTokenCount: 2,
+          toolUsePromptTokenCount: 1,
+          candidatesTokenCount: 5,
+          thoughtsTokenCount: 2,
+          totalTokenCount: 0,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      input: 9,
+      output: 7,
+      cacheRead: 2,
+      reasoningTokens: 2,
+      tokenCountsObserved: ["input", "output", "cacheRead", "reasoningTokens"],
+      totalTokens: 18,
+    });
+  });
+
+  it("does not claim Google total authority when a complete aggregate conflicts high", async () => {
+    const { output } = await consumeGoogleFixture([
+      googleResponse({
+        finishReason: FinishReason.STOP,
+        usageMetadata: {
+          promptTokenCount: 10,
+          cachedContentTokenCount: 2,
+          toolUsePromptTokenCount: 1,
+          candidatesTokenCount: 5,
+          thoughtsTokenCount: 2,
+          totalTokenCount: 25,
+        },
+      }),
+    ]);
+
+    expect(output.usage).toMatchObject({
+      input: 9,
+      output: 7,
+      cacheRead: 2,
+      reasoningTokens: 2,
+      tokenCountsObserved: ["input", "output", "cacheRead", "reasoningTokens"],
+      totalTokens: 25,
+    });
   });
 
   it("preserves MAX_TOKENS when the partial response contains a function call", async () => {

@@ -13,6 +13,7 @@ import {
 } from "../compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { copyEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -80,7 +81,7 @@ export async function compactEmbeddedRunForRecovery(
 ) {
   const { runParams } = input;
   const activeSession = input.getActiveSession();
-  const runtimeContext = {
+  const runtimeContext = copyEmbeddedRunAccountingObservers(runParams, {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: runParams.sessionKey,
       messageChannel: runParams.messageChannel,
@@ -139,7 +140,7 @@ export async function compactEmbeddedRunForRecovery(
     diagId: recovery.diagId,
     attempt: recovery.attempt,
     maxAttempts: recovery.maxAttempts,
-  };
+  });
   const runtimeSettings = input.buildRuntimeSettings({
     tokenBudget: recovery.tokenBudget,
     ...(recovery.trigger === "overflow" ? { degradedReason: "context_overflow" } : {}),

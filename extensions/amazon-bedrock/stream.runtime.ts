@@ -53,6 +53,7 @@ import {
   type Tool,
   type ToolCall,
   type ToolResultMessage,
+  type Usage,
 } from "openclaw/plugin-sdk/llm";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -152,6 +153,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
@@ -621,20 +623,53 @@ function handleMetadata(
   output: AssistantMessage,
 ): void {
   if (event.usage) {
-    output.usage.input = event.usage.inputTokens || 0;
-    output.usage.output = event.usage.outputTokens || 0;
-    output.usage.cacheRead = event.usage.cacheReadInputTokens || 0;
-    output.usage.cacheWrite = event.usage.cacheWriteInputTokens || 0;
+    const inputObserved =
+      typeof event.usage.inputTokens === "number" && Number.isFinite(event.usage.inputTokens);
+    const outputObserved =
+      typeof event.usage.outputTokens === "number" && Number.isFinite(event.usage.outputTokens);
+    const cacheReadObserved =
+      typeof event.usage.cacheReadInputTokens === "number" &&
+      Number.isFinite(event.usage.cacheReadInputTokens);
+    const cacheWriteObserved =
+      typeof event.usage.cacheWriteInputTokens === "number" &&
+      Number.isFinite(event.usage.cacheWriteInputTokens);
+    const totalObserved =
+      typeof event.usage.totalTokens === "number" && Number.isFinite(event.usage.totalTokens);
+    const observed: NonNullable<Usage["tokenCountsObserved"]> = [
+      ...(inputObserved ? (["input"] as const) : []),
+      ...(outputObserved ? (["output"] as const) : []),
+      ...(cacheReadObserved ? (["cacheRead"] as const) : []),
+      ...(cacheWriteObserved ? (["cacheWrite"] as const) : []),
+    ];
+    output.usage.input = inputObserved ? event.usage.inputTokens! : 0;
+    output.usage.output = outputObserved ? event.usage.outputTokens! : 0;
+    output.usage.cacheRead = cacheReadObserved ? event.usage.cacheReadInputTokens! : 0;
+    output.usage.cacheWrite = cacheWriteObserved ? event.usage.cacheWriteInputTokens! : 0;
+    if (observed.length > 0) {
+      delete output.usage.tokenCountsOrigin;
+      output.usage.tokenCountsObserved = observed;
+    }
     const promptTokens = output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
     output.usage.totalTokens = Math.max(
-      event.usage.totalTokens || 0,
+      totalObserved ? event.usage.totalTokens! : 0,
       promptTokens + output.usage.output,
     );
-    output.usage.contextUsage = {
-      state: "available",
-      promptTokens,
-      totalTokens: promptTokens + output.usage.output,
-    };
+    if (
+      (totalObserved && output.usage.totalTokens === event.usage.totalTokens) ||
+      (inputObserved && outputObserved && cacheReadObserved && cacheWriteObserved)
+    ) {
+      observed.push("total");
+      output.usage.tokenCountsObserved = observed;
+    }
+    if (inputObserved && outputObserved && cacheReadObserved && cacheWriteObserved) {
+      output.usage.contextUsage = {
+        state: "available",
+        promptTokens,
+        totalTokens: promptTokens + output.usage.output,
+      };
+    } else {
+      output.usage.contextUsage = { state: "unavailable" };
+    }
     const cacheWrite1h = event.usage.cacheDetails?.reduce(
       (total, detail) =>
         detail.ttl === CacheTTL.ONE_HOUR ? total + (detail.inputTokens ?? 0) : total,

@@ -155,6 +155,7 @@ export const streamOpenAICompletions: StreamFunction<
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
@@ -406,9 +407,7 @@ export const streamOpenAICompletions: StreamFunction<
           output.responseModel ||= chunk.model;
         }
         if (chunk.usage) {
-          output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
-            includeReasoningTokens: false,
-          });
+          output.usage = parseOpenAICompletionsUsage(chunk.usage, model);
         }
 
         const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -422,9 +421,7 @@ export const streamOpenAICompletions: StreamFunction<
           choice as typeof choice & { usage?: Parameters<typeof parseOpenAICompletionsUsage>[0] }
         ).usage;
         if (!chunk.usage && choiceUsage) {
-          output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
-            includeReasoningTokens: false,
-          });
+          output.usage = parseOpenAICompletionsUsage(choiceUsage, model);
         }
 
         if (choice.finish_reason) {

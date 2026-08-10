@@ -448,7 +448,7 @@ describe("anthropic transport stream", () => {
       context: { state: "unavailable" },
     },
     {
-      name: "uses complete final usage when message-start prompt buckets are zero placeholders",
+      name: "uses complete final usage after explicit all-zero message-start counts",
       id: "msg_zero_start",
       model: "claude-fable-5",
       initial: {
@@ -466,7 +466,7 @@ describe("anthropic transport stream", () => {
       context: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
     },
     {
-      name: "does not treat zero start placeholders as complete final prompt usage",
+      name: "keeps explicit all-zero start usage authoritative across a partial final update",
       id: "msg_zero_start_partial_delta",
       model: "claude-fable-5",
       initial: {
@@ -476,7 +476,133 @@ describe("anthropic transport stream", () => {
         cache_creation_input_tokens: 0,
       },
       final: { output_tokens: 15_104 },
+      context: { state: "available", promptTokens: 0, totalTokens: 15_104 },
+    },
+    {
+      name: "projects terminal reasoning usage without adding it to the total",
+      id: "msg_reasoning_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+        output_tokens_details: null,
+      },
+      final: {
+        output_tokens: 10,
+        output_tokens_details: { thinking_tokens: 6 },
+      },
+      expected: {
+        input: 12,
+        output: 10,
+        cacheRead: 3,
+        cacheWrite: 4,
+        reasoningTokens: 6,
+        tokenCountsObserved: [
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite",
+          "reasoningTokens",
+          "total",
+        ],
+        totalTokens: 29,
+      },
+      context: { state: "available", promptTokens: 19, totalTokens: 29 },
+    },
+    {
+      name: "keeps omitted terminal usage partial",
+      id: "msg_missing_terminal_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+      },
+      final: undefined,
+      expected: {
+        input: 12,
+        output: 0,
+        cacheRead: 3,
+        cacheWrite: 4,
+        tokenCountsObserved: ["input", "cacheRead", "cacheWrite"],
+        totalTokens: 19,
+      },
       context: { state: "unavailable" },
+    },
+    {
+      name: "keeps malformed terminal output partial",
+      id: "msg_malformed_terminal_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+      },
+      final: { output_tokens: "malformed" },
+      expected: {
+        input: 12,
+        output: 0,
+        cacheRead: 3,
+        cacheWrite: 4,
+        tokenCountsObserved: ["input", "cacheRead", "cacheWrite"],
+        totalTokens: 19,
+      },
+      context: { state: "unavailable" },
+    },
+    {
+      name: "revokes decreasing cumulative terminal usage",
+      id: "msg_decreasing_terminal_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 2,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+      },
+      final: {
+        input_tokens: 11,
+        output_tokens: 1,
+        cache_read_input_tokens: 2,
+        cache_creation_input_tokens: 3,
+      },
+      expected: {
+        input: 12,
+        output: 2,
+        cacheRead: 3,
+        cacheWrite: 4,
+        totalTokens: 21,
+      },
+      expectedObserved: [],
+      context: { state: "unavailable" },
+    },
+    {
+      name: "rejects terminal reasoning larger than output",
+      id: "msg_reasoning_conflict",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+      },
+      final: {
+        output_tokens: 5,
+        output_tokens_details: { thinking_tokens: 6 },
+      },
+      expected: {
+        input: 12,
+        output: 5,
+        cacheRead: 3,
+        cacheWrite: 4,
+        tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
+        totalTokens: 24,
+      },
+      expectedReasoning: undefined,
+      context: { state: "available", promptTokens: 19, totalTokens: 24 },
     },
     {
       name: "uses accumulated prompt buckets when the final usage update is partial",
@@ -539,6 +665,12 @@ describe("anthropic transport stream", () => {
     );
     if (testCase.expected) {
       expect(result.usage).toMatchObject(testCase.expected);
+    }
+    if ("expectedObserved" in testCase) {
+      expect(result.usage.tokenCountsObserved).toEqual(testCase.expectedObserved);
+    }
+    if ("expectedReasoning" in testCase) {
+      expect(result.usage.reasoningTokens).toBe(testCase.expectedReasoning);
     }
     expect(result.usage.contextUsage).toEqual(testCase.context);
   });
@@ -1597,6 +1729,18 @@ describe("anthropic transport stream", () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
         {
+          type: "message_start",
+          message: {
+            id: "msg_failed_after_start",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 0,
+              cache_read_input_tokens: 3,
+              cache_creation_input_tokens: 4,
+            },
+          },
+        },
+        {
           type: "content_block_start",
           index: 0,
           content_block: { type: "text", text: "" },
@@ -1629,6 +1773,15 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(result.content).toEqual([]);
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+    expect(result.usage).toMatchObject({
+      input: 12,
+      output: 0,
+      cacheRead: 3,
+      cacheWrite: 4,
+      tokenCountsObserved: ["input", "cacheRead", "cacheWrite"],
+      totalTokens: 19,
+    });
+    expect(result.usage).not.toHaveProperty("contextUsage");
   });
 
   it("rejects ordinary Anthropic output when the stream ends before message_stop", async () => {

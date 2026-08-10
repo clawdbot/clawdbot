@@ -32,6 +32,7 @@ import {
   resolveTurnTimeoutMs,
 } from "./manager.turn-timeout.js";
 import type {
+  AcpPromptSubmissionState,
   AcpRunTurnInput,
   AcpSessionManagerDeps,
   ActiveTurnState,
@@ -158,6 +159,7 @@ export async function runManagerTurn(params: {
   };
 
   let acpTurnMarkedActive = false;
+  let turnStreamAcquiredNotified = false;
   // Liveness spans the whole task, not one attempt: mark once before the backend loop
   // (after the ready-meta check, so a pre-loop throw cannot leak it) and clear on every
   // runTurn exit, including unexpected retry/cleanup failures before terminal task writes.
@@ -203,6 +205,7 @@ export async function runManagerTurn(params: {
         let onCallerAbort: (() => void) | undefined;
         let activeTurnStarted = false;
         let sawTurnOutput = false;
+        let promptSubmissionState: AcpPromptSubmissionState = "not_submitted";
         let retryFreshHandle = false;
         let skipPostTurnCleanup = false;
         try {
@@ -250,10 +253,6 @@ export async function runManagerTurn(params: {
             ? AbortSignal.any([input.signal, internalAbortController.signal])
             : internalAbortController.signal;
           const eventGate = { open: true };
-          await input.onLifecycle?.({
-            type: "prompt_submitted",
-            at: Date.now(),
-          });
           const turnPromise = consumeAcpTurnStream({
             runtime,
             turn: {
@@ -265,6 +264,29 @@ export async function runManagerTurn(params: {
               signal: combinedSignal,
             },
             eventGate,
+            onPromptSubmissionState: (state) => {
+              promptSubmissionState = state;
+              try {
+                const observation = input.onPromptSubmissionState?.(state);
+                void Promise.resolve(observation).catch(() => {
+                  // Submission observation cannot replace the backend turn result.
+                });
+              } catch {
+                // Submission observation cannot replace the backend turn result.
+              }
+            },
+            onPromptStarted: () =>
+              input.onLifecycle?.({
+                type: "prompt_submitted",
+                at: Date.now(),
+              }),
+            onTurnStreamAcquired: async () => {
+              if (turnStreamAcquiredNotified) {
+                return;
+              }
+              turnStreamAcquiredNotified = true;
+              await input.onTurnStreamAcquired?.();
+            },
             onOutputEvent: (event) => {
               sawTurnOutput = true;
               if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
@@ -363,6 +385,7 @@ export async function runManagerTurn(params: {
             sessionKey,
             error: acpError,
             sawTurnOutput,
+            promptSubmissionState,
             runtime,
             meta,
             runtimeHandles: params.runtimeHandles,
@@ -377,6 +400,7 @@ export async function runManagerTurn(params: {
             error: acpError.message,
             code: acpError.code,
             sawOutput: sawTurnOutput,
+            promptSubmissionState,
           };
           backendAttempts.push(backendAttempt);
           if (

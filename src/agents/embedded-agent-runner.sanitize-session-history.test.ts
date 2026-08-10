@@ -26,7 +26,7 @@ import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
+import { makePlaceholderUsageSnapshot, makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => ({
   ...(await vi.importActual("./embedded-agent-helpers.js")),
@@ -553,7 +553,7 @@ describe("sanitizeSessionHistory", () => {
     const staleAssistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant?.usage).toEqual(makePlaceholderUsageSnapshot());
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
@@ -574,7 +574,7 @@ describe("sanitizeSessionHistory", () => {
 
     const assistants = getAssistantMessages(result);
     expect(assistants).toHaveLength(2);
-    expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(assistants[0]?.usage).toEqual(makePlaceholderUsageSnapshot());
     expectAssistantUsageSnapshot(assistants[1]);
   });
 
@@ -589,7 +589,23 @@ describe("sanitizeSessionHistory", () => {
       ]),
     );
 
-    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(assistant?.usage).toEqual(makePlaceholderUsageSnapshot());
+  });
+
+  it("preserves placeholder provenance across repeated replay normalization", async () => {
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer without usage" }],
+      },
+    ]);
+
+    const firstPass = await sanitizeOpenAIHistory(messages);
+    const secondPass = await sanitizeOpenAIHistory(firstPass);
+    const assistant = secondPass.find((message) => message.role === "assistant");
+
+    expect(assistant?.usage).toEqual(makePlaceholderUsageSnapshot());
   });
 
   it("normalizes mixed partial assistant usage fields to numeric totals", async () => {
@@ -612,6 +628,7 @@ describe("sanitizeSessionHistory", () => {
       output: 3,
       cacheRead: 9,
       cacheWrite: 0,
+      tokenCountsObserved: ["output", "cacheRead"],
       totalTokens: 12,
     });
   });
@@ -645,6 +662,7 @@ describe("sanitizeSessionHistory", () => {
       output: 3,
       cacheRead: 9,
       cacheWrite: 0,
+      tokenCountsObserved: ["output", "cacheRead"],
       totalTokens: 12,
       cost: {
         input: 1.25,
@@ -680,6 +698,7 @@ describe("sanitizeSessionHistory", () => {
       output: 2,
       cacheRead: 3,
       cacheWrite: 4,
+      tokenCountsObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
       totalTokens: 10,
     });
     expect((assistant?.usage as { cost?: unknown } | undefined)?.cost).toBeUndefined();
@@ -701,7 +720,7 @@ describe("sanitizeSessionHistory", () => {
     const assistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(assistant?.usage).toEqual(makePlaceholderUsageSnapshot());
   });
 
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {
@@ -730,7 +749,7 @@ describe("sanitizeSessionHistory", () => {
     const freshAssistant = assistants.find((message) =>
       JSON.stringify(message.content).includes("fresh answer"),
     );
-    expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(keptAssistant?.usage).toEqual(makePlaceholderUsageSnapshot());
     expectAssistantUsageSnapshot(freshAssistant);
   });
 
@@ -1230,7 +1249,7 @@ describe("sanitizeSessionHistory", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "answer" }],
-        usage: makeZeroUsageSnapshot(),
+        usage: makePlaceholderUsageSnapshot(),
       },
     ]);
   });
@@ -1365,7 +1384,7 @@ describe("sanitizeSessionHistory", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "answer" }],
-        usage: makeZeroUsageSnapshot(),
+        usage: makePlaceholderUsageSnapshot(),
       },
     ]);
   });
@@ -1422,7 +1441,7 @@ describe("sanitizeSessionHistory", () => {
             textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
           },
         ],
-        usage: makeZeroUsageSnapshot(),
+        usage: makePlaceholderUsageSnapshot(),
       },
     ]);
   });
@@ -1463,7 +1482,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual([
       {
         ...(messages[0] as unknown as Record<string, unknown>),
-        usage: makeZeroUsageSnapshot(),
+        usage: makePlaceholderUsageSnapshot(),
       },
     ]);
   });

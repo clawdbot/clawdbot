@@ -20,6 +20,10 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
+import {
+  resolveEmbeddedRunAccountingObservers,
+  wrapStreamFnWithModelCallAccounting,
+} from "./accounting-observers.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -187,7 +191,14 @@ export function installEmbeddedAttemptStreamGuards(input: {
     );
   }
 
-  const innerStreamFn = session.agent.streamFn;
+  const accountingObservers = resolveEmbeddedRunAccountingObservers(attempt);
+  if (accountingObservers?.onModelCall) {
+    accountingObservers.onModelCallInstrumentationInstalled?.();
+  }
+  const innerStreamFn = wrapStreamFnWithModelCallAccounting(
+    session.agent.streamFn,
+    accountingObservers?.onModelCall,
+  );
   session.agent.streamFn = (model, context, options) => {
     const signal = input.abortSignal as AbortSignal & { reason?: unknown };
     if (input.isYieldDetected() && signal.aborted && isSessionsYieldAbortReason(signal.reason)) {

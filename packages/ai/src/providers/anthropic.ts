@@ -326,6 +326,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
@@ -630,11 +631,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               output.stopReason = mapAnthropicStopReason(event.delta.stop_reason);
             }
           }
-          // Only update usage fields if present (not null).
-          // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          if (event.usage) {
-            applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
-          }
+          // Missing terminal usage is an incomplete observation, not permission
+          // to leave the provisional message-start snapshot looking final.
+          applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
           calculateCost(costModel, output.usage);
         }
       }

@@ -283,6 +283,7 @@ async function compactCliTranscript(params: {
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
   bestEffortMaintenance?: boolean;
+  onCompactionExecutionStarted: () => void;
 }): Promise<CliTranscriptCompactionOutcome> {
   const runtimeContext = buildCliCompactionRuntimeContext({
     sessionKey: params.sessionKey,
@@ -320,6 +321,7 @@ async function compactCliTranscript(params: {
 
   let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
   try {
+    params.onCompactionExecutionStarted();
     compactResult = await compactContextEngineWithSafetyTimeout(
       params.contextEngine,
       {
@@ -434,6 +436,7 @@ async function compactNativeHarnessCliTranscript(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
+  onCompactionExecutionStarted: () => void;
 }): Promise<NativeHarnessCliCompactionOutcome> {
   let result: EmbeddedAgentCompactResult | undefined;
   try {
@@ -465,6 +468,7 @@ async function compactNativeHarnessCliTranscript(params: {
         ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
         pluginRegistry,
       });
+      params.onCompactionExecutionStarted();
       return await compactWithSafetyTimeout(
         (abortSignal) =>
           cliCompactionDeps.maybeCompactAgentHarnessSession({
@@ -590,6 +594,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
+  onCompactionExecutionStarted?: () => void;
 }): Promise<SessionEntry | undefined> {
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
   if (!params.storePath || !contextTokenBudget) {
@@ -648,6 +653,10 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
+  const noteCompactionExecutionStarted = () => {
+    params.onCompactionExecutionStarted?.();
+  };
+
   let compacted = false;
   let contextCompactionOutcome: CliTranscriptCompactionOutcome | undefined;
   let nativeCompactionResult: EmbeddedAgentCompactResult | undefined;
@@ -695,6 +704,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
+      onCompactionExecutionStarted: noteCompactionExecutionStarted,
     });
     if (nativeOutcome.compacted) {
       compacted = true;
@@ -749,6 +759,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
       bestEffortMaintenance: nativeFallbackToContextEngine,
+      onCompactionExecutionStarted: noteCompactionExecutionStarted,
     });
     contextCompactionOutcome = contextOutcome;
     compacted = contextOutcome.compacted;

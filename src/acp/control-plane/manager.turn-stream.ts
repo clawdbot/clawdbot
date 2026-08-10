@@ -6,6 +6,7 @@ import type {
   AcpRuntimeTurnResult,
 } from "@openclaw/acp-core/runtime/types";
 import { AcpRuntimeError } from "../runtime/errors.js";
+import type { AcpPromptSubmissionState } from "./manager.types.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
@@ -89,6 +90,55 @@ function waitForQueuedEvents(): Promise<"pending"> {
   });
 }
 
+function invokeAcpPromptObserver(observer: (() => Promise<void> | void) | undefined): void {
+  void Promise.resolve()
+    .then(() => observer?.())
+    .catch(() => {
+      // Prompt observation must not affect a request that was already submitted.
+    });
+}
+
+function observeAcpPromptSubmission(params: {
+  promptSubmission: Promise<AcpPromptSubmissionState> | undefined;
+  onPromptSubmissionState: (state: AcpPromptSubmissionState) => void;
+  onPromptStarted?: () => Promise<void> | void;
+}): () => void {
+  let observationOpen = true;
+  const observeSubmissionState = (state: AcpPromptSubmissionState) => {
+    if (!observationOpen) {
+      return;
+    }
+    params.onPromptSubmissionState(state);
+  };
+  const observePromptStarted = () => {
+    if (!observationOpen) {
+      return;
+    }
+    invokeAcpPromptObserver(params.onPromptStarted);
+  };
+  if (params.promptSubmission) {
+    observeSubmissionState("unknown");
+    void params.promptSubmission.then(
+      (state) => {
+        observeSubmissionState(state);
+        if (state === "submitted") {
+          observePromptStarted();
+        }
+      },
+      () => {
+        observeSubmissionState("unknown");
+      },
+    );
+    return () => {
+      observationOpen = false;
+    };
+  }
+  observeSubmissionState("unknown");
+  return () => {
+    observationOpen = false;
+  };
+}
+
 async function notifyTerminalResult(params: {
   result: AcpRuntimeTurnResult;
   eventGate: AcpTurnEventGate;
@@ -121,6 +171,9 @@ export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
+  onPromptSubmissionState: (state: AcpPromptSubmissionState) => void;
+  onPromptStarted?: () => Promise<void> | void;
+  onTurnStreamAcquired?: () => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
@@ -129,77 +182,90 @@ export async function consumeAcpTurnStream(params: {
   if (params.runtime.startTurn) {
     // startTurn exposes result and event streams separately; coordinate both before reporting done.
     const turn = params.runtime.startTurn(params.turn);
-    const eventsPromise = consumeAcpTurnEvents({
-      events: turn.events,
-      eventGate: params.eventGate,
-      onEvent: params.onEvent,
-      onOutputEvent: params.onOutputEvent,
-    }).then(
-      (outcome) => ({ kind: "events" as const, outcome }),
-      (error: unknown) => ({ kind: "event-error" as const, error }),
-    );
-    const resultPromise = turn.result.then(
-      (result) => ({ kind: "result" as const, result }),
-      (error: unknown) => ({ kind: "result-error" as const, error }),
-    );
-
-    let eventOutcome: AcpTurnStreamOutcome | null = null;
-    let result: AcpRuntimeTurnResult | null = null;
-    const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
-    if (firstOutcome.kind === "event-error") {
-      await turn.closeStream({ reason: "turn-events-error" }).catch(() => {});
-      throw firstOutcome.error;
-    }
-    if (firstOutcome.kind === "events") {
-      eventOutcome = firstOutcome.outcome;
-    } else if (firstOutcome.kind === "result-error") {
-      await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-      throw firstOutcome.error;
-    } else {
-      result = firstOutcome.result;
-    }
-
-    if (!result) {
-      const terminalOutcome = await resultPromise;
-      if (terminalOutcome.kind === "result-error") {
-        await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-        throw terminalOutcome.error;
-      }
-      result = terminalOutcome.result;
-    }
-
-    let closedTerminalStream = false;
-    if (!eventOutcome) {
-      let eventsOutcome = await Promise.race([eventsPromise, waitForQueuedEvents()]);
-      if (eventsOutcome === "pending") {
-        await turn.closeStream({ reason: `turn-result-${result.status}` }).catch(() => {});
-        closedTerminalStream = true;
-        eventsOutcome = await eventsPromise;
-      }
-      if (eventsOutcome.kind === "event-error") {
-        throw eventsOutcome.error;
-      }
-      eventOutcome = eventsOutcome.outcome;
-    }
-    if (result.status !== "completed" && !closedTerminalStream) {
-      await turn.closeStream({ reason: `turn-result-${result.status}` }).catch(() => {});
-    }
-    await notifyTerminalResult({
-      result,
-      eventGate: params.eventGate,
-      onEvent: params.onEvent,
+    invokeAcpPromptObserver(params.onTurnStreamAcquired);
+    const stopObservingPromptSubmission = observeAcpPromptSubmission({
+      promptSubmission: turn.promptSubmission,
+      onPromptSubmissionState: params.onPromptSubmissionState,
+      onPromptStarted: params.onPromptStarted,
     });
-    if (result.status === "failed") {
-      throw errorFromTurnResult(result);
+    try {
+      const eventsPromise = consumeAcpTurnEvents({
+        events: turn.events,
+        eventGate: params.eventGate,
+        onEvent: params.onEvent,
+        onOutputEvent: params.onOutputEvent,
+      }).then(
+        (outcome) => ({ kind: "events" as const, outcome }),
+        (error: unknown) => ({ kind: "event-error" as const, error }),
+      );
+      const resultPromise = turn.result.then(
+        (result) => ({ kind: "result" as const, result }),
+        (error: unknown) => ({ kind: "result-error" as const, error }),
+      );
+
+      let eventOutcome: AcpTurnStreamOutcome | null = null;
+      let result: AcpRuntimeTurnResult | null = null;
+      const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
+      if (firstOutcome.kind === "event-error") {
+        await turn.closeStream({ reason: "turn-events-error" }).catch(() => {});
+        throw firstOutcome.error;
+      }
+      if (firstOutcome.kind === "events") {
+        eventOutcome = firstOutcome.outcome;
+      } else if (firstOutcome.kind === "result-error") {
+        await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
+        throw firstOutcome.error;
+      } else {
+        result = firstOutcome.result;
+      }
+
+      if (!result) {
+        const terminalOutcome = await resultPromise;
+        if (terminalOutcome.kind === "result-error") {
+          await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
+          throw terminalOutcome.error;
+        }
+        result = terminalOutcome.result;
+      }
+
+      let closedTerminalStream = false;
+      if (!eventOutcome) {
+        let eventsOutcome = await Promise.race([eventsPromise, waitForQueuedEvents()]);
+        if (eventsOutcome === "pending") {
+          await turn.closeStream({ reason: `turn-result-${result.status}` }).catch(() => {});
+          closedTerminalStream = true;
+          eventsOutcome = await eventsPromise;
+        }
+        if (eventsOutcome.kind === "event-error") {
+          throw eventsOutcome.error;
+        }
+        eventOutcome = eventsOutcome.outcome;
+      }
+      if (result.status !== "completed" && !closedTerminalStream) {
+        await turn.closeStream({ reason: `turn-result-${result.status}` }).catch(() => {});
+      }
+      await notifyTerminalResult({
+        result,
+        eventGate: params.eventGate,
+        onEvent: params.onEvent,
+      });
+      if (result.status === "failed") {
+        throw errorFromTurnResult(result);
+      }
+      return {
+        sawOutput: eventOutcome.sawOutput,
+        terminalStatus: result.status,
+      };
+    } finally {
+      stopObservingPromptSubmission();
     }
-    return {
-      sawOutput: eventOutcome.sawOutput,
-      terminalStatus: result.status,
-    };
   }
 
+  const events = params.runtime.runTurn(params.turn);
+  params.onPromptSubmissionState("unknown");
+  invokeAcpPromptObserver(params.onTurnStreamAcquired);
   return await consumeAcpTurnEvents({
-    events: params.runtime.runTurn(params.turn),
+    events,
     eventGate: params.eventGate,
     onEvent: params.onEvent,
     onOutputEvent: params.onOutputEvent,

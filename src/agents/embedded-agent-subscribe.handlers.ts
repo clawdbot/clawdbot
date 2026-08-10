@@ -9,10 +9,10 @@ import {
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
   capturePendingAssistantUsage,
+  finalizeAssistantMessageAccounting,
   handleMessageEnd,
   handleMessageStart,
   handleMessageUpdate,
-  preservePendingAssistantUsage,
   resetPendingAssistantUsage,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import {
@@ -103,10 +103,19 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "message_end":
         if ((evt.message as AgentMessage)?.role === "assistant") {
-          preservePendingAssistantUsage(
+          const message = finalizeAssistantMessageAccounting(
+            ctx,
             evt.message as Extract<AgentMessage, { role: "assistant" }>,
-            ctx.state.pendingAssistantUsage,
+            ctx.state.assistantMessageGeneration,
           );
+          void scheduleEvent(evt, () => {
+            return handleMessageEnd(ctx, {
+              ...evt,
+              message,
+              accountingFinalized: true,
+            } as never);
+          });
+          return;
         }
         void scheduleEvent(evt, () => {
           return handleMessageEnd(ctx, evt as never);

@@ -91,6 +91,7 @@ const WorkerInferenceAssistantMessageProperties = {
   api: WorkerIdentifierSchema,
   provider: WorkerIdentifierSchema,
   model: WorkerIdentifierSchema,
+  messageOrigin: Type.Optional(Type.Literal("runtime-synthetic")),
   responseModel: Type.Optional(WorkerIdentifierSchema),
   responseId: Type.Optional(WorkerIdentifierSchema),
   usage: WorkerTranscriptUsageSchema,

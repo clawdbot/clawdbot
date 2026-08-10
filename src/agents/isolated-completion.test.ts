@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { runWithAgentCommandAccounting } from "./command/run-accounting.js";
+import type {
+  AgentCommandCandidateRuntime,
+  AgentCommandRunAccountingSnapshot,
+} from "./command/run-accounting.types.js";
 import type { AgentHarness } from "./harness/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -97,6 +102,34 @@ function request() {
   };
 }
 
+async function captureIsolatedCompletionAccounting<T>(params: {
+  runtime: Exclude<AgentCommandCandidateRuntime, "unknown">;
+  run: () => Promise<T>;
+}): Promise<{
+  result?: T;
+  error?: unknown;
+  snapshot: AgentCommandRunAccountingSnapshot;
+}> {
+  let result: T | undefined;
+  let error: unknown;
+  let snapshot: AgentCommandRunAccountingSnapshot | undefined;
+  await runWithAgentCommandAccounting(async (accounting) => {
+    const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+    candidate.selectRuntime(params.runtime);
+    candidate.markModelCallInstrumentationInstalled();
+    try {
+      result = await params.run();
+      candidate.settle("returned");
+    } catch (caught) {
+      error = caught;
+      candidate.settle("threw");
+    }
+    snapshot = accounting.project();
+  });
+  expect(snapshot).toBeDefined();
+  return { result, error, snapshot: snapshot! };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
@@ -147,6 +180,58 @@ describe("runIsolatedCompletion", () => {
         prompt: "Do the task.",
       }),
     );
+  });
+
+  it("accounts harness success, admitted throws, and post-result rejection", async () => {
+    const runHarness = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "done" }]),
+    }));
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletion: runHarness,
+      } satisfies AgentHarness,
+    });
+
+    const success = await captureIsolatedCompletionAccounting({
+      runtime: "embedded",
+      run: () => runIsolatedCompletion(request()),
+    });
+    expect(success.error).toBeUndefined();
+    expect(success.snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 1, failed: 0 },
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    });
+
+    runHarness.mockRejectedValueOnce(new Error("harness unavailable"));
+    const admittedThrow = await captureIsolatedCompletionAccounting({
+      runtime: "embedded",
+      run: () => runIsolatedCompletion(request()),
+    });
+    expect(admittedThrow.error).toMatchObject({ message: "harness unavailable" });
+    expect(admittedThrow.snapshot.modelCalls).toEqual({
+      total: 1,
+      completed: 0,
+      failed: 1,
+    });
+
+    runHarness.mockResolvedValueOnce({
+      assistant: assistant([
+        { type: "toolCall", id: "call-1", name: "update_plan", arguments: {} },
+      ]),
+    });
+    const rejectedOutput = await captureIsolatedCompletionAccounting({
+      runtime: "embedded",
+      run: () => runIsolatedCompletion(request()),
+    });
+    expect(rejectedOutput.error).toMatchObject({ code: "output-rejected" });
+    expect(rejectedOutput.snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 1, failed: 0 },
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+    });
   });
 
   it("unwraps prepared credentials only at the external harness boundary", async () => {
@@ -359,6 +444,72 @@ describe("runIsolatedCompletion", () => {
         cliToolAvailability: { native: [], openClaw: [] },
       }),
     );
+  });
+
+  it("accounts CLI success, admitted throws, and post-result rejection", async () => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+          usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
+        },
+      },
+    });
+    const cliRequest = {
+      ...request(),
+      provider: "anthropic",
+      model: "claude-test",
+      agentHarnessRuntimeOverride: "claude-cli",
+    };
+
+    const success = await captureIsolatedCompletionAccounting({
+      runtime: "cli",
+      run: () => runIsolatedCompletion(cliRequest),
+    });
+    expect(success.error).toBeUndefined();
+    expect(success.snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 1, failed: 0 },
+      usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
+    });
+
+    mocks.runCliAgent.mockRejectedValueOnce(new Error("cli unavailable"));
+    const admittedThrow = await captureIsolatedCompletionAccounting({
+      runtime: "cli",
+      run: () => runIsolatedCompletion(cliRequest),
+    });
+    expect(admittedThrow.error).toMatchObject({ message: "cli unavailable" });
+    expect(admittedThrow.snapshot.modelCalls).toEqual({
+      total: 1,
+      completed: 0,
+      failed: 1,
+    });
+
+    mocks.runCliAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+          usage: { input: 5, output: 1, total: 6 },
+        },
+      },
+    });
+    const rejectedOutput = await captureIsolatedCompletionAccounting({
+      runtime: "cli",
+      run: () => runIsolatedCompletion(cliRequest),
+    });
+    expect(rejectedOutput.error).toMatchObject({ code: "output-rejected" });
+    expect(rejectedOutput.snapshot).toMatchObject({
+      modelCalls: { total: 1, completed: 1, failed: 0 },
+      usage: { input: 5, output: 1, total: 6 },
+    });
   });
 
   it("keeps unavailable CLI usage absent", async () => {

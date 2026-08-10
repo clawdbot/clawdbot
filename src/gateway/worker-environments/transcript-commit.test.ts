@@ -81,6 +81,7 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
       api: "openai-responses",
       provider: "openai",
       model: "gpt-5.5",
+      messageOrigin: "runtime-synthetic",
       diagnostics: [
         {
           type: "provider-warning",
@@ -89,7 +90,18 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
           details: { empty: "", enabled: false },
         },
       ],
-      usage: ZERO_USAGE,
+      usage: {
+        ...ZERO_USAGE,
+        tokenCountsObserved: [
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite",
+          "reasoningTokens",
+          "total",
+        ],
+        reasoningTokens: 0,
+      },
       stopReason: "toolUse",
       timestamp: 200,
     },
@@ -233,6 +245,18 @@ describe("worker transcript commit application", () => {
               details: { empty: "", enabled: false },
             },
           ],
+          messageOrigin: "runtime-synthetic",
+          usage: expect.objectContaining({
+            tokenCountsObserved: [
+              "input",
+              "output",
+              "cacheRead",
+              "cacheWrite",
+              "reasoningTokens",
+              "total",
+            ],
+            reasoningTokens: 0,
+          }),
         }),
       }),
       expect.objectContaining({
@@ -288,6 +312,45 @@ describe("worker transcript commit application", () => {
         }),
       ),
     );
+  });
+
+  it("preserves placeholder token provenance without inventing observed buckets", async () => {
+    const messages = createTurnMessages();
+    const assistant = messages.find((message) => message.role === "assistant");
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("expected assistant fixture");
+    }
+    assistant.usage = {
+      ...ZERO_USAGE,
+      tokenCountsOrigin: "runtime-placeholder",
+    };
+
+    const outcome = await committer.commit({
+      identity: IDENTITY,
+      request: createRequest({ messages }),
+    });
+    expect(outcome.ok).toBe(true);
+
+    const reopened = SessionManager.open(sessionTarget);
+    const persistedAssistant = reopened
+      .getEntries()
+      .find(
+        (entry) =>
+          entry.type === "message" && "role" in entry.message && entry.message.role === "assistant",
+      );
+    expect(persistedAssistant).toMatchObject({
+      message: {
+        messageOrigin: "runtime-synthetic",
+        usage: {
+          tokenCountsOrigin: "runtime-placeholder",
+        },
+      },
+    });
+    expect(
+      persistedAssistant?.type === "message" && "usage" in persistedAssistant.message
+        ? persistedAssistant.message.usage
+        : undefined,
+    ).not.toHaveProperty("tokenCountsObserved");
   });
 
   it("durably materializes a user-only commit", async () => {

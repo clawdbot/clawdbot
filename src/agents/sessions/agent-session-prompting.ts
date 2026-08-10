@@ -24,17 +24,28 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   // Prompting
   // =========================================================================
 
+  private async runSubmittedAgentCall(run: () => Promise<void>): Promise<void> {
+    const submission = this.onAgentSubmission?.();
+    try {
+      await run();
+      submission?.settle("completed");
+    } catch (error) {
+      submission?.settle("failed");
+      throw error;
+    }
+  }
+
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
     let endedForTurnHandoff = false;
     try {
-      await this.agent.prompt(messages);
+      await this.runSubmittedAgentCall(() => this.agent.prompt(messages));
       while (true) {
         const action = await this.handlePostAgentRun();
         if (action !== "continue") {
           endedForTurnHandoff = action === "handoff";
           break;
         }
-        await this.agent.continue();
+        await this.runSubmittedAgentCall(() => this.agent.continue());
       }
     } finally {
       this.systemPromptOverride = undefined;

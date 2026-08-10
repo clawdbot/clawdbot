@@ -73,6 +73,8 @@ function expectTerminalFailure(events: AgentEvent[], result: AgentMessage[]): vo
     role: "assistant",
     stopReason: "error",
     errorMessage: "provider exploded",
+    messageOrigin: "runtime-synthetic",
+    usage: { tokenCountsOrigin: "runtime-placeholder" },
   });
 }
 

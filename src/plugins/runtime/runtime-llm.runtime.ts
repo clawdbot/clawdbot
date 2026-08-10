@@ -6,6 +6,7 @@ import {
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { beginActiveAgentCommandModelCall } from "../../agents/command/run-accounting.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
@@ -13,7 +14,6 @@ import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
-import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { modelKey } from "../../shared/model-key.js";
@@ -25,6 +25,7 @@ import {
   isIsolatedAgentRuntimeRequest,
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
+import { buildRuntimeLlmMessages, buildRuntimeLlmSystemPrompt } from "./runtime-llm-messages.js";
 import type {
   LlmCompleteCaller,
   LlmCompleteErrorCode,
@@ -167,48 +168,6 @@ async function resolveAgentId(params: {
   }
   const { resolveDefaultAgentId } = await import("../../agents/agent-scope.js");
   return resolveDefaultAgentId(params.cfg);
-}
-
-function buildSystemPrompt(params: LlmCompleteParams): string | undefined {
-  const segments = [
-    normalizeOptionalString(params.systemPrompt),
-    ...params.messages
-      .filter((message) => message.role === "system")
-      .map((message) => normalizeOptionalString(message.content)),
-  ].filter((segment): segment is string => Boolean(segment));
-  return segments.length > 0 ? segments.join("\n\n") : undefined;
-}
-
-function buildMessages(params: {
-  request: LlmCompleteParams;
-  provider: string;
-  model: string;
-  api: Api;
-}): Message[] {
-  const now = Date.now();
-  return params.request.messages
-    .filter((message) => message.role !== "system")
-    .map((message) =>
-      message.role === "user"
-        ? { role: "user" as const, content: message.content, timestamp: now }
-        : {
-            role: "assistant" as const,
-            content: [{ type: "text" as const, text: message.content }],
-            api: params.api,
-            provider: params.provider,
-            model: params.model,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop" as const,
-            timestamp: now,
-          },
-    );
 }
 
 function readFiniteNonNegativeNumber(value: unknown): number | undefined {
@@ -701,8 +660,8 @@ export function createRuntimeLlm(
       }
 
       const context = {
-        systemPrompt: buildSystemPrompt(params),
-        messages: buildMessages({
+        systemPrompt: buildRuntimeLlmSystemPrompt(params),
+        messages: buildRuntimeLlmMessages({
           request: params,
           provider: prepared.model.provider,
           model: prepared.model.id,
@@ -710,17 +669,38 @@ export function createRuntimeLlm(
         }),
       };
 
-      const result = await completeWithPreparedSimpleCompletionModel({
-        model: prepared.model,
-        auth: prepared.auth,
-        cfg,
-        context,
-        options: {
-          maxTokens: finiteOption(params.maxTokens),
-          temperature: finiteOption(params.temperature),
-          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-          signal: params.signal,
-        },
+      const accounting = beginActiveAgentCommandModelCall();
+      const result = await (async () => {
+        try {
+          return await completeWithPreparedSimpleCompletionModel({
+            model: prepared.model,
+            auth: prepared.auth,
+            cfg,
+            context,
+            options: {
+              maxTokens: finiteOption(params.maxTokens),
+              temperature: finiteOption(params.temperature),
+              ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+              signal: params.signal,
+            },
+          });
+        } catch (error) {
+          accounting?.settle({
+            outcome: "failed",
+            provider: prepared.model.provider,
+            model: prepared.model.id,
+            config: cfg,
+          });
+          throw error;
+        }
+      })();
+      accounting?.settle({
+        outcome:
+          result.stopReason === "error" || result.stopReason === "aborted" ? "failed" : "completed",
+        provider: prepared.model.provider,
+        model: prepared.model.id,
+        usage: normalizeUsage(result.usage),
+        config: cfg,
       });
 
       const text = result.content

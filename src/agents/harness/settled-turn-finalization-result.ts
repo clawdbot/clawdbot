@@ -9,6 +9,8 @@ import type {
 const ALLOWED_SETTLED_FINALIZATION_RESULT_KEYS = new Set([
   "assistant",
   "usage",
+  "assistantTurns",
+  "assistantTurnsWithUsage",
   "assistantTranscriptOwned",
   "assistantTranscriptIdempotencyKey",
   "assistantMessageIndex",
@@ -52,6 +54,21 @@ export function assertSettledTurnFinalizationResult(
     (!Number.isSafeInteger(result.assistantMessageIndex) || result.assistantMessageIndex < 0)
   ) {
     throw new Error("Settled-turn finalization returned an invalid assistant message index");
+  }
+  if (
+    result.assistantTurns !== undefined &&
+    (!Number.isSafeInteger(result.assistantTurns) || result.assistantTurns < 0)
+  ) {
+    throw new Error("Settled-turn finalization returned an invalid assistant turn count");
+  }
+  if (
+    result.assistantTurnsWithUsage !== undefined &&
+    (!Number.isSafeInteger(result.assistantTurnsWithUsage) ||
+      result.assistantTurnsWithUsage < 0 ||
+      result.assistantTurns === undefined ||
+      result.assistantTurnsWithUsage > result.assistantTurns)
+  ) {
+    throw new Error("Settled-turn finalization returned an invalid usage turn count");
   }
   resolveSettledTurnFinalizationText(result);
   return result;
@@ -124,6 +141,10 @@ export function projectSettledTurnFinalizationAttemptResult(
   return assertSettledTurnFinalizationResult({
     assistant,
     ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+    ...(result.assistantTurns !== undefined ? { assistantTurns: result.assistantTurns } : {}),
+    ...(result.assistantTurnsWithUsage !== undefined
+      ? { assistantTurnsWithUsage: result.assistantTurnsWithUsage }
+      : {}),
     ...(result.assistantTranscriptOwned
       ? {
           assistantTranscriptOwned: true,

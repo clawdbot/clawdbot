@@ -5,6 +5,7 @@ import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
 } from "../../../infra/diagnostic-events.js";
+import { copyEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 type ExecutionPhaseCallback = NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
@@ -46,5 +47,9 @@ export function withExecutionPhaseDiagnostics<T extends ExecutionPhaseParams>(
     }
     forwardPhase?.(info);
   };
-  return { ...params, onExecutionPhase, onSessionIdChanged };
+  return copyEmbeddedRunAccountingObservers(params, {
+    ...params,
+    onExecutionPhase,
+    onSessionIdChanged,
+  });
 }

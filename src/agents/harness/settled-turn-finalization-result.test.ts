@@ -110,6 +110,25 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("invalid assistant message index");
   });
 
+  it("rejects invalid finalizer turn cardinality", () => {
+    expect(() =>
+      assertSettledTurnFinalizationResult({ ...safeResult(), assistantTurns: -1 }),
+    ).toThrow("invalid assistant turn count");
+    expect(() =>
+      assertSettledTurnFinalizationResult({
+        ...safeResult(),
+        assistantTurnsWithUsage: 1,
+      }),
+    ).toThrow("invalid usage turn count");
+    expect(() =>
+      assertSettledTurnFinalizationResult({
+        ...safeResult(),
+        assistantTurns: 1,
+        assistantTurnsWithUsage: 2,
+      }),
+    ).toThrow("invalid usage turn count");
+  });
+
   it("rejects future result fields until their semantics are reviewed", () => {
     expect(() =>
       assertSettledTurnFinalizationResult({
@@ -120,11 +139,17 @@ describe("assertSettledTurnFinalizationResult", () => {
   });
 
   it("projects a successful full attempt into the narrow result", () => {
-    const attempt = successfulAttempt({ lastAssistantTextMessageIndex: 2 });
+    const attempt = successfulAttempt({
+      lastAssistantTextMessageIndex: 2,
+      assistantTurns: 3,
+      assistantTurnsWithUsage: 2,
+    });
 
     expect(projectSettledTurnFinalizationAttemptResult(attempt)).toEqual({
       assistant: attempt.currentAttemptCompletedAssistant,
       assistantMessageIndex: 2,
+      assistantTurns: 3,
+      assistantTurnsWithUsage: 2,
     });
   });
 

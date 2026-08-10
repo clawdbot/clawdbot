@@ -4,6 +4,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isStrictAgenticSupportedProviderModel } from "../execution-contract.js";
 import type { AgentHarness } from "../harness/types.js";
+import { copyEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
 import { buildEmbeddedRunBlockedResult } from "./run/blocked-run-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import {
@@ -211,7 +212,7 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
   let sameModelRateLimitRetries = 0;
 
   for (let attemptIndex = 0; attemptIndex < 8; attemptIndex += 1) {
-    const attemptParams = {
+    const attemptParams = copyEmbeddedRunAccountingObservers(params, {
       ...params,
       prompt: activePrompt,
       suppressNextUserMessagePersistence,
@@ -232,7 +233,7 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
           terminalToolPresentation = observation.terminalPresentation;
         }
       },
-    };
+    });
     suppressNextUserMessagePersistence = false;
     const attempt = normalizeEmbeddedRunAttemptResult(
       await mockedRunEmbeddedAttempt(attemptParams as never),
@@ -310,7 +311,10 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
     }
 
     const terminalBase = {
-      runParams: { ...params, authProfileStateMode: "read-only" as const },
+      runParams: copyEmbeddedRunAccountingObservers(params, {
+        ...params,
+        authProfileStateMode: "read-only" as const,
+      }),
       provider,
       model: modelId,
       activeErrorContext: { provider, model: modelId },
@@ -338,7 +342,10 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
       terminalBase,
       lastRunPromptUsage: attempt.attemptUsage,
       finalization: {
-        preparedAttempt: attemptParams as never,
+        preparedAttempt: copyEmbeddedRunAccountingObservers(attemptParams, {
+          ...attemptParams,
+          model: resolvedModel.model,
+        }) as never,
         harness: selectedHarness,
         modelApi: resolvedModel.model.api,
         executionContract: isStrictAgenticSupportedProviderModel({ provider, modelId })
@@ -377,7 +384,10 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
     let nextPrompt = activePrompt;
     let nextPromptPersisted: boolean = activePromptPersisted;
     const resolution = await resolveEmbeddedRunTerminal({
-      runParams: { ...params, authProfileStateMode: "read-only" },
+      runParams: copyEmbeddedRunAccountingObservers(params, {
+        ...params,
+        authProfileStateMode: "read-only",
+      }),
       retryState,
       attempt: finalized.attempt,
       attemptAssistant: finalized.attemptAssistant,

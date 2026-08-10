@@ -9,7 +9,12 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./accounting-observers.js";
 import { withExecutionPhaseDiagnostics } from "./execution-phase-diagnostics.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 
 function collectEvents(types: string[]): {
   events: DiagnosticEventPayload[];
@@ -38,20 +43,26 @@ describe("withExecutionPhaseDiagnostics", () => {
   test("publishes run.execution_phase and forwards to the wrapped callback", async () => {
     const { events, stop } = collectEvents(["run.execution_phase"]);
     const seen: unknown[] = [];
-    const params = withExecutionPhaseDiagnostics({
+    const source = {
       runId: "run-1",
       sessionId: "sid-1",
       sessionKey: "agent:main:mattermost:channel:town-square",
-      onExecutionPhase: (info) => {
+      onExecutionPhase: (
+        info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
+      ) => {
         seen.push(info);
       },
-    });
+    };
+    const observers = { onAttemptObserved: () => {} };
+    bindEmbeddedRunAccountingObservers(source, observers);
+    const params = withExecutionPhaseDiagnostics(source);
 
     params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
     await waitForDiagnosticEventsDrained();
     stop();
 
     expect(seen).toEqual([{ phase: "model_call_started", firstModelCallStarted: true }]);
+    expect(resolveEmbeddedRunAccountingObservers(params)).toBe(observers);
     expect(events).toMatchObject([
       {
         type: "run.execution_phase",

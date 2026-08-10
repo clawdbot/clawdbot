@@ -262,22 +262,23 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const { finalizeResponse, recoverTerminalOutput } = createResponsesTerminalController({
-    output,
-    stream,
-    model,
-    options,
-    reasoningBlocksById,
-    completedOutputItemIdentities,
-    startedTextBlocksByItemId,
-    getLastTextBlock: () => lastTextBlock,
-    setLastTextBlock: (block) => {
-      lastTextBlock = block;
-    },
-    markFinalized: () => {
-      terminalResponseEvent = "finalized";
-    },
-  });
+  const { applyResponseAccounting, finalizeResponse, recoverTerminalOutput } =
+    createResponsesTerminalController({
+      output,
+      stream,
+      model,
+      options,
+      reasoningBlocksById,
+      completedOutputItemIdentities,
+      startedTextBlocksByItemId,
+      getLastTextBlock: () => lastTextBlock,
+      setLastTextBlock: (block) => {
+        lastTextBlock = block;
+      },
+      markFinalized: () => {
+        terminalResponseEvent = "finalized";
+      },
+    });
 
   const guardedStream = adaptResponsesStream(
     withFirstStreamEventTimeout(openaiStream, {
@@ -703,6 +704,7 @@ export async function processResponsesStream<TApi extends Api>(
           event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
         );
       } else if (event.type === "response.failed") {
+        applyResponseAccounting(event.response);
         const failure = normalizeResponsesFailedEvent(
           event as unknown as Record<string, unknown>,
           model,

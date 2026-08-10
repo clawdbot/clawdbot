@@ -34,6 +34,7 @@ import {
   saveAuthProfileStore,
 } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { resolveEmbeddedRunAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
@@ -582,6 +583,7 @@ describe("CLI attempt execution", () => {
     configuredAuthProfileId?: string;
     timeoutMs?: number;
     runTimeoutOverrideMs?: number;
+    commandRunAccounting?: RunAgentAttemptParams["commandRunAccounting"];
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = overrides?.sessionKey ?? `agent:main:direct:${runId}`;
@@ -613,6 +615,7 @@ describe("CLI attempt execution", () => {
     const providerOverride = overrides?.providerOverride ?? "openai";
 
     await runAgentAttempt({
+      commandRunAccounting: overrides?.commandRunAccounting,
       providerOverride,
       originalProvider: "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
@@ -806,6 +809,33 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards command accounting only to the embedded runner boundary", async () => {
+    const commandRunAccounting = {
+      selectRuntime: vi.fn(),
+      beginAgentSubmission: vi.fn(),
+      beginModelCall: vi.fn(),
+      markModelCallInstrumentationInstalled: vi.fn(),
+      observeEmbeddedAttempt: vi.fn(),
+      markOpaqueWork: vi.fn(),
+      settle: vi.fn(),
+    };
+
+    const embedded = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-command-accounting",
+      commandRunAccounting,
+    });
+
+    expect(resolveEmbeddedRunAccountingObservers(embedded)).toEqual({
+      onAgentSubmission: commandRunAccounting.beginAgentSubmission,
+      onModelCall: commandRunAccounting.beginModelCall,
+      onModelCallInstrumentationInstalled:
+        commandRunAccounting.markModelCallInstrumentationInstalled,
+      onAttemptObserved: commandRunAccounting.observeEmbeddedAttempt,
+      onRuntimeSelected: commandRunAccounting.selectRuntime,
+      onOpaqueWork: commandRunAccounting.markOpaqueWork,
+    });
+  });
+
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
     sessionEntry: SessionEntry;
@@ -814,8 +844,10 @@ describe("CLI attempt execution", () => {
     runId: string;
     cwd?: string;
     onExecutionStarted?: () => void;
+    commandRunAccounting?: RunAgentAttemptParams["commandRunAccounting"];
   }) {
     await runAgentAttempt({
+      commandRunAccounting: params.commandRunAccounting,
       providerOverride: "claude-cli",
       modelOverride: "opus",
       sessionEntry: params.sessionEntry,
@@ -872,6 +904,44 @@ describe("CLI attempt execution", () => {
       sessionKey,
       chatType: "group",
     });
+  });
+
+  it("classifies CLI candidates without inventing embedded agent submissions", async () => {
+    const sessionKey = "agent:main:direct:cli-accounting";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-accounting",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const selectRuntime = vi.fn();
+    const beginAgentSubmission = vi.fn();
+    const beginModelCall = vi.fn();
+    const markModelCallInstrumentationInstalled = vi.fn();
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("accounted"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "account",
+      runId: "run-cli-accounting",
+      commandRunAccounting: {
+        selectRuntime,
+        beginAgentSubmission,
+        beginModelCall,
+        markModelCallInstrumentationInstalled,
+        observeEmbeddedAttempt: vi.fn(),
+        markOpaqueWork: vi.fn(),
+        settle: vi.fn(),
+      },
+    });
+
+    expect(selectRuntime).toHaveBeenCalledOnce();
+    expect(selectRuntime).toHaveBeenCalledWith("cli");
+    expect(beginAgentSubmission).not.toHaveBeenCalled();
+    expect(beginModelCall).not.toHaveBeenCalled();
+    expect(markModelCallInstrumentationInstalled).not.toHaveBeenCalled();
   });
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {

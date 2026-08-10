@@ -19,6 +19,7 @@ import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.j
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { copyEmbeddedRunAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -36,7 +37,7 @@ function preparePreTurnRuntimeContext(
     return runtimeContext;
   }
   const { rewriteTranscriptEntries: _rewriteTranscriptEntries, ...fenced } = runtimeContext;
-  return fenced;
+  return copyEmbeddedRunAccountingObservers(runtimeContext, fenced);
 }
 
 function runWithHarnessContextEngineTranscriptFence<T>(

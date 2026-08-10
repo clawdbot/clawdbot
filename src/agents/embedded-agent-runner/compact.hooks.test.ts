@@ -72,6 +72,7 @@ let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 let withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
+let bindEmbeddedRunAccountingObservers: typeof import("./run/accounting-observers.js").bindEmbeddedRunAccountingObservers;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -320,12 +321,15 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactEmbeddedAgentSessionDirect = (params) =>
-    loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
+    loaded.compactEmbeddedAgentSessionDirect(
+      loaded.copyEmbeddedRunAccountingObservers(params, { agentId: "main", ...params }),
+    );
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
   withOwnedSessionTranscriptWrites = loaded.withOwnedSessionTranscriptWrites;
+  bindEmbeddedRunAccountingObservers = loaded.bindEmbeddedRunAccountingObservers;
 });
 
 beforeEach(() => {
@@ -441,6 +445,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("rebuilds runtime plans for an actual compaction fallback candidate", async () => {
     const { runtimeAuthPlan, runtimePlan } = createPreparedCodexCompactionPlans();
+    const onOpaqueWork = vi.fn();
     sessionCompactImpl
       .mockRejectedValueOnce(
         Object.assign(new Error("primary compaction rate limited"), {
@@ -455,14 +460,22 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         details: { ok: true },
       });
 
-    const result = await compactEmbeddedAgentSessionDirect({
-      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-5.5" }),
-      modelFallbacksOverride: ["anthropic/claude-fallback"],
-      runtimeAuthPlan,
-      runtimePlan,
-    });
+    const result = await compactEmbeddedAgentSessionDirect(
+      bindEmbeddedRunAccountingObservers(
+        {
+          ...wrappedCompactionArgs({ provider: "openai", model: "gpt-5.5" }),
+          modelFallbacksOverride: ["anthropic/claude-fallback"],
+          runtimeAuthPlan,
+          runtimePlan,
+        },
+        { onOpaqueWork },
+      ),
+    );
 
     expect(result).toMatchObject({ ok: true, result: { summary: "rebuilt fallback summary" } });
+    expect(onOpaqueWork).toHaveBeenCalledTimes(2);
+    expect(onOpaqueWork).toHaveBeenNthCalledWith(1, "session_core_compaction");
+    expect(onOpaqueWork).toHaveBeenNthCalledWith(2, "session_core_compaction");
     const fallbackPlanCall = findMockCall(buildAgentRuntimePlanMock, ([input]) => {
       const fields = input as { provider?: string; modelId?: string } | undefined;
       return fields?.provider === "anthropic" && fields.modelId === "claude-fallback";
@@ -2201,6 +2214,63 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     },
   );
 
+  it.each([
+    { trigger: "manual", expectedAutomaticCalls: 0, expectedManualCalls: 1 },
+    { trigger: "budget", expectedAutomaticCalls: 1, expectedManualCalls: 0 },
+  ] as const)(
+    "marks one opaque core-compaction invocation for $trigger compaction",
+    async ({ trigger, expectedAutomaticCalls, expectedManualCalls }) => {
+      resolveEffectiveCompactionModeMock.mockReturnValue("default");
+      const onOpaqueWork = vi.fn();
+      const params = bindEmbeddedRunAccountingObservers(wrappedCompactionArgs({ trigger }), {
+        onOpaqueWork,
+      });
+
+      const result = await compactEmbeddedAgentSessionDirect(params);
+
+      expect(result).toMatchObject({ ok: true, compacted: true });
+      expect(sessionAutomaticCompactionMock).toHaveBeenCalledTimes(expectedAutomaticCalls);
+      expect(sessionManualCompactionMock).toHaveBeenCalledTimes(expectedManualCalls);
+      expect(onOpaqueWork).toHaveBeenCalledOnce();
+      expect(onOpaqueWork).toHaveBeenCalledWith("session_core_compaction");
+    },
+  );
+
+  it("marks a throwing core-compaction invocation exactly once", async () => {
+    sessionCompactImpl.mockRejectedValueOnce(new Error("compaction failed"));
+    const onOpaqueWork = vi.fn();
+    const params = bindEmbeddedRunAccountingObservers(
+      wrappedCompactionArgs({ trigger: "manual" }),
+      { onOpaqueWork },
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(params);
+
+    expect(result).toMatchObject({ ok: false, compacted: false });
+    expect(onOpaqueWork).toHaveBeenCalledOnce();
+    expect(onOpaqueWork).toHaveBeenCalledWith("session_core_compaction");
+  });
+
+  it("does not mark opaque core compaction when the transcript is skipped", async () => {
+    sessionMessages.splice(0, sessionMessages.length, {
+      role: "user",
+      content: "<b>HEARTBEAT_OK</b>",
+      timestamp: 1,
+    });
+    const onOpaqueWork = vi.fn();
+    const params = bindEmbeddedRunAccountingObservers(
+      wrappedCompactionArgs({ trigger: "manual" }),
+      { onOpaqueWork },
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(params);
+
+    expect(result).toMatchObject({ ok: true, compacted: false });
+    expect(sessionAutomaticCompactionMock).not.toHaveBeenCalled();
+    expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+    expect(onOpaqueWork).not.toHaveBeenCalled();
+  });
+
   it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
     const messages = [
       { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
@@ -2720,19 +2790,36 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("runs maintain after successful compaction with a transcript rewrite helper", async () => {
-    const maintain = vi.fn(async (_params?: unknown) => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
+    const maintain = vi.fn(
+      async (params?: {
+        runtimeContext?: {
+          llm?: { complete?: (request: { prompt: string }) => Promise<unknown> };
+        };
+      }) => {
+        await params?.runtimeContext?.llm
+          ?.complete?.({ prompt: "summarize" })
+          .catch(() => undefined);
+        await params?.runtimeContext?.llm
+          ?.complete?.({ prompt: "compress" })
+          .catch(() => undefined);
+        return {
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        };
+      },
+    );
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
       maintain,
     } as never);
 
+    const onOpaqueWork = vi.fn();
     const result = await compactEmbeddedAgentSession(
-      wrappedCompactionArgs({ cwd: "/tmp/task-repo" }),
+      bindEmbeddedRunAccountingObservers(wrappedCompactionArgs({ cwd: "/tmp/task-repo" }), {
+        onOpaqueWork,
+      }),
     );
 
     expect(result.ok).toBe(true);
@@ -2746,6 +2833,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(runtimeContext?.workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(runtimeContext?.cwd).toBe("/tmp/task-repo");
     expect(runtimeContext?.rewriteTranscriptEntries).toBeTypeOf("function");
+    expect(onOpaqueWork).not.toHaveBeenCalled();
   });
 
   it("resolves the effective compaction model before manual engine-owned compaction", async () => {
@@ -3064,6 +3152,26 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       { profileId: "openai:subscription", allowAuthProfileFallback: undefined },
       { profileId: undefined, allowAuthProfileFallback: false },
     ]);
+  });
+
+  it("preserves opaque accounting through queued manual legacy compaction", async () => {
+    const { delegateCompactionToRuntime } = await import("../../context-engine/delegate.js");
+    resolveContextEngineMock.mockResolvedValue({
+      info: { id: "legacy", name: "Legacy Context Engine" },
+      compact: delegateCompactionToRuntime,
+    } as never);
+    const onOpaqueWork = vi.fn();
+    const params = bindEmbeddedRunAccountingObservers(
+      wrappedCompactionArgs({ trigger: "manual" }),
+      { onOpaqueWork },
+    );
+
+    const result = await compactEmbeddedAgentSession(params);
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(sessionManualCompactionMock).toHaveBeenCalledOnce();
+    expect(onOpaqueWork).toHaveBeenCalledOnce();
+    expect(onOpaqueWork).toHaveBeenCalledWith("session_core_compaction");
   });
 
   it("uses explicit Codex runtime policy for queued native compaction", async () => {
@@ -3656,26 +3764,39 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("fails deferred budget compaction when background maintenance is not scheduled", async () => {
     const dispose = vi.fn(async () => {});
-    const maintain = vi.fn(async () => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
+    const maintain = vi.fn(
+      async (params?: {
+        runtimeContext?: {
+          llm?: { complete?: (request: { prompt: string }) => Promise<unknown> };
+        };
+      }) => {
+        await params?.runtimeContext?.llm
+          ?.complete?.({ prompt: "background" })
+          .catch(() => undefined);
+        return {
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        };
+      },
+    );
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: true, turnMaintenanceMode: "background" },
       compact: contextEngineCompactMock,
       dispose,
       maintain,
     } as never);
-    enqueueCommandInLaneMock.mockImplementationOnce(() => {
-      throw new Error("scheduler offline");
-    });
+    enqueueCommandInLaneMock.mockRejectedValueOnce(new Error("scheduler offline"));
 
+    const onOpaqueWork = vi.fn();
     const result = await compactEmbeddedAgentSession(
-      wrappedCompactionArgs({
-        trigger: "budget",
-        deferOwningContextEngineCompaction: true,
-      }),
+      bindEmbeddedRunAccountingObservers(
+        wrappedCompactionArgs({
+          trigger: "budget",
+          deferOwningContextEngineCompaction: true,
+        }),
+        { onOpaqueWork },
+      ),
     );
 
     expect(result.ok).toBe(false);
@@ -3685,6 +3806,38 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(maintain).not.toHaveBeenCalled();
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(onOpaqueWork).not.toHaveBeenCalled();
+  });
+
+  it("marks accepted deferred budget maintenance without marking its later LLM work", async () => {
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true, turnMaintenanceMode: "background" },
+      compact: contextEngineCompactMock,
+      maintain,
+    } as never);
+    const onOpaqueWork = vi.fn();
+
+    const result = await compactEmbeddedAgentSession(
+      bindEmbeddedRunAccountingObservers(
+        wrappedCompactionArgs({
+          trigger: "budget",
+          deferOwningContextEngineCompaction: true,
+        }),
+        { onOpaqueWork },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(maintain).toHaveBeenCalledOnce();
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(onOpaqueWork).toHaveBeenCalledOnce();
+    expect(onOpaqueWork).toHaveBeenCalledWith("deferred_context_engine_maintenance");
   });
 
   it("keeps context-engine compaction successful when Codex native binding is missing", async () => {
@@ -4064,6 +4217,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("aborts manual compaction before its queued global task starts", async () => {
     let startQueuedTask: (() => void) | undefined;
+    const onOpaqueWork = vi.fn();
     const enqueue = <T>(task: () => Promise<T> | T): Promise<T> =>
       new Promise<T>((resolve, reject) => {
         startQueuedTask = () => {
@@ -4072,7 +4226,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       });
 
     const resultPromise = compactEmbeddedAgentSession(
-      wrappedCompactionArgs({ enqueue, trigger: "manual" }),
+      bindEmbeddedRunAccountingObservers(wrappedCompactionArgs({ enqueue, trigger: "manual" }), {
+        onOpaqueWork,
+      }),
     );
 
     await vi.waitFor(() => {
@@ -4095,6 +4251,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    expect(onOpaqueWork).not.toHaveBeenCalled();
     expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
   });
 

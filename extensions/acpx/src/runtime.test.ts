@@ -603,7 +603,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ]);
   });
 
-  it("adds Codex wrapper stderr tail to generic startTurn failure results", async () => {
+  it("adds Codex wrapper stderr tail without fabricating startTurn readiness", async () => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     await fs.writeFile(
       path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-start-turn.log"),
@@ -626,8 +626,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         list: () => ["codex"],
       },
     });
-    vi.spyOn(delegate, "startTurn").mockImplementation(
-      (input): AcpRuntimeTurn => ({
+    vi.spyOn(delegate, "startTurn").mockImplementation((input): AcpRuntimeTurn => {
+      const turn = {
         requestId: input.requestId,
         events: (async function* () {
           yield {
@@ -645,8 +645,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         }),
         cancel: vi.fn(async () => {}),
         closeStream: vi.fn(async () => {}),
-      }),
-    );
+      };
+      return Object.assign(turn, {
+        // The pinned acpx contract does not define this field. Ignore duck-typed lookalikes.
+        promptStarted: Promise.resolve(),
+      });
+    });
 
     const turn = runtime.startTurn({
       handle: {
@@ -659,6 +663,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    await expect(turn.promptSubmission).resolves.toBe("unknown");
     const events: AcpRuntimeEvent[] = [];
     for await (const event of turn.events) {
       events.push(event);
@@ -720,11 +725,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       requestId: "turn-1",
     });
 
-    await expect(turn.result).rejects.toMatchObject({
-      name: "AcpRuntimeError",
-      code: "ACP_TURN_FAILED",
-      message: expect.stringContaining("adapter failed before returning turn"),
-    });
+    await Promise.all([
+      expect(turn.promptSubmission).resolves.toBe("not_submitted"),
+      expect(turn.result).rejects.toMatchObject({
+        name: "AcpRuntimeError",
+        code: "ACP_TURN_FAILED",
+        message: expect.stringContaining("adapter failed before returning turn"),
+      }),
+    ]);
   });
 
   it("disables delegate prompt timeout for OpenClaw-managed turns", async () => {

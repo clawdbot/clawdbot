@@ -52,6 +52,7 @@ export function cloneUsage(
     api: message.api,
     provider: message.provider,
     model: message.model,
+    ...(message.messageOrigin ? { messageOrigin: message.messageOrigin } : {}),
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
     ...(message.diagnostics
@@ -78,9 +79,18 @@ export function cloneUsage(
       output: message.usage.output,
       cacheRead: message.usage.cacheRead,
       cacheWrite: message.usage.cacheWrite,
+      ...(message.usage.tokenCountsOrigin
+        ? { tokenCountsOrigin: message.usage.tokenCountsOrigin }
+        : {}),
+      ...(message.usage.tokenCountsObserved
+        ? { tokenCountsObserved: [...message.usage.tokenCountsObserved] }
+        : {}),
       ...(message.usage.contextUsage
         ? { contextUsage: structuredClone(message.usage.contextUsage) }
         : {}),
+      ...(message.usage.reasoningTokens === undefined
+        ? {}
+        : { reasoningTokens: message.usage.reasoningTokens }),
       totalTokens: message.usage.totalTokens,
       cost: {
         input: message.usage.cost.input,

@@ -19,6 +19,10 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
 } from "../stream-resolution.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./accounting-observers.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -3212,6 +3216,33 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  it("preserves accounting observers through direct and usage-derived contexts", () => {
+    const attempt = {
+      sessionKey: "agent:main:session:accounting",
+      config: {} as OpenClawConfig,
+      skillsSnapshot: undefined,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      thinkLevel: "off" as const,
+    };
+    const observers = { onOpaqueWork: vi.fn() };
+    bindEmbeddedRunAccountingObservers(attempt, observers);
+    const params = {
+      attempt,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    };
+
+    const direct = buildAfterTurnRuntimeContext(params);
+    const fromUsage = buildAfterTurnRuntimeContextFromUsage({
+      ...params,
+      lastCallUsage: { input: 1, output: 1, total: 2 },
+    });
+
+    expect(resolveEmbeddedRunAccountingObservers(direct)).toBe(observers);
+    expect(resolveEmbeddedRunAccountingObservers(fromUsage)).toBe(observers);
+  });
+
   it("preserves sessionId-scoped active process sessions for after-turn context", () => {
     resetProcessRegistryForTests();
     try {

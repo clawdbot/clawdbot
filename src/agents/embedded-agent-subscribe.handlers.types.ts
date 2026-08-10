@@ -92,6 +92,11 @@ export type EmbeddedAgentSubscribeState = {
    * presentation resets, matching how usage totals keep counting model calls.
    */
   assistantTurnCount: number;
+  assistantTurnsWithUsage: number;
+  /** Generation advanced only by assistant message_start, not content-item resets. */
+  assistantMessageGeneration: number;
+  /** Last assistant message generation already counted at message_end. */
+  lastCountedAssistantMessageGeneration?: number;
   lastToolError?: ToolErrorSummary;
   latestMcpAppChannelView?: McpAppChannelView;
 

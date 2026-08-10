@@ -7,6 +7,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
+export type NormalizedProviderBilledCost = {
+  totalUsd: number;
+  coverage: "complete" | "partial";
+};
 
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
@@ -14,6 +18,8 @@ export type UsageLike = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  tokenCountsOrigin?: Usage["tokenCountsOrigin"];
+  tokenCountsObserved?: Usage["tokenCountsObserved"];
   contextUsage?: ContextUsage;
   total?: number;
   // Common alternates across providers/SDKs.
@@ -51,6 +57,7 @@ export type UsageLike = {
   };
   // Optional cost metadata carried through transcripts for downstream cost accounting.
   cost?: Partial<Usage["cost"]>;
+  providerBilledCost?: NormalizedProviderBilledCost;
 };
 
 /** Normalized token counts used by runtime accounting. */
@@ -62,7 +69,75 @@ export type NormalizedUsage = {
   contextUsage?: ContextUsage;
   reasoningTokens?: number;
   total?: number;
+  tokenCountsObserved?: Usage["tokenCountsObserved"];
+  providerBilledCost?: NormalizedProviderBilledCost;
 };
+
+export type NormalizedUsageBucket =
+  | "input"
+  | "output"
+  | "cacheRead"
+  | "cacheWrite"
+  | "reasoningTokens"
+  | "total";
+export const NORMALIZED_USAGE_BUCKET_ORDER: readonly NormalizedUsageBucket[] = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+  "reasoningTokens",
+  "total",
+];
+
+const normalizedUsageObservedBuckets = new WeakMap<
+  NormalizedUsage,
+  ReadonlySet<NormalizedUsageBucket>
+>();
+
+function canonicalizeNormalizedUsageBuckets(
+  buckets: Iterable<NormalizedUsageBucket>,
+): NormalizedUsageBucket[] {
+  const observed = new Set(buckets);
+  return NORMALIZED_USAGE_BUCKET_ORDER.filter((bucket) => observed.has(bucket));
+}
+
+export function bindNormalizedUsageObservedBuckets(
+  usage: NormalizedUsage,
+  buckets: Iterable<NormalizedUsageBucket>,
+): NormalizedUsage {
+  const canonical = canonicalizeNormalizedUsageBuckets(buckets);
+  normalizedUsageObservedBuckets.set(usage, new Set(canonical));
+  if (usage.tokenCountsObserved) {
+    usage.tokenCountsObserved = canonical;
+  }
+  return usage;
+}
+
+export function resolveNormalizedUsageObservedBuckets(
+  usage: NormalizedUsage,
+): ReadonlySet<NormalizedUsageBucket> {
+  const observed = normalizedUsageObservedBuckets.get(usage);
+  if (observed) {
+    return observed;
+  }
+  if (usage.tokenCountsObserved) {
+    return new Set(canonicalizeNormalizedUsageBuckets(usage.tokenCountsObserved));
+  }
+  const inferred = new Set<NormalizedUsageBucket>();
+  for (const bucket of [
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "reasoningTokens",
+    "total",
+  ] as const) {
+    if (typeof usage[bucket] === "number" && Number.isFinite(usage[bucket])) {
+      inferred.add(bucket);
+    }
+  }
+  return inferred;
+}
 
 /** OpenAI chat-completions compatible usage shape. */
 export type OpenAiChatCompletionsUsage = {
@@ -106,6 +181,11 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
+/** Build a structural zero for a turn whose provider token counts are unknown. */
+export function makePlaceholderUsageSnapshot(): AssistantUsageSnapshot {
+  return { ...makeZeroUsageSnapshot(), tokenCountsOrigin: "runtime-placeholder" };
+}
+
 /** Return true when any normalized usage bucket is positive. */
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
@@ -126,6 +206,15 @@ export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is Normal
   );
 }
 
+/** True when token fields are structural zeros created before provider usage exists. */
+export function isRuntimePlaceholderUsage(raw: unknown): boolean {
+  return (
+    typeof raw === "object" &&
+    raw !== null &&
+    (raw as { tokenCountsOrigin?: unknown }).tokenCountsOrigin === "runtime-placeholder"
+  );
+}
+
 const normalizeTokenCount = (value: unknown): number | undefined => {
   const numeric = asFiniteNumber(value);
   if (numeric === undefined) {
@@ -137,9 +226,34 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
   return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
 };
 
+function normalizeProviderBilledCost(
+  cost: UsageLike["cost"],
+  normalized: UsageLike["providerBilledCost"],
+): NormalizedUsage["providerBilledCost"] {
+  if (
+    normalized &&
+    typeof normalized.totalUsd === "number" &&
+    Number.isFinite(normalized.totalUsd) &&
+    normalized.totalUsd >= 0 &&
+    (normalized.coverage === "complete" || normalized.coverage === "partial")
+  ) {
+    return { ...normalized };
+  }
+  const total = cost?.total;
+  if (
+    cost?.totalOrigin !== "provider-billed" ||
+    typeof total !== "number" ||
+    !Number.isFinite(total) ||
+    total < 0
+  ) {
+    return undefined;
+  }
+  return { totalUsd: total, coverage: "complete" };
+}
+
 /** Normalize provider-specific token usage fields into OpenClaw usage buckets. */
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
-  if (!raw) {
+  if (!raw || isRuntimePlaceholderUsage(raw)) {
     return undefined;
   }
 
@@ -217,6 +331,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.output_tokens_details?.thinking_tokens,
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const providerBilledCost = normalizeProviderBilledCost(raw.cost, raw.providerBilledCost);
 
   if (
     input === undefined &&
@@ -225,12 +340,26 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheWrite === undefined &&
     contextUsage === undefined &&
     reasoningTokens === undefined &&
-    total === undefined
+    total === undefined &&
+    providerBilledCost === undefined
   ) {
     return undefined;
   }
 
-  return {
+  const inferredObservedBuckets = [
+    ["input", input],
+    ["output", output],
+    ["cacheRead", cacheRead],
+    ["cacheWrite", cacheWrite],
+    ["reasoningTokens", reasoningTokens],
+    ["total", total],
+  ].flatMap(([bucket, value]) => (value !== undefined ? [bucket as NormalizedUsageBucket] : []));
+  const explicitObservedBuckets = Array.isArray(raw.tokenCountsObserved)
+    ? canonicalizeNormalizedUsageBuckets(raw.tokenCountsObserved).filter((bucket) =>
+        inferredObservedBuckets.includes(bucket),
+      )
+    : undefined;
+  const usage = {
     input,
     output,
     cacheRead,
@@ -238,7 +367,15 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     ...(contextUsage ? { contextUsage } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
+    ...(explicitObservedBuckets !== undefined
+      ? { tokenCountsObserved: [...explicitObservedBuckets] }
+      : {}),
+    ...(providerBilledCost ? { providerBilledCost } : {}),
   };
+  return bindNormalizedUsageObservedBuckets(
+    usage,
+    explicitObservedBuckets ?? inferredObservedBuckets,
+  );
 }
 
 /**

@@ -18,6 +18,26 @@ export function buildUsageWithNoCost(params: {
   cacheWrite?: number;
   totalTokens?: number;
 }): Usage {
+  const observed: NonNullable<Usage["tokenCountsObserved"]> = [];
+  for (const [bucket, value] of [
+    ["input", params.input],
+    ["output", params.output],
+    ["cacheRead", params.cacheRead],
+    ["cacheWrite", params.cacheWrite],
+    ["total", params.totalTokens],
+  ] as const) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      observed.push(bucket);
+    }
+  }
+  if (
+    !observed.includes("total") &&
+    (["input", "output", "cacheRead", "cacheWrite"] as const).every((bucket) =>
+      observed.includes(bucket),
+    )
+  ) {
+    observed.push("total");
+  }
   const input = params.input ?? 0;
   const output = params.output ?? 0;
   const cacheRead = params.cacheRead ?? 0;
@@ -27,6 +47,9 @@ export function buildUsageWithNoCost(params: {
     output,
     cacheRead,
     cacheWrite,
+    ...(observed.length > 0
+      ? { tokenCountsObserved: observed }
+      : { tokenCountsOrigin: "runtime-placeholder" as const }),
     // Provider adapters normalize input to uncached tokens before this shared builder.
     totalTokens: params.totalTokens ?? input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -96,6 +119,7 @@ export function buildStreamErrorAssistantMessage(params: {
       stopReason: "error",
       timestamp: params.timestamp,
     }),
+    messageOrigin: "runtime-synthetic",
     stopReason: "error",
     errorMessage: params.errorMessage,
   };

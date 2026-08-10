@@ -152,7 +152,8 @@ export async function delegateCompactionToRuntime(
 ): Promise<CompactResult> {
   // Load through the dedicated runtime boundary without introducing another
   // source-level static edge into the embedded runner graph.
-  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
+  const { compactEmbeddedAgentSessionDirect, copyEmbeddedRunAccountingObservers } =
+    await loadCompactRuntime();
   type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
 
   // runtimeContext carries host-resolved runtime fields set by internal
@@ -172,20 +173,24 @@ export async function delegateCompactionToRuntime(
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
 
-  const result = await compactEmbeddedAgentSessionDirect({
-    ...runtimeContextParams,
-    ...(agentId ? { agentId } : {}),
-    sessionId: params.sessionId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(sessionTarget ? { sessionTarget } : {}),
-    tokenBudget: params.tokenBudget,
-    ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
-    force: params.force,
-    customInstructions: params.customInstructions,
-    abortSignal: params.abortSignal,
-    workspaceDir:
-      typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
-  });
+  const result = await compactEmbeddedAgentSessionDirect(
+    copyEmbeddedRunAccountingObservers(runtimeContext, {
+      ...runtimeContextParams,
+      ...(agentId ? { agentId } : {}),
+      sessionId: params.sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(sessionTarget ? { sessionTarget } : {}),
+      tokenBudget: params.tokenBudget,
+      ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
+      force: params.force,
+      customInstructions: params.customInstructions,
+      abortSignal: params.abortSignal,
+      workspaceDir:
+        typeof runtimeContext.workspaceDir === "string"
+          ? runtimeContext.workspaceDir
+          : process.cwd(),
+    }),
+  );
   const resultSessionTarget = result.result
     ? buildCompactionResultSessionTarget({
         agentId,

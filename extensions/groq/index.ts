@@ -111,11 +111,13 @@ function wrapGroqOversizedRequestRecovery(
             api: model.api,
             provider: model.provider,
             model: model.id,
+            messageOrigin: "runtime-synthetic",
             usage: {
               input: 0,
               output: 0,
               cacheRead: 0,
               cacheWrite: 0,
+              tokenCountsOrigin: "runtime-placeholder",
               totalTokens: 0,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },

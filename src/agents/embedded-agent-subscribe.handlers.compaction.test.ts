@@ -16,7 +16,7 @@ import {
 import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
+import { makePlaceholderUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
 
 function createCompactionContext(params: {
   storePath: string;
@@ -393,7 +393,7 @@ describe("handleCompactionEnd", () => {
 
     const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
-    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant.usage).toEqual(makePlaceholderUsageSnapshot());
     expect(freshAssistant.usage).toEqual(freshUsage);
   });
 
@@ -466,7 +466,7 @@ describe("handleCompactionEnd", () => {
 
     const staleAssistant = messages[1] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
-    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant.usage).toEqual(makePlaceholderUsageSnapshot());
     expect(freshAssistant.usage).toEqual(freshUsage);
   });
 
@@ -498,7 +498,7 @@ describe("handleCompactionEnd", () => {
 
     const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
-    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant.usage).toEqual(makePlaceholderUsageSnapshot());
     expect(freshAssistant.usage).toEqual(freshUsage);
   });
 
@@ -530,8 +530,8 @@ describe("handleCompactionEnd", () => {
 
     const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const secondAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
-    expect(firstAssistant.usage).toEqual(makeZeroUsageSnapshot());
-    expect(secondAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(firstAssistant.usage).toEqual(makePlaceholderUsageSnapshot());
+    expect(secondAssistant.usage).toEqual(makePlaceholderUsageSnapshot());
   });
 
   it("does not let legacy index fallback erase timestamp-fresh usage", async () => {

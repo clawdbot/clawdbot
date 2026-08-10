@@ -3,7 +3,7 @@
  * transcript compaction.
  */
 import type { AgentMessage } from "./runtime/index.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
+import { makePlaceholderUsageSnapshot } from "./usage.js";
 
 function parseCompactionUsageTimestamp(value: unknown): number | null {
   const timestamp = typeof value === "string" ? Date.parse(value) : value;
@@ -56,7 +56,10 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
     if (out === messages && !options.mutate) {
       out = [...messages];
     }
-    out[i] = { ...candidate, usage: makeZeroUsageSnapshot() } as TMessage;
+    out[i] = {
+      ...candidate,
+      usage: makePlaceholderUsageSnapshot(),
+    } as TMessage;
   }
   return out;
 }

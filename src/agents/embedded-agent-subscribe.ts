@@ -68,7 +68,15 @@ import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
+import {
+  bindNormalizedUsageObservedBuckets,
+  hasNonzeroUsage,
+  normalizeUsage,
+  resolveNormalizedUsageObservedBuckets,
+  type NormalizedUsage,
+  type NormalizedUsageBucket,
+  type UsageLike,
+} from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "final",
@@ -91,6 +99,36 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
     return createSubsystemLogger(`gateway/channels/${normalizedChannel}`);
   }
   return embeddedLog;
+}
+
+function mergeAssistantUsageSnapshots(
+  pendingUsage: NormalizedUsage | undefined,
+  resolvedUsage: NormalizedUsage,
+): NormalizedUsage {
+  const pendingObservedBuckets = pendingUsage
+    ? resolveNormalizedUsageObservedBuckets(pendingUsage)
+    : undefined;
+  const resolvedObservedBuckets = resolveNormalizedUsageObservedBuckets(resolvedUsage);
+  const tokenUsage = hasNonzeroUsage(resolvedUsage)
+    ? resolvedUsage
+    : pendingUsage && hasNonzeroUsage(pendingUsage)
+      ? pendingUsage
+      : resolvedObservedBuckets.size > 0
+        ? resolvedUsage
+        : pendingUsage && pendingObservedBuckets && pendingObservedBuckets.size > 0
+          ? pendingUsage
+          : resolvedUsage;
+  const providerBilledCost = resolvedUsage.providerBilledCost ?? pendingUsage?.providerBilledCost;
+  if (!providerBilledCost || tokenUsage.providerBilledCost === providerBilledCost) {
+    return tokenUsage;
+  }
+  return bindNormalizedUsageObservedBuckets(
+    {
+      ...tokenUsage,
+      providerBilledCost: { ...providerBilledCost },
+    },
+    resolveNormalizedUsageObservedBuckets(tokenUsage),
+  );
 }
 
 function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
@@ -211,6 +249,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     itemStartedCount: 0,
     itemCompletedCount: 0,
     assistantTurnCount: 0,
+    assistantTurnsWithUsage: 0,
+    assistantMessageGeneration: 0,
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
@@ -291,7 +331,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     cacheWrite: 0,
     reasoningTokens: 0,
     total: 0,
+    providerBilledCostUsd: 0,
+    providerBilledCostReports: 0,
+    providerBilledCostCompleteReports: 0,
+    observations: 0,
   };
+  let usageTotalsObserved: Set<NormalizedUsageBucket> | undefined;
   let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
   let currentAttemptAssistant: AssistantMessage | undefined;
@@ -492,8 +537,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
-    state.pendingAssistantUsage = undefined;
-    state.assistantUsageCommitted = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantStreamContentIndex = undefined;
     state.lastAssistantStreamItemId = undefined;
@@ -652,7 +695,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     resolveCompactionPromiseIfIdle();
   };
   const resolveAssistantUsage = (usageLike: unknown) => {
-    const candidates: unknown[] = [usageLike];
+    const authoritativeCandidates: unknown[] = [usageLike];
+    const structuralCandidates: unknown[] = [];
+    let observedZeroUsage: ReturnType<typeof normalizeUsage>;
     if (usageLike && typeof usageLike === "object") {
       const record = usageLike as Record<string, unknown>;
       const partial =
@@ -663,9 +708,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         record.message && typeof record.message === "object"
           ? (record.message as Record<string, unknown>)
           : undefined;
-      candidates.push(
-        record.usage,
-        record.timings,
+      authoritativeCandidates.push(record.usage, record.timings);
+      structuralCandidates.push(
         record.partial,
         record.message,
         partial?.usage,
@@ -674,13 +718,27 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         message?.timings,
       );
     }
-    for (const candidate of candidates) {
+    for (const candidate of authoritativeCandidates) {
+      const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
+      const hasObservedTokens = (value: NormalizedUsage | undefined): boolean =>
+        hasNonzeroUsage(value);
+      if (hasObservedTokens(usage)) {
+        return usage;
+      }
+      if (
+        usage &&
+        (resolveNormalizedUsageObservedBuckets(usage).size > 0 || usage.providerBilledCost)
+      ) {
+        observedZeroUsage ??= usage;
+      }
+    }
+    for (const candidate of structuralCandidates) {
       const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
       if (hasNonzeroUsage(usage)) {
         return usage;
       }
     }
-    return undefined;
+    return observedZeroUsage;
   };
   const emitRunUsage = (outputTokens: number) => {
     const lifecycleGeneration = params.lifecycleGeneration;
@@ -713,6 +771,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     const usage = state.pendingAssistantUsage;
+    const observedBuckets = resolveNormalizedUsageObservedBuckets(usage);
+    if (!usageTotalsObserved) {
+      usageTotalsObserved = new Set(observedBuckets);
+    } else {
+      for (const bucket of usageTotalsObserved) {
+        if (!observedBuckets.has(bucket)) {
+          usageTotalsObserved.delete(bucket);
+        }
+      }
+    }
     usageTotals.input += usage.input ?? 0;
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
@@ -722,9 +790,18 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    usageTotals.observations += 1;
+    if (usage.providerBilledCost) {
+      usageTotals.providerBilledCostUsd += usage.providerBilledCost.totalUsd;
+      usageTotals.providerBilledCostReports += 1;
+      usageTotals.providerBilledCostCompleteReports +=
+        usage.providerBilledCost.coverage === "complete" ? 1 : 0;
+    }
     // A terminal abort may report zeros after several completed model calls.
     // Retain the latest committed nonzero call so context accounting stays exact.
-    lastAssistantUsage = { ...usage };
+    if (hasNonzeroUsage(usage) || !hasNonzeroUsage(lastAssistantUsage)) {
+      lastAssistantUsage = { ...usage };
+    }
     state.assistantUsageCommitted = true;
     emitRunUsage(usage.output ?? 0);
   };
@@ -732,33 +809,64 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (state.assistantUsageCommitted) {
       return;
     }
-    const usage = resolveAssistantUsage(usageLike);
-    if (!usage) {
+    const resolvedUsage = resolveAssistantUsage(usageLike);
+    if (!resolvedUsage) {
       return;
     }
-    state.pendingAssistantUsage = usage;
+    state.pendingAssistantUsage = mergeAssistantUsageSnapshots(
+      state.pendingAssistantUsage,
+      resolvedUsage,
+    );
   };
   const getUsageTotals = () => {
     const hasUsage =
+      (usageTotalsObserved?.size ?? 0) > 0 ||
       usageTotals.input > 0 ||
       usageTotals.output > 0 ||
       usageTotals.cacheRead > 0 ||
       usageTotals.cacheWrite > 0 ||
       usageTotals.reasoningTokens > 0 ||
-      usageTotals.total > 0;
+      usageTotals.total > 0 ||
+      usageTotals.providerBilledCostReports > 0;
     if (!hasUsage) {
       return undefined;
     }
     const derivedTotal =
       usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
-    return {
-      input: usageTotals.input || undefined,
-      output: usageTotals.output || undefined,
-      cacheRead: usageTotals.cacheRead || undefined,
-      cacheWrite: usageTotals.cacheWrite || undefined,
-      ...(usageTotals.reasoningTokens > 0 ? { reasoningTokens: usageTotals.reasoningTokens } : {}),
-      total: usageTotals.total || derivedTotal || undefined,
-    };
+    return bindNormalizedUsageObservedBuckets(
+      {
+        input: usageTotalsObserved?.has("input")
+          ? usageTotals.input
+          : usageTotals.input || undefined,
+        output: usageTotalsObserved?.has("output")
+          ? usageTotals.output
+          : usageTotals.output || undefined,
+        cacheRead: usageTotalsObserved?.has("cacheRead")
+          ? usageTotals.cacheRead
+          : usageTotals.cacheRead || undefined,
+        cacheWrite: usageTotalsObserved?.has("cacheWrite")
+          ? usageTotals.cacheWrite
+          : usageTotals.cacheWrite || undefined,
+        ...(usageTotalsObserved?.has("reasoningTokens") || usageTotals.reasoningTokens > 0
+          ? { reasoningTokens: usageTotals.reasoningTokens }
+          : {}),
+        total: usageTotalsObserved?.has("total")
+          ? usageTotals.total
+          : usageTotals.total || derivedTotal || undefined,
+        ...(usageTotals.providerBilledCostReports > 0
+          ? {
+              providerBilledCost: {
+                totalUsd: usageTotals.providerBilledCostUsd,
+                coverage:
+                  usageTotals.providerBilledCostCompleteReports === usageTotals.observations
+                    ? ("complete" as const)
+                    : ("partial" as const),
+              },
+            }
+          : {}),
+      },
+      usageTotalsObserved ?? [],
+    );
   };
   const getLastAssistantUsage = () => (lastAssistantUsage ? { ...lastAssistantUsage } : undefined);
   const incrementCompactionCount = () => {
@@ -1372,6 +1480,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // completed assistant or pre-compaction context snapshot.
     currentAttemptAssistant = undefined;
     lastAssistantUsage = undefined;
+    state.pendingAssistantUsage = undefined;
+    state.assistantUsageCommitted = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
@@ -1585,6 +1695,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getAssistantTurnCount: () => state.assistantTurnCount,
+    getAssistantTurnsWithUsage: () => state.assistantTurnsWithUsage,
     waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,

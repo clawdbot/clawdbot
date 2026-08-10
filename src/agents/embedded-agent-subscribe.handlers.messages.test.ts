@@ -24,6 +24,7 @@ import {
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
+import { normalizeUsage, resolveNormalizedUsageObservedBuckets } from "./usage.js";
 
 function updateMessage(
   context: EmbeddedAgentSubscribeContext,
@@ -1754,6 +1755,71 @@ describe("handleMessageEnd", () => {
     expect(ctx.state.assistantTurnCount).toBe(expected);
   });
 
+  it("does not count runtime placeholder usage as a completed provider turn", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        assistantTurnCount: 0,
+        assistantTurnsWithUsage: 0,
+        assistantUsageCommitted: false,
+      },
+    });
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        messageOrigin: "runtime-synthetic",
+        stopReason: "error",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          tokenCountsOrigin: "runtime-placeholder",
+        },
+      },
+    });
+
+    expect(ctx.state.assistantTurnCount).toBe(0);
+    expect(ctx.state.assistantTurnsWithUsage).toBe(0);
+    expect(ctx.recordAssistantUsage).not.toHaveBeenCalled();
+    expect(ctx.commitAssistantUsage).not.toHaveBeenCalled();
+  });
+
+  it("counts provider-reported all-zero usage as observed", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        assistantTurnCount: 0,
+        assistantTurnsWithUsage: 0,
+        assistantUsageCommitted: false,
+      },
+    });
+    (ctx.commitAssistantUsage as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      ctx.state.assistantUsageCommitted = true;
+    });
+    const usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+    };
+
+    void endMessage(ctx, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "error",
+        usage,
+      },
+    });
+
+    expect(ctx.state.assistantTurnCount).toBe(1);
+    expect(ctx.state.assistantTurnsWithUsage).toBe(1);
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(usage);
+  });
+
   it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
     const text = `${"a".repeat(49)}😀tail`;
     const ctx = createMessageEndContext({
@@ -1787,6 +1853,7 @@ describe("handleMessageEnd", () => {
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
         totalTokens: 0,
       },
     };
@@ -1801,6 +1868,7 @@ describe("handleMessageEnd", () => {
         output: 5,
         cacheRead: 0,
         cacheWrite: 0,
+        tokenCountsObserved: ["input", "output", "reasoningTokens", "total"],
         reasoningTokens: 2,
         totalTokens: 12,
       },
@@ -1813,6 +1881,46 @@ describe("handleMessageEnd", () => {
         totalTokens: 12,
       }),
     );
+    const preservedUsage = (
+      firstMockArg(ctx.noteLastAssistant as never, "last assistant") as {
+        usage: Parameters<typeof normalizeUsage>[0];
+      }
+    ).usage;
+    expect(resolveNormalizedUsageObservedBuckets(normalizeUsage(preservedUsage)!)).toEqual(
+      new Set(["input", "output", "reasoningTokens", "total"]),
+    );
+  });
+
+  it("preserves authoritative streamed all-zero usage", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 0, output: 0, total: 0 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        tokenCountsOrigin: "runtime-placeholder",
+        totalTokens: 0,
+      },
+    };
+
+    void endMessage(ctx, { message });
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+      usage: {
+        input: 0,
+        output: 0,
+        tokenCountsObserved: ["input", "output", "total"],
+        totalTokens: 0,
+      },
+    });
+    expect(ctx.recordAssistantUsage).toHaveBeenCalled();
   });
 
   it("keeps authoritative final usage instead of pending stream usage", () => {

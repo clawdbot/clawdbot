@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEmbeddedRunReplayState, type EmbeddedRunReplayState } from "./replay-state.js";
+import { bindEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
@@ -205,6 +206,64 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected retry, got ${result.action}`);
     }
     expect(result.retryKind).toBe("recovery");
+  });
+
+  it("reports one normalized attempt to the command accounting observer", async () => {
+    const state = makePromptState();
+    const attempt = makeAttempt();
+    attempt.attemptUsage = { input: 10, output: 2, total: 12 };
+    attempt.assistantTurns = 2;
+    attempt.assistantTurnsWithUsage = 2;
+    attempt.toolMetas = [
+      { toolName: "read", isError: false },
+      { toolName: "write", isError: true },
+    ];
+    const onEmbeddedRunAttemptObserved = vi.fn();
+    const input = makeNormalizationInput(attempt, state);
+    bindEmbeddedRunAccountingObservers(input.runInput.runParams, {
+      onAttemptObserved: onEmbeddedRunAttemptObserved,
+    });
+
+    await normalizeEmbeddedRunAttempt(input);
+
+    expect(onEmbeddedRunAttemptObserved).toHaveBeenCalledOnce();
+    expect(onEmbeddedRunAttemptObserved).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      config: {},
+      agentDir: undefined,
+      usage: { input: 10, output: 2, total: 12 },
+      assistantTurns: 2,
+      assistantTurnsObserved: true,
+      assistantTurnsWithUsage: 2,
+      toolSummary: {
+        calls: 2,
+        tools: ["read", "write"],
+        failures: 1,
+      },
+      toolsObserved: true,
+      codeModeEngaged: undefined,
+      codeModeStats: undefined,
+      codeModeLifecycleObserved: false,
+    });
+  });
+
+  it("does not publish partial attempt facts after cancellation wins normalization", async () => {
+    const state = makePromptState();
+    const attempt = makeAttempt();
+    attempt.attemptUsage = { input: 10, output: 2, total: 12 };
+    attempt.assistantTurns = 1;
+    attempt.toolMetas = [{ toolName: "read", isError: false }];
+    const onEmbeddedRunAttemptObserved = vi.fn();
+    const input = makeNormalizationInput(attempt, state);
+    input.dispatchedAttempt.cancellationRequested = true;
+    bindEmbeddedRunAccountingObservers(input.runInput.runParams, {
+      onAttemptObserved: onEmbeddedRunAttemptObserved,
+    });
+
+    await expect(normalizeEmbeddedRunAttempt(input)).rejects.toThrow("aborted");
+
+    expect(onEmbeddedRunAttemptObserved).not.toHaveBeenCalled();
   });
 
   it("keeps replay state unsafe after a later clean attempt", async () => {

@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import type { LlmCompleteParams, LlmCompleteResult } from "../../plugins/runtime/types-core.js";
 import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -19,8 +20,17 @@ import {
   setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import {
+  beginActiveAgentCommandModelCall,
+  runWithAgentCommandAccounting,
+} from "../command/run-accounting.js";
+import type { AgentCommandRunAccountingSnapshot } from "../command/run-accounting.types.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveSessionLane } from "./lanes.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./run/accounting-observers.js";
 
 const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) => ({
   changed: true,
@@ -35,6 +45,23 @@ const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string
   sessionKey: scope.sessionKey,
   storePath: scope.storePath ?? "/tmp/default-openclaw.sqlite",
 }));
+const { contextEngineCompleteMock } = vi.hoisted(() => ({
+  contextEngineCompleteMock: vi.fn<(request: LlmCompleteParams) => Promise<LlmCompleteResult>>(),
+}));
+const contextEngineCompleteResult: LlmCompleteResult = {
+  text: "",
+  provider: "test-provider",
+  model: "test-model",
+  agentId: "main",
+  usage: {},
+  execution: {
+    mode: "direct-provider",
+    owner: { kind: "provider", id: "test-provider" },
+  },
+  audit: {
+    caller: { kind: "context-engine" },
+  },
+};
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.test-support.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
@@ -98,7 +125,13 @@ function expectSystemEventContaining(sessionKey: string, text: string) {
 }
 
 vi.mock("./context-engine-capabilities.js", () => ({
-  resolveContextEngineCapabilities: () => ({ llm: undefined }),
+  resolveContextEngineCapabilities: () => ({
+    llm: {
+      complete: async (request: LlmCompleteParams): Promise<LlmCompleteResult> => {
+        return await contextEngineCompleteMock(request);
+      },
+    },
+  }),
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
@@ -181,6 +214,7 @@ describe("runContextEngineMaintenance", () => {
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     sessionManagerOpenMock.mockClear();
     resolveRuntimeTranscriptReadTargetMock.mockClear();
+    contextEngineCompleteMock.mockReset().mockResolvedValue(contextEngineCompleteResult);
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
@@ -254,6 +288,41 @@ describe("runContextEngineMaintenance", () => {
         { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
       ],
     });
+  });
+
+  it.each([
+    ["foreground", true],
+    ["background", false],
+  ] as const)("preserves observers only for %s maintenance", async (executionMode, preserved) => {
+    const observers = { onOpaqueWork: vi.fn() };
+    const source = bindEmbeddedRunAccountingObservers(
+      { workspaceDir: "/tmp/workspace" },
+      observers,
+    );
+    let received: ReturnType<typeof resolveEmbeddedRunAccountingObservers>;
+    const maintain = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      received = params.runtimeContext
+        ? resolveEmbeddedRunAccountingObservers(params.runtimeContext)
+        : undefined;
+      return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+    });
+
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: `session-${executionMode}`,
+      sessionFile: `/tmp/session-${executionMode}.jsonl`,
+      reason: "compaction",
+      executionMode,
+      runtimeContext: source,
+    });
+
+    expect(received).toBe(preserved ? observers : undefined);
   });
 
   it("forces background maintenance rewrites through the runtime target even when a session manager exists", async () => {
@@ -702,6 +771,27 @@ describe("runContextEngineMaintenance", () => {
             deferredPromises.push(promise);
           },
         });
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-rerun",
+          sessionKey,
+          sessionFile: "/tmp/session-rerun.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-rerun",
+          sessionKey,
+          sessionFile: "/tmp/session-rerun.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
         expect(deferredPromises).toHaveLength(2);
         let secondDeferredSettled = false;
         const secondDeferred = expectDefined(
@@ -734,6 +824,85 @@ describe("runContextEngineMaintenance", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  it("detaches deferred workers from the originating command accounting scope", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-accounting-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const sessionKey = "agent:main:session-accounting";
+      let backgroundModelCallObserved = false;
+      const maintain = vi.fn(async () => {
+        const modelCall = beginActiveAgentCommandModelCall();
+        backgroundModelCallObserved = modelCall !== undefined;
+        modelCall?.settle({
+          outcome: "completed",
+          provider: "test",
+          model: "background",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            reasoningTokens: 0,
+            total: 2,
+          },
+        });
+        return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+      });
+      const backgroundEngine = {
+        info: {
+          id: "test",
+          name: "Test Engine",
+          turnMaintenanceMode: "background" as const,
+        },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }: { messages: unknown[] }) => ({
+          messages,
+          estimatedTokens: 0,
+        }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+      let deferred: Promise<void> | undefined;
+      let snapshot: AgentCommandRunAccountingSnapshot | undefined;
+
+      await runWithAgentCommandAccounting(async (accounting) => {
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-accounting",
+          sessionKey,
+          sessionFile: "/tmp/session-accounting.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            accounting.markOpaqueWork("deferred_context_engine_maintenance");
+            deferred = promise;
+          },
+        });
+        await expectDefined(deferred, "deferred maintenance accounting promise");
+        snapshot = accounting.project();
+      });
+
+      expect(maintain).toHaveBeenCalledOnce();
+      expect(backgroundModelCallObserved).toBe(false);
+      expect(snapshot).toMatchObject({
+        opaqueWork: {
+          total: 1,
+          byReason: { deferred_context_engine_maintenance: 1 },
+        },
+        coverage: {
+          modelCalls: {
+            state: "unavailable",
+            reasons: expect.arrayContaining([
+              "not_observed",
+              "deferred_context_engine_maintenance",
+            ]),
+          },
+        },
+      });
     });
   });
 
@@ -1074,6 +1243,8 @@ describe("runContextEngineMaintenance", () => {
         resetCommandQueueStateForTest();
 
         const sessionKey = "agent:main:session-enqueue-reject";
+        const onDeferredMaintenance = vi.fn();
+        const onDeferredMaintenanceFailure = vi.fn();
         const maintain = vi.fn(async () => ({
           changed: false,
           bytesFreed: 0,
@@ -1100,6 +1271,8 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-enqueue-reject.jsonl",
           reason: "turn",
+          onDeferredMaintenance,
+          onDeferredMaintenanceFailure,
         });
         await flushAsyncWork();
 
@@ -1111,6 +1284,9 @@ describe("runContextEngineMaintenance", () => {
         expect(task.status).toBe("cancelled");
         expect(String(task.terminalSummary)).toContain("gateway draining");
         expect(maintain).not.toHaveBeenCalled();
+        expect(onDeferredMaintenance).not.toHaveBeenCalled();
+        expect(onDeferredMaintenanceFailure).toHaveBeenCalledOnce();
+        expect(onDeferredMaintenanceFailure).toHaveBeenCalledWith(scheduleError);
       } finally {
         enqueueSpy.mockRestore();
         vi.useRealTimers();

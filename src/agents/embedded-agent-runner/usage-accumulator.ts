@@ -2,7 +2,13 @@ import { createCodeModeStats, mergeCodeModeStats, type CodeModeStats } from "../
 /**
  * Accumulates and normalizes per-call token usage across embedded runs.
  */
-import type { NormalizedUsage } from "../usage.js";
+import {
+  bindNormalizedUsageObservedBuckets,
+  NORMALIZED_USAGE_BUCKET_ORDER,
+  resolveNormalizedUsageObservedBuckets,
+  type NormalizedUsage,
+  type NormalizedUsageBucket,
+} from "../usage.js";
 
 export type UsageAccumulator = {
   input: number;
@@ -11,6 +17,12 @@ export type UsageAccumulator = {
   cacheWrite: number;
   reasoningTokens: number;
   total: number;
+  observedUsageBuckets: Set<NormalizedUsageBucket>;
+  /** Usage-bearing calls merged so exact buckets can require all-call observation. */
+  usageObservations: number;
+  providerBilledCostUsd: number;
+  providerBilledCostReports: number;
+  providerBilledCostCompleteReports: number;
   /**
    * Completed assistant round trips across every model attempt of the run.
    * Kept beside token totals so retried attempts stay counted like their usage.
@@ -37,6 +49,11 @@ export const createUsageAccumulator = (): UsageAccumulator => ({
   cacheWrite: 0,
   reasoningTokens: 0,
   total: 0,
+  observedUsageBuckets: new Set(),
+  usageObservations: 0,
+  providerBilledCostUsd: 0,
+  providerBilledCostReports: 0,
+  providerBilledCostCompleteReports: 0,
   assistantTurns: 0,
 });
 
@@ -47,6 +64,7 @@ const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
     return false;
   }
   return (
+    resolveNormalizedUsageObservedBuckets(usage).size > 0 ||
     [
       usage.input,
       usage.output,
@@ -57,7 +75,8 @@ const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
       usage.reasoningTokens,
       usage.total,
     ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0) ||
-    usage.contextUsage?.state === "unavailable"
+    usage.contextUsage?.state === "unavailable" ||
+    usage.providerBilledCost !== undefined
   );
 };
 
@@ -65,6 +84,19 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
   if (!hasUsageValues(usage)) {
     return;
   }
+  const observedBuckets = resolveNormalizedUsageObservedBuckets(usage);
+  if (target.usageObservations === 0) {
+    for (const bucket of observedBuckets) {
+      target.observedUsageBuckets.add(bucket);
+    }
+  } else {
+    for (const bucket of target.observedUsageBuckets) {
+      if (!observedBuckets.has(bucket)) {
+        target.observedUsageBuckets.delete(bucket);
+      }
+    }
+  }
+  target.usageObservations += 1;
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
@@ -74,6 +106,12 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
   target.cacheWrite += usage.cacheWrite ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
+  if (usage.providerBilledCost) {
+    target.providerBilledCostUsd += usage.providerBilledCost.totalUsd;
+    target.providerBilledCostReports += 1;
+    target.providerBilledCostCompleteReports +=
+      usage.providerBilledCost.coverage === "complete" ? 1 : 0;
+  }
 };
 
 /**
@@ -110,21 +148,47 @@ export const mergeAttemptRunStatsIntoAccumulator = (
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
+    usage.observedUsageBuckets.size > 0 ||
     usage.input > 0 ||
     usage.output > 0 ||
     usage.cacheRead > 0 ||
     usage.cacheWrite > 0 ||
     usage.reasoningTokens > 0 ||
-    usage.total > 0;
+    usage.total > 0 ||
+    usage.providerBilledCostReports > 0;
   if (!hasUsage) {
     return undefined;
   }
-  return {
-    input: usage.input || undefined,
-    output: usage.output || undefined,
-    cacheRead: usage.cacheRead || undefined,
-    cacheWrite: usage.cacheWrite || undefined,
-    ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
-    total: usage.total || undefined,
-  };
+  const tokenCountsObserved = NORMALIZED_USAGE_BUCKET_ORDER.filter((bucket) =>
+    usage.observedUsageBuckets.has(bucket),
+  );
+  return bindNormalizedUsageObservedBuckets(
+    {
+      input: usage.observedUsageBuckets.has("input") ? usage.input : usage.input || undefined,
+      output: usage.observedUsageBuckets.has("output") ? usage.output : usage.output || undefined,
+      cacheRead: usage.observedUsageBuckets.has("cacheRead")
+        ? usage.cacheRead
+        : usage.cacheRead || undefined,
+      cacheWrite: usage.observedUsageBuckets.has("cacheWrite")
+        ? usage.cacheWrite
+        : usage.cacheWrite || undefined,
+      ...(usage.observedUsageBuckets.has("reasoningTokens") || usage.reasoningTokens > 0
+        ? { reasoningTokens: usage.reasoningTokens }
+        : {}),
+      total: usage.observedUsageBuckets.has("total") ? usage.total : usage.total || undefined,
+      tokenCountsObserved,
+      ...(usage.providerBilledCostReports > 0
+        ? {
+            providerBilledCost: {
+              totalUsd: usage.providerBilledCostUsd,
+              coverage:
+                usage.providerBilledCostCompleteReports === usage.usageObservations
+                  ? ("complete" as const)
+                  : ("partial" as const),
+            },
+          }
+        : {}),
+    },
+    tokenCountsObserved,
+  );
 };

@@ -22,6 +22,10 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "../embedded-agent-runner/run/accounting-observers.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
@@ -86,6 +90,51 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
+  it("preserves accounting observers when fencing transcript rewrite authority", async () => {
+    const observers = { onOpaqueWork: vi.fn() };
+    const runtimeContext = bindEmbeddedRunAccountingObservers(
+      {
+        rewriteTranscriptEntries: vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        })),
+      },
+      observers,
+    );
+    const bootstrap = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      expect(params.runtimeContext?.rewriteTranscriptEntries).toBeUndefined();
+      expect(resolveEmbeddedRunAccountingObservers(params.runtimeContext!)).toBe(observers);
+      return { bootstrapped: true };
+    });
+    const assemble = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      expect(params.runtimeContext?.rewriteTranscriptEntries).toBeUndefined();
+      expect(resolveEmbeddedRunAccountingObservers(params.runtimeContext!)).toBe(observers);
+      return { messages: [], estimatedTokens: 0 };
+    });
+    const contextEngine = createContextEngine({ bootstrap, assemble });
+
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: true,
+      contextEngine,
+      ...sessionParams,
+      runtimeContext,
+      runMaintenance: vi.fn(async () => undefined),
+      warn: vi.fn(),
+    });
+    await assembleHarnessContextEngine({
+      contextEngine,
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [],
+      modelId: "gpt-test",
+      runtimeContext,
+    });
+
+    expect(bootstrap).toHaveBeenCalledOnce();
+    expect(assemble).toHaveBeenCalledOnce();
+  });
+
   it("scopes async memory preparation to non-legacy assembly with sandbox context", async () => {
     const prepare = vi.fn(async ({ sandboxed }) => [
       "## Prepared Memory",

@@ -7,6 +7,7 @@ import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
+  AcpPromptSubmissionState,
   AcpSessionManagerDeps,
   SessionAcpMeta,
   WriteManagerSessionMeta,
@@ -48,6 +49,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
   sessionKey: string;
   error: AcpRuntimeError;
   sawTurnOutput: boolean;
+  promptSubmissionState: AcpPromptSubmissionState;
   runtime?: AcpRuntime;
   meta?: SessionAcpMeta;
   runtimeHandles: ManagerRuntimeHandleCache;
@@ -57,6 +59,9 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     return false;
   }
   if (isRecoverableManagerAcpxExitError(params.error.message)) {
+    if (params.promptSubmissionState !== "not_submitted") {
+      return false;
+    }
     params.runtimeHandles.clear(params.sessionKey);
     logVerbose(
       `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
@@ -66,11 +71,16 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
   if (
     !params.runtime ||
     !params.meta ||
+    params.meta.backend !== "acpx" ||
     params.meta.mode !== "persistent" ||
+    params.promptSubmissionState === "submitted" ||
     !isRecoverableMissingManagerPersistentSessionError(params.error)
   ) {
     return false;
   }
+  // acpx emits SESSION_RESUME_REQUIRED only while reconnecting the saved
+  // session, before its runPromptTurn boundary. That pinned backend contract can
+  // resolve missing readiness, but never override explicit submission authority.
   const cleared = await clearPersistedRuntimeResumeState({
     cfg: params.cfg,
     sessionKey: params.sessionKey,

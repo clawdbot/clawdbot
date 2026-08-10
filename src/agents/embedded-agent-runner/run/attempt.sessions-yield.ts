@@ -61,6 +61,7 @@ export function createYieldAbortedResponse(model: {
   result: () => Promise<{
     role: "assistant";
     content: Array<{ type: "text"; text: string }>;
+    messageOrigin: "runtime-synthetic";
     stopReason: "aborted";
     api: string;
     provider: string;
@@ -70,6 +71,7 @@ export function createYieldAbortedResponse(model: {
       output: number;
       cacheRead: number;
       cacheWrite: number;
+      tokenCountsOrigin: "runtime-placeholder";
       totalTokens: number;
       cost: {
         input: number;
@@ -85,6 +87,7 @@ export function createYieldAbortedResponse(model: {
   const message = {
     role: "assistant" as const,
     content: [{ type: "text" as const, text: "" }],
+    messageOrigin: "runtime-synthetic" as const,
     stopReason: "aborted" as const,
     api: model.api ?? "",
     provider: model.provider ?? "",
@@ -94,6 +97,7 @@ export function createYieldAbortedResponse(model: {
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder" as const,
       totalTokens: 0,
       cost: {
         input: 0,

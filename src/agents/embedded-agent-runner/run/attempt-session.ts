@@ -12,6 +12,7 @@ import {
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { bindAgentSessionAccounting } from "../../sessions/agent-session-accounting.js";
 import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
 import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
@@ -20,6 +21,7 @@ import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
+import { resolveEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -167,6 +169,23 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     withSessionWriteLock: (operation) =>
       input.sessionLockController.withSessionWriteLock(operation),
   };
+  const accountingObservers = resolveEmbeddedRunAccountingObservers(attempt);
+  bindAgentSessionAccounting(
+    sessionOptions,
+    accountingObservers
+      ? {
+          onAgentSubmission: accountingObservers.onAgentSubmission,
+          ...(accountingObservers.onModelCall
+            ? {}
+            : {
+                onCoreCompactionInvocation: () =>
+                  accountingObservers.onOpaqueWork?.("session_core_compaction"),
+                onExtensionCompactionInvocation: () =>
+                  accountingObservers.onOpaqueWork?.("session_extension_compaction"),
+              }),
+        }
+      : undefined,
+  );
   const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",

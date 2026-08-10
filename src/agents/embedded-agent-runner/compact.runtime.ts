@@ -5,6 +5,8 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
+export { copyEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
+
 const compactRuntimeLoader = createLazyImportLoader(() => import("./compact.js"));
 
 function loadCompactRuntime() {

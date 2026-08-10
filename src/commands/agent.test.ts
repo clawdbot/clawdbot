@@ -12,6 +12,7 @@ import { executionIdentity } from "../agents/agent-command-execution-identity.js
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
+import { resolveAgentCommandRunAccounting } from "../agents/command/run-accounting.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -561,7 +562,7 @@ describe("agentCommand", () => {
         },
       });
 
-      await agentCommandFromIngress(
+      const result = await agentCommandFromIngress(
         {
           message: "continue safely",
           sessionKey,
@@ -572,6 +573,7 @@ describe("agentCommand", () => {
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
+      expect(resolveAgentCommandRunAccounting(result?.meta)).toBeUndefined();
     });
   });
 

@@ -36,8 +36,24 @@ function readCount(value: number | null | undefined): number {
  */
 export function mapResponsesTerminalUsage(
   usage: ResponsesTerminalUsagePayload | undefined | null,
-): Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens"> | undefined {
+):
+  | Pick<
+      Usage,
+      "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens" | "tokenCountsObserved"
+    >
+  | undefined {
   if (!usage) {
+    return undefined;
+  }
+  const hasObservedCounts = [
+    usage.input_tokens,
+    usage.output_tokens,
+    usage.total_tokens,
+    usage.input_tokens_details?.cached_tokens,
+    usage.input_tokens_details?.cache_write_tokens,
+    usage.output_tokens_details?.reasoning_tokens,
+  ].some((value) => typeof value === "number" && Number.isFinite(value));
+  if (!hasObservedCounts) {
     return undefined;
   }
   const cacheRead = readCount(usage.input_tokens_details?.cached_tokens);
@@ -46,7 +62,43 @@ export function mapResponsesTerminalUsage(
   const output = readCount(usage.output_tokens);
   const bucketTotal = input + output + cacheRead + cacheWrite;
   const totalTokens = Math.max(bucketTotal, readCount(usage.total_tokens));
-  return { input, output, cacheRead, cacheWrite, totalTokens };
+  const inputObserved =
+    typeof usage.input_tokens === "number" &&
+    Number.isFinite(usage.input_tokens) &&
+    typeof usage.input_tokens_details?.cached_tokens === "number" &&
+    Number.isFinite(usage.input_tokens_details.cached_tokens) &&
+    typeof usage.input_tokens_details?.cache_write_tokens === "number" &&
+    Number.isFinite(usage.input_tokens_details.cache_write_tokens);
+  const observed: NonNullable<Usage["tokenCountsObserved"]> = [
+    ...(inputObserved ? (["input"] as const) : []),
+    ...(typeof usage.output_tokens === "number" && Number.isFinite(usage.output_tokens)
+      ? (["output"] as const)
+      : []),
+    ...(typeof usage.input_tokens_details?.cached_tokens === "number" &&
+    Number.isFinite(usage.input_tokens_details.cached_tokens)
+      ? (["cacheRead"] as const)
+      : []),
+    ...(typeof usage.input_tokens_details?.cache_write_tokens === "number" &&
+    Number.isFinite(usage.input_tokens_details.cache_write_tokens)
+      ? (["cacheWrite"] as const)
+      : []),
+    ...(typeof usage.output_tokens_details?.reasoning_tokens === "number" &&
+    Number.isFinite(usage.output_tokens_details.reasoning_tokens)
+      ? (["reasoningTokens"] as const)
+      : []),
+  ];
+  const allBucketsObserved = (["input", "output", "cacheRead", "cacheWrite"] as const).every(
+    (bucket) => observed.includes(bucket),
+  );
+  if (
+    (typeof usage.total_tokens === "number" &&
+      Number.isFinite(usage.total_tokens) &&
+      totalTokens === usage.total_tokens) ||
+    allBucketsObserved
+  ) {
+    observed.push("total");
+  }
+  return { input, output, cacheRead, cacheWrite, tokenCountsObserved: observed, totalTokens };
 }
 
 /** Reasoning tokens are reported by the agent path only; the package path does not track them. */

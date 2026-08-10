@@ -55,6 +55,8 @@ export type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    tokenCountsOrigin?: Usage["tokenCountsOrigin"];
+    tokenCountsObserved?: Usage["tokenCountsObserved"];
     reasoningTokens?: number;
     totalTokens: number;
     cost: Usage["cost"];
@@ -74,26 +76,85 @@ export function parseOpenAICompletionsUsage(
     prompt_cache_hit_tokens?: number;
   },
   model: Model,
-  options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
+  const promptTokens =
+    typeof rawUsage.prompt_tokens === "number" && Number.isFinite(rawUsage.prompt_tokens)
+      ? rawUsage.prompt_tokens
+      : undefined;
+  const completionTokens =
+    typeof rawUsage.completion_tokens === "number" && Number.isFinite(rawUsage.completion_tokens)
+      ? rawUsage.completion_tokens
+      : undefined;
+  const reportedTotal =
+    typeof rawUsage.total_tokens === "number" && Number.isFinite(rawUsage.total_tokens)
+      ? rawUsage.total_tokens
+      : undefined;
+  const reportedCacheRead =
+    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens;
   const cacheRead =
-    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWrite = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
-  const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
-  const output = rawUsage.completion_tokens || 0;
+    typeof reportedCacheRead === "number" && Number.isFinite(reportedCacheRead)
+      ? reportedCacheRead
+      : 0;
+  const reportedCacheWrite = rawUsage.prompt_tokens_details?.cache_write_tokens;
+  const cacheWrite =
+    typeof reportedCacheWrite === "number" && Number.isFinite(reportedCacheWrite)
+      ? reportedCacheWrite
+      : 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  const inputObserved =
+    promptTokens !== undefined &&
+    typeof reportedCacheRead === "number" &&
+    Number.isFinite(reportedCacheRead) &&
+    typeof reportedCacheWrite === "number" &&
+    Number.isFinite(reportedCacheWrite);
+  const input = Math.max(0, (promptTokens ?? 0) - cacheRead - cacheWrite);
+  const output = completionTokens ?? 0;
+  const bucketTotal = input + output + cacheRead + cacheWrite;
+  const totalTokens = Math.max(reportedTotal ?? 0, bucketTotal);
+  const observed: NonNullable<Usage["tokenCountsObserved"]> = [
+    ...(inputObserved ? (["input"] as const) : []),
+    ...(completionTokens !== undefined ? (["output"] as const) : []),
+    ...(reportedCacheRead !== undefined &&
+    typeof reportedCacheRead === "number" &&
+    Number.isFinite(reportedCacheRead)
+      ? (["cacheRead"] as const)
+      : []),
+    ...(reportedCacheWrite !== undefined &&
+    typeof reportedCacheWrite === "number" &&
+    Number.isFinite(reportedCacheWrite)
+      ? (["cacheWrite"] as const)
+      : []),
+    ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+      ? (["reasoningTokens"] as const)
+      : []),
+  ];
+  const allBucketsObserved = (["input", "output", "cacheRead", "cacheWrite"] as const).every(
+    (bucket) => observed.includes(bucket),
+  );
+  if ((reportedTotal !== undefined && totalTokens === reportedTotal) || allBucketsObserved) {
+    observed.push("total");
+  }
+  if (observed.length === 0) {
+    return {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+  }
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output,
     cacheRead,
     cacheWrite,
-    // Managed transport exposes reasoning telemetry; the shipped package Usage shape does not.
-    ...(options?.includeReasoningTokens !== false &&
-    typeof reasoningTokens === "number" &&
-    Number.isFinite(reasoningTokens)
+    tokenCountsObserved: observed,
+    ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
-    totalTokens: input + output + cacheRead + cacheWrite,
+    totalTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, usage);

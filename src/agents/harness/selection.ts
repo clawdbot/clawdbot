@@ -20,6 +20,10 @@ import {
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import {
+  copyEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "../embedded-agent-runner/run/accounting-observers.js";
 import { transferEmbeddedAttemptExecutionAttribution } from "../embedded-agent-runner/run/attempt-execution-attribution.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -484,12 +488,14 @@ export async function runAgentHarnessSettledTurnFinalization(
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
-  const pluginParams = withoutInternalHarnessAuthority({
+  const operationParams = copyEmbeddedRunAccountingObservers(params, {
     ...internalParams,
     operation: "settled-tool-finalization",
-  });
+  } as const);
   const attemptParams =
-    harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+    harness.id === "openclaw"
+      ? withoutSystemAgentToolAuthority(operationParams)
+      : preparePluginHarnessParams(withoutInternalHarnessAuthority(operationParams));
   return runAgentHarnessOperation(harness, params, () =>
     runWithAgentRingZeroTools([], () =>
       runAgentHarnessLifecycleFinalization(harness, attemptParams, () =>
@@ -524,11 +530,17 @@ async function runSelectedAgentHarnessAttempt(
       lease: internalParams.contextEngineLogicalTurnLease,
     });
     const effective = internalParams.contextEngineLogicalTurnLease.begin();
-    internalParams = {
-      ...internalParams,
-      contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
-    };
+    internalParams = transferEmbeddedAttemptExecutionAttribution(
+      params,
+      copyEmbeddedRunAccountingObservers(params, {
+        ...internalParams,
+        contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
+      }),
+    );
   }
+  resolveEmbeddedRunAccountingObservers(params)?.onRuntimeSelected?.(
+    harness.id === "openclaw" ? "embedded" : "native",
+  );
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
@@ -539,7 +551,6 @@ async function runSelectedAgentHarnessAttempt(
         ),
       ]
     : [];
-  const pluginParams = withoutInternalHarnessAuthority(internalParams);
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -551,7 +562,9 @@ async function runSelectedAgentHarnessAttempt(
       // Resolve plugin policy after entering the host scope. Ring-zero tools are
       // trusted setup authority and must survive ordinary deny-all policy.
       const attemptParams =
-        harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+        harness.id === "openclaw"
+          ? withoutSystemAgentToolAuthority(internalParams)
+          : preparePluginHarnessParams(withoutInternalHarnessAuthority(internalParams));
       return runAgentHarnessLifecycleAttempt(harness, attemptParams);
     }),
   );
@@ -659,6 +672,16 @@ function withoutInternalHarnessAuthority(
     ...pluginParams
   } = params;
   return transferEmbeddedAttemptExecutionAttribution(params, pluginParams);
+}
+
+function withoutSystemAgentToolAuthority(
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+): EmbeddedRunAttemptParams {
+  if (!Object.hasOwn(params, "systemAgentTool")) {
+    return params;
+  }
+  const { systemAgentTool: _systemAgentTool, ...hostParams } = params;
+  return copyEmbeddedRunAccountingObservers(params, hostParams);
 }
 
 function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {

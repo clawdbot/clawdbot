@@ -1,5 +1,6 @@
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { ResolveRunWorkspaceResult } from "../../workspace-run.js";
+import { copyEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 
 /** Rebinds every config-derived run projection to one committed prepared generation. */
@@ -20,13 +21,13 @@ export function bindRunToPreparedModelRuntime(params: {
       params.preparedModelRuntime.workspaceDir ?? params.requestedWorkspaceResolution.workspaceDir,
   };
   return {
-    runParams: {
+    runParams: copyEmbeddedRunAccountingObservers(params.runParams, {
       ...params.runParams,
       agentId: preparedAgentId,
       agentDir: params.preparedModelRuntime.agentDir,
       config: params.preparedModelRuntime.config,
       workspaceDir: workspaceResolution.workspaceDir,
-    },
+    }),
     workspaceResolution,
   };
 }

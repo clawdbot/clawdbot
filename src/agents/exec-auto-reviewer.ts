@@ -16,6 +16,7 @@ import {
   type ExecAutoReviewInput,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
+import { beginActiveAgentCommandModelCall } from "./command/run-accounting.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT } from "./exec-auto-reviewer.prompt.js";
 import {
@@ -23,6 +24,7 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
+import { normalizeUsage } from "./usage.js";
 
 const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
 const EXEC_REVIEWER_MAX_TOKENS = 360;
@@ -387,38 +389,71 @@ export function createModelExecAutoReviewer(params: {
         );
       }
 
-      completionController = new AbortController();
-      const result = await raceWithReviewerTimeout(
-        complete({
-          model: prepared.model,
-          auth: prepared.auth,
-          cfg,
-          context: {
-            systemPrompt: DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
-            messages: [
-              {
-                role: "user",
-                content: buildReviewerUserPrompt(input),
-                timestamp: Date.now(),
-              },
-            ],
+      const controller = new AbortController();
+      completionController = controller;
+      const modelCall = beginActiveAgentCommandModelCall();
+      const settleModelCall = (
+        outcome: "completed" | "failed",
+        result?: Awaited<ReturnType<typeof complete>>,
+      ) => {
+        const usage = normalizeUsage(result?.usage);
+        modelCall?.settle({
+          outcome,
+          provider: result?.provider ?? prepared.model.provider,
+          model: result?.model ?? prepared.model.id,
+          ...(usage ? { usage } : {}),
+          config: cfg,
+          agentDir: prepared.selection.agentDir,
+        });
+      };
+      const completion = Promise.resolve()
+        .then(() =>
+          complete({
+            model: prepared.model,
+            auth: prepared.auth,
+            cfg,
+            context: {
+              systemPrompt: DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: "user",
+                  content: buildReviewerUserPrompt(input),
+                  timestamp: Date.now(),
+                },
+              ],
+            },
+            options: {
+              maxTokens: EXEC_REVIEWER_MAX_TOKENS,
+              temperature: 0,
+              signal: params.signal
+                ? AbortSignal.any([controller.signal, params.signal])
+                : controller.signal,
+            },
+          }),
+        )
+        .then(
+          (result) => {
+            settleModelCall(
+              result.stopReason === "error" || result.stopReason === "aborted"
+                ? "failed"
+                : "completed",
+              result,
+            );
+            return result;
           },
-          options: {
-            maxTokens: EXEC_REVIEWER_MAX_TOKENS,
-            temperature: 0,
-            signal: params.signal
-              ? AbortSignal.any([completionController.signal, params.signal])
-              : completionController.signal,
+          (error: unknown) => {
+            settleModelCall("failed");
+            throw error;
           },
-        }),
-        {
-          timeoutMs,
-          signal: params.signal,
-          // Abort the provider request after the local timeout wins the race.
-          onTimeout: () => completionController?.abort(),
-        },
-      );
+        );
+      const result = await raceWithReviewerTimeout(completion, {
+        timeoutMs,
+        signal: params.signal,
+        // Abort the provider request after the local timeout wins the race.
+        onTimeout: () => completionController?.abort(),
+      });
       if (result === EXEC_REVIEWER_TIMEOUT) {
+        settleModelCall("failed");
         return buildReviewerTimeoutDecision(timeoutMs);
       }
       const completionFailure = extractCompletionFailure(result);

@@ -28,6 +28,7 @@ import {
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
+import { resolveAgentCommandRunAccounting } from "./command/run-accounting.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -58,6 +59,7 @@ const state = vi.hoisted(() => ({
   createAcpVisibleTextAccumulatorMock: vi.fn(),
   emitAcpLifecycleEndMock: vi.fn(),
   emitAcpLifecycleErrorMock: vi.fn(),
+  emitAcpPromptSubmittedMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
@@ -66,6 +68,7 @@ const state = vi.hoisted(() => ({
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
+  bindAgentCommandRunAccountingMock: vi.fn(),
   resolveAgentSkillsFilterMock: vi.fn(
     (_cfg?: unknown, _agentId?: string): string[] | undefined => undefined,
   ),
@@ -155,7 +158,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleEnd: (...args: unknown[]) => state.emitAcpLifecycleEndMock(...args),
   emitAcpLifecycleError: (...args: unknown[]) => state.emitAcpLifecycleErrorMock(...args),
   emitAcpLifecycleStart: vi.fn(),
-  emitAcpPromptSubmitted: vi.fn(),
+  emitAcpPromptSubmitted: (...args: unknown[]) => state.emitAcpPromptSubmittedMock(...args),
   emitAcpRuntimeEvent: vi.fn(),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
@@ -164,6 +167,14 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
   sessionFileHasContent: vi.fn(async () => false),
 }));
+
+vi.mock("./command/run-accounting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./command/run-accounting.js")>();
+  return {
+    ...actual,
+    bindAgentCommandRunAccounting: state.bindAgentCommandRunAccountingMock,
+  };
+});
 
 vi.mock("./command/attempt-execution.shared.js", async () => {
   const actual = await vi.importActual<typeof import("./command/attempt-execution.shared.js")>(
@@ -802,7 +813,7 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
 }
 
 async function runBasicAgentCommand() {
-  await agentCommand({
+  return await agentCommand({
     message: "hello",
     to: "+1234567890",
   });
@@ -925,9 +936,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return parent ? { channel, model: parent, matchKey: parentChannel } : null;
     });
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
-      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
-      onEvent?.({ type: "text_delta", stream: "output", text: "done" });
-      onEvent?.({ type: "done", stopReason: "end_turn" });
+      const callbacks = params as {
+        onPromptSubmissionState?: (
+          state: "not_submitted" | "unknown" | "submitted",
+        ) => Promise<void> | void;
+        onLifecycle?: (event: { type: "prompt_submitted"; at: number }) => Promise<void> | void;
+        onTurnStreamAcquired?: () => Promise<void> | void;
+        onEvent?: (event: unknown) => void;
+      };
+      await callbacks.onPromptSubmissionState?.("submitted");
+      await callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
+      await callbacks.onTurnStreamAcquired?.();
+      callbacks.onEvent?.({ type: "text_delta", stream: "output", text: "done" });
+      callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
     });
     state.createAcpVisibleTextAccumulatorMock.mockImplementation(() => {
       let text = "";
@@ -1154,6 +1175,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         now: expect.any(Number),
       }),
     );
+    expect(state.bindAgentCommandRunAccountingMock).toHaveBeenCalledTimes(1);
+    expect(
+      requireRecord(mockCallArg(state.runAgentAttemptMock, 1), "system attempt")
+        .commandRunAccounting,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -1376,6 +1402,170 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       fastModeStartedAtMs?: number;
     };
     expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
+  });
+
+  it("retains exact command accounting across live switches and fallback candidates", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let fallbackInvocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      fallbackInvocation += 1;
+      if (fallbackInvocation === 1) {
+        await params.run(params.provider, params.model);
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      await params.run(params.provider, params.model);
+      const result = await params.run("anthropic", "claude");
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        providerOverride: string;
+        modelOverride: string;
+        commandRunAccounting: {
+          selectRuntime: (runtime: "embedded") => void;
+          beginAgentSubmission: () => {
+            settle: (outcome: "completed") => void;
+          };
+          beginModelCall: () => {
+            settle: (outcome: "completed") => void;
+          };
+          markModelCallInstrumentationInstalled: () => void;
+          observeEmbeddedAttempt: (observation: {
+            provider: string;
+            model: string;
+            usage: { input: number; output: number; total: number };
+            assistantTurns: number;
+            assistantTurnsObserved: boolean;
+            assistantTurnsWithUsage: number;
+            toolSummary: { calls: number; tools: string[] };
+            toolsObserved: boolean;
+            codeModeLifecycleObserved: boolean;
+          }) => void;
+        };
+      };
+      const ordinal = state.runAgentAttemptMock.mock.calls.length;
+      attempt.commandRunAccounting.selectRuntime("embedded");
+      attempt.commandRunAccounting.markModelCallInstrumentationInstalled();
+      attempt.commandRunAccounting.beginAgentSubmission().settle("completed");
+      attempt.commandRunAccounting.beginModelCall().settle("completed");
+      attempt.commandRunAccounting.observeEmbeddedAttempt({
+        provider: attempt.providerOverride,
+        model: attempt.modelOverride,
+        usage: { input: ordinal * 10, output: ordinal, total: ordinal * 11 },
+        assistantTurns: ordinal,
+        assistantTurnsObserved: true,
+        assistantTurnsWithUsage: ordinal,
+        toolSummary: { calls: 1, tools: [`tool-${ordinal}`] },
+        toolsObserved: true,
+        codeModeLifecycleObserved: false,
+      });
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+      vi.setSystemTime(1_025);
+      const result = requireRecord(requireRecord(params, "delivery params").result, "result");
+      return {
+        payloads: result.payloads,
+        meta: result.meta,
+      };
+    });
+
+    const commandResult = await runBasicAgentCommand();
+
+    const deliveryParams = requireRecord(
+      mockCallArg(state.deliverAgentCommandResultMock),
+      "delivery params",
+    );
+    requireRecord(deliveryParams.result, "delivered result");
+    const deliveredMeta = requireRecord(commandResult?.meta, "delivered metadata");
+    const [accountingTarget, accountingSnapshot] =
+      state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingTarget).toBe(deliveredMeta);
+    expect(accountingSnapshot).toMatchObject({
+      candidates: {
+        total: 3,
+        returned: 3,
+        threw: 0,
+        runtimes: { embedded: 3, cli: 0, native: 0, cloud: 0, unknown: 0 },
+        entries: [
+          { provider: "anthropic", model: "claude", runtime: "embedded", outcome: "returned" },
+          { provider: "openai", model: "gpt-5.4", runtime: "embedded", outcome: "returned" },
+          { provider: "anthropic", model: "claude", runtime: "embedded", outcome: "returned" },
+        ],
+        truncated: 0,
+      },
+      agentSubmissions: { total: 3, completed: 3, failed: 0 },
+      modelCalls: { total: 3, completed: 3, failed: 0 },
+      assistantTurns: 6,
+      usage: {
+        input: 60,
+        output: 6,
+        total: 66,
+      },
+      commandExecutionDurationMs: 25,
+      toolSummary: { calls: 3, tools: ["tool-1", "tool-2", "tool-3"] },
+      coverage: {
+        candidates: { state: "complete" },
+        agentSubmissions: { state: "complete" },
+        modelCalls: { state: "complete" },
+        assistantTurns: { state: "complete" },
+        usage: { state: "partial", reasons: ["partial_usage"] },
+        tools: { state: "complete" },
+        providerTransport: { state: "unavailable", reasons: ["not_instrumented"] },
+      },
+    });
+    expect(state.bindAgentCommandRunAccountingMock.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      state.deliverAgentCommandResultMock.mock.invocationCallOrder.at(-1) ?? 0,
+    );
+    vi.useRealTimers();
+  });
+
+  it("retains accounting on a thrown non-switch provider failure", async () => {
+    setupSingleAttemptFallback();
+    const failure = new Error("provider exploded");
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        commandRunAccounting: {
+          selectRuntime: (runtime: "embedded") => void;
+        };
+      };
+      attempt.commandRunAccounting.selectRuntime("embedded");
+      throw failure;
+    });
+
+    await expect(runBasicAgentCommand()).rejects.toBe(failure);
+    expect(resolveAgentCommandRunAccounting(failure)).toMatchObject({
+      candidates: {
+        total: 1,
+        returned: 0,
+        threw: 1,
+        entries: [
+          {
+            provider: "anthropic",
+            model: "claude",
+            runtime: "embedded",
+            outcome: "threw",
+          },
+        ],
+        truncated: 0,
+      },
+      coverage: {
+        candidates: { state: "complete" },
+        assistantTurns: {
+          state: "unavailable",
+          reasons: ["candidate_failed", "not_observed"],
+        },
+      },
+    });
   });
 
   it("reuses durable user-turn proof across live model switch retries", async () => {
@@ -2065,7 +2255,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       kind: "persisted",
       sessionEntry: rotatedEntry,
     });
-    state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
+    state.runCliTurnCompactionLifecycleMock.mockImplementation(
+      async (params: { onCompactionExecutionStarted?: () => void }) => {
+        params.onCompactionExecutionStarted?.();
+        return rotatedEntry;
+      },
+    );
 
     await runBasicAgentCommand();
 
@@ -2079,6 +2274,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.runCliTurnCompactionLifecycleMock), {
       sessionId: "rotated-session",
       sessionKey: "agent:main:main",
+    });
+    const [, accountingSnapshot] = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingSnapshot).toMatchObject({
+      coverage: {
+        usage: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["post_turn_compaction"]),
+        },
+        providerTransport: {
+          state: "unavailable",
+          reasons: ["not_instrumented", "post_turn_compaction"],
+        },
+      },
     });
     expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
       expectedSessionIdForFreshDelivery: "rotated-session",
@@ -2109,6 +2317,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    const [, accountingSnapshot] = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingSnapshot).toMatchObject({
+      coverage: {
+        providerTransport: { state: "unavailable", reasons: ["not_instrumented"] },
+      },
+    });
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2142,7 +2356,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       kind: "session-rebound",
       sessionEntry: undefined,
     });
-    state.deliverAgentCommandResultMock.mockRejectedValue(new Error("delivery failed"));
+    const deliveryError = new Error("delivery failed");
+    state.deliverAgentCommandResultMock.mockRejectedValue(deliveryError);
 
     await expect(
       agentCommand({
@@ -2152,9 +2367,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         accountId: "main",
         deliver: true,
       }),
-    ).rejects.toThrow("delivery failed");
+    ).rejects.toBe(deliveryError);
 
     expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
+    expect(resolveAgentCommandRunAccounting(deliveryError)).toMatchObject({
+      candidates: {
+        total: 1,
+        returned: 1,
+        threw: 0,
+      },
+      coverage: {
+        candidates: { state: "complete" },
+      },
+    });
   });
 
   it.each([
@@ -4540,16 +4765,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 
-  it("marks ACP execution start when the prompt is submitted", async () => {
+  it("starts ACP execution only after the manager reports prompt submission", async () => {
     setupAcpSession();
     const onExecutionStarted = vi.fn();
     state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
       const callbacks = params as {
+        onPromptSubmissionState?: (state: "not_submitted" | "unknown" | "submitted") => void;
         onLifecycle?: (event: { type: string; at: number }) => void;
         onEvent?: (event: unknown) => void;
       };
       expect(onExecutionStarted).not.toHaveBeenCalled();
+      expect(state.emitAcpPromptSubmittedMock).not.toHaveBeenCalled();
+      callbacks.onPromptSubmissionState?.("submitted");
+      expect(onExecutionStarted).toHaveBeenCalledOnce();
       callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
+      expect(state.emitAcpPromptSubmittedMock).toHaveBeenCalledOnce();
       callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
     });
 
@@ -4560,6 +4790,115 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports ACP model work as opaque without synthetic exact counts", async () => {
+    setupAcpSession();
+
+    await agentCommand({
+      message: "ACP accounting boundary",
+      sessionKey: "agent:main:main",
+    });
+
+    const [, accountingSnapshot] = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingSnapshot).toMatchObject({
+      candidates: { total: 0 },
+      agentSubmissions: { total: 1, completed: 1, failed: 0 },
+      opaqueWork: { total: 1, byReason: { acp_runtime: 1 } },
+      coverage: {
+        candidates: {
+          state: "unavailable",
+          reasons: ["not_observed"],
+        },
+        agentSubmissions: { state: "complete" },
+        providerTransport: {
+          state: "unavailable",
+          reasons: ["not_instrumented", "acp_runtime"],
+        },
+      },
+    });
+  });
+
+  it("keeps unknown ACP submission opaque without reporting execution start", async () => {
+    setupAcpSession();
+    const onExecutionStarted = vi.fn();
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as {
+        onPromptSubmissionState?: (state: "not_submitted" | "unknown" | "submitted") => void;
+        onEvent?: (event: unknown) => void;
+      };
+      callbacks.onPromptSubmissionState?.("unknown");
+      callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+
+    await agentCommand({
+      message: "ACP unknown submission boundary",
+      sessionKey: "agent:main:main",
+      onExecutionStarted,
+    });
+
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(state.emitAcpPromptSubmittedMock).not.toHaveBeenCalled();
+    const [, accountingSnapshot] = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingSnapshot.agentSubmissions).toBeUndefined();
+    expect(accountingSnapshot).toMatchObject({
+      opaqueWork: { total: 1, byReason: { acp_runtime: 1 } },
+      coverage: {
+        agentSubmissions: {
+          state: "unavailable",
+          reasons: ["not_observed"],
+        },
+        modelCalls: {
+          state: "unavailable",
+          reasons: ["not_observed", "acp_runtime"],
+        },
+      },
+    });
+  });
+
+  it("projects exact zero model work when ACP proves the prompt was not submitted", async () => {
+    setupAcpSession();
+    const onExecutionStarted = vi.fn();
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as {
+        onPromptSubmissionState?: (state: "not_submitted" | "unknown" | "submitted") => void;
+        onEvent?: (event: unknown) => void;
+      };
+      callbacks.onPromptSubmissionState?.("not_submitted");
+      callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+
+    await agentCommand({
+      message: "ACP rejected before submission",
+      sessionKey: "agent:main:main",
+      onExecutionStarted,
+    });
+
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    const [, accountingSnapshot] = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingSnapshot).toMatchObject({
+      agentSubmissions: { total: 0, completed: 0, failed: 0 },
+      modelCalls: { total: 0, completed: 0, failed: 0 },
+      assistantTurns: 0,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: 0,
+        total: 0,
+      },
+      toolSummary: { calls: 0, tools: [] },
+      costUsd: 0,
+      coverage: {
+        agentSubmissions: { state: "complete" },
+        modelCalls: { state: "complete" },
+        usage: { state: "complete" },
+        tools: { state: "complete" },
+        cost: { state: "complete" },
+      },
+    });
+    expect(accountingSnapshot).not.toHaveProperty("opaqueWork");
   });
 
   it("keeps session provenance for internal ACP turns", async () => {
@@ -4722,6 +5061,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.emitAcpLifecycleErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),
     );
+    const [, accountingSnapshot] = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1) ?? [];
+    expect(accountingSnapshot).not.toMatchObject({
+      coverage: {
+        agentSubmissions: {
+          reasons: expect.arrayContaining(["acp_runtime"]),
+        },
+      },
+    });
   });
 
   it("preserves ACP cancelled results without a stop reason", async () => {

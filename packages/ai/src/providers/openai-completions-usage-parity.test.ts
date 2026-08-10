@@ -26,6 +26,7 @@ type UsageScenario = {
   name: string;
   usage: Record<string, unknown>;
   expectedUsage: Record<string, unknown>;
+  expectedObserved: string[];
   expectedCost?: number;
   inChoice?: boolean;
 };
@@ -49,6 +50,7 @@ const scenarios: UsageScenario[] = [
       totalTokens: 120,
     },
     expectedCost: 0.00011625,
+    expectedObserved: ["input", "output", "cacheRead", "cacheWrite", "reasoningTokens", "total"],
   },
   {
     name: "explicit zero reasoning tokens",
@@ -59,6 +61,7 @@ const scenarios: UsageScenario[] = [
       completion_tokens_details: { reasoning_tokens: 0 },
     },
     expectedUsage: { input: 10, output: 5, reasoningTokens: 0, totalTokens: 15 },
+    expectedObserved: ["output", "reasoningTokens", "total"],
   },
   {
     name: "compatible prompt-cache-hit fallback",
@@ -70,6 +73,7 @@ const scenarios: UsageScenario[] = [
     },
     expectedUsage: { input: 75, output: 20, cacheRead: 25, cacheWrite: 0, totalTokens: 120 },
     expectedCost: 0.00012125,
+    expectedObserved: ["output", "cacheRead", "total"],
   },
   {
     name: "authoritative provider-billed zero cost",
@@ -89,6 +93,7 @@ const scenarios: UsageScenario[] = [
       cost: { total: 0, totalOrigin: "provider-billed" },
     },
     expectedCost: 0,
+    expectedObserved: ["input", "output", "cacheRead", "cacheWrite", "total"],
   },
   {
     name: "invalid provider cost and cached-token overflow",
@@ -101,6 +106,7 @@ const scenarios: UsageScenario[] = [
     },
     expectedUsage: { input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 },
     expectedCost: 0.000011,
+    expectedObserved: ["output", "cacheRead"],
   },
   {
     name: "provider-compatible usage nested in a choice",
@@ -112,7 +118,27 @@ const scenarios: UsageScenario[] = [
       completion_tokens_details: { reasoning_tokens: 3 },
     },
     expectedUsage: { input: 15, output: 10, cacheRead: 5, reasoningTokens: 3, totalTokens: 30 },
+    expectedObserved: ["output", "cacheRead", "reasoningTokens", "total"],
     inChoice: true,
+  },
+  {
+    name: "complete all-zero usage",
+    usage: {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+      completion_tokens_details: { reasoning_tokens: 0 },
+    },
+    expectedUsage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+    },
+    expectedObserved: ["input", "output", "cacheRead", "cacheWrite", "reasoningTokens", "total"],
   },
 ];
 
@@ -167,26 +193,21 @@ afterEach(() => {
 describe.each([
   {
     name: "package",
-    preservesReasoningTokens: false,
     createStream: () =>
       streamOpenAICompletions(model, context, {
         apiKey: "fixture-token",
         reasoningEffort: "medium",
       }),
   },
-  { name: "managed", preservesReasoningTokens: true, createStream: createManagedFixtureStream },
-])("$name Chat Completions usage", ({ createStream, preservesReasoningTokens }) => {
+  { name: "managed", createStream: createManagedFixtureStream },
+])("$name Chat Completions usage", ({ createStream }) => {
   it.each(scenarios)("preserves $name", async (scenario) => {
     installUsageChunk(scenario);
     const result = await createStream().result();
-    const expectedUsage = { ...scenario.expectedUsage };
-    if (!preservesReasoningTokens) {
-      delete expectedUsage.reasoningTokens;
-      expect(result.usage).not.toHaveProperty("reasoningTokens");
-    }
 
     expect(result.stopReason).toBe("stop");
-    expect(result.usage).toMatchObject(expectedUsage);
+    expect(result.usage).toMatchObject(scenario.expectedUsage);
+    expect(result.usage.tokenCountsObserved).toEqual(scenario.expectedObserved);
     if (scenario.expectedCost !== undefined) {
       expect(result.usage.cost.total).toBeCloseTo(scenario.expectedCost, 10);
     }

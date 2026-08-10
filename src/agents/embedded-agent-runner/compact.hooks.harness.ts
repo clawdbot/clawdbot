@@ -143,7 +143,14 @@ function createDefaultSessionMessages(): unknown[] {
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
-function createMockCompactionSession() {
+let resolveAgentSessionAccountingForMock:
+  | typeof import("../sessions/agent-session-accounting.js").resolveAgentSessionAccounting
+  | undefined;
+function createMockCompactionSession(options?: object) {
+  const onCoreCompactionInvocation =
+    options && resolveAgentSessionAccountingForMock
+      ? resolveAgentSessionAccountingForMock(options)?.onCoreCompactionInvocation
+      : undefined;
   const session = {
     sessionId: "session-1",
     messages: sessionMessages.map((message) => structuredClone(message)),
@@ -161,11 +168,13 @@ function createMockCompactionSession() {
       },
     },
     compact: vi.fn(async () => {
+      onCoreCompactionInvocation?.();
       sessionManualCompactionMock();
       session.messages.splice(1);
       return await sessionCompactImpl();
     }),
     [agentSessionAutomaticCompaction]: vi.fn(async () => {
+      onCoreCompactionInvocation?.();
       sessionAutomaticCompactionMock();
       session.messages.splice(1);
       return await sessionCompactImpl();
@@ -180,7 +189,7 @@ function createMockCompactionSession() {
   return session;
 }
 export const createAgentSessionMock = vi.fn(async (_options?: unknown) => ({
-  session: createMockCompactionSession(),
+  session: createMockCompactionSession(_options as object | undefined),
 }));
 function createMockToolDefinitions(tools: unknown[] = []) {
   return tools.map((tool) => {
@@ -489,8 +498,8 @@ export function resetCompactSessionStateMocks(): void {
   resolveEffectiveCompactionModeMock.mockReset();
   resolveEffectiveCompactionModeMock.mockReturnValue("default");
   createAgentSessionMock.mockReset();
-  createAgentSessionMock.mockImplementation(async () => ({
-    session: createMockCompactionSession(),
+  createAgentSessionMock.mockImplementation(async (options?: unknown) => ({
+    session: createMockCompactionSession(options as object | undefined),
   }));
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
@@ -641,6 +650,8 @@ export async function loadCompactHooksHarness(): Promise<{
   withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+  bindEmbeddedRunAccountingObservers: typeof import("./run/accounting-observers.js").bindEmbeddedRunAccountingObservers;
+  copyEmbeddedRunAccountingObservers: typeof import("./run/accounting-observers.js").copyEmbeddedRunAccountingObservers;
 }> {
   resetCompactHooksHarnessMocks();
   vi.resetModules();
@@ -1099,13 +1110,22 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  const [compactModule, compactQueuedModule, transcriptEvents, transcriptWriteContext] =
-    await Promise.all([
-      import("./compact.js"),
-      import("./compact.queued.js"),
-      import("../../sessions/transcript-events.js"),
-      import("../../config/sessions/transcript-write-context.js"),
-    ]);
+  const [
+    compactModule,
+    compactQueuedModule,
+    transcriptEvents,
+    transcriptWriteContext,
+    accountingObservers,
+    agentSessionAccounting,
+  ] = await Promise.all([
+    import("./compact.js"),
+    import("./compact.queued.js"),
+    import("../../sessions/transcript-events.js"),
+    import("../../config/sessions/transcript-write-context.js"),
+    import("./run/accounting-observers.js"),
+    import("../sessions/agent-session-accounting.js"),
+  ]);
+  resolveAgentSessionAccountingForMock = agentSessionAccounting.resolveAgentSessionAccounting;
 
   return {
     ...compactModule,
@@ -1113,6 +1133,8 @@ export async function loadCompactHooksHarness(): Promise<{
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
     withOwnedSessionTranscriptWrites: transcriptWriteContext.withOwnedSessionTranscriptWrites,
+    bindEmbeddedRunAccountingObservers: accountingObservers.bindEmbeddedRunAccountingObservers,
+    copyEmbeddedRunAccountingObservers: accountingObservers.copyEmbeddedRunAccountingObservers,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

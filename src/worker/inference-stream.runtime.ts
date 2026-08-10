@@ -49,6 +49,7 @@ function emptyAssistantMessage(modelRef: WorkerInferenceModelRef): AssistantMess
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      tokenCountsOrigin: "runtime-placeholder",
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
@@ -193,6 +194,7 @@ function terminalErrorMessage(
   outcome: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>,
 ): AssistantMessage {
   partial.stopReason = outcome.reason === "cancelled" ? "aborted" : "error";
+  partial.messageOrigin = "runtime-synthetic";
   partial.errorMessage = outcome.message;
   if (outcome.usage) {
     partial.usage = structuredClone(outcome.usage);
@@ -208,6 +210,7 @@ function transcriptSafeErrorMessage(
     return message;
   }
   const replacement = emptyAssistantMessage(modelRef);
+  replacement.messageOrigin = "runtime-synthetic";
   replacement.stopReason = message.stopReason === "aborted" ? "aborted" : "error";
   replacement.errorMessage = "Worker inference result exceeds the transcript message limit.";
   return replacement;
@@ -245,6 +248,7 @@ export function createWorkerInferenceStreamAdapter(
       }
       settled = true;
       partial.stopReason = "aborted";
+      partial.messageOrigin = "runtime-synthetic";
       partial.errorMessage = "Worker inference aborted.";
       stream.push({
         type: "error",
@@ -261,6 +265,7 @@ export function createWorkerInferenceStreamAdapter(
     };
     if (inferenceRequest.signal?.aborted) {
       partial.stopReason = "aborted";
+      partial.messageOrigin = "runtime-synthetic";
       partial.errorMessage = "Worker inference aborted before start.";
       stream.push({
         type: "error",
@@ -291,6 +296,7 @@ export function createWorkerInferenceStreamAdapter(
         if (outcome.type === "done") {
           if (!isWorkerTranscriptMessageFrameSafe(outcome.message)) {
             const message = emptyAssistantMessage(adapter.modelRef);
+            message.messageOrigin = "runtime-synthetic";
             message.stopReason = "error";
             message.errorMessage = "Worker inference result exceeds the transcript message limit.";
             stream.push({ type: "error", reason: "error", error: message });
@@ -317,6 +323,7 @@ export function createWorkerInferenceStreamAdapter(
         }
         settled = true;
         partial.stopReason = inferenceRequest.signal?.aborted ? "aborted" : "error";
+        partial.messageOrigin = "runtime-synthetic";
         partial.errorMessage = error instanceof Error ? error.message : String(error);
         stream.push({
           type: "error",

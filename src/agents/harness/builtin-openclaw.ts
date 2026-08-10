@@ -5,6 +5,7 @@
  * through the same AgentHarness contract as external harness plugins.
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { copyEmbeddedRunCallAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
@@ -13,7 +14,7 @@ import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 function buildRestrictedFinalizationAttempt(
   attempt: AgentHarnessAttemptParams,
 ): AgentHarnessAttemptParams {
-  return {
+  return copyEmbeddedRunCallAccountingObservers(attempt, {
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
@@ -62,7 +63,7 @@ function buildRestrictedFinalizationAttempt(
     disableTrajectory: true,
     skipPreparedUserTurnMessage: true,
     initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
-  };
+  });
 }
 
 /** Creates the built-in harness backed by the embedded OpenClaw agent runner. */

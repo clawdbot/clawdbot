@@ -48,9 +48,10 @@ import {
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
-  hasNonzeroUsage,
+  isRuntimePlaceholderUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
+  resolveNormalizedUsageObservedBuckets,
   type NormalizedUsage,
   type UsageLike,
 } from "./usage.js";
@@ -105,16 +106,28 @@ export function preservePendingAssistantUsage(
   message: AssistantMessage,
   pendingUsage: NormalizedUsage | undefined,
 ): AssistantMessage {
-  if (isTranscriptOnlyOpenClawAssistantMessage(message) || !hasNonzeroUsage(pendingUsage)) {
+  const pendingObservedBuckets = pendingUsage
+    ? resolveNormalizedUsageObservedBuckets(pendingUsage)
+    : undefined;
+  if (
+    isTranscriptOnlyOpenClawAssistantMessage(message) ||
+    !pendingUsage ||
+    !pendingObservedBuckets ||
+    (pendingObservedBuckets.size === 0 && !pendingUsage.providerBilledCost)
+  ) {
     return message;
   }
   const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
-  if (hasNonzeroUsage(messageUsage)) {
+  if (
+    messageUsage &&
+    (resolveNormalizedUsageObservedBuckets(messageUsage).size > 0 ||
+      messageUsage.providerBilledCost)
+  ) {
     return message;
   }
 
   // Pending usage resets at each assistant-message boundary, so it belongs to
-  // this final snapshot. Only replace missing/zero usage; provider totals win.
+  // this final snapshot. Preserve bucket provenance when filling required fields.
   const input = pendingUsage.input ?? 0;
   const output = pendingUsage.output ?? 0;
   const cacheRead = pendingUsage.cacheRead ?? 0;
@@ -125,10 +138,23 @@ export function preservePendingAssistantUsage(
     output,
     cacheRead,
     cacheWrite,
+    tokenCountsObserved: [...pendingObservedBuckets],
     ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
     totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
     ...(pendingUsage.reasoningTokens !== undefined
       ? { reasoningTokens: pendingUsage.reasoningTokens }
+      : {}),
+    ...(pendingUsage.providerBilledCost?.coverage === "complete"
+      ? {
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: pendingUsage.providerBilledCost.totalUsd,
+            totalOrigin: "provider-billed" as const,
+          },
+        }
       : {}),
   };
   return message;
@@ -159,8 +185,34 @@ export function resetPendingAssistantUsage(
   if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
     return;
   }
+  ctx.state.assistantMessageGeneration = (ctx.state.assistantMessageGeneration ?? 0) + 1;
   ctx.state.pendingAssistantUsage = undefined;
   ctx.state.assistantUsageCommitted = false;
+}
+
+export function finalizeAssistantMessageAccounting(
+  ctx: EmbeddedAgentSubscribeContext,
+  message: AssistantMessage,
+  generation = ctx.state.assistantMessageGeneration ?? 0,
+): AssistantMessage {
+  const assistantMessage = preservePendingAssistantUsage(message, ctx.state.pendingAssistantUsage);
+  const firstTerminalForMessage = ctx.state.lastCountedAssistantMessageGeneration !== generation;
+  if (!firstTerminalForMessage) {
+    return assistantMessage;
+  }
+
+  if (assistantMessage.messageOrigin !== "runtime-synthetic") {
+    ctx.state.assistantTurnCount += 1;
+  }
+  ctx.state.lastCountedAssistantMessageGeneration = generation;
+  if (!isRuntimePlaceholderUsage(assistantMessage.usage)) {
+    ctx.recordAssistantUsage(assistantMessage.usage);
+    ctx.commitAssistantUsage();
+    if (ctx.state.assistantUsageCommitted) {
+      ctx.state.assistantTurnsWithUsage += 1;
+    }
+  }
+  return assistantMessage;
 }
 
 function extractStandaloneMessageToolText(
@@ -846,13 +898,6 @@ export function handleMessageUpdate(
 
   const assistantPhase = resolveAssistantMessagePhase(msg);
 
-  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
-    capturePendingAssistantUsage(ctx, evt);
-    if (evtType === "done" || evtType === "error") {
-      ctx.commitAssistantUsage();
-    }
-  }
-
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (
       !suppressMessageToolOnlySourceReplyOutput &&
@@ -1246,25 +1291,22 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 /** Handles assistant message-end finalization, block flush, and usage commit. */
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage },
+  evt: AgentEvent & { message: AgentMessage; accountingFinalized?: true },
 ): void | Promise<void> {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
-  // Transcript-only messages never reach the provider, so this counts exactly
-  // the completed model round trips consumers see as `assistantTurns`.
-  ctx.state.assistantTurnCount += 1;
-  const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
+  const assistantMessage = evt.accountingFinalized
+    ? msg
+    : finalizeAssistantMessageAccounting(ctx, msg);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
-  ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);
     const commentaryMessage = isResponsesCommentary

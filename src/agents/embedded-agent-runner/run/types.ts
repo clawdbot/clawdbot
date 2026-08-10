@@ -318,6 +318,8 @@ export type EmbeddedRunAttemptResult = {
   codeModeEngaged?: boolean;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
+  /** Completed assistant round trips with an observed provider usage payload. */
+  assistantTurnsWithUsage?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */
   bridgeCalls?: {
     search: number;

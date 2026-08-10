@@ -104,8 +104,12 @@ type AgentHarnessSettledTurnFinalizationParams = {
 export type AgentHarnessSettledTurnFinalizationResult = {
   /** The single completed assistant answer produced by the isolated operation. */
   assistant: import("../../llm/types.js").AssistantMessage;
-  /** Normalized usage for the finalization model call only. */
+  /** Aggregate normalized usage for the full isolated finalization operation. */
   usage?: import("../usage.js").NormalizedUsage;
+  /** Exact completed assistant messages produced by the isolated operation. */
+  assistantTurns?: number;
+  /** Exact subset of assistantTurns covered by the aggregate usage payload. */
+  assistantTurnsWithUsage?: number;
   /** True when the harness already persisted the assistant into the application transcript. */
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the harness-owned assistant transcript row. */

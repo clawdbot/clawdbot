@@ -1,10 +1,11 @@
 /** Tests ACP turn terminal results and detached-task progress outcomes. */
-import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntimeEvent, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
+import { createDeferred } from "../../shared/deferred.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -31,6 +32,7 @@ describe("AcpSessionManager turn results", () => {
       const closeStream = vi.fn(async () => {});
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
+        promptSubmission: Promise.resolve("submitted" as const),
         events: (async function* () {
           yield {
             type: "text_delta" as const,
@@ -121,6 +123,7 @@ describe("AcpSessionManager turn results", () => {
       const runtimeState = createRuntime();
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
+        promptSubmission: Promise.resolve("submitted" as const),
         events: (async function* () {
           yield {
             type: "text_delta" as const,
@@ -168,6 +171,7 @@ describe("AcpSessionManager turn results", () => {
       });
 
       const events: string[] = [];
+      const onTurnStreamAcquired = vi.fn();
       const manager = new AcpSessionManager();
       await manager.runTurn({
         provenance: "system",
@@ -176,12 +180,14 @@ describe("AcpSessionManager turn results", () => {
         text: "Print the current directory",
         mode: "prompt",
         requestId: "direct-parented-start-turn-text-run",
+        onTurnStreamAcquired,
         onEvent: (event) => {
           events.push(event.type);
         },
       });
 
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
+      expect(onTurnStreamAcquired).toHaveBeenCalledTimes(1);
       expect(events).toEqual(["text_delta", "done"]);
       expectRecordFields(requireTaskByRunId("direct-parented-start-turn-text-run"), {
         runtime: "acp",
@@ -194,6 +200,358 @@ describe("AcpSessionManager turn results", () => {
         progressSummary: "Current directory is /tmp/openclaw.",
       });
     });
+  });
+
+  it("reports turn acquisition independently when submission authority is unavailable", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const onTurnStreamAcquired = vi.fn();
+    const onLifecycle = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-missing-readiness",
+      onTurnStreamAcquired,
+      onLifecycle,
+    });
+
+    expect(onTurnStreamAcquired).toHaveBeenCalledOnce();
+    expect(onLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("preserves the terminal result when prompt submission observation rejects", async () => {
+    const runtimeState = createRuntime();
+    const startTurn = vi.fn((input: AcpRuntimeTurnInput) => ({
+      requestId: input.requestId,
+      promptSubmission: Promise.reject(new Error("submission observer failed")),
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    runtimeState.runtime.startTurn = startTurn;
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const onTurnStreamAcquired = vi.fn();
+    const onLifecycle = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-rejected-submission-observer",
+        onTurnStreamAcquired,
+        onLifecycle,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
+    expect(onTurnStreamAcquired).toHaveBeenCalledOnce();
+    expect(onLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("settles a completed turn while prompt submission authority remains pending", async () => {
+    const runtimeState = createRuntime();
+    const promptSubmission = createDeferred<"submitted">();
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptSubmission: promptSubmission.promise,
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const onTurnStreamAcquired = vi.fn();
+    const onPromptSubmissionState = vi.fn();
+    const onLifecycle = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-pending-submission-observer",
+        onTurnStreamAcquired,
+        onPromptSubmissionState,
+        onLifecycle,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(onTurnStreamAcquired).toHaveBeenCalledOnce();
+    expect(onPromptSubmissionState.mock.calls).toEqual([["unknown"]]);
+    expect(onLifecycle).not.toHaveBeenCalled();
+
+    promptSubmission.resolve("submitted");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onPromptSubmissionState.mock.calls).toEqual([["unknown"]]);
+    expect(onLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("preserves a stream error while prompt submission authority remains pending", async () => {
+    const runtimeState = createRuntime();
+    const promptSubmission = createDeferred<"submitted">();
+    const closeStream = vi.fn(async () => {});
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptSubmission: promptSubmission.promise,
+      events: (async function* () {
+        yield await Promise.reject(new Error("authoritative stream failure"));
+      })(),
+      result: new Promise<never>(() => {}),
+      cancel: vi.fn(async () => {}),
+      closeStream,
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-pending-submission-stream-error",
+      }),
+    ).rejects.toThrow("authoritative stream failure");
+
+    expect(closeStream).toHaveBeenCalledExactlyOnceWith({ reason: "turn-events-error" });
+  });
+
+  it("does not let a stalled prompt observer delay the terminal result", async () => {
+    const runtimeState = createRuntime();
+    const acquisitionObserved = createDeferred();
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptSubmission: Promise.resolve("submitted" as const),
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const order: string[] = [];
+
+    const manager = new AcpSessionManager();
+    const run = manager
+      .runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-deferred-readiness",
+        onLifecycle: () => {
+          order.push("lifecycle");
+        },
+        onTurnStreamAcquired: async () => {
+          order.push("accounting-started");
+          await acquisitionObserved.promise;
+          order.push("accounting-finished");
+        },
+      })
+      .then(() => {
+        order.push("settled");
+      });
+
+    await vi.waitFor(() => expect(runtimeState.runtime.startTurn).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(order).toEqual(["accounting-started", "lifecycle", "settled"]));
+    await run;
+    expect(order).toEqual(["accounting-started", "lifecycle", "settled"]);
+
+    acquisitionObserved.resolve();
+    await vi.waitFor(() =>
+      expect(order).toEqual(["accounting-started", "lifecycle", "settled", "accounting-finished"]),
+    );
+  });
+
+  it("reports acquisition after prompt readiness even when the submitted turn fails", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptSubmission: Promise.resolve("submitted" as const),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed" as const,
+        error: { code: "ACP_TURN_FAILED", message: "failed after submission" },
+      }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const onTurnStreamAcquired = vi.fn();
+    const onLifecycle = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-post-submit-failure",
+        onTurnStreamAcquired,
+        onLifecycle,
+      }),
+    ).rejects.toThrow("failed after submission");
+
+    expect(onTurnStreamAcquired).toHaveBeenCalledOnce();
+    expect(onLifecycle).toHaveBeenCalledExactlyOnceWith({
+      type: "prompt_submitted",
+      at: expect.any(Number),
+    });
+  });
+
+  it("does not let acquisition observer failures affect a submitted turn", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptSubmission: Promise.resolve("submitted" as const),
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-observer-failure",
+        onTurnStreamAcquired: () => {
+          throw new Error("observer failed");
+        },
+        onLifecycle: () => {
+          throw new Error("lifecycle observer failed");
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not let acquisition observer failures replace a terminal error", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptSubmission: Promise.resolve("submitted" as const),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed" as const,
+        error: { code: "ACP_TURN_FAILED", message: "authoritative terminal failure" },
+      }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-observer-terminal-failure",
+        onTurnStreamAcquired: () => {
+          throw new Error("observer failed");
+        },
+        onLifecycle: () => {
+          throw new Error("lifecycle observer failed");
+        },
+      }),
+    ).rejects.toThrow("authoritative terminal failure");
   });
 
   it("keeps parented ACP turns successful when final output follows progress text", async () => {
@@ -943,18 +1301,31 @@ describe("AcpSessionManager turn results", () => {
         storeSessionKey: "agent:codex:acp:session-1",
         acp: readySessionMeta(),
       });
-      runtimeState.runTurn
-        .mockImplementationOnce(async function* () {
-          yield {
-            type: "error" as const,
-            message,
-          };
-        })
-        .mockImplementationOnce(async function* () {
-          yield { type: "done" as const };
-        });
+      const startTurn = vi
+        .fn()
+        .mockImplementationOnce((input: AcpRuntimeTurnInput) => ({
+          requestId: input.requestId,
+          promptSubmission: Promise.resolve("not_submitted" as const),
+          events: (async function* () {})(),
+          result: Promise.resolve({
+            status: "failed" as const,
+            error: { code: "ACP_TURN_FAILED", message },
+          }),
+          cancel: async () => {},
+          closeStream: async () => {},
+        }))
+        .mockImplementationOnce((input: AcpRuntimeTurnInput) => ({
+          requestId: input.requestId,
+          promptSubmission: Promise.resolve("submitted" as const),
+          events: (async function* () {})(),
+          result: Promise.resolve({ status: "completed" as const }),
+          cancel: async () => {},
+          closeStream: async () => {},
+        }));
+      runtimeState.runtime.startTurn = startTurn;
 
       const manager = new AcpSessionManager();
+      const onTurnStreamAcquired = vi.fn();
       await expect(
         manager.runTurn({
           provenance: "system",
@@ -963,12 +1334,14 @@ describe("AcpSessionManager turn results", () => {
           text: "do work",
           mode: "prompt",
           requestId: "run-1",
+          onTurnStreamAcquired,
         }),
         message,
       ).resolves.toBeUndefined();
 
       expect(runtimeState.ensureSession, message).toHaveBeenCalledTimes(2);
-      expect(runtimeState.runTurn, message).toHaveBeenCalledTimes(2);
+      expect(startTurn, message).toHaveBeenCalledTimes(2);
+      expect(onTurnStreamAcquired, message).toHaveBeenCalledOnce();
       const states = extractStatesFromUpserts();
       expect(states, message).toContain("running");
       expect(states, message).toContain("idle");
@@ -977,19 +1350,188 @@ describe("AcpSessionManager turn results", () => {
     }
   });
 
-  // Drives a thread-bound persistent ACP session whose first turn fails because
-  // the backend can no longer resume the stale session id, then a clean second
-  // turn. Returns observers so each case can assert whether the manager
-  // discarded the stale identity and retried fresh (#87830).
-  function setupStaleResumeScenario(firstTurn: () => AsyncIterable<AcpRuntimeEvent>) {
+  it.each([
+    {
+      name: "missing",
+      promptSubmission: undefined,
+    },
+    {
+      name: "resolved",
+      promptSubmission: Promise.resolve("submitted" as const),
+    },
+  ])("does not retry after $name prompt submission authority", async ({ promptSubmission }) => {
     const runtimeState = createRuntime();
+    const startTurn = vi.fn((input: AcpRuntimeTurnInput) => ({
+      requestId: input.requestId,
+      ...(promptSubmission ? { promptSubmission } : {}),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed" as const,
+        error: {
+          code: "ACP_TURN_FAILED",
+          message: "acpx exited with code 1",
+        },
+      }),
+      cancel: async () => {},
+      closeStream: async () => {},
+    }));
+    runtimeState.runtime.startTurn = startTurn;
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
       runtime: runtimeState.runtime,
     });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do not duplicate",
+        mode: "prompt",
+        requestId: `run-${promptSubmission ? "submitted" : "unknown"}`,
+      }),
+    ).rejects.toThrow("acpx exited with code 1");
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry after a legacy turn stream is acquired", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield {
+        type: "error" as const,
+        message: "acpx exited with code 1",
+      };
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do not duplicate",
+        mode: "prompt",
+        requestId: "run-legacy-unknown",
+      }),
+    ).rejects.toThrow("acpx exited with code 1");
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report acquisition when legacy runTurn throws synchronously", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runTurn.mockImplementation(() => {
+      throw new Error("acpx exited with code 1");
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const onTurnStreamAcquired = vi.fn();
+    const onPromptSubmissionState = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-sync-rejection",
+        onTurnStreamAcquired,
+        onPromptSubmissionState,
+      }),
+    ).rejects.toThrow("acpx exited with code 1");
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expect(onTurnStreamAcquired).not.toHaveBeenCalled();
+    expect(onPromptSubmissionState).not.toHaveBeenCalled();
+  });
+
+  it("keeps synchronous startTurn failures explicitly pre-submission", async () => {
+    const runtimeState = createRuntime();
+    const startTurn = vi.fn(() => {
+      throw new Error("acpx exited with code 1");
+    });
+    runtimeState.runtime.startTurn = startTurn;
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    const onTurnStreamAcquired = vi.fn();
+    const onPromptSubmissionState = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-sync-start-turn-rejection",
+        onTurnStreamAcquired,
+        onPromptSubmissionState,
+      }),
+    ).rejects.toThrow("acpx exited with code 1");
+
+    expect(startTurn).toHaveBeenCalledTimes(2);
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(onTurnStreamAcquired).not.toHaveBeenCalled();
+    expect(onPromptSubmissionState).not.toHaveBeenCalled();
+  });
+
+  // Drives a thread-bound persistent ACP session whose first turn fails because
+  // the backend can no longer resume the stale session id, then a clean second
+  // turn. Returns observers so each case can assert whether the manager
+  // discarded the stale identity and retried fresh (#87830).
+  function setupStaleResumeScenario(
+    firstTurn: () => AsyncIterable<AcpRuntimeEvent>,
+    options: {
+      backend?: string;
+      mode?: "oneshot" | "persistent";
+      promptSubmissionState?: "not_submitted" | "unknown" | "submitted";
+    } = {},
+  ) {
+    const runtimeState = createRuntime();
+    const backend = options.backend ?? "acpx";
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: backend,
+      runtime: runtimeState.runtime,
+    });
     const sessionKey = "agent:claude:acp:binding:discord:default:retry-no-session";
     let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta({ agent: "claude" }),
+      ...readySessionMeta({ agent: "claude", backend, mode: options.mode ?? "persistent" }),
       runtimeSessionName: sessionKey,
       identity: {
         state: "resolved",
@@ -1023,7 +1565,7 @@ describe("AcpSessionManager turn results", () => {
       };
       return {
         sessionKey: input.sessionKey,
-        backend: "acpx",
+        backend,
         runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
         backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
       };
@@ -1033,11 +1575,24 @@ describe("AcpSessionManager turn results", () => {
       backendSessionId: "acpx-sid-fresh",
       details: { status: "alive" },
     });
-    runtimeState.runTurn
-      .mockImplementationOnce(firstTurn)
-      .mockImplementationOnce(async function* () {
-        yield { type: "done" as const };
-      });
+    runtimeState.runtime.startTurn = vi
+      .fn()
+      .mockImplementationOnce((input: AcpRuntimeTurnInput) => ({
+        requestId: input.requestId,
+        promptSubmission: Promise.resolve(options.promptSubmissionState ?? "unknown"),
+        events: firstTurn(),
+        result: new Promise<never>(() => {}),
+        cancel: async () => {},
+        closeStream: async () => {},
+      }))
+      .mockImplementationOnce((input: AcpRuntimeTurnInput) => ({
+        requestId: input.requestId,
+        promptSubmission: Promise.resolve("submitted" as const),
+        events: (async function* () {})(),
+        result: Promise.resolve({ status: "completed" as const }),
+        cancel: async () => {},
+        closeStream: async () => {},
+      }));
     const manager = new AcpSessionManager();
     const runTurn = () =>
       manager.runTurn({
@@ -1105,6 +1660,77 @@ describe("AcpSessionManager turn results", () => {
     );
     await expect(scenario.runTurn()).resolves.toBeUndefined();
     expectFreshRetry(scenario);
+  });
+
+  it("retries a resume-required acpx error after explicit non-submission", async () => {
+    const scenario = setupStaleResumeScenario(
+      async function* () {
+        yield {
+          type: "error" as const,
+          code: "NO_SESSION",
+          detailCode: "SESSION_RESUME_REQUIRED",
+          message: "Persistent ACP session could not be resumed",
+        };
+      },
+      { promptSubmissionState: "not_submitted" },
+    );
+
+    await expect(scenario.runTurn()).resolves.toBeUndefined();
+    expectFreshRetry(scenario);
+  });
+
+  it("does not retry a resume-required error after explicit prompt submission", async () => {
+    const scenario = setupStaleResumeScenario(
+      async function* () {
+        yield {
+          type: "error" as const,
+          code: "NO_SESSION",
+          detailCode: "SESSION_RESUME_REQUIRED",
+          message: "Persistent ACP session could not be resumed",
+        };
+      },
+      { promptSubmissionState: "submitted" },
+    );
+
+    await expect(scenario.runTurn()).rejects.toThrow("could not be resumed");
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledOnce();
+    expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+  });
+
+  it("does not trust acpx resume authority from another backend", async () => {
+    const scenario = setupStaleResumeScenario(
+      async function* () {
+        yield {
+          type: "error" as const,
+          code: "NO_SESSION",
+          detailCode: "SESSION_RESUME_REQUIRED",
+          message: "Persistent ACP session could not be resumed",
+        };
+      },
+      { backend: "custom-backend" },
+    );
+
+    await expect(scenario.runTurn()).rejects.toThrow("could not be resumed");
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledOnce();
+    expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a resume-required error for a oneshot session", async () => {
+    const scenario = setupStaleResumeScenario(
+      async function* () {
+        yield {
+          type: "error" as const,
+          code: "NO_SESSION",
+          detailCode: "SESSION_RESUME_REQUIRED",
+          message: "Persistent ACP session could not be resumed",
+        };
+      },
+      { mode: "oneshot" },
+    );
+
+    await expect(scenario.runTurn()).rejects.toThrow("could not be resumed");
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledOnce();
+    expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
   });
 
   it("does not retry a generic Internal error that is not a resume-required failure", async () => {

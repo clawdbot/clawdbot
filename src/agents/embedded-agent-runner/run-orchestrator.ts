@@ -51,6 +51,7 @@ import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maint
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { executePreparedEmbeddedRun } from "./run-execution.js";
+import { copyEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -104,18 +105,23 @@ export function runEmbeddedAgentInternal(
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runEmbeddedAgentOrchestrated({
-      ...internalParamsInput,
-      config,
-      lifecycleGeneration,
-    }),
+    runEmbeddedAgentOrchestrated(
+      copyEmbeddedRunAccountingObservers(paramsInput, {
+        ...internalParamsInput,
+        config,
+        lifecycleGeneration,
+      }),
+    ),
   );
 }
 
 async function runEmbeddedAgentOrchestrated(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const paramsBase = copyEmbeddedRunAccountingObservers(
+    paramsInput,
+    applyAgentRunSessionTargetIdentity(paramsInput),
+  );
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
     ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
@@ -135,15 +141,17 @@ async function runEmbeddedAgentOrchestrated(
     missingSessionKey: "create",
     sessionKey: effectiveSessionKey,
   });
-  let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
-    ...paramsBase,
-    agentId: runSessionTarget.agentId,
-    sessionId: runSessionTarget.sessionId,
-    sessionKey: runSessionTarget.sessionKey,
-    sessionTarget: runSessionTarget,
-    sessionFile: runSessionTarget.sessionKey,
-    skillWorkshopProposalMutationBudget,
-  });
+  let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics(
+    copyEmbeddedRunAccountingObservers(paramsBase, {
+      ...paramsBase,
+      agentId: runSessionTarget.agentId,
+      sessionId: runSessionTarget.sessionId,
+      sessionKey: runSessionTarget.sessionKey,
+      sessionTarget: runSessionTarget,
+      sessionFile: runSessionTarget.sessionKey,
+      skillWorkshopProposalMutationBudget,
+    }),
+  );
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -190,7 +198,10 @@ async function runEmbeddedAgentOrchestrated(
   if (recoveryMessageActionTurnCapability) {
     // A recovered run reconstructs this capability from the exact durable
     // source claim; revocation below keeps it scoped to this run lifetime.
-    params = { ...params, messageActionTurnCapability: recoveryMessageActionTurnCapability };
+    params = copyEmbeddedRunAccountingObservers(params, {
+      ...params,
+      messageActionTurnCapability: recoveryMessageActionTurnCapability,
+    });
   }
 
   return enqueueSession(async () => {
