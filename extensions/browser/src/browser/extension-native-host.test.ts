@@ -84,14 +84,16 @@ describe("native messaging framing", () => {
               first = false;
               return { done: false as const, value: expected };
             }
-            return await new Promise<IteratorResult<Buffer>>(() => undefined);
+            return await new Promise<IteratorResult<Buffer>>(() => {});
           },
         };
       },
     };
     const result = await Promise.race([
       readBrowserNativeFrame(openPipe),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 100);
+      }),
     ]);
 
     expect(result).toEqual(expected);

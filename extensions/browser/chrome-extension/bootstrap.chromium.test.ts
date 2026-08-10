@@ -184,8 +184,10 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         const predictedId = generateChromeExtensionIdForPath(installed, process.platform);
         const expectedOrigin = `chrome-extension://${predictedId}/`;
         const relevantManifestPaths = chromeProductRoots(deps)
-          .filter((root) => root.userDataDir === userDataDir)
-          .map((root) => path.join(root.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"));
+          .filter((productRoot) => productRoot.userDataDir === userDataDir)
+          .map((productRoot) =>
+            path.join(productRoot.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"),
+          );
         const installPromise = installChromeExtensionBootstrap({
           bundledDir: extensionSource,
           pluginRoot: path.resolve("extensions/browser"),

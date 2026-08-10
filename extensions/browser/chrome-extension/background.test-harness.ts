@@ -172,7 +172,7 @@ export async function loadBackground({
       },
       connectNative: vi.fn((host: string) => {
         let disconnected = false;
-        let messageListener: ((response: unknown) => void) | undefined;
+        let nativeMessageListener: ((response: unknown) => void) | undefined;
         let disconnectListener: (() => void) | undefined;
         const disconnect = () => {
           if (disconnected) {
@@ -190,17 +190,17 @@ export async function loadBackground({
           },
           onMessage: {
             addListener: (listener: (response: unknown) => void) => {
-              messageListener = listener;
+              nativeMessageListener = listener;
             },
           },
           postMessage: (request: unknown) => {
             void sendNativeMessage(host, request).then(
               (response) => {
                 if (!disconnected) {
-                  messageListener?.(response);
+                  nativeMessageListener?.(response);
                 }
               },
-              (error) => {
+              (error: unknown) => {
                 if (!disconnected) {
                   runtimeLastError = {
                     message: error instanceof Error ? error.message : String(error),

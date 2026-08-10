@@ -21,7 +21,6 @@ import {
 } from "./extension-install.js";
 
 const ID_A = "abcdefghijklmnopabcdefghijklmnop";
-const ID_B = "ponmlkjihgfedcbaponmlkjihgfedcba";
 const tempRoots: string[] = [];
 
 async function predictedId(candidate: string, platform: NodeJS.Platform = process.platform) {
