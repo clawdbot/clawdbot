@@ -404,6 +404,35 @@ describe("skill collection reconciliation", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
   });
 
+  it("preserves an edit made while restore artifacts are captured", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Original procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [
+        {
+          action: "write",
+          name: "procedure",
+          description: "Clean procedure",
+          content: "# Clean\n",
+        },
+      ],
+    });
+    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
+    snapshotCommittedSkillArtifactBestEffort.mockImplementationOnce(async () => {
+      await fs.appendFile(skillFile, "\nManual improvement.\n");
+      return undefined;
+    });
+
+    await expect(
+      restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+    ).rejects.toThrow("changed after cleanup");
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
+  });
+
   it("rolls back a failed restore so the backup remains retryable", async () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "procedure", description: "Original procedure", body: "# Original\n" },
@@ -581,6 +610,35 @@ describe("skill collection reconciliation", () => {
     renameSpy.mockRestore();
 
     expect(getArchivedSkillFiles({ env: testState.env })).toEqual(new Set([skillFile]));
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
+  });
+
+  it("restores a staged drop when backup commit fails", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "obsolete", description: "Obsolete procedure", body: "# Original\n" },
+    ]);
+    const skillFile = path.join(workspaceDir, "skills", "obsolete", "SKILL.md");
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (String(oldPath).includes(`${path.sep}.pending-`)) {
+        throw new Error("forced backup commit failure");
+      }
+      await originalRename(oldPath, newPath);
+    });
+
+    try {
+      await expect(
+        reconcileSkillCollection({
+          workspaceDir,
+          env: testState.env,
+          ...(await readCollectionReceipt()),
+          plan: [{ action: "drop", name: "obsolete", reason: "obsolete" }],
+        }),
+      ).rejects.toThrow("forced backup commit failure");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
   });
 

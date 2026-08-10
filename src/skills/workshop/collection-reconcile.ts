@@ -31,9 +31,10 @@ import {
 import { validateSkillCollectionPlan } from "./collection-plan.js";
 import { recordSkillCollectionReviewSuccess } from "./collection-review-state.js";
 import {
-  removeSkillCollectionDirectory,
+  discardStagedSkillCollectionDrops,
   restoreSkillCollectionBackupTransaction,
   rollbackSkillCollectionMutation,
+  stageSkillCollectionDrop,
 } from "./collection-rollback.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
@@ -235,7 +236,9 @@ export async function reconcileSkillCollection(params: {
         throw error;
       }
       const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
-      const droppedSkills: WritableSkillCollectionEntry[] = [];
+      const droppedSkills: Array<
+        Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
+      > = [];
       try {
         for (const mutation of prepared) {
           await applyWorkspaceSkillMutation(mutation);
@@ -246,15 +249,12 @@ export async function reconcileSkillCollection(params: {
             continue;
           }
           const skill = currentByName.get(entry.name)!;
-          await removeSkillCollectionDirectory(workspaceDir, skill.baseDir);
-          droppedSkills.push(skill);
+          droppedSkills.push(await stageSkillCollectionDrop(skill));
         }
         await commitCollectionBackup(workspaceDir, backup);
       } catch (error) {
         try {
           await rollbackSkillCollectionMutation({
-            workspaceDir,
-            backupDir: backup.backupDir,
             appliedWrites,
             droppedSkills,
           });
@@ -268,6 +268,7 @@ export async function reconcileSkillCollection(params: {
         throw error;
       }
       bumpSkillsSnapshotVersion({ reason: "workshop" });
+      await discardStagedSkillCollectionDrops(workspaceDir, droppedSkills);
       clearCuratedSkillLifecycle(
         current.map((skill) => skill.filePath),
         params.env ? { env: params.env } : {},
@@ -370,6 +371,7 @@ export async function restoreLatestSkillCollectionBackup(params: {
           );
         }
       }
+      await assertCollectionResultUnchanged(workspaceDir, manifest);
       try {
         await restoreSkillCollectionBackupTransaction({
           workspaceDir,

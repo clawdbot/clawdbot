@@ -11,10 +11,8 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 
 export async function rollbackSkillCollectionMutation(params: {
-  workspaceDir: string;
-  backupDir: string;
   appliedWrites: readonly PreparedWorkspaceSkillMutation[];
-  droppedSkills: readonly { name: string; baseDir: string }[];
+  droppedSkills: readonly { name: string; baseDir: string; stagedDir: string }[];
 }): Promise<void> {
   const errors: unknown[] = [];
   for (const mutation of params.appliedWrites.toReversed()) {
@@ -37,18 +35,36 @@ export async function rollbackSkillCollectionMutation(params: {
       if (await pathExists(skill.baseDir)) {
         throw new Error(`Dropped skill changed before restoration: ${skill.name}`);
       }
-      await fs.mkdir(path.dirname(skill.baseDir), { recursive: true });
-      await fs.cp(
-        path.join(params.backupDir, "workspace", path.relative(params.workspaceDir, skill.baseDir)),
-        skill.baseDir,
-        { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true },
-      );
+      await fs.rename(skill.stagedDir, skill.baseDir);
     } catch (error) {
       errors.push(error);
     }
   }
   if (errors.length > 0) {
     throw new AggregateError(errors, "Failed to restore the previous skill collection.");
+  }
+}
+
+export async function stageSkillCollectionDrop(params: {
+  name: string;
+  baseDir: string;
+}): Promise<{ name: string; baseDir: string; stagedDir: string }> {
+  const stagedDir = path.join(
+    path.dirname(params.baseDir),
+    `.openclaw-drop-${path.basename(params.baseDir)}-${randomUUID()}`,
+  );
+  await fs.rename(params.baseDir, stagedDir);
+  return { name: params.name, baseDir: params.baseDir, stagedDir };
+}
+
+export async function discardStagedSkillCollectionDrops(
+  workspaceDir: string,
+  droppedSkills: readonly { stagedDir: string }[],
+): Promise<void> {
+  for (const skill of droppedSkills) {
+    await removeSkillCollectionDirectory(workspaceDir, skill.stagedDir).catch((error: unknown) => {
+      logWarn(`skill-workshop: failed to discard staged skill drop: ${String(error)}`);
+    });
   }
 }
 
