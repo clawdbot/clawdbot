@@ -89,7 +89,7 @@ export function listRepoFilesSync(
 ): string[] {
   const roots = options.roots ?? REPO_SCAN_ROOTS;
   try {
-    return execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
+    const trackedFiles = execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: GIT_LS_FILES_TIMEOUT_MS,
@@ -98,7 +98,10 @@ export function listRepoFilesSync(
     })
       .split(/\r?\n/u)
       .filter(Boolean)
-      .map(toPosixPath)
+      .map(toPosixPath);
+    // Staged deletions remain in Git's index, while every caller scans the working tree.
+    return trackedFiles
+      .filter((file) => fs.existsSync(path.join(repoRoot, file)))
       .filter(options.includeFile)
       .toSorted((left, right) => left.localeCompare(right));
   } catch {

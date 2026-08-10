@@ -461,6 +461,13 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "extensions/memory-core/src/memory/manager-source-sync-ops.ts",
   ),
   entry(
+    "session-memory-hook-transcript-capture",
+    "derive",
+    "core-session-runtime",
+    "blocked-in-enforced-mode",
+    "src/hooks/bundled/session-memory/handler.ts",
+  ),
+  entry(
     "memory-migration-import",
     "ingress",
     "operator-memory-host",
