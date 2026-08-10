@@ -90,11 +90,14 @@ export function createImageGenerateListActionResult(params: {
 }): ImageGenerateActionResult {
   const providers = listRuntimeImageGenerationProviders({ config: params.cfg });
   // Shared readiness owner for list/status callers that do not go through factory plan prep.
+  // Include configured media model so explicit image models stay available even with no runtime
+  // providers (matches resolveOptionalMediaToolFactoryPlan / registration).
   const generationAvailable = hasGenerationToolAvailability({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.image,
     providers,
     providerKey: "imageGenerationProviders",
   });
