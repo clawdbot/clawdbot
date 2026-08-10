@@ -461,6 +461,7 @@ export function assertTrustedWorkflowHarness(
   } catch (error) {
     throw new Error(
       `Tooling SHA ${workflowSha} contains invalid ${TRUSTED_WORKFLOW_PATH}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   if (

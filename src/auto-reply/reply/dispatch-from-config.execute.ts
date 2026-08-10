@@ -681,6 +681,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   originatingThreadId: state.routeReplyThreadId,
                   originatingChatType: replyRoute.chatType,
                   shouldSendToolSummaries: state.shouldSendToolSummaries,
+                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
                   sendPolicy: state.sendPolicy,
                   isTailDispatch: true,
                 }),

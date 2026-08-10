@@ -852,8 +852,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         }),
     });
   };
-  const emitToolSummary = (toolName?: string, meta?: string) => {
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+  const emitToolSummary = (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => {
+    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
     });
     emitToolResultMessage(toolName, agg);

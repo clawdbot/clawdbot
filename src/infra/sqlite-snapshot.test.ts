@@ -612,6 +612,10 @@ describe("createVerifiedSqliteSnapshot", () => {
         linked = true;
       }
     });
+    // Forward only the path, not lstat options: passing bigint options through
+    // changes which publication-identity call the injected EIO lands on, and on
+    // Windows that surfaces "publication source identity did not match" instead
+    // of the inspection failure under test (broke checks-windows-node-test).
     vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
       if (linked && !failedInspection && path.resolve(String(filePath)) === targetPath) {
         failedInspection = true;

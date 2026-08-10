@@ -38,6 +38,12 @@ import { cancelRunBoundExecApprovals } from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../approval-channel-custody.js", () => ({
+  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
+}));
+
 const tempDirs: string[] = [];
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
 const managersForCleanup: Array<{
@@ -313,6 +319,47 @@ describe("unified approval handlers", () => {
     expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
       expect.objectContaining({ approvalKind: "system-agent" }),
     );
+  });
+
+  it("checks live channel custody before the canonical resolution CAS", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, {
+      id: "channel-custody-cas",
+      request: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
+      reviewerDeviceIds: [],
+    });
+    prepareApprovalChannelCustodyMock.mockReturnValue({
+      resolverId: "telegram:ops",
+      authorizes: (request: { request: ExecApprovalRequestPayload }) =>
+        request.request.turnSourceAccountId === "ops",
+    });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: pending.record.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      },
+      client: createClient({ internal: true }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+      kind: "channel",
+      id: "telegram:ops",
+    });
   });
 
   it("returns mapped terminal history with attribution and a next cursor", async () => {

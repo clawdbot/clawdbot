@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -912,22 +913,24 @@ export function createSessionsSendTool(opts?: {
             // This detached flow can outlive the tool request that launched it.
             // Own a fresh root so parent release cannot retire later nested turns.
             void runWithGatewayIndependentRootWorkContinuation(() =>
-              runSessionsSendA2AFlow({
-                callGateway: gatewayCall,
-                targetSessionKey: flowTargetSessionKey,
-                displayKey: flowDisplayKey,
-                message,
-                announceTimeoutMs,
-                // Cron runs are isolated jobs; target replies must not become new
-                // requester turns, but the target-side announce still runs.
-                maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                requesterSessionKey: replyRequesterSessionKey,
-                requesterChannel,
-                baseline: flowBaseline,
-                roundOneReply,
-                waitRunId,
-                notifyRequesterOnWaitFailure,
-              }),
+              runWithoutOwnedSessionTranscriptWrites(() =>
+                runSessionsSendA2AFlow({
+                  callGateway: gatewayCall,
+                  targetSessionKey: flowTargetSessionKey,
+                  displayKey: flowDisplayKey,
+                  message,
+                  announceTimeoutMs,
+                  // Cron runs are isolated jobs; target replies must not become new
+                  // requester turns, but the target-side announce still runs.
+                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                  requesterSessionKey: replyRequesterSessionKey,
+                  requesterChannel,
+                  baseline: flowBaseline,
+                  roundOneReply,
+                  waitRunId,
+                  notifyRequesterOnWaitFailure,
+                }),
+              ),
             ).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",

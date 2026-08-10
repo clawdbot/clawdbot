@@ -201,6 +201,21 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes MCP environment resolution and native doctor coverage to Windows", () => {
+    for (const mcpPath of [
+      "src/cli/mcp-cli.ts",
+      "src/cli/mcp-cli.test.ts",
+      "src/cli/mcp-cli.path-case.windows.test.ts",
+      "src/infra/process-env.ts",
+      "src/infra/process-env.test.ts",
+    ]) {
+      expect(detectChangedScope([mcpPath]), mcpPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SecretRef path-security changes and native fixtures to Windows", () => {
     for (const secretRefPath of [
       "src/commands/doctor-gateway-auth-token.ts",

@@ -409,7 +409,6 @@ export async function dispatchCronDelivery(
           channel: delivery.channel,
           to: delivery.to,
           threadId: stringifyRouteThreadId(delivery.threadId),
-          error: err,
           partialDelivered: payloadMayHaveReachedRecipientBeforeFailure,
         });
         await queueCronAwarenessSystemEvent({

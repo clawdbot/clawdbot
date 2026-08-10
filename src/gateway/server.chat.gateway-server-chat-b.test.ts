@@ -5269,7 +5269,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history advances past an oversized newest record when the tail parses empty", async () => {
+  test("chat.history serves older history past an oversized newest record", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const historyMaxBytes = getMaxChatHistoryMessagesBytes();
@@ -5289,18 +5289,9 @@ describe("gateway server chat", () => {
         hasMore?: boolean;
       }>(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
       expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages).toEqual([]);
-      expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
-        ws,
-        "chat.history",
-        makeMainSessionParams({ limit: 1, offset: firstPage.payload?.nextOffset }),
-      );
-      expect(olderPage.ok).toBe(true);
-      expect(JSON.stringify(olderPage.payload?.messages)).toContain("reachable older message");
-      expect(olderPage.payload?.hasMore).toBe(false);
+      expect(JSON.stringify(firstPage.payload?.messages)).toContain("reachable older message");
+      expect(firstPage.payload?.hasMore).toBe(false);
+      expect(firstPage.payload?.nextOffset).toBeUndefined();
     });
   });
 
@@ -5807,6 +5798,83 @@ describe("gateway server chat", () => {
       expect(JSON.stringify(messages)).toContain("visible question");
       expect(JSON.stringify(messages)).toContain("visible answer");
       expect(JSON.stringify(messages)).not.toContain("NO_REPLY");
+    });
+  });
+
+  // A silent tail longer than the bounded raw window used to project to an empty
+  // first page while the branch still held visible turns, and snapshot clients
+  // erase their rendered conversation when that page comes back empty.
+  test.each([
+    { name: "tail request", params: { limit: 2, maxChars: 100 } },
+    { name: "explicit first page", params: { limit: 2, maxChars: 100, offset: 0 } },
+  ])(
+    "chat.history recovers visible history when the raw tail window is entirely silent ($name)",
+    async ({ params }) => {
+      await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+        await prepareMainHistoryHarness({ ws, createSessionDir });
+        // limit 2 reads at most 2 * 20 + 20 raw records, so 80 silent records
+        // push every visible turn out of the tail window.
+        const silentTail = Array.from({ length: 80 }, (_, index) =>
+          createTextTranscriptEvent("assistant", "NO_REPLY", {
+            timestamp: Date.now() + index + 2,
+          }),
+        );
+        await writeMainSessionTranscript([
+          createTextTranscriptEvent("user", "visible question", { timestamp: Date.now() }),
+          createTextTranscriptEvent("assistant", "visible answer", { timestamp: Date.now() + 1 }),
+          ...silentTail,
+        ]);
+
+        const page = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
+          ws,
+          "chat.history",
+          makeMainSessionParams(params),
+        );
+        expect(page.ok).toBe(true);
+        expect(JSON.stringify(page.payload?.messages)).toContain("visible question");
+        expect(JSON.stringify(page.payload?.messages)).toContain("visible answer");
+        expect(JSON.stringify(page.payload?.messages)).not.toContain("NO_REPLY");
+        expect(page.payload?.hasMore).toBe(false);
+      });
+    },
+  );
+
+  test("chat.history overreads context while scanning past a silent tail", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sessionStartedAt = Date.now();
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now(), sessionStartedAt },
+        },
+      });
+      // limit 2 reads a 60-record tail, and the scan then walks 100-record
+      // chunks, so record 239 of 400 is the first chunk's context boundary.
+      const silent = (index: number, count: number) =>
+        Array.from({ length: count }, (_, offset) =>
+          createTextTranscriptEvent("assistant", "NO_REPLY", {
+            timestamp: sessionStartedAt + index + offset,
+          }),
+        );
+      await writeMainSessionTranscript([
+        createTextTranscriptEvent("user", "oldest visible question", {
+          timestamp: sessionStartedAt + 1,
+        }),
+        ...silent(2, 238),
+        createTextTranscriptEvent("user", "stale announce", {
+          timestamp: sessionStartedAt - 2_000,
+          message: { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } },
+        }),
+        createTextTranscriptEvent("assistant", "stale announce reply", {
+          timestamp: sessionStartedAt - 1_000,
+        }),
+        ...silent(300, 159),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2, maxChars: 100 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("oldest visible question");
+      expect(serialized).not.toContain("stale announce reply");
     });
   });
 

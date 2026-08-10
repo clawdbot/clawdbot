@@ -6,6 +6,7 @@ export const SETUP_ADMISSION_BUSY_MESSAGE =
   "OpenClaw setup is already in progress; try again when it finishes.";
 
 let wizardSessionInProgress = false;
+const wizardSessionAdmissionSettlements = new WeakMap<object, Promise<unknown>>();
 
 export class SetupAdmissionBusyError extends Error {}
 
@@ -27,6 +28,12 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
   }
 }
 
+export function whenAdmittedWizardSessionSettled(session: {
+  whenSettled(): Promise<unknown>;
+}): Promise<unknown> {
+  return wizardSessionAdmissionSettlements.get(session) ?? session.whenSettled();
+}
+
 export async function createAdmittedWizardSession<T extends { whenSettled(): Promise<unknown> }>(
   createSession: () => T,
   lockSetupTarget = true,
@@ -39,16 +46,20 @@ export async function createAdmittedWizardSession<T extends { whenSettled(): Pro
     wizardSessionInProgress = false;
   };
   try {
+    let admissionSettled: Promise<unknown> | undefined;
     const session = lockSetupTarget
       ? await new Promise<T>((resolve, reject) => {
-          void runExclusiveSystemAgentSetupActivation(async () => {
+          admissionSettled = runExclusiveSystemAgentSetupActivation(async () => {
             const createdSession = createSession();
             resolve(createdSession);
             await createdSession.whenSettled();
-          }).catch(reject);
+          });
+          void admissionSettled.catch(reject);
         })
       : createSession();
-    void session.whenSettled().then(releaseSession, releaseSession);
+    const settled = admissionSettled ?? session.whenSettled();
+    wizardSessionAdmissionSettlements.set(session, settled);
+    void settled.then(releaseSession, releaseSession);
     return session;
   } catch (error) {
     releaseSession();

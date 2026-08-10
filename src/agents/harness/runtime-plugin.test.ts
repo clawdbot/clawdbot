@@ -73,6 +73,19 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.entries?.codex).toEqual({ enabled: true });
   });
 
+  it("includes and enables the context-engine owner in the prepared load plan", () => {
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: [],
+      selections: [],
+    });
+
+    expect(plan.pluginIds).toEqual(["custom-context-engine"]);
+    expect(plan.config?.plugins?.allow).toEqual(["custom-context-engine"]);
+    expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
+  });
+
   const memorySelectionCases: Array<{
     name: string;
     config: OpenClawConfig;

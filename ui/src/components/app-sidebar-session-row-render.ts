@@ -10,6 +10,7 @@ import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -197,6 +198,14 @@ export function renderRecentSession(params: {
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
   const menuSession = display ? { ...session, meta } : session;
+  const openMenuFromEvent = session.isChild
+    ? undefined
+    : (event: MouseEvent | KeyboardEvent) =>
+        handleContextMenuEvent(
+          event,
+          (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
+          (trigger, x, y) => host.sidebarMenus.openSessionMenu(menuSession, x, y, trigger),
+        );
   const title = [
     display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · "),
     trailingDescription,
@@ -257,18 +266,8 @@ export function renderRecentSession(params: {
         : () => {
             host.finishSessionDrag();
           }}
-      @contextmenu=${session.isChild
-        ? nothing
-        : (event: MouseEvent) => {
-            event.preventDefault();
-            const rowElement = event.currentTarget as HTMLElement;
-            const trigger =
-              rowElement.querySelector<HTMLElement>("[data-session-menu]") ??
-              (event.target instanceof Element
-                ? event.target.closest<HTMLElement>("a, button, [tabindex]")
-                : null);
-            host.sidebarMenus.openSessionMenu(menuSession, event.clientX, event.clientY, trigger);
-          }}
+      @contextmenu=${openMenuFromEvent ?? nothing}
+      @keydown=${openMenuFromEvent ?? nothing}
       @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
     >

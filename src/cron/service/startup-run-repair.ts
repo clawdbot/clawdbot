@@ -82,6 +82,7 @@ export function markInterruptedStartupRun(params: {
   job.state.lastRunStatus = "error";
   job.state.lastStatus = "error";
   job.state.lastError = STARTUP_INTERRUPTED_ERROR;
+  job.state.lastErrorReason = undefined;
   job.state.lastDurationMs = Math.max(0, nowMs - runningAtMs);
   job.state.consecutiveErrors = previousErrors + 1;
   job.state.lastDelivered = false;
@@ -98,7 +99,6 @@ export function markInterruptedStartupRun(params: {
       state: params.state,
       job,
       atMs: nowMs,
-      error: STARTUP_INTERRUPTED_ERROR,
       deferredNotifications: params.deferredNotifications,
     })
   ) {

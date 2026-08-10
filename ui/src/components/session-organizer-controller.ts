@@ -33,6 +33,7 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
+type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
 
 export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
@@ -42,6 +43,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "publishSessionMutationError"
     | "refreshSidebarSessions"
     | "resetForStatusFilter"
+    | "sessionMutationError"
   >;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
@@ -79,6 +81,14 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   hostConnected(): void {}
+
+  // No dialog teardown here on purpose. The sidebar detaches for reasons that
+  // are not the operator leaving — a narrow viewport drops it entirely — and
+  // cancelling on those would throw away a name mid-edit. The dialog is a
+  // body-level modal, so it outlives the sidebar's DOM position by design; the
+  // Sessions page binds its own dialogs because a page unmount really is a
+  // navigation.
+  hostDisconnected(): void {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
@@ -391,12 +401,26 @@ export class SessionOrganizerController implements ReactiveController {
     this.finishSidebarEntryDrag();
   }
 
+  /** A dialog that never opens still owes the operator a visible outcome. */
+  private async loadInputDialog(): Promise<InputDialogOpener | null> {
+    try {
+      return (await import("./input-dialog.ts")).showInputDialog;
+    } catch (error) {
+      const scope = this.host.sessionData.beginSessionMutation();
+      if (scope) {
+        this.host.sessionData.publishSessionMutationError(scope, error);
+      }
+      return null;
+    }
+  }
+
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const { showInputDialog } = await import("./input-dialog.ts");
-    const nextLabel = await showInputDialog({
-      title: t("sessionsView.renameSessionPrompt"),
-      defaultValue: session.label,
-    });
+    const showInputDialog = await this.loadInputDialog();
+    const nextLabel =
+      (await showInputDialog?.({
+        title: t("sessionsView.renameSessionPrompt"),
+        defaultValue: session.label,
+      })) ?? null;
     if (nextLabel === null) {
       return;
     }
@@ -409,16 +433,45 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    const name = window.prompt(t("sessionsView.newGroupPrompt"))?.trim();
-    if (!name) {
-      return;
-    }
+    const showInputDialog = await this.loadInputDialog();
+    await showInputDialog?.({
+      title: t("sessionsView.newGroupTitle"),
+      label: t("sessionsView.newGroupPrompt"),
+      submitLabel: t("sessionsView.newGroupCreate"),
+      requireValue: true,
+      submit: (name) => this.writeSessionGroup(name, sessions),
+    });
+  }
+
+  /**
+   * Replays the failure the mutation already recorded so the dialog can keep the
+   * typed name for a retry. A replaced connection confirmed neither the group nor
+   * the move, so it reports a retryable message too rather than closing on an
+   * outcome that never landed; resubmitting runs against the new connection.
+   */
+  private async writeSessionGroup(
+    name: string,
+    sessions: readonly SidebarRecentSession[],
+  ): Promise<string | null> {
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
-      return;
+      return t("sessionsView.newGroupFailed");
     }
     const operations = await this.loadOperations(scope);
-    await operations?.createSessionGroup(this.host, name, sessions, scope);
+    if (!operations) {
+      return this.host.sessionData.isSessionMutationScopeCurrent(scope)
+        ? this.sessionGroupFailure()
+        : t("sessionsView.newGroupStale");
+    }
+    const result = await operations.createSessionGroup(this.host, name, sessions, scope);
+    if (result === "failed") {
+      return this.sessionGroupFailure();
+    }
+    return result === "stale" ? t("sessionsView.newGroupStale") : null;
+  }
+
+  private sessionGroupFailure(): string {
+    return this.host.sessionData.sessionMutationError ?? t("sessionsView.newGroupFailed");
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {

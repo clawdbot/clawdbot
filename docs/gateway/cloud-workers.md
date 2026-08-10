@@ -38,13 +38,15 @@ The box needs no inbound ports except `sshd`: the Gateway connects out via pinne
 
 In managed mode, the Crabbox coordinator owns the cloud-provider credentials and provisions AWS on the Gateway user's behalf. Local AWS keys are not required. Authenticate interactively, then verify the stored coordinator and provider state:
 
-Before provisioning, determine the Gateway host's outbound IPv4:
+Crabbox normally discovers the Gateway host's outbound IPv4 when a lease is requested and sends that `/32` as the effective SSH ingress policy. This discovered value is request-scoped, so `crabbox config show --json` can legitimately continue to show an empty `aws.sshCIDRs` list.
+
+For a fixed ingress policy, determine the outbound IPv4 yourself:
 
 ```bash
 curl -fsS https://checkip.amazonaws.com
 ```
 
-Add that address as a `/32` to Crabbox's own configuration. For example, if the command prints `203.0.113.10`:
+Then add that address as a `/32` to Crabbox's own configuration. For example, if the command prints `203.0.113.10`:
 
 ```yaml
 aws:
@@ -52,7 +54,7 @@ aws:
     - 203.0.113.10/32
 ```
 
-Direct SSH originates from the Gateway host, while the coordinator API may see a reverse-proxy or request-source address. Explicit pinning keeps later Crabbox security-group reconciliation from replacing the actual SSH caller with that API-facing address.
+Direct SSH originates from the Gateway host, while the coordinator API may see a reverse-proxy or request-source address. Explicit pinning is useful when outbound detection is unavailable or a fixed policy is required.
 
 ```bash
 crabbox login --url <coordinator-url> --provider aws
@@ -61,7 +63,7 @@ crabbox whoami --json
 crabbox doctor --provider aws --json
 ```
 
-Before provisioning, confirm `crabbox config show --json` reports the expected `/32` under `aws.sshCIDRs`, then review `crabbox doctor --provider aws --json` for provider-readiness failures. `doctor` is non-mutating: it checks the coordinator, broker identity, local tools, and AWS provider readiness without creating or changing a lease. Trusted automation can pipe an approved coordinator token through stdin instead of placing it on the command line:
+Before provisioning, review `crabbox doctor --provider aws --json` for provider-readiness failures. If `aws.sshCIDRs` is explicitly configured, also confirm `crabbox config show --json` reports the expected `/32`; an empty list is valid when using request-time discovery. `doctor` is non-mutating: it checks the coordinator, broker identity, local tools, and read-only AWS control-plane access without creating or changing a lease. It cannot prove mutating IAM permissions such as key-pair import, instance launch, tagging, or termination; a direct-provider report containing `mutation=false` is not a write-access attestation. Trusted automation can pipe an approved coordinator token through stdin instead of placing it on the command line:
 
 ```bash
 printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login \
@@ -103,7 +105,6 @@ Profile fields:
 | `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                                                 |
 | `install`  | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release.                                                                                     |
 | `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup`, optional `desktop` (boolean), and absolute `binary` path. OpenClaw forces public SSH and disables managed Tailscale for these leases. |
-| `lifetime` | Optional stored policy (`idleTimeoutMinutes`, `maxLifetimeMinutes`).                                                                                                                                                                                                          |
 
 Crabbox inspect reports a primary SSH port and may advertise ordered fallback ports. OpenClaw persists that order across Gateway restarts. Its shared pinned SSH transport rotates candidates only for replay-safe operations: idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed on their current candidate and are not replayed on another port. OpenClaw never invents an unadvertised port. If your network policy pins SSH ingress, allow at least one advertised Crabbox candidate.
 
@@ -217,8 +218,9 @@ Desktop observe is not supported when the Gateway itself runs on Windows.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.
 - **Dispatch or workspace recovery fails** — inspect `environments.list` and `sessions.describe`. A failed environment exposes its bounded environment error. A failed placement exposes `recoveryError` plus its durable per-session `terminalReason`; the selected Control UI chat shows that terminal reason above the composer. When deeper diagnosis is necessary, an operator on the Gateway host can inspect the durable worker state read-only. Do not edit the state database to bypass lifecycle fencing.
-- **No SSH candidate is reachable** — compare the Gateway host's current outbound IPv4 with Crabbox's effective `aws.sshCIDRs` in `crabbox config show --json`. If the matching `/32` is absent, correct Crabbox's configuration and rerun `crabbox doctor --provider aws --json` before retrying; the coordinator's reverse-proxy or request-source address is not necessarily the Gateway's direct SSH source. Then ensure the Gateway's outbound route and the worker ingress policy permit at least one advertised candidate. OpenClaw rotates the ordered ports with the same identity and pinned host key only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed on the next port.
-- **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously (dispatch keeps running server-side either way, and a retry while provisioning is rejected with `session cannot dispatch from placement provisioning`).
+- **No SSH candidate is reachable** — compare the Gateway host's current outbound IPv4 with an explicitly configured `aws.sshCIDRs` policy in `crabbox config show --json`. If the matching `/32` is absent, correct Crabbox's configuration and rerun `crabbox doctor --provider aws --json` before retrying. An empty configured list is valid because Crabbox normally discovers and injects the caller's `/32` when requesting the lease; if reachability still fails, pin the `/32` explicitly. Then ensure the Gateway's outbound route and the worker ingress policy permit at least one advertised candidate. OpenClaw rotates the ordered ports with the same identity and pinned host key only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed on the next port.
+- **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously. Dispatch keeps running server-side either way, and an identical retry on the same Gateway joins that in-flight operation instead of provisioning another worker. A retry with a different profile or session identity is rejected.
+- **Direct AWS authorization fails after `doctor` passes** — `doctor` proves read-only AWS access, not the complete mutation policy. Inspect the named denied action and grant only Crabbox's required provisioning/cleanup actions, or configure coordinator-backed Crabbox instead. A fresh direct AWS lease normally needs key-pair import before `RunInstances`; an authorization failure there creates no instance.
 - **Worker reclaimed after upgrading from a 2026.7.2 beta** — those betas used the older worker launch contract. On restart, OpenClaw destroys an idle incompatible worker, keeps the session and workspace, marks the placement reclaimed, and provisions a current worker on the next dispatch or turn. A beta worker interrupted while still starting is marked failed after cleanup; retry the dispatch to provision it with the current contract.
 - **Cloud workspace conflict notice** — the turn completed and kept the local version of each listed path. Use the staged-ref commands in the notice to inspect or take the cloud version; no retry is required for the non-conflicting changes, which are already applied.
 - **“The previous cloud turn's workspace result is still reconciling”** — the Gateway waited briefly for the prior result's durable fence and could not acquire the session claim. Wait for reconciliation to finish, then retry the turn; restarting the Gateway is safe because recovery preserves staged results before reclaiming a dead worker.

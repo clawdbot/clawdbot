@@ -533,13 +533,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       });
 
       const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
-      expect(lastUpdate?.text).toContain("install dependencies");
+      expect(lastUpdate?.text).not.toContain("install dependencies");
       expect(lastUpdate?.text).not.toContain("completed");
       expect(lastUpdate).toEqual(
-        telegramProgressPreview(
-          "Shelling\n\n🛠️ install dependencies",
-          "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>install dependencies</code>",
-        ),
+        telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
       );
     } finally {
       vi.useRealTimers();

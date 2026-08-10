@@ -228,7 +228,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -254,7 +256,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot, newlyObservedFrom) => replays.push({ snapshot, newlyObservedFrom }),
+      onReplay: (snapshot, newlyObservedFrom) => {
+        replays.push({ snapshot, newlyObservedFrom });
+      },
     });
     deferRequest(client, "terminal.attach", recovery);
 
@@ -276,6 +280,53 @@ describe("TerminalConnection", () => {
 
     emitData(client, 20, "!");
     expect(data).toEqual(["hello", "!"]);
+  });
+
+  it("does not let a superseded recovery drain the replacement stream queue", async () => {
+    const { client, conn } = makeHarness();
+    const oldReplay = deferred<void>();
+    const oldReplayEvents: string[] = [];
+    let oldReplayIsCurrent: (() => boolean) | undefined;
+    await openSession(conn, {
+      onData: () => {},
+      onReplay: async (_snapshot, _newlyObservedFrom, _mode, isCurrent) => {
+        oldReplayIsCurrent = isCurrent;
+        oldReplayEvents.push("start");
+        await oldReplay.promise;
+        oldReplayEvents.push("done");
+      },
+    });
+    client.nextResponse = sessionResult({ buffer: "old snapshot", seq: 12 });
+    emitData(client, 5, "hello");
+    emitData(client, 12, "world");
+    await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start"]));
+    expect(oldReplayIsCurrent?.()).toBe(true);
+
+    const newReplay = deferred<void>();
+    const newReplayEvents: string[] = [];
+    const newData: string[] = [];
+    client.nextResponse = sessionResult({ buffer: "new snapshot", seq: 20 });
+    const newAttach = conn.attach("s1", {
+      onData: (chunk) => newData.push(chunk),
+      onReplay: async () => {
+        newReplayEvents.push("start");
+        await newReplay.promise;
+        newReplayEvents.push("done");
+      },
+      onExit: () => {},
+    });
+    await vi.waitFor(() => expect(newReplayEvents).toEqual(["start"]));
+    expect(oldReplayIsCurrent?.()).toBe(false);
+    emitData(client, 21, "!");
+
+    oldReplay.resolve();
+    await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start", "done"]));
+    await Promise.resolve();
+    newReplay.resolve();
+    await newAttach;
+
+    expect(newReplayEvents).toEqual(["start", "done"]);
+    expect(newData).toEqual(["!"]);
   });
 
   it("never appends a recovery snapshot when the sink cannot reset", async () => {
@@ -301,7 +352,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -326,7 +379,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -380,7 +435,9 @@ describe("TerminalConnection", () => {
 
     const opening = openSession(conn, {
       onData: () => {},
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     emitData(client, 7, "first");
@@ -625,6 +682,48 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["replayed history", " tail", " live"]);
   });
 
+  it("awaits asynchronous initial replay before flushing live output", async () => {
+    const { client, conn } = makeHarness();
+    const replay = deferred<void>();
+    const order: string[] = [];
+    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+
+    const attachPromise = conn.attach("s1", {
+      onData: (chunk) => order.push(`data:${chunk}`),
+      onReplay: async (snapshot, _newlyObservedFrom, mode) => {
+        order.push(`${mode}:${snapshot}`);
+        await replay.promise;
+        order.push("replay:done");
+      },
+      onExit: () => {},
+    });
+    await vi.waitFor(() => expect(order).toEqual(["initial:snapshot"]));
+
+    emitData(client, 9, "!");
+    expect(order).toEqual(["initial:snapshot"]);
+    replay.resolve();
+
+    await attachPromise;
+    expect(order).toEqual(["initial:snapshot", "replay:done", "data:!"]);
+  });
+
+  it("rejects initial replay failures without retaining a stream", async () => {
+    const { client, conn } = makeHarness();
+    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+
+    await expect(
+      conn.attach("s1", {
+        onData: () => {},
+        onReplay: async () => {
+          throw new Error("replay failed");
+        },
+        onExit: () => {},
+      }),
+    ).rejects.toThrow("replay failed");
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
+  });
+
   it("discards a detached exit that predates successful session adoption", async () => {
     const { client, conn } = makeHarness();
     const replays: string[] = [];
@@ -635,7 +734,9 @@ describe("TerminalConnection", () => {
 
     const attachPromise = conn.attach("s1", {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     emitExit(client, { exitCode: null, signal: null, reason: "detached" });

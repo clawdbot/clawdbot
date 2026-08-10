@@ -951,9 +951,7 @@ export async function runPreparedCliAgent(
   ): ReplyPayload[] => {
     return buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: [],
       lastAssistant: undefined,
-      inlineToolResultsAllowed: false,
       sessionKey: params.sessionKey ?? "",
       provider: params.provider,
       model: context.modelId,

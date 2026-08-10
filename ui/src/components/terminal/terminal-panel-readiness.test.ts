@@ -212,8 +212,8 @@ describe("terminal panel readiness", () => {
   });
 
   it("marks a catalog terminal ready when its first visible output is a replay", async () => {
-    const controller = createTerminalController();
-    createTerminal.mockResolvedValue(controller);
+    const controllers = [createTerminalController(), createTerminalController()] as const;
+    createTerminal.mockResolvedValueOnce(controllers[0]).mockResolvedValueOnce(controllers[1]);
     const requests: Array<{ method: string; params: unknown }> = [];
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
@@ -263,8 +263,10 @@ describe("terminal panel readiness", () => {
       method: "terminal.attach",
       params: { sessionId: "catalog-terminal-1" },
     });
-    expect(controller.terminal.reset).toHaveBeenCalledOnce();
-    expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("recovered output");
+    expect(controllers[0].dispose).toHaveBeenCalledOnce();
+    expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
+      "recovered output",
+    );
   });
 
   it("closes a catalog terminal and shows an error when no output arrives", async () => {

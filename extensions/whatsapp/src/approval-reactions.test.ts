@@ -178,6 +178,7 @@ describe("WhatsApp approval reactions", () => {
       approvalKind: "plugin",
       decision: "allow-once",
       channel: "whatsapp",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -255,6 +256,7 @@ describe("WhatsApp approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "whatsapp",
+      accountId: "default",
       senderId: "+15551230001",
       gatewayUrl: undefined,
     });
@@ -320,6 +322,7 @@ describe("WhatsApp approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "whatsapp",
+      accountId: "default",
       senderId: testCase.actorId,
       gatewayUrl: undefined,
     });

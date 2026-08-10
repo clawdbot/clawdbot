@@ -353,6 +353,30 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("starts a fresh turn before the post-start mirror records admission", async () => {
+    const workspaceDir = path.join(tempDir, "workspace-fresh-admission");
+    const params = await createSqliteParams(workspaceDir, "fresh-admission");
+    params.contextEngine = createContextEngine();
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("expected user turn transcript recorder");
+    }
+    const markRuntimePersisted = vi.fn();
+    recorder.markRuntimePersisted = markRuntimePersisted;
+    recorder.markSentToProvider = vi.fn(() => {
+      throw new Error("admission is not available before Codex turn/start");
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(recorder.markSentToProvider).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(markRuntimePersisted).toHaveBeenCalledOnce());
+    await harness.completeTurn();
+    await run;
+  });
+
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
