@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
@@ -113,7 +114,7 @@ export function inspectOpenClawStateOwnershipFromDatabase(
   return parseExternalOwnership(row.value_json, databasePath);
 }
 
-/** Inspect one resolved state database path through a read-only connection. */
+/** Inspect one resolved state database path without mutating a quiescent SQLite family. */
 export function inspectOpenClawStateOwnershipAtPath(
   databasePath: string,
 ): OpenClawExternalStateOwnership | null {
@@ -121,11 +122,15 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  const database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(resolvedPath), {
-    readOnly: true,
-  });
+  const hasLiveJournal = ["-journal", "-shm", "-wal"].some((suffix) =>
+    existsSync(`${resolvedPath}${suffix}`),
+  );
+  const location = hasLiveJournal ? resolvedPath : resolveImmutableSqliteFileUri(resolvedPath);
+  const database = openNodeSqliteDatabase(location, { readOnly: true });
   try {
-    database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+    database.exec(
+      `${hasLiveJournal ? `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; ` : ""}PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
+    );
     return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
   } finally {
     database.close();
