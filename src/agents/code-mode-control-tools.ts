@@ -43,7 +43,8 @@ export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
 }
 
-function isCodeModeExecTool(tool: AnyAgentTool): boolean {
+/** Return whether a tool is the marked Code Mode exec control. */
+export function isCodeModeExecControlTool(tool: AnyAgentTool): boolean {
   return isCodeModeControlTool(tool) && normalizeToolName(tool.name) === CODE_MODE_EXEC_TOOL_NAME;
 }
 
@@ -83,7 +84,7 @@ export function getCodeModeExecBeforeHookMetadata(params: {
   tool: AnyAgentTool;
   params: unknown;
 }): CodeModeExecHookMetadata | undefined {
-  if (!isCodeModeExecTool(params.tool)) {
+  if (!isCodeModeExecControlTool(params.tool)) {
     return undefined;
   }
   const toolInputKind = resolveCodeModeExecToolInputKind(params.params);
@@ -113,7 +114,7 @@ export function normalizeCodeModeExecBeforeHookParams(params: {
   tool: AnyAgentTool;
   params: unknown;
 }): unknown {
-  if (!isCodeModeExecTool(params.tool)) {
+  if (!isCodeModeExecControlTool(params.tool)) {
     return params.params;
   }
   return normalizeCodeModeExecParams(params.params);
@@ -138,7 +139,7 @@ export function reconcileCodeModeExecBeforeHookParams(params: {
   adjustedParams: unknown;
 }): unknown {
   if (
-    !isCodeModeExecTool(params.tool) ||
+    !isCodeModeExecControlTool(params.tool) ||
     !isPlainObject(params.originalParams) ||
     !isPlainObject(params.hookParams) ||
     !isPlainObject(params.adjustedParams)

@@ -24,6 +24,11 @@ import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
+export {
+  resolveModelExecTargetProjection,
+  type ModelExecTargetProjection,
+} from "./exec-defaults-model-projection.js";
+
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
   SessionEntry,

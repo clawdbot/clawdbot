@@ -4,7 +4,12 @@
  * Keep these schemas provider-friendly: flat fields, string enums, and explicit
  * descriptions that match runtime validation.
  */
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import {
+  resolveModelExecTargetProjection,
+  type ModelExecTargetProjection,
+} from "./exec-defaults-model-projection.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
@@ -59,6 +64,43 @@ export const execSchema = Type.Object({
     }),
   ),
 });
+
+function projectedElevatedSchema(mode: ModelExecTargetProjection["elevated"]) {
+  if (mode === "hidden") {
+    return undefined;
+  }
+  if (mode === "boolean") {
+    return execSchema.properties.elevated;
+  }
+  const elevated = Type.Literal(true, {
+    description:
+      "Use true to route the configured sandbox target through the authorized gateway elevation path.",
+  });
+  return mode === "required-true" ? elevated : Type.Optional(elevated);
+}
+
+/** Build the model-facing exec schema from prepared policy facts. */
+export function createModelExecSchema(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "elevated" | "mode" | "security" | "ask">,
+) {
+  const projection = resolveModelExecTargetProjection(defaults);
+  if (!projection) {
+    return undefined;
+  }
+  const properties: Record<string, TSchema> = {
+    ...execSchema.properties,
+    host: optionalStringEnum(projection.targets, {
+      description: `Policy-authorized exec target (${projection.targets.join("|")}); endpoint reachability is checked at runtime.`,
+    }),
+  };
+  const elevated = projectedElevatedSchema(projection.elevated);
+  if (elevated) {
+    properties.elevated = elevated;
+  } else {
+    delete properties.elevated;
+  }
+  return Type.Object(properties);
+}
 
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({

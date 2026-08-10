@@ -19,6 +19,7 @@ import {
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeExecControlTool,
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
@@ -343,7 +344,7 @@ export function applyCodeModeCatalog(params: {
   // wrongly strip MCP/namespace guidance from the exec description.
   const visibleCatalog = params.catalogRef?.current?.entries;
   for (const tool of compacted.tools) {
-    if (tool.name === CODE_MODE_EXEC_TOOL_NAME) {
+    if (isCodeModeExecControlTool(tool)) {
       tool.description = createCodeModeExecDescription(
         {
           config: params.config,

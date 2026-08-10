@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -12,7 +13,16 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { isCodeModeExecControlTool } from "./code-mode-control-tools.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  resolveToolSearchConfig,
+  ToolSearchRuntime,
+} from "./tool-search.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 function createExecHostDefaultsConfig(
   agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
@@ -161,7 +171,7 @@ describe("Agent-specific exec tool defaults", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("passes normalized exec mode defaults into the exec tool", async () => {
+  it("omits exec when normalized mode denies every call", () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: {
@@ -173,13 +183,9 @@ describe("Agent-specific exec tool defaults", () => {
       sessionKey: "agent:main:main",
       ...createTempAgentDirs("test-main-mode-deny"),
     });
-    const execTool = requireExecTool(tools);
 
-    await expect(
-      execTool.execute("call-mode-deny", {
-        command: "echo blocked",
-      }),
-    ).rejects.toThrow("security=deny");
+    expect(tools.some((tool) => tool.name === "exec")).toBe(false);
+    expect(tools.some((tool) => tool.name === "process")).toBe(true);
   });
 
   it("ignores per-call legacy security when configured mode is full", async () => {
@@ -238,7 +244,7 @@ describe("Agent-specific exec tool defaults", () => {
     ).rejects.toThrow(/allowlist miss/);
   });
 
-  it("lets session legacy exec overrides clear inherited mode", async () => {
+  it("omits exec when a session legacy security override resolves to deny", () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: {
@@ -254,13 +260,8 @@ describe("Agent-specific exec tool defaults", () => {
       sessionKey: "agent:main:main",
       ...createTempAgentDirs("test-main-session-legacy-override"),
     });
-    const execTool = requireExecTool(tools);
-
-    await expect(
-      execTool.execute("call-session-legacy-override", {
-        command: "echo denied",
-      }),
-    ).rejects.toThrow("security=deny");
+    expect(tools.some((tool) => tool.name === "exec")).toBe(false);
+    expect(tools.some((tool) => tool.name === "process")).toBe(true);
   });
 
   it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
@@ -270,12 +271,157 @@ describe("Agent-specific exec tool defaults", () => {
       ...createTempAgentDirs("test-main-fail-closed"),
     });
     const execTool = requireExecTool(tools);
+    expect(
+      (execTool.parameters as { properties?: { host?: { enum?: string[] } } }).properties?.host
+        ?.enum,
+    ).toEqual(["auto", "gateway", "node"]);
     await expect(
       execTool.execute("call-fail-closed", {
         command: "echo done",
         host: "sandbox",
       }),
     ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it("omits pinned unavailable sandbox exec from direct and nested catalogs", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "sandbox",
+          },
+        },
+      },
+      exec: {
+        host: "sandbox",
+        elevated: { enabled: false, allowed: false, defaultLevel: "off" },
+      },
+      sessionKey: "agent:main:main",
+      ...createTempAgentDirs("test-main-pinned-sandbox-unavailable"),
+    });
+    expect(tools.some((tool) => tool.name === "exec")).toBe(false);
+    expect(tools.some((tool) => tool.name === "process")).toBe(true);
+
+    const toolSearchCatalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef: toolSearchCatalogRef, tools });
+    const toolSearchRuntime = new ToolSearchRuntime(
+      { catalogRef: toolSearchCatalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: true } } as never),
+    );
+    await expect(toolSearchRuntime.describe("exec")).rejects.toThrow(/Unknown tool/);
+
+    const codeModeCatalogRef = createToolSearchCatalogRef();
+    const codeModeConfig = { tools: { codeMode: true } } as never;
+    const codeModeTools = createCodeModeTools({
+      config: codeModeConfig,
+      runtimeConfig: codeModeConfig,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef: codeModeCatalogRef,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ...tools],
+      config: codeModeConfig,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef: codeModeCatalogRef,
+    });
+    expect(
+      codeModeCatalogRef.current?.entries.some((entry) => entry.id === "openclaw:core:exec"),
+    ).toBe(false);
+  });
+
+  it("retains the authorized elevated route across direct and nested catalogs", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "sandbox",
+            mode: "full",
+          },
+        },
+      },
+      exec: {
+        host: "sandbox",
+        mode: "full",
+        ask: "off",
+        elevated: { enabled: true, allowed: true, defaultLevel: "off" },
+      },
+      sessionKey: "agent:main:main",
+      ...createTempAgentDirs("test-main-pinned-sandbox-elevated"),
+    });
+    const execTool = requireExecTool(tools);
+    const execSchema = execTool.parameters as {
+      properties?: { host?: { enum?: string[] }; elevated?: { const?: boolean } };
+      required?: string[];
+    };
+    expect(execSchema.properties?.host?.enum).toEqual(["sandbox"]);
+    expect(execSchema.properties?.elevated?.const).toBe(true);
+    expect(execSchema.required).toContain("elevated");
+
+    const toolSearchCatalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef: toolSearchCatalogRef, tools });
+    const toolSearchRuntime = new ToolSearchRuntime(
+      { catalogRef: toolSearchCatalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: true } } as never),
+    );
+    expect((await toolSearchRuntime.describe("exec")).parameters).toBe(execTool.parameters);
+
+    const codeModeCatalogRef = createToolSearchCatalogRef();
+    const codeModeConfig = { tools: { codeMode: true } } as never;
+    const codeModeTools = createCodeModeTools({
+      config: codeModeConfig,
+      runtimeConfig: codeModeConfig,
+      sessionId: "session-code-mode-elevated",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode-elevated",
+      catalogRef: codeModeCatalogRef,
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, ...tools],
+      config: codeModeConfig,
+      sessionId: "session-code-mode-elevated",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode-elevated",
+      catalogRef: codeModeCatalogRef,
+    });
+    const codeModeExec = compacted.tools.find(isCodeModeExecControlTool);
+    const quickIndex = codeModeExec?.description ?? "";
+    expect(quickIndex).toContain('"openclaw:core:exec"');
+    expect(quickIndex).toContain("elevated: true");
+
+    const nestedExec = codeModeCatalogRef.current?.entries.find(
+      (entry) => entry.id === "openclaw:core:exec",
+    );
+    expect(nestedExec?.parameters).toBe(execTool.parameters);
+    expect(Value.Check(execTool.parameters as never, { command: "printf elevated-route" })).toBe(
+      false,
+    );
+    expect(
+      Value.Check(execTool.parameters as never, {
+        command: "printf elevated-route",
+        elevated: false,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(execTool.parameters as never, {
+        command: "printf elevated-route",
+        elevated: true,
+      }),
+    ).toBe(true);
+
+    expect(nestedExec).toBeDefined();
+    expect(nestedExec?.source).toBe("openclaw");
+    const result = await (nestedExec!.tool as AnyAgentTool).execute(
+      "call-pinned-sandbox-elevated",
+      {
+        command: "printf elevated-route",
+        elevated: true,
+      },
+    );
+    expect((result?.content[0] as { text?: string } | undefined)?.text).toContain("elevated-route");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isCodeModeExecControlTool } from "./code-mode-control-tools.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
@@ -63,6 +64,29 @@ describe("Code Mode catalog and model-visible surface", () => {
       CODE_MODE_WAIT_TOOL_NAME,
     ]);
     expect(compacted.catalogToolCount).toBe(2);
+  });
+
+  it("rewrites only the marked Code Mode exec when a raw exec stays direct", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const rawExec = {
+      ...fakeTool("exec", "Run a raw shell command"),
+      catalogMode: "direct-only" as const,
+    };
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, rawExec],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const markedExec = compacted.tools.find(isCodeModeExecControlTool);
+    const visibleRawExec = compacted.tools.find((tool) => tool === rawExec);
+
+    expect(markedExec?.description).toContain("OpenClaw Code Mode");
+    expect(visibleRawExec?.description).toBe("Run a raw shell command");
+    expect(isCodeModeExecControlTool(rawExec)).toBe(false);
   });
 
   it("keeps direct-only tools model-visible and out of the guest catalog", () => {

@@ -15,6 +15,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
+import { createModelExecSchema } from "./bash-tools.schemas.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
@@ -223,30 +224,34 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         }) as unknown as AnyAgentTool,
       );
     }
-    shell.push(
-      createLazyExecTool({
-        ...options.execDefaults,
-        cwd: options.codingRoot,
-        sandbox: sandbox
-          ? {
-              containerName: sandbox.containerName,
-              workspaceDir: sandbox.workspaceDir,
-              containerWorkdir: sandbox.containerWorkdir,
-              workdirValidation: sandbox.backend?.workdirValidation,
-              validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
-              discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(
-                sandbox.backend,
-              ),
-              workdirRoots: sandbox.backend?.workdirRoots,
-              readOnlyWorkspaceSkillMounts,
-              env: sandbox.backend?.env ?? sandbox.docker.env,
-              buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
-              finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
-            }
-          : undefined,
-      }) as unknown as AnyAgentTool,
-      createLazyProcessTool(options.processDefaults),
-    );
+    const preparedExecDefaults: ExecToolDefaults = {
+      ...options.execDefaults,
+      cwd: options.codingRoot,
+      sandbox: sandbox
+        ? {
+            containerName: sandbox.containerName,
+            workspaceDir: sandbox.workspaceDir,
+            containerWorkdir: sandbox.containerWorkdir,
+            workdirValidation: sandbox.backend?.workdirValidation,
+            validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
+            discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(sandbox.backend),
+            workdirRoots: sandbox.backend?.workdirRoots,
+            readOnlyWorkspaceSkillMounts,
+            env: sandbox.backend?.env ?? sandbox.docker.env,
+            buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
+            finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
+          }
+        : undefined,
+    };
+    const execParameters = createModelExecSchema(preparedExecDefaults);
+    if (execParameters) {
+      shell.push(
+        createLazyExecTool(preparedExecDefaults, {
+          parameters: execParameters,
+        }) as unknown as AnyAgentTool,
+      );
+    }
+    shell.push(createLazyProcessTool(options.processDefaults));
   }
   options.recordToolPrepStage?.("shell-tools");
 

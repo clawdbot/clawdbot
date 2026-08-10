@@ -479,6 +479,22 @@ describe("resolveExecTarget", () => {
     );
   });
 
+  it("routes pinned sandbox to gateway when elevation is authorized without a sandbox", () => {
+    expectExecTarget(
+      resolveExecTarget({
+        configuredTarget: "sandbox",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+      {
+        configuredTarget: "sandbox",
+        requestedTarget: null,
+        selectedTarget: "gateway",
+        effectiveHost: "gateway",
+      },
+    );
+  });
+
   it("rejects mismatched requestedTarget under elevated+node", () => {
     expect(() =>
       resolveExecTarget({
