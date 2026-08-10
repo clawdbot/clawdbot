@@ -1,6 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Ollama tests cover stream runtime plugin behavior.
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1208,6 +1210,23 @@ function mockNdjsonReader(
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
 }
 
+function mockChunkSequenceReader(chunks: Array<Uint8Array | null>) {
+  let index = 0;
+  return {
+    read: vi.fn(async () => {
+      const value = chunks[index++];
+      return value === null
+        ? { done: true as const, value: undefined }
+        : { done: false as const, value };
+    }),
+    releaseLock: () => {},
+    cancel: async () => {},
+    closed: Promise.resolve(undefined),
+  } as unknown as ReadableStreamDefaultReader<Uint8Array> & {
+    read: ReturnType<typeof vi.fn>;
+  };
+}
+
 function createPendingCancelNdjsonStream(lines: string[]) {
   const encoder = new TextEncoder();
   let markCancelStarted!: () => void;
@@ -1264,6 +1283,163 @@ async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Arr
 }
 
 describe("parseNdjsonStream", () => {
+  it("clears the terminal-tail deadline when the reader completes first", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const reader = mockChunkSequenceReader([
+        encoder.encode('{"model":"m","message":{"role":"assistant","content":""},"done":true}\n'),
+        encoder.encode("\n"),
+        null,
+      ]);
+      const chunks = [];
+      for await (const chunk of parseNdjsonStream(reader)) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(1);
+      expect(reader.read).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts terminal-tail bytes already present in the terminal read", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}',
+      );
+      const value = new Uint8Array(terminal.byteLength + 16 * 1024 * 1024 + 2);
+      value.set(terminal);
+      value.fill(0x20, terminal.byteLength, value.length - 1);
+      value[value.length - 1] = 0x0a;
+      let readCount = 0;
+      const read = vi.fn(async () => {
+        readCount += 1;
+        if (readCount === 1) {
+          return { done: false as const, value };
+        }
+        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+      });
+      const reader = {
+        read,
+        releaseLock: () => {},
+        cancel: async () => {},
+        closed: Promise.resolve(undefined),
+      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not apply the NDJSON record cap to a large later tail", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const tail = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
+      const reader = mockChunkSequenceReader([terminal, tail, null]);
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(reader.read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts a UTF-8 tail sequence when it completes in a later read", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const firstTail = new Uint8Array(256 * 1024 - 1).fill(0x20);
+      firstTail[firstTail.length - 1] = 0xc3;
+      const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
+      first.set(terminal);
+      first.set(firstTail, terminal.byteLength);
+      const reader = mockChunkSequenceReader([first, new Uint8Array([0xa9]), null]);
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(reader.read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts a split three-byte UTF-8 prefix before the terminal-tail cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const firstTail = new Uint8Array(256 * 1024).fill(0x20);
+      firstTail[firstTail.length - 3] = 0xf0;
+      firstTail[firstTail.length - 2] = 0x9f;
+      firstTail[firstTail.length - 1] = 0x98;
+      const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
+      first.set(terminal);
+      first.set(firstTail, terminal.byteLength);
+      const reader = mockChunkSequenceReader([first, new Uint8Array([0x80]), null]);
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+
+      await expect(chunksPromise).rejects.toThrow(/utf-8/i);
+      expect(reader.read).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels an oversized unterminated record", async () => {
     const oversizedRecord = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
     let canceled = false;
@@ -3814,3 +3990,136 @@ describe("createConfiguredOllamaStreamFn", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("parseNdjsonStream UTF-8 decoding", () => {
+  function byteReader(bytes: Uint8Array): ReadableStreamDefaultReader<Uint8Array> {
+    let consumed = false;
+    return {
+      read: async () => {
+        if (consumed) {
+          return { done: true as const, value: undefined };
+        }
+        consumed = true;
+        return { done: false as const, value: bytes };
+      },
+      releaseLock: () => {},
+      cancel: async () => {},
+      closed: Promise.resolve(undefined),
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+  }
+
+  it("rejects invalid UTF-8 bytes in streaming NDJSON", async () => {
+    const encoded = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"hello"}}\n',
+    );
+    const corrupted = new Uint8Array(encoded);
+    corrupted[encoded.indexOf(0x68) + 1] = 0xff;
+
+    const generator = parseNdjsonStream(byteReader(corrupted));
+    await expect(async () => {
+      for await (const _ of generator) {
+        // Drain the generator; the corrupted byte must reject the stream.
+      }
+    }).rejects.toThrow(/not valid for encoding utf-8/i);
+  });
+
+  it("rejects a terminal partial UTF-8 sequence at EOF", async () => {
+    const encoded = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"hello"}}\n',
+    );
+    // A lone leading UTF-8 byte stays buffered by the continuing stream decode
+    // and must reject the stream when the fatal decoder is finalized at EOF.
+    const truncated = new Uint8Array([...encoded, 0xc3]);
+
+    const generator = parseNdjsonStream(byteReader(truncated));
+    await expect(async () => {
+      for await (const _ of generator) {
+        // Drain the generator; the terminal partial sequence must reject.
+      }
+    }).rejects.toThrow(/not valid for encoding utf-8/i);
+  });
+
+  it("parses valid UTF-8 NDJSON unchanged (negative control)", async () => {
+    const encoded = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"hello"}}\n',
+    );
+    const chunks: unknown[] = [];
+    for await (const chunk of parseNdjsonStream(byteReader(encoded))) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(1);
+    expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
+  });
+});
+
+describe("parseNdjsonStream real HTTP transport", () => {
+  async function serve(bytes: Uint8Array): Promise<{ url: string; close: () => Promise<void> }> {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.end(bytes);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address() as AddressInfo;
+    return {
+      url: `http://127.0.0.1:${address.port}/api/chat`,
+      close: async () => {
+        server.closeAllConnections?.();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      },
+    };
+  }
+
+  async function drain(url: string): Promise<unknown[]> {
+    const response = await fetch(url, { method: "POST" });
+    if (!response.body) {
+      throw new Error("response body missing");
+    }
+    const chunks: unknown[] = [];
+    for await (const chunk of parseNdjsonStream(response.body.getReader())) {
+      chunks.push(chunk);
+    }
+    return chunks;
+  }
+
+  it("rejects invalid UTF-8 bytes through a real HTTP response stream", async () => {
+    const valid = new TextEncoder().encode('{"message":{"role":"assistant","content":"hello"}}\n');
+    const corrupted = new Uint8Array(valid);
+    corrupted[valid.indexOf(0x68) + 1] = 0xff;
+    const { url, close } = await serve(corrupted);
+    try {
+      await expect(drain(url)).rejects.toThrow(/not valid for encoding utf-8/i);
+    } finally {
+      await close();
+    }
+  });
+
+  it("rejects a terminal partial UTF-8 sequence at EOF through a real HTTP stream", async () => {
+    const valid = new TextEncoder().encode('{"message":{"role":"assistant","content":"hello"}}\n');
+    const { url, close } = await serve(new Uint8Array([...valid, 0xc3]));
+    try {
+      await expect(drain(url)).rejects.toThrow(/not valid for encoding utf-8/i);
+    } finally {
+      await close();
+    }
+  });
+
+  it("parses valid UTF-8 NDJSON through a real HTTP response stream", async () => {
+    const valid = new TextEncoder().encode('{"message":{"role":"assistant","content":"hello"}}\n');
+    const { url, close } = await serve(valid);
+    try {
+      const chunks = await drain(url);
+      expect(chunks).toHaveLength(1);
+      expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
+    } finally {
+      await close();
+    }
+  });
+});
