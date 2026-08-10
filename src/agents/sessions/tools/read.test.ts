@@ -217,9 +217,12 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("File contains no readable text (3 bytes).");
   });
 
-  it("describes newline-only files instead of returning blank content", async () => {
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ])("describes %s-only files instead of returning blank content", async (_label, contents) => {
     const tempDir = tempDirs.make("openclaw-read-blank-line-");
-    await fs.writeFile(path.join(tempDir, "blank.txt"), "\n");
+    await fs.writeFile(path.join(tempDir, "blank.txt"), contents);
     const tool = createReadToolDefinition(tempDir);
 
     const result = await tool.execute(

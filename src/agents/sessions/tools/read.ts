@@ -534,9 +534,9 @@ export function createReadToolDefinition(
             } else {
               const decodedText =
                 ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
-              const textContent = decodedText.startsWith("\uFEFF")
-                ? decodedText.slice(1)
-                : decodedText;
+              const textContent = (
+                decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText
+              ).replaceAll("\r\n", "\n");
               const allLines = textContent.split("\n");
               if (allLines.at(-1) === "") {
                 allLines.pop();
