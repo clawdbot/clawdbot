@@ -1,4 +1,9 @@
 // Tests Telegram native Codex login command behavior.
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
@@ -14,7 +19,6 @@ import {
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
-import { resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 
@@ -67,13 +71,16 @@ function registerLoginCommand(params: {
 
 describe("registerTelegramNativeCommands /login", () => {
   beforeAll(async () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
-    resetPluginCommandMocks();
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("handles /login codex by sending the device code before login completes", async () => {
