@@ -258,6 +258,7 @@ export function createCronRunDiagnosticsFromAgentResult(
     diagnostics.push(
       createCronRunDiagnosticsFromError("tool", terminalToolFailure.message, {
         ...opts,
+        severity: opts?.finalStatus === "ok" ? "warn" : "error",
         toolName:
           typeof terminalToolFailure.toolName === "string"
             ? terminalToolFailure.toolName

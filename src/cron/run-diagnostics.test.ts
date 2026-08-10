@@ -244,6 +244,33 @@ describe("cron run diagnostics", () => {
     ]);
   });
 
+  it("downgrades a recovered terminal tool failure to a warning", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            toolName: "exec",
+            message: "Unknown tool id: MCP.notes.read",
+          },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Unknown tool id: MCP.notes.read",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "warn",
+          message: "Unknown tool id: MCP.notes.read",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
   it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
     const diagnostics = createCronRunDiagnosticsFromAgentResult(
       {
