@@ -3,13 +3,17 @@ import { expandToolGroups, resolveToolProfilePolicy } from "../agents/tool-polic
 import type { ClawOpenClawProfile } from "./types.js";
 
 type ClawToolSettings = NonNullable<ClawOpenClawProfile["agent"]["tools"]>;
+type ClawToolProfileSelection = Omit<
+  Pick<ClawToolSettings, "profile" | "allow" | "alsoAllow" | "deny">,
+  "profile"
+> & { profile?: string };
 
 export function isConcreteBundleMcpToolName(name: string): boolean {
   return name.length <= 64 && /^[A-Za-z][A-Za-z0-9_-]*__[A-Za-z][A-Za-z0-9_-]*$/u.test(name);
 }
 
 export function resolveClawToolProfileSnapshot(
-  tools: Pick<ClawToolSettings, "profile" | "allow" | "alsoAllow" | "deny">,
+  tools: ClawToolProfileSelection,
 ): { allow: string[]; deny: string[] } | undefined {
   if (!tools.profile) {
     return undefined;
