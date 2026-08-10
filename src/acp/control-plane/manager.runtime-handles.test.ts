@@ -1,5 +1,5 @@
 /** Tests ACP runtime handle caching, reuse, re-ensure, and eviction behavior. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -92,6 +92,54 @@ describe("AcpSessionManager runtime handles", () => {
         ),
       ),
     ).toEqual(new Set(["agent:claude:acp:session-1", "agent:codex:acp:session-2"]));
+    expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+  });
+
+  it("cancels an active turn before closing its retained runtime handle", async () => {
+    const runtimeState = createRuntime();
+    let releaseTurn!: () => void;
+    const turnReleased = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const lifecycle: string[] = [];
+    runtimeState.runTurn.mockImplementation(async function* () {
+      await turnReleased;
+      yield { type: "done" as const };
+    });
+    runtimeState.cancel.mockImplementation(async () => {
+      lifecycle.push("cancel");
+      releaseTurn();
+    });
+    runtimeState.close.mockImplementation(async () => {
+      lifecycle.push("close");
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:claude:acp:active-session";
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: readySessionMeta(),
+    });
+    const manager = new AcpSessionManager();
+    const turnPromise = manager
+      .runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: "active turn",
+        mode: "prompt",
+        requestId: "r-active",
+      })
+      .catch(() => undefined);
+    await vi.waitFor(() => expect(runtimeState.runTurn).toHaveBeenCalledOnce());
+
+    await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
+    await turnPromise;
+
+    expect(lifecycle).toEqual(["cancel", "close"]);
     expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
 
