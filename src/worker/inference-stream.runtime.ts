@@ -18,7 +18,20 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 
-type StreamingToolCall = ToolCall & { partialJson?: string };
+type StreamingToolCall = ToolCall & { partialJson?: string; argParseThreshold?: number };
+
+// Streaming tool-call arguments are re-parsed as fragments arrive. Re-parsing the
+// whole accumulated buffer on every delta is O(n^2) over a large tool call and can
+// stall the event loop. Below this size we re-parse on every delta (cheap, and it
+// keeps the live parsed-args preview responsive for typical tool calls); at/above
+// it we only re-parse once the buffer has doubled, so total parse work is a
+// geometric series (O(n)). The authoritative parse at toolcall_end keeps the final
+// arguments exact.
+const TOOLCALL_ARG_COALESCE_MIN_BYTES = 4096;
+
+function nextToolCallArgParseAt(bufferLength: number): number {
+  return bufferLength < TOOLCALL_ARG_COALESCE_MIN_BYTES ? 0 : bufferLength * 2;
+}
 
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
@@ -165,7 +178,11 @@ function processInferenceEvent(
       }
       const streaming = content as StreamingToolCall;
       streaming.partialJson = `${streaming.partialJson ?? ""}${event.delta}`;
-      content.arguments = parseStreamingJson(streaming.partialJson);
+      const nextParseAt = streaming.argParseThreshold ?? 0;
+      if (streaming.partialJson.length >= nextParseAt) {
+        content.arguments = parseStreamingJson(streaming.partialJson);
+        streaming.argParseThreshold = nextToolCallArgParseAt(streaming.partialJson.length);
+      }
       return {
         type: "toolcall_delta",
         contentIndex: event.contentIndex,
@@ -181,7 +198,14 @@ function processInferenceEvent(
         }
         throw new Error("worker inference tool end has no active tool call");
       }
-      delete (content as StreamingToolCall).partialJson;
+      const streaming = content as StreamingToolCall;
+      if (streaming.partialJson !== undefined && streaming.partialJson.length > 0) {
+        // Authoritative parse: the mid-stream re-parse is coalesced, so reparse the
+        // complete buffer here to guarantee the final arguments are exact.
+        content.arguments = parseStreamingJson(streaming.partialJson);
+      }
+      delete streaming.partialJson;
+      delete streaming.argParseThreshold;
       return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: content, partial };
     }
   }
@@ -212,6 +236,9 @@ function transcriptSafeErrorMessage(
   replacement.errorMessage = "Worker inference result exceeds the transcript message limit.";
   return replacement;
 }
+
+/** Test-only surface for the stream-event reducer. */
+export const testing = { processInferenceEvent, emptyAssistantMessage };
 
 export function createWorkerInferenceStreamAdapter(
   adapter: WorkerInferenceStreamAdapterOptions,
