@@ -26,6 +26,7 @@ import {
   MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import {
   applyPreparedRuntimeAuthToModel,
@@ -408,9 +409,12 @@ export function createEmbeddedRunAuthController(params: {
         provider,
         allInCooldown: failoverParams.allInCooldown,
         cause: failoverParams.error,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
+        recoveryHint: buildProviderAuthRecoveryHint({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+        }),
       });
     if (params.fallbackConfigured) {
       const authMode =

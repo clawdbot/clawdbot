@@ -24,6 +24,7 @@ import {
   renderUserFacingText,
   resolveProviderRequestFailureCopy,
 } from "../../agents/failover/user-copy.js";
+import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -163,6 +164,7 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
     cause: error.cause,
+    recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
   });
 }
 

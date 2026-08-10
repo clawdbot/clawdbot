@@ -3,19 +3,20 @@
  * Verifies actionable recovery hints, transient-copy suppression, provider
  * naming, and diagnostic cause handling.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
-
-vi.mock("../provider-auth-recovery-hint.js", () => ({
-  buildProviderAuthRecoveryHint: (params: { provider: string }) =>
-    `${LOGIN_HINT_SENTINEL}:${params.provider}`,
-}));
 
 import type { FailoverReason } from "../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../failover/user-copy.js";
 
-const formatAuthProfileFailureMessage = renderAuthProfileFailoverCopy;
+const formatAuthProfileFailureMessage = (
+  params: Parameters<typeof renderAuthProfileFailoverCopy>[0],
+) =>
+  renderAuthProfileFailoverCopy({
+    ...params,
+    recoveryHint: `${LOGIN_HINT_SENTINEL}:${params.provider}`,
+  });
 
 const PROVIDER = "openai-codex";
 

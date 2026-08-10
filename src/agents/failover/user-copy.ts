@@ -1,7 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   extractLeadingHttpStatus,
@@ -21,7 +20,6 @@ import {
   type FallbackAttemptRecord,
 } from "../failover-error.js";
 import { isProviderAuthError } from "../model-auth-runtime-shared.js";
-import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 import {
   classifyFailoverReason,
   isPeriodicUsageLimitErrorMessage,
@@ -583,9 +581,7 @@ type AuthProfileFailureCopyParams = {
   provider: string;
   allInCooldown: boolean;
   cause?: unknown;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
+  recoveryHint?: string;
 };
 
 const AUTH_PROFILE_COOLDOWN_COPY = {
@@ -655,14 +651,7 @@ export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyPara
           `Couldn't reach ${params.provider} with any of your saved logins right now.`
       : `Couldn't reach ${params.provider} with any of your saved logins right now.`;
   }
-  const hint = authProfileRecoveryApplies(params.reason)
-    ? buildProviderAuthRecoveryHint({
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      })
-    : null;
+  const hint = authProfileRecoveryApplies(params.reason) ? params.recoveryHint : null;
   const causeText = params.cause ? formatErrorMessage(params.cause).trim() : "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;
