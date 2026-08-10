@@ -460,7 +460,7 @@ current implementation head:
       it never logs memory content, prompts, queries, snippets, or raw
       principal identifiers, and does not claim to evaluate context-free policy
       decisions.
-- [x] Existing single-user results, configured corpora, and measured hot-path
+- [ ] Existing single-user results, configured corpora, and measured hot-path
       latency remain unchanged.
 - [x] SDK exports, API baselines, contract and runtime-inspection tests, and any
       required build/lazy-import gates pass.
