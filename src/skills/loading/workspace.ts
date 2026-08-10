@@ -40,6 +40,7 @@ import type {
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
+import { readCodexImplicitInvocationDisabled } from "./codex-invocation-policy.js";
 import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
@@ -1295,7 +1296,10 @@ function loadSkillEntries(
           maxBytes: limits.maxSkillFileBytes,
         }) ??
         ({} as ParsedSkillFrontmatter);
-      const invocation = resolveSkillInvocationPolicy(frontmatter);
+      const invocation = resolveSkillInvocationPolicy(
+        frontmatter,
+        readCodexImplicitInvocationDisabled(skill.baseDir),
+      );
       const entry: SkillEntry = {
         skill,
         frontmatter,

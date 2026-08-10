@@ -8,6 +8,7 @@ import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ig
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
+import { readCodexImplicitInvocationDisabled } from "./codex-invocation-policy.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
@@ -216,8 +217,11 @@ function loadSkillFromFile(
   try {
     const rawContent = readFileSync(filePath, "utf-8");
     const frontmatter = parseFrontmatter(rawContent);
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
+    const invocation = resolveSkillInvocationPolicy(
+      frontmatter,
+      readCodexImplicitInvocationDisabled(skillDir),
+    );
     const parentDirName = basename(skillDir);
 
     // Validate description

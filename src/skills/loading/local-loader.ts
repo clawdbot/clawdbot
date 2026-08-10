@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
+import { readCodexImplicitInvocationDisabled } from "./codex-invocation-policy.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
@@ -75,7 +76,10 @@ function loadSingleSkillDirectory(params: {
   if (!name || !description) {
     return null;
   }
-  const invocation = resolveSkillInvocationPolicy(frontmatter);
+  const invocation = resolveSkillInvocationPolicy(
+    frontmatter,
+    readCodexImplicitInvocationDisabled(params.skillDir),
+  );
   const filePath = path.resolve(skillFilePath);
   const baseDir = path.resolve(params.skillDir);
 

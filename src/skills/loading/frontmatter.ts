@@ -214,13 +214,18 @@ export function resolveOpenClawMetadata(
 
 export function resolveSkillInvocationPolicy(
   frontmatter: ParsedSkillFrontmatter,
+  codexImplicitDisabled = false,
 ): SkillInvocationPolicy {
   return {
     userInvocable: parseFrontmatterBool(getFrontmatterString(frontmatter, "user-invocable"), true),
-    disableModelInvocation: parseFrontmatterBool(
-      getFrontmatterString(frontmatter, "disable-model-invocation"),
-      false,
-    ),
+    // A skill is hidden from implicit model context when either declaration
+    // disables it: the SKILL.md `disable-model-invocation` field or Codex's
+    // `agents/openai.yaml` -> `policy.allow_implicit_invocation: false`. The
+    // latter is resolved by the caller via readCodexImplicitInvocationDisabled
+    // so this helper stays free of filesystem I/O.
+    disableModelInvocation:
+      parseFrontmatterBool(getFrontmatterString(frontmatter, "disable-model-invocation"), false) ||
+      codexImplicitDisabled,
   };
 }
 
