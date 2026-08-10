@@ -596,6 +596,9 @@ describe("gateway aux handlers", () => {
     await Promise.all([reloadPromise, setPromise]);
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
+    expect(activateRuntimeSecrets.mock.calls[1]?.[1]).toMatchObject({
+      forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+    });
     expect(setRespond).toHaveBeenCalledWith(true, {
       ok: true,
       reloaded: true,

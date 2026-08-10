@@ -163,4 +163,22 @@ suite.define(() => {
       },
     );
   });
+
+  it("keeps optional store actions hidden when the Gateway omits method discovery", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        omitFeatureMethods: true,
+        methodResponses: {
+          "secrets.store.list": { entries: [] },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByText(/does not advertise team secret-store access/u).waitFor();
+      expect(await page.getByRole("button", { name: "Add", exact: true }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Bulk Add", exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("secrets.store.list")).toHaveLength(0);
+    });
+  });
 });

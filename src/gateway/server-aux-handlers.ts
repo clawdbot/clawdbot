@@ -339,9 +339,14 @@ export function createGatewayAuxHandlers(params: {
   let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
   const runExclusiveReload = (
     fn: () => Promise<ReloadSecretsResult>,
+    options: { joinInFlight?: boolean } = {},
   ): Promise<ReloadSecretsResult> => {
     if (reloadInFlight) {
-      return reloadInFlight;
+      if (options.joinInFlight !== false) {
+        return reloadInFlight;
+      }
+      const precedingReload = reloadInFlight;
+      return precedingReload.catch(() => undefined).then(() => runExclusiveReload(fn, options));
     }
     const run = (async () => {
       try {
@@ -357,7 +362,7 @@ export function createGatewayAuxHandlers(params: {
     () =>
       import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
-          reloadSecrets: () =>
+          reloadSecrets: (reloadOptions) =>
             runExclusiveReload(async () => {
               let transaction:
                 | {
@@ -397,6 +402,7 @@ export function createGatewayAuxHandlers(params: {
                       reason: "reload",
                       activate: false,
                       publishFailureAsDegraded: true,
+                      forceColdRefKeys: reloadOptions?.forceColdRefKeys,
                       canPublishFailureAsDegraded: () =>
                         getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
                     },
@@ -624,14 +630,7 @@ export function createGatewayAuxHandlers(params: {
                 }
                 throw err;
               }
-            }),
-          waitForSecretsReloadIdle: async () => {
-            // Store mutations must not join a preparation that began before their write.
-            const precedingReload = reloadInFlight;
-            if (precedingReload) {
-              await precedingReload.catch(() => undefined);
-            }
-          },
+            }, reloadOptions),
           log: params.log,
           resolveSecrets: async ({
             allowedPaths,

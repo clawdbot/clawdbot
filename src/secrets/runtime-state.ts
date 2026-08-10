@@ -30,6 +30,7 @@ import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.se
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
+import { secretRefKey } from "./ref-contract.js";
 import {
   setActiveDegradedSecretOwners,
   type DegradedSecretOwner,
@@ -86,10 +87,15 @@ function listLocatedSecretRefs(
   return refs;
 }
 
-/** Whether the canonical config contains a store SecretRef for one entry name. */
-export function isSecretStoreNameReferencedInConfig(config: OpenClawConfig, name: string): boolean {
-  return listLocatedSecretRefs(config, config.secrets?.defaults).some(
-    ({ ref }) => ref.source === "store" && ref.id === name,
+/** Canonical store SecretRef keys in config that resolve one team entry name. */
+export function collectSecretStoreRefKeysInConfig(
+  config: OpenClawConfig,
+  name: string,
+): Set<string> {
+  return new Set(
+    listLocatedSecretRefs(config, config.secrets?.defaults).flatMap(({ ref }) =>
+      ref.source === "store" && ref.id === name ? [secretRefKey(ref)] : [],
+    ),
   );
 }
 

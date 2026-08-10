@@ -62,15 +62,21 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private get canList(): boolean {
-    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.list", "operator.admin");
+    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.list", "operator.admin", {
+      requireAdvertisement: true,
+    });
   }
 
   private get canSet(): boolean {
-    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.set", "operator.admin");
+    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.set", "operator.admin", {
+      requireAdvertisement: true,
+    });
   }
 
   private get canDelete(): boolean {
-    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.delete", "operator.admin");
+    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.delete", "operator.admin", {
+      requireAdvertisement: true,
+    });
   }
 
   private ensureInitialData() {

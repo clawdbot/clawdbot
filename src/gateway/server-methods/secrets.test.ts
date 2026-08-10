@@ -11,12 +11,12 @@ const storeMocks = vi.hoisted(() => ({
   purgeEntries: vi.fn(() => 0),
   writeEntry: vi.fn(),
   getSnapshot: vi.fn(() => ({ sourceConfig: {} })),
-  isReferenced: vi.fn((_config: unknown, _name: string) => false),
+  collectRefKeys: vi.fn((_config: unknown, _name: string) => new Set<string>()),
 }));
 
 vi.mock("../../secrets/runtime-state.js", () => ({
+  collectSecretStoreRefKeysInConfig: storeMocks.collectRefKeys,
   getActiveSecretsRuntimeSnapshot: storeMocks.getSnapshot,
-  isSecretStoreNameReferencedInConfig: storeMocks.isReferenced,
 }));
 
 vi.mock("../../secrets/store/secret-store.js", () => {
@@ -181,12 +181,14 @@ describe("secrets handlers", () => {
     storeMocks.purgeEntries.mockReset().mockReturnValue(0);
     storeMocks.writeEntry.mockReset();
     storeMocks.getSnapshot.mockReset().mockReturnValue({ sourceConfig: {} });
-    storeMocks.isReferenced.mockReset().mockReturnValue(false);
+    storeMocks.collectRefKeys.mockReset().mockReturnValue(new Set());
   });
 
   function createHandlers(overrides?: {
-    reloadSecrets?: () => Promise<{ warningCount: number }>;
-    waitForSecretsReloadIdle?: () => Promise<void>;
+    reloadSecrets?: (options?: {
+      forceColdRefKeys?: ReadonlySet<string>;
+      joinInFlight?: boolean;
+    }) => Promise<{ warningCount: number }>;
     resolveSecrets?: (params: {
       commandName: string;
       targetIds: string[];
@@ -209,7 +211,6 @@ describe("secrets handlers", () => {
       }));
     return createSecretsHandlers({
       reloadSecrets,
-      waitForSecretsReloadIdle: overrides?.waitForSecretsReloadIdle ?? (async () => {}),
       resolveSecrets,
       log: overrides?.log,
     });
@@ -395,10 +396,22 @@ describe("secrets handlers", () => {
   });
 
   it("refreshes the runtime only after mutations of referenced store names", async () => {
-    storeMocks.isReferenced.mockImplementation((_config, name) => name === "SERVICE_API_KEY");
+    storeMocks.collectRefKeys.mockImplementation((_config, name) =>
+      name === "SERVICE_API_KEY" ? new Set(["store:default:SERVICE_API_KEY"]) : new Set(),
+    );
     const reloadSecrets = vi.fn().mockResolvedValue({ warningCount: 2 });
-    const waitForSecretsReloadIdle = vi.fn().mockResolvedValue(undefined);
-    const handlers = createHandlers({ reloadSecrets, waitForSecretsReloadIdle });
+    storeMocks.getSnapshot.mockReturnValue({
+      sourceConfig: {
+        models: {
+          providers: {
+            test: {
+              apiKey: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
+            },
+          },
+        },
+      },
+    });
+    const handlers = createHandlers({ reloadSecrets });
 
     const setRespond = vi.fn();
     await invokeStoreMethod({
@@ -428,8 +441,11 @@ describe("secrets handlers", () => {
       respond: deleteRespond,
     });
     expect(deleteRespond).toHaveBeenCalledWith(true, { ok: true, reloaded: false });
-    expect(waitForSecretsReloadIdle).toHaveBeenCalledTimes(1);
     expect(reloadSecrets).toHaveBeenCalledTimes(1);
+    expect(reloadSecrets).toHaveBeenCalledWith({
+      forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+      joinInFlight: false,
+    });
   });
 
   it("rejects invalid store params before writing", async () => {
@@ -445,7 +461,7 @@ describe("secrets handlers", () => {
   });
 
   it("reports a saved entry when its required runtime refresh fails", async () => {
-    storeMocks.isReferenced.mockReturnValue(true);
+    storeMocks.collectRefKeys.mockReturnValue(new Set(["store:default:SERVICE_API_KEY"]));
     const handlers = createHandlers({
       reloadSecrets: vi.fn().mockRejectedValue(new Error("provider unavailable")),
     });

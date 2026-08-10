@@ -15,8 +15,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import {
+  collectSecretStoreRefKeysInConfig,
   getActiveSecretsRuntimeSnapshot,
-  isSecretStoreNameReferencedInConfig,
 } from "../../secrets/runtime-state.js";
 import {
   deleteSecretStoreEntry,
@@ -99,8 +99,10 @@ function invalidSecretsResolveField(
 }
 
 export function createSecretsHandlers(params: {
-  reloadSecrets: () => Promise<{ warningCount: number }>;
-  waitForSecretsReloadIdle: () => Promise<void>;
+  reloadSecrets: (options?: {
+    forceColdRefKeys?: ReadonlySet<string>;
+    joinInFlight?: boolean;
+  }) => Promise<{ warningCount: number }>;
   resolveSecrets: (params: {
     commandName: string;
     targetIds: string[];
@@ -135,11 +137,15 @@ export function createSecretsHandlers(params: {
     name: string,
   ): Promise<{ reloaded: boolean; warningCount?: number }> => {
     const snapshot = getActiveSecretsRuntimeSnapshot();
-    if (!snapshot || !isSecretStoreNameReferencedInConfig(snapshot.sourceConfig, name)) {
+    const refKeys = snapshot
+      ? collectSecretStoreRefKeysInConfig(snapshot.sourceConfig, name)
+      : new Set<string>();
+    if (refKeys.size === 0) {
       return { reloaded: false };
     }
-    await params.waitForSecretsReloadIdle();
-    const reload = await params.reloadSecrets();
+    // An explicit store mutation must not reuse an older credential if the
+    // replacement is missing or invalid; affected owners become cold instead.
+    const reload = await params.reloadSecrets({ forceColdRefKeys: refKeys, joinInFlight: false });
     return { reloaded: true, warningCount: reload.warningCount };
   };
 

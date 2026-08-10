@@ -55,6 +55,25 @@ describe("canCallGatewayMethod", () => {
     ).toBe(true);
   });
 
+  it("requires explicit method advertisement when requested", () => {
+    expect(
+      canCallGatewayMethod(
+        snapshot({ includeAuth: false }),
+        "secrets.store.list",
+        "operator.admin",
+        { requireAdvertisement: true },
+      ),
+    ).toBe(false);
+    expect(
+      canCallGatewayMethod(
+        snapshot({ methods: ["secrets.store.list"], scopes: ["operator.admin"] }),
+        "secrets.store.list",
+        "operator.admin",
+        { requireAdvertisement: true },
+      ),
+    ).toBe(true);
+  });
+
   it("supports registered methods that are intentionally not advertised", () => {
     expect(
       canCallGatewayMethod(

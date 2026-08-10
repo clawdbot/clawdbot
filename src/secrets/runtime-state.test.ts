@@ -29,11 +29,11 @@ import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshot,
+  collectSecretStoreRefKeysInConfig,
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   hasSameSecretReloadContract,
-  isSecretStoreNameReferencedInConfig,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   restoreSecretsRuntimeSnapshotStateIfCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
@@ -42,30 +42,28 @@ import {
 
 describe("secret store references", () => {
   it("finds canonical and provider-defaulted store refs without matching other sources", () => {
-    expect(
-      isSecretStoreNameReferencedInConfig(
-        {
-          secrets: { defaults: { store: "default" } },
-          models: {
-            providers: {
-              one: {
-                apiKey: { source: "store", id: "TEAM_API_KEY" },
-                models: [],
-              },
-            },
+    const config = {
+      secrets: { defaults: { store: "default" } },
+      models: {
+        providers: {
+          one: {
+            apiKey: { source: "store", id: "TEAM_API_KEY" },
+            models: [],
           },
-        } as unknown as OpenClawConfig,
-        "TEAM_API_KEY",
-      ),
-    ).toBe(true);
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(collectSecretStoreRefKeysInConfig(config, "TEAM_API_KEY")).toEqual(
+      new Set(["store:default:TEAM_API_KEY"]),
+    );
     expect(
-      isSecretStoreNameReferencedInConfig(
+      collectSecretStoreRefKeysInConfig(
         {
           gateway: { auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } } },
         },
         "TEAM_API_KEY",
       ),
-    ).toBe(false);
+    ).toEqual(new Set());
   });
 });
 
