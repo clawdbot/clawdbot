@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
-  approvedRealpaths,
   assertOwnedPath,
   chromeProductRoots,
   type ChromeProduct,
@@ -213,8 +212,8 @@ async function installRegistration(params: {
   const launcherPath = launcherPathForManifest(manifestPath, deps);
   const nodePath = await fs.realpath(deps.nodePath ?? process.execPath);
   const nativeHostPath = await resolveNativeHostPath(params.pluginRoot, deps.nativeHostPath);
-  await assertOwnedPath(nodePath, "file");
-  await assertOwnedPath(nativeHostPath, "file");
+  await assertOwnedPath(nodePath, "file", { allowRootOwner: true });
+  await assertOwnedPath(nativeHostPath, "file", { allowRootOwner: true });
   const desiredLauncher = launcherContent({
     nodePath,
     nativeHostPath,
@@ -260,11 +259,11 @@ async function installRegistration(params: {
 }
 
 async function approvedInstallRealpaths(installed: string, bundled: string): Promise<string[]> {
-  const approved = await approvedRealpaths([installed, bundled]);
-  for (const candidate of approved) {
-    await assertOwnedPath(candidate, "directory");
-  }
-  return approved;
+  const installedPath = await fs.realpath(installed);
+  const bundledPath = await fs.realpath(bundled);
+  await assertOwnedPath(installedPath, "directory");
+  await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
+  return [...new Set([installedPath, bundledPath])];
 }
 
 export function normalizeExtensionInstallWaitMs(value: unknown): number {
@@ -376,10 +375,11 @@ export async function browserExtensionStatus(params: {
   const platform = deps.platform ?? process.platform;
   const installedPath = stableChromeExtensionDir(deps);
   const installedCopy = await inspectInstalledCopy(installedPath);
-  const approvedPaths = await approvedRealpaths([
-    params.bundledDir,
-    ...(installedCopy.owned ? [installedPath] : []),
-  ]);
+  const bundledPath = await fs.realpath(params.bundledDir);
+  await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
+  const approvedPaths = installedCopy.owned
+    ? await approvedInstallRealpaths(installedPath, bundledPath)
+    : [bundledPath];
   const discovery = await discoverChromeExtensionIds({ approvedDirs: approvedPaths, deps });
   const predictedIds = approvedPaths.map((candidate) =>
     generateChromeExtensionIdForPath(candidate, platform),
@@ -479,7 +479,9 @@ export async function resolveChromeExtensionLoadPath(
     }
     return await fs.realpath(installedPath);
   }
-  return await fs.realpath(path.resolve(bundledDir));
+  const bundledPath = await fs.realpath(path.resolve(bundledDir));
+  await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
+  return bundledPath;
 }
 
 /** Repair drift only when both the copy and existing registration are already owned. */

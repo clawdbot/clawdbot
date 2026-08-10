@@ -47,7 +47,7 @@ export function createNativeBootstrapController(params: {
 
 export function clearRetiredExtensionState(chromeApi?: {
   storage: {
-    local: Pick<NativeBootstrapStorageArea, "remove">;
+    local: Pick<NativeBootstrapStorageArea, "get" | "remove">;
     session: Pick<NativeBootstrapStorageArea, "remove">;
   };
 }): Promise<void>;

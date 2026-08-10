@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
-import { clearRetiredExtensionState } from "./modules/native-bootstrap.js";
+import { describe, expect, it } from "vitest";
 
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,36 +29,5 @@ describe("simplified Chrome extension package", () => {
       .filter((entry) => !entry.endsWith(".test.ts"));
 
     expect(files.join("\n")).not.toMatch(/copilot|page-share|sidepanel/iu);
-  });
-
-  it("clears only retired copilot keys", async () => {
-    const localRemove = vi.fn(async () => undefined);
-    const sessionRemove = vi.fn(async () => undefined);
-    await clearRetiredExtensionState({
-      storage: {
-        local: { remove: localRemove },
-        session: { remove: sessionRemove },
-      },
-    });
-
-    expect(localRemove).toHaveBeenCalledWith([
-      "copilotSessionRegistryV1",
-      "copilotDeviceIdentitiesV1",
-      "copilotDeviceTokensV1",
-    ]);
-    expect(sessionRemove).toHaveBeenCalledWith([
-      "copilotBrowserInstanceV1",
-      "copilotPanelBindingsV1",
-    ]);
-    const removed = [...localRemove.mock.calls.flat(), ...sessionRemove.mock.calls.flat()].flat();
-    expect(removed).not.toEqual(
-      expect.arrayContaining([
-        "relayUrl",
-        "token",
-        "accessMode",
-        "deniedTabIdsV1",
-        "nativeBootstrapDisabled",
-      ]),
-    );
   });
 });

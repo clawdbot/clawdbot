@@ -169,14 +169,20 @@ export async function pathInfo(
   }
 }
 
-export async function assertOwnedPath(target: string, kind: "file" | "directory"): Promise<void> {
+export async function assertOwnedPath(
+  target: string,
+  kind: "file" | "directory",
+  policy: { allowRootOwner?: boolean } = {},
+): Promise<void> {
   const info = await fs.lstat(target);
   if (info.isSymbolicLink() || (kind === "file" ? !info.isFile() : !info.isDirectory())) {
     throw new Error(`Unsafe ${kind} at ${target}`);
   }
   if (process.platform !== "win32") {
     const uid = process.getuid?.();
-    if (uid !== undefined && info.uid !== uid) {
+    const ownerAllowed =
+      uid === undefined || info.uid === uid || (policy.allowRootOwner === true && info.uid === 0);
+    if (!ownerAllowed) {
       throw new Error(`Refusing foreign owner at ${target}`);
     }
     if ((info.mode & 0o022) !== 0) {
@@ -254,7 +260,7 @@ export async function installStableChromeExtension(
   deps: ExtensionInstallDeps = {},
 ): Promise<string> {
   const source = await fs.realpath(path.resolve(bundledDir));
-  await assertOwnedPath(source, "directory");
+  await assertOwnedPath(source, "directory", { allowRootOwner: true });
   const target = stableChromeExtensionDir(deps);
   await ensurePrivateDirectory(path.resolve(deps.stateDir ?? resolveStateDir(deps.env)));
   await ensurePrivateDirectory(path.dirname(target));

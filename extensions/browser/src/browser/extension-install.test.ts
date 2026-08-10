@@ -2,9 +2,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import {
+  assertOwnedPath,
   chromeProductRoots,
   discoverChromeExtensionIds,
   generateChromeExtensionIdForPath,
@@ -74,9 +75,102 @@ async function writeSecurePreferences(params: {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
+});
+
+function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, uid: number): T {
+  return new Proxy(info, {
+    get(target, property) {
+      if (property === "uid") {
+        return uid;
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+describe.runIf(process.platform !== "win32")("extension install ownership policy", () => {
+  it("allows only explicit read-only root-owned inputs", async () => {
+    const target = "/opt/openclaw/native-host-entry.js";
+    vi.spyOn(process, "getuid").mockReturnValue(1000);
+    vi.spyOn(fs, "lstat").mockResolvedValue({
+      isDirectory: () => false,
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      mode: 0o100644,
+      uid: 0,
+    } as Awaited<ReturnType<typeof fs.lstat>>);
+    vi.spyOn(fs, "realpath").mockResolvedValue(target);
+
+    await expect(
+      assertOwnedPath(target, "file", { allowRootOwner: true }),
+    ).resolves.toBeUndefined();
+    await expect(assertOwnedPath(target, "file")).rejects.toThrow("foreign owner");
+  });
+
+  it.each([
+    { label: "root-owned state", uid: 0, mode: 0o100600, allowRootOwner: false },
+    { label: "foreign-owned input", uid: 2000, mode: 0o100600, allowRootOwner: true },
+    { label: "root-owned group-writable input", uid: 0, mode: 0o100660, allowRootOwner: true },
+    { label: "user-owned world-writable input", uid: 1000, mode: 0o100602, allowRootOwner: false },
+  ])("rejects $label", async ({ uid, mode, allowRootOwner }) => {
+    const target = "/opt/openclaw/unsafe";
+    vi.spyOn(process, "getuid").mockReturnValue(1000);
+    vi.spyOn(fs, "lstat").mockResolvedValue({
+      isDirectory: () => false,
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      mode,
+      uid,
+    } as Awaited<ReturnType<typeof fs.lstat>>);
+    vi.spyOn(fs, "realpath").mockResolvedValue(target);
+
+    await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
+      uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
+    );
+  });
+
+  it("installs from a package-shaped root-owned tree into user-owned state", async () => {
+    const value = await fixture();
+    const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
+    if (!chromium) {
+      throw new Error("missing Chromium fixture root");
+    }
+    await fs.mkdir(chromium.userDataDir, { recursive: true, mode: 0o700 });
+    const userUid = 1000;
+    const packageRoot = path.join(value.root, "package");
+    const canonicalNodePath = await fs.realpath(value.deps.nodePath);
+    const realLstat = fs.lstat.bind(fs);
+    vi.spyOn(process, "getuid").mockReturnValue(userUid);
+    vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
+      const info = await realLstat(target);
+      const resolved = path.resolve(String(target));
+      const rootOwned =
+        resolved.startsWith(`${packageRoot}${path.sep}`) || resolved === canonicalNodePath;
+      return statsWithUid(info, rootOwned ? 0 : userUid);
+    });
+    let now = 0;
+
+    const status = await installChromeExtensionBootstrap({
+      bundledDir: value.bundledDir,
+      pluginRoot: value.pluginRoot,
+      waitMs: 1_000,
+      deps: {
+        ...value.deps,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+    });
+
+    expect(status.installedCopy).toMatchObject({ present: true, owned: true });
+    expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe("owned");
+  });
 });
 
 describe("stable extension copy", () => {
