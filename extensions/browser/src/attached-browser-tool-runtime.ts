@@ -132,12 +132,7 @@ export async function createAttachedBrowserToolRuntime(
     });
     return {
       tool,
-      dispose: async () => {
-        const stopping = stopBrowserBridgeServer(bridge.server);
-        bridge.server.closeIdleConnections();
-        bridge.server.closeAllConnections();
-        await stopping;
-      },
+      dispose: async () => await stopBrowserBridgeServer(bridge.server),
     };
   } catch (error) {
     await stopBrowserBridgeServer(bridge.server);

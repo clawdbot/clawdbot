@@ -26,11 +26,7 @@ describe("attached Browser tool runtime", () => {
     mocks.createBrowserTool.mockReturnValue({ name: "browser" });
     mocks.startBrowserBridgeServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:18443",
-      server: {
-        marker: "bridge-server",
-        closeIdleConnections: vi.fn(),
-        closeAllConnections: vi.fn(),
-      },
+      server: { marker: "bridge-server" },
     });
     mocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
   });
@@ -100,10 +96,7 @@ describe("attached Browser tool runtime", () => {
     expect(runtime.tool).toEqual({ name: "browser" });
 
     await runtime.dispose();
-    const bridgeServer = (await mocks.startBrowserBridgeServer.mock.results[0]?.value).server;
-    expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledWith(bridgeServer);
-    expect(bridgeServer.closeIdleConnections).toHaveBeenCalledOnce();
-    expect(bridgeServer.closeAllConnections).toHaveBeenCalledOnce();
+    expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledWith({ marker: "bridge-server" });
     expect(ensureAttachTarget).toHaveBeenCalledOnce();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });

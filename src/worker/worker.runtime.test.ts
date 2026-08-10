@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -43,6 +43,26 @@ import {
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
+
+const browserRuntimeMocks = vi.hoisted(() => ({
+  createWorkerBrowserToolRuntime: vi.fn(),
+  dispose: vi.fn(),
+}));
+
+vi.mock("./browser-runtime.js", async () => {
+  const { Type } = await import("typebox");
+  browserRuntimeMocks.createWorkerBrowserToolRuntime.mockImplementation(async () => ({
+    tool: {
+      name: "browser",
+      label: "Browser",
+      description: "Control the attached worker browser.",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    },
+    dispose: browserRuntimeMocks.dispose,
+  }));
+  return { createWorkerBrowserToolRuntime: browserRuntimeMocks.createWorkerBrowserToolRuntime };
+});
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -770,6 +790,8 @@ async function setup(options?: FakeGatewayOptions): Promise<{
 }
 
 afterEach(async () => {
+  browserRuntimeMocks.createWorkerBrowserToolRuntime.mockClear();
+  browserRuntimeMocks.dispose.mockClear();
   for (const gateway of gateways.splice(0)) {
     await gateway.stop();
   }
@@ -865,6 +887,13 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
       "browser",
     ]);
+    expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
+      descriptor: launch.assignment.browser,
+      sessionKey: `worker:${SESSION_ID}`,
+      stateDir: expect.any(String),
+      workspaceDir: await realpath(launch.assignment.workspaceDir),
+    });
+    expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
   });
 
   it.each([
