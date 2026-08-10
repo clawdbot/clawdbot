@@ -468,6 +468,65 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("plans generation tools from config-backed auth without prepared runtime", () => {
+    // Gateway/skill tool prep often has no prepared model runtime. Snapshot env signals may
+    // fail while models.providers.<id>.apiKey still authorizes the contract provider. Config
+    // auth is recognized inside the snapshot signal path so base-url guards still apply.
+    vi.stubEnv("CUSTOM_IMAGE_API_KEY", "");
+    vi.stubEnv("CUSTOM_VIDEO_API_KEY", "");
+    vi.stubEnv("CUSTOM_MUSIC_API_KEY", "");
+    const config = {
+      models: {
+        providers: {
+          "custom-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+          "custom-video": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+          "custom-music": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    installSnapshot(config, [
+      createPlugin({
+        id: "custom-image",
+        contracts: { imageGenerationProviders: ["custom-image"] },
+        setupProviders: [{ id: "custom-image", envVars: ["CUSTOM_IMAGE_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "custom-video",
+        contracts: { videoGenerationProviders: ["custom-video"] },
+        setupProviders: [{ id: "custom-video", envVars: ["CUSTOM_VIDEO_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "custom-music",
+        contracts: { musicGenerationProviders: ["custom-music"] },
+        setupProviders: [{ id: "custom-music", envVars: ["CUSTOM_MUSIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        authStore: createAuthStore(),
+      }),
+    ).toMatchObject({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+    });
+  });
+
   it("preserves implicit allow-all from alsoAllow-only policies for built-in media factories", async () => {
     const config = createExplicitMediaModelConfig();
     const allowlistFromAlsoAllowOnlyPolicy = ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY];

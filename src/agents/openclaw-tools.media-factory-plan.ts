@@ -72,8 +72,9 @@ function resolvePreparedGenerationProviders(
  * - Explicit model config wins even when a prepared family is empty (prepared runtimes are
  *   not a deny list for configured models).
  * - Prepared families evaluate provider isConfigured callbacks.
- * - Without prepared providers, use snapshot capability (workspace scope + base-url guards).
- *   Do not fall back to raw auth-only checks; that would reintroduce snapshot leaks.
+ * - Without prepared providers, use snapshot capability (workspace scope + base-url guards +
+ *   profile/env/config auth). Config-backed `models.providers.<id>.apiKey` is recognized inside
+ *   the snapshot signal path so gateway/skill prep without a prepared runtime stays compatible.
  */
 function planGenerationToolAvailability(params: {
   config?: OpenClawConfig;

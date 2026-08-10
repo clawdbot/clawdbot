@@ -17,6 +17,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runtime-state.js";
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
 /** Manifest contract keys that represent provider-backed tool capabilities. */
 type CapabilityContractKey =
@@ -141,7 +142,9 @@ function hasConfiguredCapabilityProviderSignal(params: {
     ) {
       continue;
     }
-    // A provider is available when either profile auth or a declared env candidate exists.
+    // Profile auth, declared env candidates, or generic tool auth (including
+    // models.providers.<id>.apiKey). Base-url guards above still apply so local/override
+    // provider configs cannot skip manifest host restrictions.
     if (params.authStore && listProfilesForProvider(params.authStore, signal.provider).length > 0) {
       return true;
     }
@@ -150,6 +153,15 @@ function hasConfiguredCapabilityProviderSignal(params: {
         process.env,
         manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
       )
+    ) {
+      return true;
+    }
+    if (
+      hasProviderAuthForTool({
+        provider: signal.provider,
+        cfg: params.config,
+        authStore: params.authStore,
+      })
     ) {
       return true;
     }
