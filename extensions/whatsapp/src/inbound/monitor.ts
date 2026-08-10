@@ -73,6 +73,8 @@ type MonitorWebInboxOptions = {
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
+  /** Internal harness override; production uses the WhatsApp recovery policy. */
+  deferredAdoptionStallTimeoutMs?: number;
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -135,6 +137,7 @@ export async function attachWebInboxToSocket(
     appendReplyWindow: options.appendReplyWindow,
     shouldDebounce: options.shouldDebounce,
     onPendingWorkChanged: options.onPendingWorkChanged,
+    deferredAdoptionStallTimeoutMs: options.deferredAdoptionStallTimeoutMs,
     durableInboundQueue:
       options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId),
   });

@@ -1,5 +1,9 @@
 // Channel test helper exports provide shared fixtures for plugin channel contract tests.
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
+export {
+  admitFollowupRunLifecycle,
+  markFollowupRunEnqueued,
+} from "../auto-reply/reply/queue/types.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {
   expectChannelPluginContract,

@@ -103,6 +103,7 @@ type WhatsAppMessageDeliveryOptions = {
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
+  deferredAdoptionStallTimeoutMs?: number;
 };
 
 export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessageDeliveryOptions) {
@@ -485,6 +486,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       kind: await processDurableInboundMessage(admission, lifecycle),
     }),
     pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
+    deferredAdoptionStallTimeoutMs: options.deferredAdoptionStallTimeoutMs,
     onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
     onError: (error) =>
       inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed"),

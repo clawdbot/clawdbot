@@ -204,6 +204,27 @@ if the process dies or persistence fails after the effect succeeds but before
 the claim commits, or if the record expires while its ingress row is still
 pending.
 
+#### Deferred ingress adoption watchdogs
+
+The durable ingress drain starts its adoption watchdog when it claims an event.
+Calling the dispatch lifecycle's deferral callback means that downstream
+scheduling now owns adoption; it does not make the durable claim unbounded.
+
+By default, deferral leaves the original claim-time deadline in place. A channel
+that supplies `drain.deferredAdoptionStallTimeoutMs` explicitly replaces that
+deadline at the moment of deferral, giving the downstream scheduler a fresh,
+bounded adoption window. Adoption or abandonment cancels the deferred
+watchdog. If the window expires without either outcome, the drain aborts the
+dispatch and records a failed `handler-timeout` tombstone so the claim and its
+serialization lane cannot remain held forever.
+
+Choose a longer deferred window only when the channel's scheduler can
+legitimately wait longer than the generic adoption window. WhatsApp uses seven
+days as an operational recovery limit for multi-day reply-lane waits; it is not
+a promise that every scheduler backlog must finish within seven days. A channel
+that needs arbitrarily long healthy waits should provide an explicit renewable
+owner lease or heartbeat rather than removing the fail-closed bound.
+
 #### Account-scoped restart contract
 
 Channel config changes restart the whole channel by default. A multi-account

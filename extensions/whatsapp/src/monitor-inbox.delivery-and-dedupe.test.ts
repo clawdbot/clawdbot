@@ -1,4 +1,9 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  admitFollowupRunLifecycle,
+  markFollowupRunEnqueued,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it, vi } from "vitest";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
@@ -651,15 +656,15 @@ describe("web monitor inbox delivery and dedupe", () => {
   });
 
   it("delivery coordinator keeps same-lane follow-up pending until turn adoption", async () => {
-    let adoptFirst: (() => void | Promise<void>) | undefined;
+    let firstRun: Parameters<typeof admitFollowupRunLifecycle>[0] | undefined;
     const onMessage = vi.fn(async (message: WebInboundMessage) => {
-      if (!adoptFirst) {
+      if (!firstRun) {
         const lifecycle = resolveWhatsAppIngressLifecycle(message);
         if (!lifecycle) {
           throw new Error("expected durable ingress lifecycle");
         }
-        lifecycle.onDeferred();
-        adoptFirst = lifecycle.onAdopted;
+        firstRun = bindIngressLifecycleToReplyOptions(lifecycle);
+        expect(markFollowupRunEnqueued(firstRun)).toBe(true);
       }
     });
 
@@ -691,12 +696,58 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(inboundMessage(onMessage).payload.body).toBe("ping");
 
-    if (!adoptFirst) {
-      throw new Error("expected first adoption callback");
+    if (!firstRun) {
+      throw new Error("expected first queued reply run");
     }
-    await adoptFirst();
+    await admitFollowupRunLifecycle(firstRun);
     await waitForMessageCalls(onMessage, 2);
     expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
+    await listener.close();
+  });
+
+  it("delivery coordinator releases a same-lane follow-up after lost scheduler adoption", async () => {
+    let firstRun: Parameters<typeof admitFollowupRunLifecycle>[0] | undefined;
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      if (!firstRun) {
+        const lifecycle = resolveWhatsAppIngressLifecycle(message);
+        if (!lifecycle) {
+          throw new Error("expected durable ingress lifecycle");
+        }
+        firstRun = bindIngressLifecycleToReplyOptions(lifecycle);
+        expect(markFollowupRunEnqueued(firstRun)).toBe(true);
+      }
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      deferredAdoptionStallTimeoutMs: 50,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("lost-scheduler-first"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("lost-scheduler-second"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "second",
+        timestamp: 1_700_000_001,
+      }),
+    );
+
+    await waitForMessageCalls(onMessage, 2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+    if (!firstRun) {
+      throw new Error("expected first queued reply run");
+    }
+    await expect(admitFollowupRunLifecycle(firstRun)).rejects.toThrow(/adoption lost/iu);
     await listener.close();
   });
 });

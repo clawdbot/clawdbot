@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { WAMessage } from "baileys";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   deserializeWhatsAppDurableInboundMessage,
@@ -28,6 +31,7 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
   try {
     return await fn(stateDir);
   } finally {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
@@ -190,6 +194,108 @@ describe("createWhatsAppIngressMonitor", () => {
       expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await monitor.stop();
+    });
+  });
+
+  it("preserves a deferred WhatsApp claim beyond the generic adoption watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+          channelId: "whatsapp",
+          accountId: "acct",
+          stateDir,
+        });
+        const id = eventId("msg-long-deferred");
+        await queue.enqueue(id, payload("msg-long-deferred"), { laneKey: REMOTE_JID });
+        let adopt: (() => void | Promise<void>) | undefined;
+
+        const monitor = createWhatsAppIngressMonitor({
+          queue,
+          pollIntervalMs: 10,
+          dispatch: async (_inbound, lifecycle) => {
+            adopt = lifecycle.onAdopted;
+            return { kind: "deferred" };
+          },
+        });
+
+        monitor.start();
+        await monitor.waitForIdle();
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 + 1);
+
+        expect((await queue.listClaims()).map((row) => row.id)).toEqual([id]);
+        if (!adopt) {
+          throw new Error("expected deferred WhatsApp adoption callback");
+        }
+        await adopt();
+        await monitor.waitForIdle();
+        expect((await queue.enqueue(id, payload("msg-long-deferred"))).kind).toBe("completed");
+        await monitor.stop();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("real-timer fault harness recovers when the deferred scheduler never terminates", async () => {
+    await withTempState(async (stateDir) => {
+      const logs: string[] = [];
+      const dispatched: string[] = [];
+      let resolveStall!: () => void;
+      const stallObserved = new Promise<void>((resolve) => {
+        resolveStall = resolve;
+      });
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const id = eventId("msg-lost-deferred");
+      await queue.enqueue(id, payload("msg-lost-deferred"), { laneKey: REMOTE_JID });
+
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        deferredAdoptionStallTimeoutMs: 100,
+        dispatch: async (admission) => {
+          const messageId = admission.message.key?.id ?? "missing";
+          dispatched.push(messageId);
+          return { kind: messageId === "msg-lost-deferred" ? "deferred" : "completed" };
+        },
+        onLog: (logLine) => {
+          logs.push(logLine);
+          if (logLine.includes("deferred claim→adoption stalled")) {
+            resolveStall();
+          }
+        },
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+      expect((await queue.listClaims()).map((row) => row.id)).toEqual([id]);
+
+      await Promise.race([
+        stallObserved,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("deferred stall watchdog did not fire")), 2_000);
+        }),
+      ]);
+      await monitor.waitForIdle();
+      const reenqueue = await queue.enqueue(id, payload("msg-lost-deferred"));
+      expect(reenqueue.kind).toBe("failed");
+      if (reenqueue.kind === "failed") {
+        expect(reenqueue.record.reason).toBe("handler-timeout");
+      }
+      expect(logs.some((logLine) => logLine.includes("deferred claim→adoption stalled"))).toBe(
+        true,
+      );
+      const successorId = eventId("msg-deferred-successor");
+      await queue.enqueue(successorId, payload("msg-deferred-successor"), {
+        laneKey: REMOTE_JID,
+      });
+      await vi.waitFor(() => expect(dispatched).toHaveLength(2), { timeout: 2_000, interval: 10 });
+      expect(dispatched).toEqual(["msg-lost-deferred", "msg-deferred-successor"]);
       await monitor.stop();
     });
   });

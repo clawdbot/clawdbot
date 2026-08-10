@@ -16,6 +16,8 @@ import {
 } from "./durable-payload.js";
 
 const WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION = 1;
+/** Multi-day reply-lane waits are valid; lost in-memory handoffs are not unbounded. */
+const WHATSAPP_DEFERRED_ADOPTION_STALL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export type WhatsAppReadReceiptTarget = {
   remoteJid: string;
@@ -95,6 +97,7 @@ export function createWhatsAppIngressMonitor(params: {
   onError?: (error: unknown) => void;
   onActivityChange?: (active: boolean) => void;
   pollIntervalMs: number;
+  deferredAdoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   return createChannelIngressMonitor<
@@ -137,6 +140,11 @@ export function createWhatsAppIngressMonitor(params: {
       failedMaxEntries: 450,
     },
     drain: {
+      // WhatsApp can legitimately wait beyond the generic five-minute handoff
+      // window. Keep a longer fail-closed bound so a lost debounce/reply
+      // scheduler lifecycle cannot refresh its durable claim forever.
+      deferredAdoptionStallTimeoutMs:
+        params.deferredAdoptionStallTimeoutMs ?? WHATSAPP_DEFERRED_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
       deriveLaneKey: (record) => {
         try {
