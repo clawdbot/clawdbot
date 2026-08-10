@@ -182,7 +182,7 @@ type GatewaySystemAgentSession = {
 };
 
 /** Kernel-owned services and state that can be constructed without binding sockets. */
-export type GatewayKernelContext = {
+type GatewayKernelContext = {
   deps: CliDeps;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
@@ -274,7 +274,7 @@ export type GatewayKernelContext = {
 };
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
-export type GatewayTransportContext = {
+type GatewayTransportContext = {
   getMcpAppSandboxPort?: () => number | undefined;
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
@@ -324,7 +324,7 @@ export type GatewayTransportContext = {
 };
 
 /** Resident-owned services bridged into request handling by the server lifecycle. */
-export type GatewayResidentBridgeContext = {
+type GatewayResidentBridgeContext = {
   controlUiSessionPullRequests?: ReturnType<
     typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
   >;
