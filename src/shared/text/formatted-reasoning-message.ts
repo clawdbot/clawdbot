@@ -25,7 +25,9 @@ export function stripFormattedReasoningMessage(text: string): string {
   }
 
   // Remove blank/italic summary preamble lines but preserve the substantive
-  // answer body exactly after the first non-preamble line.
+  // answer body exactly after the first non-preamble line, including leading
+  // whitespace (e.g. Markdown indented code blocks). Trimming here would strip
+  // indentation that carries meaning downstream.
   let index = 1;
   while (index < lines.length) {
     const trimmed = lines[index]?.trim() ?? "";
@@ -35,5 +37,5 @@ export function stripFormattedReasoningMessage(text: string): string {
     }
     break;
   }
-  return lines.slice(index).join("\n").trim();
+  return lines.slice(index).join("\n");
 }

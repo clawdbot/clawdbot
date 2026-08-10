@@ -119,12 +119,17 @@ export async function buildMessagePayload(params: {
     readToolStringParam(actionParams, "message", {
       required: !hasMediaHint && !hasPresentation && !hasInteractive && !location && !voiceText,
       allowEmpty: true,
+      // Read untrimmed so leading body whitespace survives — e.g. Markdown
+      // indented code blocks carried through stripFormattedReasoningMessage.
+      // Whitespace-only bodies collapse to empty below so empty/required/caption
+      // behavior is unchanged.
+      trim: false,
     }) ?? "";
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
   }
-  if (!message.trim() && caption.trim()) {
-    message = caption;
+  if (!message.trim()) {
+    message = caption.trim() ? caption : "";
   }
 
   const parsed = parseInlineDirectives(message, {

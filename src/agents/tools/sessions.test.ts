@@ -1016,6 +1016,21 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("rejects a whitespace-only message body before forwarding it", async () => {
+    // The message is read untrimmed (to preserve substantive leading whitespace),
+    // so a whitespace-only body must be rejected explicitly rather than forwarded.
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-blank-message", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "    ",
+        timeoutSeconds: 5,
+      }),
+    ).rejects.toThrow(/message required/i);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
     const tool = createMainSessionsSendTool();
 

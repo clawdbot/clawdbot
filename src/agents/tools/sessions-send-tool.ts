@@ -70,7 +70,12 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -181,7 +186,9 @@ function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> 
 
   if (typeof params.message !== "string" || !params.message.trim()) {
     for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
-      const value = readToolStringParam(params, alias);
+      // Read untrimmed so leading body whitespace survives the alias path; a
+      // whitespace-only alias falls through to the required-message check below.
+      const value = readToolStringParam(params, alias, { trim: false });
       if (value) {
         params.message = stripFormattedReasoningMessage(value);
         break;
@@ -488,7 +495,13 @@ export function createSessionsSendTool(opts?: {
       const promptedAt = Date.now();
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const message = readToolStringParam(params, "message", { required: true });
+      const message = readToolStringParam(params, "message", { required: true, trim: false });
+      // `required` rejects absent/empty; reject whitespace-only explicitly so a
+      // blank body is not forwarded while substantive leading whitespace
+      // (e.g. Markdown indented code blocks) is preserved.
+      if (!message.trim()) {
+        throw new ToolInputError("message required");
+      }
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const {
         cfg,
