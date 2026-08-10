@@ -2673,13 +2673,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   color: var(--danger);
 }
 
-/* Web Awesome puts the `type="checkbox"` checkmark before the label. Every selection
- * state in these menus reads on the trailing edge, so hide its leading one and let the
- * item render the shared `session-menu__check` in the details slot like its siblings. */
-.sidebar-session-sort-menu__item::part(checkmark) {
-  display: none;
-}
-
 .session-menu__icon,
 .session-menu__check {
   display: inline-flex;
