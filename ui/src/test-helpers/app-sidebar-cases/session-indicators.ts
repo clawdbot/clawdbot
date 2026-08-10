@@ -13,16 +13,17 @@ function expectEmptyLead(row: Element | null) {
 }
 
 describe("AppSidebar session indicators", () => {
-  it("preserves child PR indicators and concurrent pinned run/unread glyph state", async () => {
+  it("preserves child PR indicators and leads a pinned child like any other", async () => {
     const parentKey = "agent:main:parent";
     const pinnedKey = "agent:main:pinned-child";
+    const runningKey = "agent:main:running-child";
     const openPullRequestKey = "agent:main:open-pr-child";
     const mergedPullRequestKey = "agent:main:merged-pr-child";
     const sessions = createSessionsHarness("main", [parentKey]);
     sessions.list.mockResolvedValue({
       ts: 2,
       path: "",
-      count: 3,
+      count: 4,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
@@ -36,6 +37,17 @@ describe("AppSidebar session indicators", () => {
           status: "running",
           unread: true,
           worktree: { id: "wt-pinned", branch: "feature/pinned", repoRoot: "/repo" },
+        },
+        {
+          key: runningKey,
+          spawnedBy: parentKey,
+          kind: "direct",
+          label: "Running child",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "running",
+          unread: true,
+          worktree: { id: "wt-running", branch: "feature/running", repoRoot: "/repo" },
         },
         {
           key: openPullRequestKey,
@@ -69,7 +81,7 @@ describe("AppSidebar session indicators", () => {
             kind: "direct",
             label: "Parent",
             updatedAt: 1,
-            childSessions: [pinnedKey, openPullRequestKey, mergedPullRequestKey],
+            childSessions: [pinnedKey, runningKey, openPullRequestKey, mergedPullRequestKey],
           },
         ],
       },
@@ -77,7 +89,7 @@ describe("AppSidebar session indicators", () => {
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() =>
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(3),
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
     );
     Object.assign(sidebar, {
       sessionPullRequestIndicatorState: (key: string) =>
@@ -98,12 +110,15 @@ describe("AppSidebar session indicators", () => {
         ),
       ).not.toBeNull();
     });
+    // Pinning is not a status: a pinned child must lead exactly like an
+    // unpinned child in the same run/unread state.
     const pinnedRow = sidebar.querySelector(`[data-session-key="${pinnedKey}"]`);
-    const glyph = pinnedRow?.querySelector(".sidebar-session-indicator .session-glyph");
-    expect(glyph?.classList.contains("session-glyph--running")).toBe(true);
-    expect(glyph?.querySelector(".session-glyph__ring")).not.toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).not.toBeNull();
-    expect(glyph?.querySelector("[data-session-pr-state]")).toBeNull();
+    const runningRow = sidebar.querySelector(`[data-session-key="${runningKey}"]`);
+    const pinnedLead = pinnedRow?.querySelector(".sidebar-session-indicator");
+    const runningLead = runningRow?.querySelector(".sidebar-session-indicator");
+    expect(pinnedLead).not.toBeNull();
+    expect(pinnedLead?.innerHTML).toBe(runningLead?.innerHTML);
+    expect(pinnedLead?.querySelector("[data-session-pr-state]")).toBeNull();
     expect(pinnedRow?.querySelector(".session-row-state")).toBeNull();
   });
 

@@ -123,19 +123,6 @@ export function renderSessionLeadingState(
         trailingIndicator,
       };
     }
-    if (session.pinned) {
-      return {
-        running,
-        leadingIndicator: renderSessionGlyph({
-          content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-            >${icons.messageSquare}</span
-          >`,
-          running,
-          badge: renderGlyphBadge(session, pullRequestState),
-        }),
-        trailingIndicator,
-      };
-    }
     if (running) {
       return {
         running,
@@ -163,18 +150,6 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionAttentionIcon(session.attention),
-        running: false,
-      }),
-      trailingIndicator,
-    };
-  }
-  if (session.pinned) {
-    return {
-      running,
-      leadingIndicator: renderSessionGlyph({
-        content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-          >${icons.messageSquare}</span
-        >`,
         running: false,
       }),
       trailingIndicator,
