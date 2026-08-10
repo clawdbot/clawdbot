@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -70,6 +71,7 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
+import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
@@ -98,6 +100,31 @@ const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
   "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
+]);
+const QA_GATEWAY_CREDENTIAL_ISOLATION_SAFE_ENV_KEYS = Object.freeze([
+  "COMSPEC",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "NODE_EXTRA_CA_CERTS",
+  "PATH",
+  "PATHEXT",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SYSTEMROOT",
+  "SystemRoot",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+  "WINDIR",
+]);
+export const QA_GATEWAY_CREDENTIAL_ISOLATION_ENV_OMIT_PATTERNS = Object.freeze([
+  /^(?:ALL|HTTP|HTTPS|NO)_PROXY$/iu,
+  /^(?:ANTHROPIC|AWS|AZURE_OPENAI|CODEX|GEMINI|GOOGLE|MISTRAL|OPENAI|VOYAGE)(?:_|$)/iu,
+  /^CODEX_HOME$/iu,
+  /^OPENCLAW_LIVE_[A-Z0-9_]+$/iu,
+  /(?:^|_)(?:API_?KEYS?|ACCESS_?KEY(?:_ID)?|AUTH|CREDENTIALS?|PASSWORD|SECRET|TOKENS?)(?:_\d+)?$/iu,
 ]);
 
 export type QaGatewayChildStateMutationContext = {
@@ -131,6 +158,113 @@ export type QaGatewayChildListeningContext = {
   runtimeEnv: NodeJS.ProcessEnv;
 };
 
+export type QaGatewayChildConfigPreparationContext = {
+  config: OpenClawConfig;
+  stateDir: string;
+  tempRoot: string;
+  recordPortableCodexAuth: () => void;
+};
+
+export function buildQaGatewayCredentialIsolationChildEnv(
+  source: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {};
+  for (const key of QA_GATEWAY_CREDENTIAL_ISOLATION_SAFE_ENV_KEYS) {
+    const value = source[key];
+    if (typeof value === "string" && value.length > 0) {
+      childEnv[key] = value;
+    }
+  }
+  return childEnv;
+}
+
+export function createQaGatewayApiKeyCredentialIsolation(params: {
+  sourceEnv: NodeJS.ProcessEnv;
+  credential: string;
+  provider: string;
+  profileId: string;
+  agentIds?: readonly string[];
+}) {
+  if (!params.credential.trim()) {
+    throw new Error("QA isolated credential must not be blank.");
+  }
+  if (!params.provider.trim()) {
+    throw new Error("QA isolated credential provider must not be blank.");
+  }
+  if (!params.profileId.trim()) {
+    throw new Error("QA isolated credential profile id must not be blank.");
+  }
+  const requestedAgentIds = params.agentIds ?? ["main", "qa"];
+  if (requestedAgentIds.length === 0) {
+    throw new Error("QA isolated credential requires at least one agent id.");
+  }
+  const agentIds = [
+    ...new Set(
+      requestedAgentIds.map((agentId) => {
+        const normalized = normalizeAgentId(agentId);
+        if (!agentId.trim() || normalized !== agentId) {
+          throw new Error(`QA isolated credential agent id must be canonical: ${agentId}`);
+        }
+        return normalized;
+      }),
+    ),
+  ];
+  return {
+    childBaseEnv: buildQaGatewayCredentialIsolationChildEnv(params.sourceEnv),
+    credentialIsolation: true as const,
+    keepTemp: false as const,
+    runtimeEnvOmitPatterns: QA_GATEWAY_CREDENTIAL_ISOLATION_ENV_OMIT_PATTERNS,
+    async prepareConfigBeforeSpawn({
+      config,
+      stateDir,
+      recordPortableCodexAuth,
+    }: QaGatewayChildConfigPreparationContext): Promise<OpenClawConfig> {
+      const agentsRoot = path.resolve(stateDir, "agents");
+      for (const agentId of agentIds) {
+        const agentDir = path.resolve(resolveQaAgentAuthDir({ stateDir, agentId }));
+        const relativeAgentDir = path.relative(agentsRoot, agentDir);
+        if (
+          !relativeAgentDir ||
+          relativeAgentDir === ".." ||
+          relativeAgentDir.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relativeAgentDir)
+        ) {
+          throw new Error(`QA isolated credential agent path escaped its state root: ${agentId}`);
+        }
+        await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+        await fs.chmod(agentDir, 0o700);
+        await writeQaAuthProfiles({
+          agentDir,
+          profiles: {
+            [params.profileId]: {
+              type: "api_key",
+              provider: params.provider,
+              key: params.credential,
+              displayName: "QA isolated credential",
+            },
+          },
+          replace: true,
+        });
+      }
+      if (params.provider === "openai") {
+        recordPortableCodexAuth();
+      }
+      return {
+        ...config,
+        auth: {
+          ...config.auth,
+          profiles: {
+            [params.profileId]: {
+              provider: params.provider,
+              mode: "api_key",
+            },
+          },
+        },
+      };
+    },
+  };
+}
+
 function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
     delete env[envKey];
@@ -146,6 +280,29 @@ function scrubQaGatewayChildTestRunnerEnv(env: NodeJS.ProcessEnv): NodeJS.Proces
   delete env.VITEST_WORKER_ID;
   if (env.NODE_ENV === "test") {
     delete env.NODE_ENV;
+  }
+  return env;
+}
+
+function omitQaGatewayChildEnv(
+  env: NodeJS.ProcessEnv,
+  omittedKeys: readonly string[],
+  omittedPatterns: readonly RegExp[],
+): NodeJS.ProcessEnv {
+  for (const envKey of omittedKeys) {
+    delete env[envKey];
+  }
+  for (const envKey of Object.keys(env)) {
+    if (
+      omittedPatterns.some((pattern) => {
+        pattern.lastIndex = 0;
+        const matched = pattern.test(envKey);
+        pattern.lastIndex = 0;
+        return matched;
+      })
+    ) {
+      delete env[envKey];
+    }
   }
   return env;
 }
@@ -304,13 +461,31 @@ async function clearQaGatewayArtifactDir(dir: string) {
   }
 }
 
-async function cleanupQaGatewayTempRoots(params: {
-  tempRoot: string;
-  stagedBundledPluginsRoot?: string | null;
-}) {
-  await fs.rm(params.tempRoot, { recursive: true, force: true }).catch(() => {});
+async function cleanupQaGatewayTempRoots(
+  params: {
+    tempRoot: string;
+    stagedBundledPluginsRoot?: string | null;
+  },
+  remove: typeof fs.rm = fs.rm,
+) {
+  const errors: unknown[] = [];
+  try {
+    await remove(params.tempRoot, { recursive: true, force: true });
+  } catch (error) {
+    errors.push(error);
+  }
   if (params.stagedBundledPluginsRoot) {
-    await fs.rm(params.stagedBundledPluginsRoot, { recursive: true, force: true }).catch(() => {});
+    try {
+      await remove(params.stagedBundledPluginsRoot, { recursive: true, force: true });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "qa gateway temp cleanup failed");
   }
 }
 
@@ -443,6 +618,9 @@ export function buildQaRuntimeEnv(params: {
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
+  runtimeEnvOmit?: readonly string[];
+  runtimeEnvOmitPatterns?: readonly RegExp[];
+  credentialIsolation?: boolean;
   forwardHostHomeForClaudeCli?: boolean;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
@@ -494,7 +672,42 @@ export function buildQaRuntimeEnv(params: {
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildSecretEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
+  const scrubbedEnv = omitQaGatewayChildEnv(
+    scrubQaGatewayChildSecretEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv)),
+    params.runtimeEnvOmit ?? [],
+    params.runtimeEnvOmitPatterns ?? [],
+  );
+  if (params.credentialIsolation) {
+    Object.assign(scrubbedEnv, {
+      HOME: params.homeDir,
+      OPENCLAW_HOME: params.homeDir,
+      OPENCLAW_CONFIG_PATH: params.configPath,
+      OPENCLAW_STATE_DIR: params.stateDir,
+      OPENCLAW_OAUTH_DIR: path.join(params.stateDir, "credentials"),
+      OPENCLAW_GATEWAY_TOKEN: params.gatewayToken,
+      OPENCLAW_QA_PARENT_PID: String(process.pid),
+      OPENCLAW_QA_TEMP_ROOT: params.tempRoot,
+      XDG_CONFIG_HOME: params.xdgConfigHome,
+      XDG_DATA_HOME: params.xdgDataHome,
+      XDG_CACHE_HOME: params.xdgCacheHome,
+    });
+    if (params.stagedBundledPluginsRoot) {
+      scrubbedEnv.OPENCLAW_QA_STAGED_RUNTIME_ROOT = params.stagedBundledPluginsRoot;
+    } else {
+      delete scrubbedEnv.OPENCLAW_QA_STAGED_RUNTIME_ROOT;
+    }
+    if (params.bundledPluginsDir) {
+      scrubbedEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = params.bundledPluginsDir;
+    } else {
+      delete scrubbedEnv.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    }
+    if (params.compatibilityHostVersion) {
+      scrubbedEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION = params.compatibilityHostVersion;
+    } else {
+      delete scrubbedEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    }
+  }
+  return scrubbedEnv;
 }
 
 async function stageQaCodexMockModelCatalog(params: {
@@ -1102,6 +1315,13 @@ async function readQaLiveProviderConfigOverrides(params: {
   if (providerIds.length === 0) {
     return {};
   }
+  if (
+    params.env !== undefined &&
+    !params.env[QA_LIVE_PROVIDER_CONFIG_PATH_ENV]?.trim() &&
+    !params.env.OPENCLAW_CONFIG_PATH?.trim()
+  ) {
+    return {};
+  }
   const configPath = resolveQaLiveProviderConfigPath(params.env);
   if (!existsSync(configPath.path)) {
     return {};
@@ -1251,16 +1471,26 @@ export async function startQaGatewayChild(params: {
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
   allowUnhealthyStartup?: boolean;
+  childBaseEnv?: NodeJS.ProcessEnv;
+  credentialIsolation?: boolean;
   forwardHostHome?: boolean;
+  keepTemp?: boolean;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+  prepareConfigBeforeSpawn?: (
+    context: QaGatewayChildConfigPreparationContext,
+  ) => Promise<OpenClawConfig> | OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
+  runtimeEnvOmit?: readonly string[];
+  runtimeEnvOmitPatterns?: readonly RegExp[];
 }) {
   // Verified launchers may require every runtime artifact to stay inside their
   // prepared root; carry that root forward instead of rediscovering host temp policy.
   const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
-  const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
+  const keepTemp =
+    params.keepTemp ??
+    (params.childBaseEnv === undefined && process.env.OPENCLAW_QA_KEEP_TEMP === "1");
   const gatewayLogStreams: Array<["stdout" | "stderr", WriteStream]> = [];
   let child: ReturnType<typeof spawn> | null = null;
   let childIdentity: QaGatewayVerifiedProcessIdentity | null = null;
@@ -1320,6 +1550,7 @@ export async function startQaGatewayChild(params: {
       : [];
     const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
       providerIds: liveProviderIds,
+      env: params.childBaseEnv,
     });
     const liveOwnerPluginIds =
       liveProviderIds.length > 0
@@ -1364,10 +1595,12 @@ export async function startQaGatewayChild(params: {
         cfg,
         stateDir,
         providerIds: liveProviderIds,
+        env: params.childBaseEnv,
       });
       cfg = await stageQaLiveAnthropicSetupToken({
         cfg,
         stateDir,
+        env: params.childBaseEnv,
       });
       const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
       if (mockAuthProviders && mockAuthProviders.length > 0) {
@@ -1378,7 +1611,17 @@ export async function startQaGatewayChild(params: {
           providers: mockAuthProviders,
         });
       }
-      return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
+      cfg = params.mutateConfig ? params.mutateConfig(cfg) : cfg;
+      return params.prepareConfigBeforeSpawn
+        ? await params.prepareConfigBeforeSpawn({
+            config: cfg,
+            stateDir,
+            tempRoot,
+            recordPortableCodexAuth: () => {
+              portableCodexAuthPrepared = true;
+            },
+          })
+        : cfg;
     };
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -1399,6 +1642,7 @@ export async function startQaGatewayChild(params: {
     let env: NodeJS.ProcessEnv | null = null;
     let migrationConvergenceRestartUsed = false;
     let reuseStartupLaunchState = false;
+    let portableCodexAuthPrepared = false;
 
     const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
     const cliArgsPrefix = gatewayExecutablePath
@@ -1567,6 +1811,7 @@ export async function startQaGatewayChild(params: {
             stagedBundledPluginsRoot,
             compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
             providerMode,
+            baseEnv: params.childBaseEnv,
             runtimeEnvPatch: {
               ...params.runtimeEnvPatch,
               ...buildQaForcedRuntimeEnvPatch({
@@ -1576,9 +1821,15 @@ export async function startQaGatewayChild(params: {
                 codexModelCatalogPath,
                 nativeAppServerArgs:
                   params.runtimeEnvPatch?.OPENCLAW_CODEX_APP_SERVER_ARGS ??
-                  process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
+                  params.childBaseEnv?.OPENCLAW_CODEX_APP_SERVER_ARGS ??
+                  (params.childBaseEnv === undefined
+                    ? process.env.OPENCLAW_CODEX_APP_SERVER_ARGS
+                    : undefined),
               }),
             },
+            runtimeEnvOmit: params.runtimeEnvOmit,
+            runtimeEnvOmitPatterns: params.runtimeEnvOmitPatterns,
+            credentialIsolation: params.credentialIsolation,
             forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
             claudeCliAuthMode: params.claudeCliAuthMode,
           });
@@ -1590,6 +1841,8 @@ export async function startQaGatewayChild(params: {
           cfg,
           providerIds: liveProviderIds,
           env,
+          allowAmbientCodexHome: params.childBaseEnv === undefined,
+          portableCodexAuthPrepared,
         });
         await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
           encoding: "utf8",
@@ -1982,7 +2235,11 @@ export async function startQaGatewayChild(params: {
               stagedBundledPluginsRoot,
             });
           } catch (error) {
-            cleanupErrors.push(error);
+            cleanupErrors.push(
+              new Error(appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot), {
+                cause: error,
+              }),
+            );
           }
         }
         try {
@@ -2032,7 +2289,11 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
         });
       } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
+        cleanupErrors.push(
+          new Error(appendQaGatewayTempRoot(formatErrorMessage(cleanupError), tempRoot), {
+            cause: cleanupError,
+          }),
+        );
       }
     }
     const message =

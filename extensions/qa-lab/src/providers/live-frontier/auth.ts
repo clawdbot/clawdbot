@@ -272,6 +272,8 @@ export function assertQaLiveCodexAuthAvailable(params: {
   cfg: OpenClawConfig;
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
+  allowAmbientCodexHome?: boolean;
+  portableCodexAuthPrepared?: boolean;
   readCodexCredentials?: typeof readCodexCliCredentialsCached;
 }): void {
   const env = params.env ?? process.env;
@@ -279,6 +281,7 @@ export function assertQaLiveCodexAuthAvailable(params: {
     return;
   }
   if (
+    params.portableCodexAuthPrepared === true ||
     resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_PROVIDER_ID, env, cfg: params.cfg })?.apiKey ||
     hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID })
   ) {
@@ -286,6 +289,15 @@ export function assertQaLiveCodexAuthAvailable(params: {
   }
   const readCodexCredentials = params.readCodexCredentials ?? readCodexCliCredentialsCached;
   const codexHome = env.CODEX_HOME?.trim();
+  if (!codexHome && params.allowAmbientCodexHome !== true) {
+    throw new Error(
+      [
+        "QA live-frontier cannot run Codex-backed OpenAI models inside an isolated QA agent because no portable Codex auth is available.",
+        "Provide an isolated API-key profile or an explicit CODEX_HOME.",
+        "Ambient host Codex credentials are not consulted for isolated QA children.",
+      ].join(" "),
+    );
+  }
   const codexCredential = readCodexCredentials({
     ...(codexHome ? { codexHome } : {}),
     allowKeychainPrompt: false,

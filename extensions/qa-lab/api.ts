@@ -101,8 +101,12 @@ export { runQaE2eSelfCheck, runQaLabSelfCheck } from "./src/self-check-runner.js
 export {
   testing,
   testing as __testing,
+  buildQaGatewayCredentialIsolationChildEnv,
   buildQaRuntimeEnv,
+  createQaGatewayApiKeyCredentialIsolation,
+  QA_GATEWAY_CREDENTIAL_ISOLATION_ENV_OMIT_PATTERNS,
   type QaCliBackendAuthMode,
+  type QaGatewayChildConfigPreparationContext,
   type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
