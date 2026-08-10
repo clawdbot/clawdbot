@@ -217,19 +217,20 @@ function collectSessionIdMatchesForRequest(opts: {
       if (normalizedParsedAgentId && !configuredAgentIds.includes(normalizedParsedAgentId)) {
         continue;
       }
+      const isLegacyUnscopedKey = classifySessionKeyShape(candidateKey) === "legacy_or_alias";
       // Unique physical paths prove ownership directly. During cross-agent scans, unscoped rows
-      // in a shared fixed store belong to its persisted/retained owner, not the scan candidate.
-      const legacyUnscopedOwner =
-        classifySessionKeyShape(candidateKey) === "legacy_or_alias"
-          ? (pathOwnedAgentId ??
-            sharedPathCompatibilityAgentId ??
-            scopedCandidateAgentId ??
-            compatibilityAgentId)
-          : undefined;
+      // in a shared fixed store need a persisted/retained owner; only an agent-constrained lookup
+      // may assign the scan candidate.
+      const legacyUnscopedOwner = isLegacyUnscopedKey
+        ? (pathOwnedAgentId ??
+          sharedPathCompatibilityAgentId ??
+          (opts.searchOtherAgentStores ? undefined : scopedCandidateAgentId) ??
+          compatibilityAgentId)
+        : undefined;
       const matchedAgentId =
         normalizedParsedAgentId ??
         legacyUnscopedOwner ??
-        scopedCandidateAgentId ??
+        (isLegacyUnscopedKey ? undefined : scopedCandidateAgentId) ??
         compatibilityAgentId;
       candidates.push({
         sessionKey: candidateKey,

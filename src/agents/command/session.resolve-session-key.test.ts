@@ -30,9 +30,9 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveExplicitAgentSessionKey: () => undefined,
 }));
 
-vi.mock("../agent-scope.js", () => ({
+vi.mock("../agent-scope.js", async () => ({
+  ...(await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js")),
   listAgentIds: () => hoisted.listAgentIdsMock(),
-  resolveDefaultAgentId: () => "main",
 }));
 
 const { resolveSessionKeyForRequestCore, resolveStoredSessionKeyForSessionId } =
@@ -166,6 +166,59 @@ describe("resolveSessionKeyForRequest", () => {
       "research",
       "ops",
     ]);
+  });
+
+  it("fails closed for an ownerless unscoped row during a cross-agent shared-store scan", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
+    const sharedStore = {
+      main: { sessionId: "ownerless-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        entries: { research: {}, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() => resolveSessionKeyForRequest({ cfg, sessionId: "ownerless-session" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+    expect(hoisted.listSessionEntriesMock.mock.calls.map(([scope]) => scope?.agentId)).toEqual([
+      "research",
+      "ops",
+    ]);
+  });
+
+  it("allows an agent-constrained lookup to own an unscoped shared-store row", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
+    const sharedStore = {
+      main: { sessionId: "ops-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: { store: "/stores/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          entries: { research: {}, ops: {} },
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "ops-session",
+      agentId: "ops",
+    });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.sessionKey).toBe("main");
+    expect(result.sessionStore).toEqual(sharedStore);
+    expect(result.storePath).toBe("/stores/shared.sqlite");
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
   });
 
   it("borrows session stores when requested", () => {

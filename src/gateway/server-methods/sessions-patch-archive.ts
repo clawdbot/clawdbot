@@ -7,6 +7,7 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -216,7 +217,7 @@ export async function prepareSessionPatchArchive(params: {
       sessionId: fresh.entry?.sessionId,
       sessionKey: freshCanonicalKey,
       agentId: freshResolved.agentId,
-      defaultAgentId: freshResolved.agentId,
+      defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
       lifecycleIdentities: target.lifecycleIdentities.filter((identity): identity is string =>
         Boolean(identity),
       ),

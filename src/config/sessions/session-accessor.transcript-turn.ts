@@ -6,10 +6,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
-import {
-  resolveSessionStoreCompatibilityAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../legacy.default-agent-owner.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
@@ -42,9 +39,12 @@ import {
 import type { SessionEntry } from "./types.js";
 
 function resolveTranscriptCompatibilityAgentId(config: OpenClawConfig): string | undefined {
-  return isPerAgentSessionStoreConfig(config.session?.store)
-    ? tryResolveLegacyCompatibilityAgentId(config)
-    : resolveSessionStoreCompatibilityAgentId(config);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  if (isPerAgentSessionStoreConfig(config.session?.store)) {
+    return compatibilityAgentId;
+  }
+  const persistedAgentId = config.agents?.defaults?.sessionStore?.agentId?.trim();
+  return persistedAgentId ? normalizeAgentId(persistedAgentId) : compatibilityAgentId;
 }
 
 function resolveTranscriptTurnAgentId(params: {
