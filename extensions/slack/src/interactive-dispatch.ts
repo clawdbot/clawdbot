@@ -125,17 +125,39 @@ export async function dispatchSlackPluginInteractiveHandler(params: {
     ? qualify(params.ctx.parentConversationId)
     : undefined;
 
-  return await dispatchSlackInteractive({
-    ...params,
+  return await dispatchPluginInteractiveHandler<SlackInteractiveHandlerRegistration>({
+    channel: "slack",
+    data: params.data,
     dedupeId: qualify(params.interactionId),
-    conversation: {
-      channel: "slack",
-      accountId: params.ctx.accountId,
-      conversationId: qualifiedThreadId ?? baseConversationId,
-      parentConversationId: qualifiedThreadId
-        ? (qualifiedParentConversationId ?? baseConversationId)
-        : qualifiedParentConversationId,
-      threadId: qualifiedThreadId,
-    },
+    onMatched: params.onMatched,
+    invoke: ({ registration, namespace, payload }) =>
+      registration.handler({
+        ...params.ctx,
+        channel: "slack",
+        interaction: {
+          ...params.ctx.interaction,
+          data: params.data,
+          namespace,
+          payload,
+        },
+        respond: params.respond,
+        ...createInteractiveConversationBindingHelpers({
+          // The shared helpers fail closed without owner authority; never expose it to unauthenticated actions.
+          registration:
+            params.ctx.auth.isAuthorizedSender && baseConversationId
+              ? registration
+              : { ...registration, pluginRoot: undefined },
+          senderId: params.ctx.senderId,
+          conversation: {
+            channel: "slack",
+            accountId: params.ctx.accountId,
+            conversationId: qualifiedThreadId ?? baseConversationId,
+            parentConversationId: qualifiedThreadId
+              ? (qualifiedParentConversationId ?? baseConversationId)
+              : qualifiedParentConversationId,
+            threadId: qualifiedThreadId,
+          },
+        }),
+      }),
   });
 }

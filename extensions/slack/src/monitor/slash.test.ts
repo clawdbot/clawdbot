@@ -410,7 +410,6 @@ function createArgMenusHarness(
   const app = {
     client: listenerClient,
     command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
-      commandRegistrations.push(name);
       commands.set(name, async (args) => await handler(withBoltScope(args)));
     },
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {

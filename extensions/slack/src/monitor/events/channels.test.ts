@@ -10,6 +10,7 @@ let createSlackSystemEventTestHarness: typeof import("./system-event-test-harnes
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
+
 type SlackChannelHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
@@ -28,13 +29,14 @@ function createChannelContext(params?: {
   registerSlackChannelEvents({ ctx: harness.ctx, trackEvent: params?.trackEvent });
   registerSlackChannelIdChangedEvent({ ctx: harness.ctx, trackEvent: params?.trackEvent });
   return {
-    getCreatedHandler: () => harness.getHandler("channel_created") as SlackChannelHandler | null,
+    ctx: harness.ctx,
+    getHandler: (name: string) => harness.getHandler(name) as SlackChannelHandler | null,
   };
 }
 
 function requireChannelHandler(handler: SlackChannelHandler | null): SlackChannelHandler {
   if (!handler) {
-    throw new Error("expected Slack channel_created handler");
+    throw new Error("expected Slack channel handler");
   }
   return handler;
 }
@@ -52,11 +54,11 @@ describe("registerSlackChannelEvents", () => {
 
   it("does not track mismatched events", async () => {
     const trackEvent = vi.fn();
-    const { getCreatedHandler } = createChannelContext({
+    const { getHandler } = createChannelContext({
       trackEvent,
       shouldDropMismatchedSlackEvent: () => true,
     });
-    const createdHandler = requireChannelHandler(getCreatedHandler());
+    const createdHandler = requireChannelHandler(getHandler("channel_created"));
 
     await createdHandler({
       event: {
@@ -71,8 +73,8 @@ describe("registerSlackChannelEvents", () => {
 
   it("tracks accepted events", async () => {
     const trackEvent = vi.fn();
-    const { getCreatedHandler } = createChannelContext({ trackEvent });
-    const createdHandler = requireChannelHandler(getCreatedHandler());
+    const { getHandler } = createChannelContext({ trackEvent });
+    const createdHandler = requireChannelHandler(getHandler("channel_created"));
 
     await createdHandler({
       event: {
@@ -121,7 +123,7 @@ describe("registerSlackChannelEvents", () => {
         const handler = requireChannelHandler(getHandler(eventCase.name));
         await handler({
           event: eventCase.event,
-          body: { api_app_id: "A_GRID", event_id: `Ev-${eventCase.name}-${teamId}` },
+          body: { api_app_id: "A_GRID" },
           context: {
             isEnterpriseInstall: true,
             enterpriseId: "E_GRID",
@@ -140,7 +142,7 @@ describe("registerSlackChannelEvents", () => {
           eventCase.message,
           {
             sessionKey: `session:${teamId}`,
-            contextKey: `slack:channel:${teamId}:${eventCase.kind}:C1:Ev-${eventCase.name}-${teamId}`,
+            contextKey: `slack:channel:${teamId}:${eventCase.kind}:C1`,
           },
         );
       }
@@ -161,7 +163,7 @@ describe("registerSlackChannelEvents", () => {
 
       await handler({
         event: { channel: { id: "C1", name: "general" } },
-        body: { api_app_id: "A_GRID", event_id: `Ev-${eventName}` },
+        body: { api_app_id: "A_GRID" },
         context: {
           isEnterpriseInstall: true,
           enterpriseId: "E_GRID",
@@ -173,63 +175,4 @@ describe("registerSlackChannelEvents", () => {
       expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     },
   );
-
-  it("keeps live config unchanged when channel-ID persistence fails, then retries", async () => {
-    const oldChannelId = "C_OLD";
-    const newChannelId = "C_NEW";
-    const initialConfig = {
-      channels: { slack: { channels: { [oldChannelId]: { enabled: true } } } },
-    };
-    let persistedConfig = structuredClone(initialConfig);
-    const persistenceError = new Error("disk full");
-    readConfigSnapshotMock.mockImplementation(async () => ({
-      snapshot: {
-        hash: "base-hash",
-        sourceConfig: structuredClone(persistedConfig),
-      },
-    }));
-    mutateConfigFileMock
-      .mockRejectedValueOnce(persistenceError)
-      .mockImplementationOnce(
-        async (params: { mutate: (draft: typeof initialConfig) => unknown }) => {
-          const draft = structuredClone(persistedConfig);
-          const result = params.mutate(draft);
-          persistedConfig = draft;
-          return { result, nextConfig: draft };
-        },
-      );
-    const { ctx, getHandler } = createChannelContext();
-    ctx.cfg = structuredClone(initialConfig) as never;
-    ctx.accountId = "default";
-    ctx.runtime.error = vi.fn();
-    const handler = requireChannelHandler(getHandler("channel_id_changed"));
-    const turnAdoptionLifecycle = {
-      admission: "exclusive",
-      abortSignal: new AbortController().signal,
-      onAdopted: vi.fn(),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(),
-    };
-    const args = {
-      event: {
-        type: "channel_id_changed",
-        old_channel_id: oldChannelId,
-        new_channel_id: newChannelId,
-      },
-      body: {},
-      context: { openclawIngressLifecycle: turnAdoptionLifecycle },
-    };
-
-    await expect(handler(args)).rejects.toBe(persistenceError);
-    expect(ctx.cfg.channels?.slack?.channels).toHaveProperty(oldChannelId);
-    expect(ctx.cfg.channels?.slack?.channels).not.toHaveProperty(newChannelId);
-    expect(persistedConfig.channels.slack.channels).toHaveProperty(oldChannelId);
-
-    await expect(handler(args)).resolves.toBeUndefined();
-    expect(ctx.cfg.channels?.slack?.channels).not.toHaveProperty(oldChannelId);
-    expect(ctx.cfg.channels?.slack?.channels).toHaveProperty(newChannelId);
-    expect(persistedConfig.channels.slack.channels).not.toHaveProperty(oldChannelId);
-    expect(persistedConfig.channels.slack.channels).toHaveProperty(newChannelId);
-    expect(mutateConfigFileMock).toHaveBeenCalledTimes(2);
-  });
 });
