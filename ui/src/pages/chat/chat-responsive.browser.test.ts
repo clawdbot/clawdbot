@@ -2925,7 +2925,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(styles.thread.minHeight).toBe("96px");
       expect(styles.thread.overflowY).toBe("auto");
       for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
-        expect(metadata.minHeight).toBe("0px");
+        // Relational, not a literal: the point is that these nodes do not share
+        // the thread's rule, whatever the thread's own numbers become.
+        expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
         expect(metadata.overflowY).toBe("visible");
         expect(metadata.borderTopWidth).toBe("0px");
       }
