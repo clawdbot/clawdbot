@@ -283,7 +283,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 2000,
       suppressEmbeds: true,
       streaming: {
-        mode: "progress", // off | partial | block | progress (Discord default: progress)
+        mode: "progress", // explicit opt-in; Discord defaults to off
         chunkMode: "length", // length | newline
         progress: {
           label: "auto",
@@ -356,7 +356,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.voice.reconnectGraceMs` controls how long a disconnected voice session may take to enter reconnect signalling before OpenClaw destroys it (default `15000`).
 - Discord voice playback is not interrupted by another user's speaking-start event. To avoid feedback loops, OpenClaw ignores new voice capture while TTS is playing.
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
-- `channels.discord.streaming` is the canonical stream mode key. Discord defaults to `streaming.mode: "progress"` so tool/work progress appears in one edited preview message; set `streaming.mode: "off"` to disable it. Legacy flat keys (`streamMode`, `chunkMode`, `blockStreaming`, `draftChunk`, `blockStreamingCoalesce`) are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config.
+- `channels.discord.streaming` is the canonical stream mode key. Discord preview streaming defaults to `off`; set `streaming.mode: "progress"` to opt into one edited tool/work progress message, or choose `partial` or `block` for answer previews. Legacy flat keys (`streamMode`, `chunkMode`, `blockStreaming`, `draftChunk`, `blockStreamingCoalesce`) are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
 - `channels.discord.guilds.<id>.presenceEvents` routes human availability arrivals into one configured Discord channel as agent system events. Eligible members must be able to view `channelId`; public threads inherit parent visibility, while private threads additionally require membership or Manage Threads. `users` can further narrow that audience. It seeds current online members from complete `GUILD_CREATE` snapshots, routes observed offline-to-online transitions, and treats a first later online signal for an unseen member as newly available without asserting whether they came online or joined after the snapshot. Guilds above Discord's 75,000-member snapshot limit require an explicit offline update first. Throttling knobs: `reconnectSuppressSeconds` (quiet window after a new Gateway session while guild presence state is rebuilt, default 300, `0` disables) and `burstLimit`/`burstWindowSeconds` (per-guild successfully queued event rate limit, default 8 events per 60s sliding window). Resumed sessions do not start the reconnect suppression window. The existing per-user re-greet cooldown remains eight hours. It requires `channels.discord.intents.presence=true`, the privileged Presence Intent in Discord's Developer Portal, and an enabled agent heartbeat.
 - `channels.discord.intents.messageContent` defaults to `true`. Set it to `false` only for mention-only operation when Discord cannot grant the privileged Message Content intent; DMs and explicit bot mentions still carry message content, while other guild messages do not. Keep `requireMention: true` on every configured guild channel in this mode.
@@ -605,7 +605,7 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. Th
 
 BlueBubbles support was removed. `channels.bluebubbles` is not a supported runtime config surface on current OpenClaw. Migrate old configs to `channels.imessage`; use [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short version and [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full translation table.
 
-If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
+If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to the absolute path of a Gateway-local SSH wrapper that runs `imsg "$@"` on that Mac. Set `remoteHost` to the Messages Mac, not the Gateway host. OpenClaw auto-detects simple transparent SSH wrappers for compatibility, but complex wrappers require explicit `remoteHost`. The default local `imsg` path is macOS-only.
 
 Before relying on an SSH wrapper for production sends, verify an outbound `imsg send` through that exact wrapper. Some macOS TCC states assign Messages Automation to `/usr/libexec/sshd-keygen-wrapper`, which can make reads and probes work while sends fail with AppleEvents `-1743`; see the SSH wrapper troubleshooting section on [iMessage](/channels/imessage).
 
@@ -614,9 +614,9 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
   channels: {
     imessage: {
       enabled: true,
-      cliPath: "imsg",
-      dbPath: "~/Library/Messages/chat.db",
-      remoteHost: "user@gateway-host",
+      cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
+      dbPath: "/Users/user/Library/Messages/chat.db",
+      remoteHost: "user@messages-mac",
       dmPolicy: "pairing",
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,
@@ -643,9 +643,10 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 - Optional `channels.imessage.defaultAccount` overrides default account selection when it matches a configured account id.
 - Requires Full Disk Access to the Messages DB.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `cliPath` can point to an SSH wrapper; set `remoteHost` (`host` or `user@host`) for SCP attachment fetching.
+- For SSH setups, `cliPath` is an absolute path on the Gateway host. `remoteHost` (`host` or `user@host`) is the Messages Mac, and `dbPath` is interpreted on that Mac. Use an absolute remote database path rather than expanding it from the Gateway user's home.
+- A configured or auto-detected `remoteHost` enables inbound attachment fetches and outbound file staging over the existing strict SSH/SCP transport. Outbound files use an owner-only remote temporary path with best-effort cleanup after success, failure, or timeout; cleanup failure warns and can leave owner-only residue.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
-- SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
+- SCP uses strict host-key checking, so ensure the Messages Mac host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 - `channels.imessage.sendTransport`: preferred `imsg` RPC send transport for normal outbound replies. `auto` (default) uses the IMCore bridge for existing chats when it is running, then falls back to AppleScript; `bridge` requires private-API delivery; `applescript` forces the public Messages automation path.
 - `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
@@ -658,8 +659,10 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 
 ```bash
 #!/usr/bin/env bash
-exec ssh -T gateway-host imsg "$@"
+exec ssh -T messages-mac imsg "$@"
 ```
+
+With remote `imsg` v0.13.4, poll votes must use `pollOptionId`; its `poll.vote` RPC method does not resolve index or text selectors. Attachment replies to nonzero part indices are also unavailable remotely. These limits do not change local `imsg` behavior.
 
 </Accordion>
 
@@ -833,7 +836,12 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
     },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    entries: {
+      main: {
+        default: true,
+        groupChat: { mentionPatterns: ["@openclaw", "openclaw"] },
+      },
+    },
   },
 }
 ```
@@ -876,12 +884,12 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
       },
-    ],
+    },
   },
 }
 ```
@@ -902,13 +910,10 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     debug: false, // allow /debug
     restart: true, // allow /restart + external SIGUSR1 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw", // raw | hash
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -931,9 +936,8 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `ownerDisplay: "hash"` hashes owner ids in the system prompt. Set `ownerDisplaySecret` to control hashing.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
-- `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)
   - channel-specific command surfaces: [Channels](/channels)

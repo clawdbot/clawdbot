@@ -22,7 +22,6 @@ import {
   resolveModelFallbackError,
 } from "./failover-error.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
-import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -526,87 +525,6 @@ describe("failover-error", () => {
         message: '{"error":{"message":"The model is overloaded. Please try later"}}',
       }),
     ).toBe("overloaded");
-  });
-
-  it("does not classify session lock wait errors as model timeout failover", () => {
-    const sessionLockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 10_000,
-      owner: "pid=37121",
-      lockPath: "/tmp/openclaw/session.jsonl.lock",
-    });
-    expect(resolveFailoverReasonFromError(sessionLockError)).toBeNull();
-    expect(isTimeoutError(sessionLockError)).toBe(false);
-
-    const wrappedLockError = Object.assign(new Error("operation timed out"), {
-      name: "AbortError",
-      cause: sessionLockError,
-    });
-    expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
-    expect(isTimeoutError(wrappedLockError)).toBe(false);
-
-    const abortWrappedLockError = Object.assign(new Error("request was aborted"), {
-      name: "AbortError",
-      cause: sessionLockError,
-    });
-    expect(resolveFailoverReasonFromError(abortWrappedLockError)).toBeNull();
-    expect(isTimeoutError(abortWrappedLockError)).toBe(false);
-  });
-
-  it("keeps explicit provider failover metadata authoritative over nested session lock text", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 429,
-        code: "RESOURCE_EXHAUSTED",
-        message: "upstream quota pressure",
-        cause: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps inferred HTTP failover metadata authoritative over nested session lock text", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "HTTP 429: upstream quota pressure",
-        cause: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("does not treat generic abort codes as explicit failover metadata over nested session lock text", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        name: "AbortError",
-        code: "ABORT_ERR",
-        message: "The operation was aborted",
-        cause: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-      }),
-    ).toBeNull();
-  });
-
-  it("does not let cause-based failover classification bypass wrapper session lock suppression", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "wrapper",
-        reason: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-        cause: new Error("operation timed out"),
-      }),
-    ).toBeNull();
   });
 
   it("classifies bare shared model runtime stream wrapper as timeout regardless of provider (#71620)", () => {
@@ -1411,26 +1329,14 @@ describe("failover-error", () => {
   });
 
   describe("isNonProviderRuntimeCoordinationError", () => {
-    const makeSessionLockError = () =>
-      new SessionWriteLockTimeoutError({
-        timeoutMs: 10_000,
-        owner: "pid=37121",
-        lockPath: "/tmp/openclaw/session.jsonl.lock",
-      });
-    const makeEmbeddedTakeoverError = () => {
-      const err = new Error(
-        "session file changed while embedded prompt lock was released: /tmp/openclaw/session.jsonl",
-      );
-      err.name = "EmbeddedAttemptSessionTakeoverError";
+    const makeWriterClaimReboundError = () => {
+      const err = new Error("session writer claim changed before transcript persistence");
+      err.name = "SessionTranscriptWriterClaimReboundError";
       return err;
     };
 
-    it("returns true for direct session write-lock timeout errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeSessionLockError())).toBe(true);
-    });
-
-    it("returns true for direct embedded attempt session takeover errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+    it("returns true for transcript writer claim rebound errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeWriterClaimReboundError())).toBe(true);
     });
 
     it("returns true for harness session generation ownership loss", () => {
@@ -1467,11 +1373,8 @@ describe("failover-error", () => {
     });
 
     it("returns true when the coordination error is nested via cause", () => {
-      const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
-      expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
-
-      const wrappedTakeover = new Error("wrapper", { cause: makeEmbeddedTakeoverError() });
-      expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
+      const wrappedRebound = new Error("wrapper", { cause: makeWriterClaimReboundError() });
+      expect(isNonProviderRuntimeCoordinationError(wrappedRebound)).toBe(true);
     });
 
     it("returns true for Codex missing tool-result local execution failures", () => {
@@ -1494,14 +1397,6 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
         false,
       );
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 429,
-          code: "RESOURCE_EXHAUSTED",
-          message: "upstream quota pressure",
-          cause: makeSessionLockError(),
-        }),
-      ).toBe(false);
       expect(
         isNonProviderRuntimeCoordinationError({
           status: 503,
@@ -1529,63 +1424,12 @@ describe("failover-error", () => {
       ).toBe(false);
     });
 
-    it("returns false when takeover wrapper holds a classifiable provider timeout in promptError", () => {
-      // Simulates EmbeddedAttemptPromptErrorWithCleanupTakeoverError: name matches
-      // EmbeddedAttemptSessionTakeoverError, but the real cause is in .promptError.
-      const timeoutPromptErr = Object.assign(new Error("request timed out"), {
-        name: "TimeoutError",
-      });
-      const wrapper = Object.assign(new Error("request timed out"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError: timeoutPromptErr,
-      });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
-    });
-
-    it("returns false when takeover wrapper holds rate_limit in promptError", () => {
-      const rateLimitPromptErr = {
-        status: 429,
-        code: "RATE_LIMITED",
-        message: "too many requests",
-      };
-      const wrapper = Object.assign(new Error("cleanup takeover"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError: rateLimitPromptErr,
-      });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
-      const resolution = resolveModelFallbackError(wrapper);
-      expect(resolution).toMatchObject({
-        kind: "failover",
-        error: {
-          message: "too many requests",
-          reason: "rate_limit",
-          status: 429,
-          code: "RATE_LIMITED",
-        },
-      });
-      expect(resolution.error).toHaveProperty("cause", wrapper);
-    });
-
-    it("returns true when takeover wrapper holds an unclassifiable promptError", () => {
-      const unknownPromptErr = { weirdField: "something unknown" };
-      const wrapper = Object.assign(new Error("unknown"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError: unknownPromptErr,
-      });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(true);
-    });
-
-    it("returns true for pure takeover error without promptError (regression)", () => {
-      const pureTakeover = Object.assign(
-        new Error("session file changed while embedded prompt lock was released"),
-        { name: "EmbeddedAttemptSessionTakeoverError" },
-      );
-      expect(isNonProviderRuntimeCoordinationError(pureTakeover)).toBe(true);
+    it("keeps provider-looking rebound wrappers in the coordination path", () => {
+      const rebound = makeWriterClaimReboundError();
+      expect(isNonProviderRuntimeCoordinationError(rebound)).toBe(true);
       expect(
         isNonProviderRuntimeCoordinationError(
-          Object.assign(new Error("provider rejected request: rate limit"), {
-            name: "EmbeddedAttemptSessionTakeoverError",
-          }),
+          new Error("provider rejected request: rate limit", { cause: rebound }),
         ),
       ).toBe(true);
     });

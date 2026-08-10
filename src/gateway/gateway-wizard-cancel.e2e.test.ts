@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
 import {
@@ -15,10 +15,12 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "./test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",

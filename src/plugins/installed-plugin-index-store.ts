@@ -1,8 +1,18 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { z } from "zod";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  createPluginInstallRecordMap,
+  inspectPluginInstallRecordMap,
+  parsePluginInstallRecord,
+  parsePluginInstallRecordMap,
+  PluginInstallRecordSchema,
+  serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../config/plugin-install-record-map.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
@@ -28,7 +38,6 @@ import {
   resolveInstalledPluginIndexPolicyHash,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
-  type InstalledPluginInstallRecordInfo,
   type InstalledPluginIndexRefreshReason,
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
@@ -91,7 +100,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   pluginId: z.string(),
   packageName: z.string().optional(),
   packageVersion: z.string().optional(),
-  installRecord: z.record(z.string(), z.unknown()).optional(),
+  installRecord: PluginInstallRecordSchema.optional(),
   installRecordHash: z.string().optional(),
   packageInstall: z.unknown().optional(),
   packageChannel: z.unknown().optional(),
@@ -127,8 +136,6 @@ const InstalledPluginIndexRecordSchema = z.object({
   compat: z.array(z.string()),
 });
 
-const InstalledPluginInstallRecordSchema = z.record(z.string(), z.unknown());
-
 const PluginDiagnosticSchema = z.object({
   level: z.union([z.literal("warn"), z.literal("error")]),
   message: z.string(),
@@ -145,42 +152,26 @@ const InstalledPluginIndexSchema = z.object({
   policyHash: z.string(),
   generatedAtMs: z.number(),
   refreshReason: z.string().optional(),
-  installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
+  installRecords: z.unknown().optional(),
   plugins: z.array(InstalledPluginIndexRecordSchema),
   diagnostics: z.array(PluginDiagnosticSchema),
 });
 
-function copySafeInstallRecords(
-  records: Readonly<Record<string, InstalledPluginInstallRecordInfo>> | undefined,
-): Record<string, InstalledPluginInstallRecordInfo> | undefined {
-  if (!records) {
-    return undefined;
-  }
-  const safeRecords: Record<string, InstalledPluginInstallRecordInfo> = {};
-  for (const [pluginId, record] of Object.entries(records)) {
-    if (isBlockedObjectKey(pluginId)) {
-      continue;
-    }
-    safeRecords[pluginId] = record;
-  }
-  return safeRecords;
-}
-
 export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
   const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
     | (Omit<InstalledPluginIndex, "installRecords"> & {
-        installRecords?: InstalledPluginIndex["installRecords"];
+        installRecords?: unknown;
       })
     | null;
   if (!parsed) {
     return null;
   }
-  const installRecords =
-    copySafeInstallRecords(parsed.installRecords) ??
-    copySafeInstallRecords(
-      extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex),
-    ) ??
-    {};
+  const installRecords = Object.hasOwn(parsed, "installRecords")
+    ? parsePluginInstallRecordMap(parsed.installRecords)
+    : extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex);
+  if (!installRecords) {
+    return null;
+  }
   return {
     version: parsed.version,
     ...(parsed.warning ? { warning: parsed.warning } : {}),
@@ -222,11 +213,7 @@ function assertWritableInstalledPluginIndexStoreOptions(
 }
 
 function parseJsonColumn(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(value);
 }
 
 function parseInstalledPluginIndexSqliteRow(
@@ -251,10 +238,18 @@ function parseInstalledPluginIndexSqliteRow(
 }
 
 function preparePersistedInstalledPluginIndex(index: InstalledPluginIndex): InstalledPluginIndex {
+  const installRecords = createPluginInstallRecordMap<PluginInstallRecord>();
+  for (const [pluginId, rawRecord] of Object.entries(index.installRecords)) {
+    const record = parsePluginInstallRecord(rawRecord);
+    if (!record) {
+      throw new Error("Invalid plugin install record");
+    }
+    setPluginInstallRecordMapEntry(installRecords, pluginId, record);
+  }
   return {
     ...index,
     warning: INSTALLED_PLUGIN_INDEX_WARNING,
-    installRecords: copySafeInstallRecords(index.installRecords) ?? {},
+    installRecords,
   };
 }
 
@@ -321,7 +316,7 @@ function writePersistedInstalledPluginIndexRow(
       policy_hash: index.policyHash,
       generated_at_ms: index.generatedAtMs,
       refresh_reason: index.refreshReason ?? null,
-      install_records_json: JSON.stringify(index.installRecords),
+      install_records_json: serializePluginInstallRecordMap(index.installRecords),
       plugins_json: JSON.stringify(index.plugins),
       diagnostics_json: JSON.stringify(index.diagnostics),
       warning: index.warning ?? INSTALLED_PLUGIN_INDEX_WARNING,
@@ -356,8 +351,19 @@ function writePersistedInstalledPluginIndexToSqlite(
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = preparePersistedInstalledPluginIndex(index);
   return runOpenClawStateWriteTransaction(({ db }) => {
-    lease?.assertOwnedInTransaction(db);
     const previousRow = readInstalledPluginIndexRow(db);
+    if (previousRow) {
+      const previousInstallRecords = safeParseJson(previousRow.install_records_json);
+      if (
+        previousInstallRecords === undefined ||
+        inspectPluginInstallRecordMap(previousInstallRecords).status === "invalid"
+      ) {
+        throw new Error(
+          "Persisted plugin install records are invalid. Repair the state before writing plugin installation metadata.",
+        );
+      }
+    }
+    lease?.assertOwnedInTransaction(db);
     const revision = resolveNextInstalledPluginIndexRevision(
       previousRow ? Number(previousRow.updated_at_ms) : null,
     );

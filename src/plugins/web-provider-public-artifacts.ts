@@ -139,10 +139,6 @@ function resolveBundledRuntimeCandidatePluginIds(params: {
       env: params.env,
       onlyPluginIds: pluginIds,
       contract: params.contract,
-      compatMode: {
-        enablement: "always",
-        vitest: params.config !== undefined,
-      },
     }).map((plugin) => plugin.id),
   );
   return pluginIds.filter((pluginId) => enabledPluginIds.has(pluginId));

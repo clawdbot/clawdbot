@@ -147,6 +147,7 @@ export function startManagedGatewayConfigReloader(
     ...(params.requestRecoveryRestart
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
+    ...(params.assertRestartReady ? { assertRestartReady: params.assertRestartReady } : {}),
     restartRecoveryAvailable,
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({

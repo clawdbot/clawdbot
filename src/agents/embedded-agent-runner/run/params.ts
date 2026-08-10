@@ -15,6 +15,7 @@ import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -41,6 +42,8 @@ import type {
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine-turn-attempt.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
@@ -109,6 +112,8 @@ export type RunEmbeddedAgentParams = {
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
+  /** Trusted channel-configured policy for the admitted conversation turn. */
+  conversationToolPolicy?: GroupToolPolicyConfig;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -167,6 +172,7 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalOnly?: boolean;
   /** Mark proposals created by this internal review as autonomous captures. */
   skillWorkshopAutonomousCapture?: boolean;
+  skillWorkshopUpdateProposals?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */
@@ -257,6 +263,8 @@ export type RunEmbeddedAgentParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */
+  cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -308,7 +316,7 @@ export type RunEmbeddedAgentParams = {
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
@@ -387,6 +395,10 @@ export type RunEmbeddedAgentParams = {
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Context engine resolved once by the outer logical-turn owner. */
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
+  /** Emits immutable attempt facts for selection by the outer logical-turn owner. */
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;

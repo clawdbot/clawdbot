@@ -1,9 +1,11 @@
 import {
   embeddedAgentLog,
+  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -157,6 +159,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
+    runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step,
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await operation();
+      },
+    });
   const unregisterNativeSubagentMonitor = () => {
     state.nativeSubagentMonitor?.unregister();
     state.nativeSubagentMonitor = undefined;
@@ -170,6 +182,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
       agentId: sessionAgentId,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
+      retainParentThread: (protectedThreadId) =>
+        protectCodexAppServerLiveThread(state.client, protectedThreadId),
     });
   };
   const releaseCurrentRoute = () => {
@@ -190,6 +204,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:
@@ -257,6 +278,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLeaseOnce,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    runCleanupStep,
     registerNativeSubagentMonitor,
     releaseCurrentRoute,
     startupTimeoutMs,

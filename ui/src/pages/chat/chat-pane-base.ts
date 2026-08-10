@@ -6,7 +6,6 @@ import type {
   SessionDiscussionState,
   SessionSharingRole,
   SessionSuggestion,
-  TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionBranch,
@@ -29,7 +28,7 @@ import type {
   BoardProvider,
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
-import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { ObserverDigestHistory } from "../../lib/observer-digest.ts";
@@ -47,7 +46,6 @@ import {
   boardChatDockLayout,
   type ChatPageContext,
   type PaneSessionChangeOptions,
-  type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import {
@@ -109,6 +107,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.requestUpdate(),
   );
   protected readonly transcript = new ChatTranscriptController(this);
+  protected readonly backgroundTaskTranscript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -253,7 +252,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         resolve: (confirmed: boolean) => void;
       }
     | undefined;
-  protected readonly lastVisibleBoardDock = new Map<string, VisibleBoardDock>();
+  protected readonly lastVisibleBoardDock = new Map<string, BoardVisibleChatDock>();
+  protected retainedBoardSessionKey = "";
   protected readonly observerDigestHistory = new ObserverDigestHistory();
   protected builtinBoardSnapshot: BoardViewSnapshot | null = null;
   protected builtinBoardSnapshotBase: BoardSnapshot | null = null;
@@ -290,10 +290,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   >();
   protected nativeDraftCleanup: (() => void) | null = null;
   protected readonly unreadPatchGuard = new SessionUnreadPatchGuard();
-  protected taskSuggestions: TaskSuggestion[] = [];
-  protected readonly taskSuggestionBusyIds = new Set<string>();
-  protected readonly taskSuggestionOperations = new Map<string, symbol>();
-  protected taskSuggestionsRequestVersion = 0;
   protected sessionSuggestions: SessionSuggestion[] = [];
   protected sessionSuggestionRole: SessionSharingRole | undefined;
   protected readonly sessionSuggestionBusyIds = new Set<string>();

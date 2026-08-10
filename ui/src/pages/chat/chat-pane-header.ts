@@ -9,8 +9,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  type DesktopPanelToggleDetail,
+} from "../../components/panel-toggle-contract.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
@@ -19,16 +24,13 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { renderBoardDockMenu, renderBoardFaceToggle } from "./board-session-surface.ts";
+import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
-import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
-import {
-  renderBackgroundTasksToggle,
-  type BackgroundTasksProps,
-} from "./components/chat-background-tasks.ts";
+import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
+import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import {
   type ChatPaneHeaderAction,
@@ -42,6 +44,7 @@ import {
   renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import { renderChatTerminalButton } from "./components/chat-terminal-button.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import {
@@ -62,6 +65,8 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     workspaceGit: boolean,
   ) {
     const board = this.resolveBoardView();
+    const canChangeBoardDock =
+      board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate;
     const workspace = resolveChatPaneWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -141,6 +146,23 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         : renameAccess.allowed
           ? undefined
           : renameAccess.reason;
+    const desktopPanelAction = isDesktopPanelAvailable(this.context.gateway.snapshot)
+      ? html`<openclaw-tooltip .content=${t("desktop.toggle")}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-desktop-panel-toggle"
+            type="button"
+            aria-label=${t("desktop.toggle")}
+            @click=${() =>
+              window.dispatchEvent(
+                new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true },
+                }),
+              )}
+          >
+            ${icons.monitor}
+          </button>
+        </openclaw-tooltip>`
+      : nothing;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -168,7 +190,11 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
+      panelActions: html`${renderChatTerminalButton(
+        this.state,
+        this.catalogSession,
+        sessionWorkspace.onToggleTerminal,
+      )}${desktopPanelAction}`,
       discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
@@ -191,9 +217,35 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
               variant="session"
             ></openclaw-viewer-facepile>`
           : nothing,
-      faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
-        this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
-        this.persistBoardSessionView({ face });
+      faceControl: renderBoardViewSwitch({
+        hasBoard: board.hasBoard,
+        face: board.face,
+        dock: board.dock,
+        canChangeDock: canChangeBoardDock,
+        onSelectMode: (mode) => {
+          if (!canChangeBoardDock) {
+            const face = mode === "chat" ? "chat" : "dashboard";
+            this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
+            this.persistBoardSessionView({ face });
+            return;
+          }
+          if (mode === "chat") {
+            this.syncChatSidebarForDock("hidden");
+            this.persistBoardSessionView({ face: "chat" });
+            return;
+          }
+          this.persistBoardSessionView({ face: "dashboard" });
+          if (mode === "split") {
+            if (board.dock === "hidden") {
+              this.handleBoardDockChange(board.reopenDock);
+            } else {
+              this.syncChatSidebarForDock(board.dock);
+            }
+          } else if (board.dock !== "hidden") {
+            this.handleBoardDockChange("hidden");
+          }
+        },
+        onDockSideChange: (dock) => this.handleBoardDockChange(dock),
       }),
       sharingControl: sharingMethodsSupported
         ? renderChatSessionSharing({
@@ -220,12 +272,6 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
               row && void this.setSessionMember(row, identityId, member),
           })
         : nothing,
-      boardDockAction: renderBoardDockMenu(
-        board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
-        board.face,
-        board.dock,
-        (dock) => this.handleBoardDockChange(dock),
-      ),
       nativeGateways: this.nativeGateways,
       gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
@@ -481,7 +527,7 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        this.publishHeaderError(result.error ?? "Failed to reveal thread workspace.");
+        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.");
       }
     } catch (error) {
       this.publishHeaderError(error);

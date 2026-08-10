@@ -12,6 +12,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -49,11 +50,13 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
-import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
-import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import {
+  buildActiveImageGenerationTaskPromptContextForSession,
+  buildActiveMusicGenerationTaskPromptContextForSession,
+  buildActiveVideoGenerationTaskPromptContextForSession,
+} from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
-import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import { prepareCliRunContext } from "./prepare.js";
 import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -104,23 +107,17 @@ vi.mock("../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-vi.mock("../video-generation-task-status.js", () => ({
+vi.mock("../media-generation-task-status.js", () => ({
   VIDEO_GENERATION_TASK_KIND: "video_generation",
   buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => ""),
   findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
-}));
-
-vi.mock("../image-generation-task-status.js", () => ({
   IMAGE_GENERATION_TASK_KIND: "image_generation",
   buildActiveImageGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => ""),
   findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
-}));
-
-vi.mock("../music-generation-task-status.js", () => ({
   MUSIC_GENERATION_TASK_KIND: "music_generation",
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
@@ -595,6 +592,64 @@ describe("prepareCliRunContext", () => {
     );
   });
 
+  it("preserves a selected Gemini profile when backend auth preparation fails", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:legacy";
+    const backendError = new CliBackendAuthProfilePreparationError(
+      "Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw.",
+    );
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "expired-access-token",
+            refresh: "",
+            expires: 0,
+          },
+        },
+      },
+      agentDir,
+    );
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution: vi.fn(async () => {
+        throw backendError;
+      }),
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "google-gemini-cli",
+      agentDir,
+      cause: backendError,
+    });
+  });
+
   it("selects the configured Gemini CLI OAuth profile when no explicit profile is passed", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
@@ -984,6 +1039,13 @@ describe("prepareCliRunContext", () => {
     await expect(preparation).rejects.toThrow(
       `could not materialize selected auth profile "${authProfileId}"`,
     );
+    await expect(preparation).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "anthropic",
+      agentDir,
+    });
     await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
     expect(prepareExecution).not.toHaveBeenCalled();
   });

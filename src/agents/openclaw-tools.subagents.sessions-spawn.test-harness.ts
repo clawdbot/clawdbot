@@ -1,5 +1,6 @@
 // Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
 import { vi, type Mock } from "vitest";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
@@ -13,7 +14,8 @@ type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSub
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
 type SubagentRegistryTesting = (typeof import("./subagent-registry.test-helpers.js"))["testing"];
-type SubagentSpawnTesting = (typeof import("./subagent-spawn.test-support.js"))["testing"];
+type SubagentSpawnTesting =
+  (typeof import("./subagents/spawn/subagent-spawn.test-support.js"))["testing"];
 type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
 type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
 type AgentWaitCall = { runId?: string; timeoutMs?: number };
@@ -22,7 +24,7 @@ type TestSessionEntry = {
   updatedAt: number;
   startedAt?: number;
   endedAt?: number;
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  status?: SessionRunStatus;
 };
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;
@@ -193,7 +195,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
     const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
       await Promise.all([
-        import("./subagent-spawn.test-support.js"),
+        import("./subagents/spawn/subagent-spawn.test-support.js"),
         import("./subagent-registry.test-helpers.js"),
       ]);
     cachedSubagentSpawnTesting = subagentSpawnTesting;

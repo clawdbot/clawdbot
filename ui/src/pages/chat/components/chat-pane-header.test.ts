@@ -86,7 +86,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    terminalAction: nothing,
+    panelActions: nothing,
     discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,
@@ -313,7 +313,7 @@ describe("chat pane header", () => {
     const { container } = mount({
       catalog: true,
       session: undefined,
-      terminalAction: html`<span data-action="terminal"></span>`,
+      panelActions: html`<span data-action="terminal"></span>`,
       diffAction: html`<span data-action="diff"></span>`,
       backgroundTasksAction: html`<span data-action="tasks"></span>`,
       workspaceAction: html`<span data-action="workspace"></span>`,
@@ -360,7 +360,7 @@ describe("chat pane header", () => {
   it("shows an incognito indicator for in-memory threads", () => {
     const { container } = mount({ session: row({ incognito: true }) });
     expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
-      "Incognito thread",
+      "Incognito session",
     );
   });
 

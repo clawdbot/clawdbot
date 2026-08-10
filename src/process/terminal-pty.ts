@@ -1,4 +1,5 @@
 import type { IPty } from "@lydell/node-pty";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { signalProcessTree } from "./kill-tree.js";
 import {
   readPtyTerminalName,
@@ -53,7 +54,7 @@ export async function spawnTerminalPty(params: {
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
   const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
   setPtyTerminalName({ env, name: terminalName, platform: process.platform });
-  const comSpec = env.ComSpec ?? env.COMSPEC;
+  const comSpec = resolveEnvironmentValue(env, "COMSPEC");
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,

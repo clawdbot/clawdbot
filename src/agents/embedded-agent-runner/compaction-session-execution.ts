@@ -1,5 +1,4 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 /**
  * Executes compaction while owning the transcript lock, session lifecycle,
  * hooks, checkpoint, and optional successor transcript rotation.
@@ -24,12 +23,6 @@ import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockTargetKey,
-  resolveSessionWriteLockOptions,
-} from "../session-write-lock.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
@@ -113,26 +106,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const sessionTarget = await resolveAgentRunSessionTarget({
       agentId: sessionAgentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionFile: params.sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
     });
-    const sessionLock =
-      (await acquireOwnedSessionTranscriptWriteLock({
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        sessionTarget,
-      })) ??
-      (await acquireSessionWriteLock({
-        sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
-        targetKind: "session-key",
-        ...resolveSessionWriteLockOptions(params.config, {
-          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-            timeoutMs: compactionTimeoutMs,
-          }),
-        }),
-      }));
     try {
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
@@ -174,6 +153,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         provider,
         modelId,
         model: effectiveModel,
+        contextTokenBudget,
         agentId: sessionAgentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? sandboxSessionKey,
@@ -369,7 +349,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
             hookRunner,
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: sessionTarget.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
@@ -564,7 +544,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }
     } finally {
       await runtime.disposeToolRuntimes();
-      await sessionLock.release();
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({

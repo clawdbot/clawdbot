@@ -7,7 +7,7 @@ import {
   createSparseTsgoSkipEnv,
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
-} from "../../scripts/lib/tsgo-sparse-guard.mjs";
+} from "../../scripts/lib/tsgo-sparse-guard.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();

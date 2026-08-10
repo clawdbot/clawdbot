@@ -99,7 +99,17 @@ function throwUnknownProviderResolutionError(params: {
   if (isSecretResolutionError(params.err)) {
     throw params.err;
   }
+  // fs-safe 0.5 exposes one fail-closed receipt for failed permission inspection,
+  // unavailable ACL data, and indeterminate owner trust. Keep the diagnostic path-free.
+  const isWindowsPathSecurityFailure =
+    process.platform === "win32" &&
+    (params.source === "file" || params.source === "exec") &&
+    params.err instanceof FsSafeError &&
+    params.err.code === "permission-unverified";
   throw providerResolutionError({
+    ...(isWindowsPathSecurityFailure
+      ? { code: "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE" as const }
+      : {}),
     source: params.source,
     provider: params.provider,
     message: formatErrorMessage(params.err),
@@ -245,7 +255,8 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
+    throw new FsSafeError(
+      "permission-unverified",
       `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
     );
   }

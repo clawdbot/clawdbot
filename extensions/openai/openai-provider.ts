@@ -84,7 +84,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.146.1";
+const OPENAI_CODEX_CLIENT_VERSION = "0.147.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -579,7 +579,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       fetchGuard: params.fetchGuard,
       signal: params.signal,
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
-      auditContext: "openai-codex-model-discovery",
+      auditContext: "openai-model-discovery",
       readRows: readCodexModelRows,
       buildRequestHeaders: ({ discoveryApiKey }) => ({
         Accept: "application/json",
@@ -1127,8 +1127,4 @@ export function buildOpenAIProvider(): ProviderPlugin {
   };
 }
 
-/** @deprecated Use buildOpenAIProvider; OpenAI Codex is now an OpenAI auth/transport mode. */
-export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
-  return buildOpenAIProvider();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

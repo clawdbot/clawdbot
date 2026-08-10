@@ -125,15 +125,6 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
   }
 }
 
-export async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
-  await noteSessionLockHealth({
-    shouldRepair: ctx.prompter.shouldRepair,
-    config: ctx.cfg,
-    env: ctx.env,
-  });
-}
-
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({

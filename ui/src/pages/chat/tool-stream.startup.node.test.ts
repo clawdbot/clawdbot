@@ -1,24 +1,16 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
+import { createHost } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
-type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 
-function createHost(): ToolStreamHost {
-  return {
-    sessionKey: "main",
+function createStartupHost() {
+  return createHost({
     chatRunId: "run-1",
-    chatStream: null,
-    chatStreamStartedAt: null,
     chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },
-    chatStreamSegments: [],
-    toolStreamById: new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: [],
-    chatToolMessages: [],
     toolStreamSyncTimer: 1,
-    sessions: { setModelOverride: () => {} },
-  };
+  });
 }
 
 function toolStart(runId: string, toolCallId: string): AgentEvent {
@@ -34,7 +26,7 @@ function toolStart(runId: string, toolCallId: string): AgentEvent {
 
 describe("app-tool-stream startup status", () => {
   it("clears the active run status on the first matching tool start", () => {
-    const host = createHost();
+    const host = createStartupHost();
 
     handleAgentEvent(host, toolStart("run-1", "tool-1"));
 
@@ -42,7 +34,7 @@ describe("app-tool-stream startup status", () => {
   });
 
   it("keeps active status for a tool from another run", () => {
-    const host = createHost();
+    const host = createStartupHost();
 
     handleAgentEvent(host, toolStart("run-2", "tool-2"));
 

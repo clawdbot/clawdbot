@@ -48,6 +48,15 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
+// Nested overlays bubble lifecycle events through the dropdown. Only the
+// owner's completed hide may remove its menu or consume its Escape state.
+function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: boolean) => void) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  onClose(consumeDropdownKeyboardDismissal(event));
+}
+
 type AgentMenuAgent = {
   id: string;
   name?: string;
@@ -285,7 +294,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
           slot="trigger"
@@ -425,7 +434,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
           slot="trigger"
@@ -456,10 +465,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           class="sidebar-customize-menu__item sidebar-pair-mobile"
           value="command:pair-mobile"
           ?disabled=${!params.canPairDevice}
-          title=${params.canPairDevice ? nothing : t("nodes.pairing.adminRequired")}
+          title=${params.canPairDevice ? nothing : t("devices.pairing.adminRequired")}
         >
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
-          <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
+          <span class="sidebar-customize-menu__text">${t("devices.pairing.button")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>

@@ -1,0 +1,27 @@
+title: Plugin package runtime compatibility
+
+scenario:
+  id: plugin-package-runtime-compatibility
+  surface: plugins
+  coverage:
+    primary:
+      - plugins.runtime-compatibility
+    secondary:
+      - plugins.validation-feedback
+  objective: Verify the plugin install compatibility owner enforces independent package-declared minimum host and plugin API ranges.
+  successCriteria:
+    - A package can support a newer host through independent compatibility floors without requiring package-host version equality.
+    - A package whose openclaw.install.minHostVersion exceeds the current host is rejected with an incompatible-host error.
+    - A package whose openclaw.compat.pluginApi range excludes the current runtime is rejected with an incompatible-plugin-API error.
+    - Malformed compatibility metadata fails with a specific validation error.
+  docsRefs:
+    - docs/plugins/compatibility.md
+    - docs/plugins/manifest.md
+    - docs/cli/plugins.md
+  codeRefs:
+    - src/plugins/install-shared.ts
+    - src/plugins/install-compatibility.test.ts
+  execution:
+    kind: vitest
+    path: src/plugins/install-compatibility.test.ts
+    summary: Run the focused product-owner tests for independent minimum-host and plugin-API package compatibility gates.

@@ -2,6 +2,7 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
@@ -21,7 +22,6 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
@@ -526,6 +526,32 @@ describe("sweepCronRunSessions", () => {
     expect(result.swept).toBe(false);
     expect(result.pruned).toBe(0);
   });
+
+  it.each([["0h"], ["0s"], ["0"]])(
+    "treats a zero retention (%s) as disabled instead of pruning everything",
+    async (sessionRetention) => {
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        "agent:main:cron:job1:run:run1": {
+          sessionId: "run1",
+          updatedAt: now - 100 * 3_600_000,
+        },
+      };
+      await seedSessionEntries(storePath, store);
+
+      const result = await sweepCronRunSessions({
+        cronConfig: { sessionRetention },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      expect(result.swept).toBe(false);
+      expect(result.pruned).toBe(0);
+      expect(readSessionEntries(storePath)).toHaveProperty("agent:main:cron:job1:run:run1");
+    },
+  );
 
   it("sweeps immediately when disabled retention is enabled again", async () => {
     const now = Date.now();

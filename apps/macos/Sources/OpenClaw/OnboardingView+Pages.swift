@@ -851,13 +851,15 @@ extension OnboardingView {
 
     func cliPage() -> some View {
         let remoteMode = self.state.connectionMode == .remote
-        let detail = if remoteMode {
+        let setupDetail = if remoteMode {
             "OpenClaw is installing the matching runtime for this Mac node. " +
                 "It will connect to your selected Gateway without starting another one here."
         } else {
-            "OpenClaw is setting up its background service on this Mac. " +
-                "This usually takes under a minute — no Terminal, no administrator password."
+            "OpenClaw is setting up its background service on this Mac."
         }
+        let detail = setupDetail + " Published Stable and Beta installs are usually quick. " +
+            "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
+            "and several gigabytes of free space. No administrator password is required."
         return onboardingPage {
             Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))
@@ -891,7 +893,9 @@ extension OnboardingView {
 
                 if self.installFailed {
                     OnboardingErrorCard(
-                        title: "The Gateway didn’t start",
+                        title: self.cliExecutableReady
+                            ? "The Gateway didn’t start"
+                            : "OpenClaw installation failed",
                         message: self.cliStatus ?? "The installer did not finish.",
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
@@ -1043,8 +1047,12 @@ extension OnboardingView {
                     self.openSettings(tab: .skills)
                 }
                 self.skillsOverview
-                Toggle("Launch at login", isOn: self.$state.launchAtLogin)
-                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
+                if AppProfile.current.isActive {
+                    LabeledContent("Launch at login", value: "Unavailable under profile")
+                } else {
+                    Toggle("Launch at login", isOn: self.$state.launchAtLogin)
+                        .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
+                }
             }
         }
         .task { await self.maybeLoadOnboardingSkills() }

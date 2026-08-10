@@ -92,8 +92,6 @@ export const dispatchCronDeliveryMock = createMock();
 export const queueCronMessageToolDeliveryAwarenessMock = createMock();
 export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
-export const isHeartbeatOnlyResponseMock = createMock();
-const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
@@ -238,6 +236,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
     entries: await loadModelCatalogMock(params),
     routeVariants: [],
   }),
+  loadProviderScopedThinkingCatalog: async (params: unknown) => await loadModelCatalogMock(params),
   loadResolvedPublishedModelCatalogOwner: loadModelCatalogOwnerMock,
   publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
     owner.agentId === agentId.trim().toLowerCase(),
@@ -257,8 +256,8 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
-      { raw: agentConfigOverride?.model, source: "agent" as const },
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
       if (normalizeModelSelectionForTest(candidate.raw)) {
         return candidate;
@@ -410,11 +409,9 @@ vi.mock("./model-preflight.runtime.js", () => ({
 }));
 
 vi.mock("./helpers.js", () => ({
-  isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
-  resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -534,9 +531,9 @@ function resetRunConfigMocks(): void {
     }
     const selectedConfig = [
       agentConfig?.subagents?.model,
-      agentConfig?.model,
       (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
         ?.subagents?.model,
+      agentConfig?.model,
     ].find((raw) => normalizeModelSelectionForTest(raw));
     return resolveOverride(selectedConfig);
   });
@@ -706,6 +703,7 @@ function resetRunOutcomeMocks(): void {
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [],
+        deliveryDisposition: { kind: "visible" },
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
         hasFatalStructuredErrorPayload,
@@ -766,10 +764,6 @@ function resetRunOutcomeMocks(): void {
   cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
-  isHeartbeatOnlyResponseMock.mockReset();
-  isHeartbeatOnlyResponseMock.mockReturnValue(false);
-  resolveHeartbeatAckMaxCharsMock.mockReset();
-  resolveHeartbeatAckMaxCharsMock.mockReturnValue(100);
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 }

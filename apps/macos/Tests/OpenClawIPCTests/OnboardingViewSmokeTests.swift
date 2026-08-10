@@ -234,21 +234,40 @@ struct OnboardingViewSmokeTests {
             installing: true))
     }
 
+    @Test func `later gateway readiness revises a pinned CLI activation failure`() {
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .attachedExisting(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .failed("still unavailable"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: nil),
+            isLocal: false,
+            executableReady: true,
+            installed: false))
+    }
+
     @Test func `connection mode change restarts full page monitoring`() {
         let state = AppState(preview: true)
         let view = OnboardingView(state: state)
         var monitoredPage: Int?
-        let previousSystemAgentChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "route-bound"
-        view.systemAgentState.isPresented = true
 
         view.handleConnectionModeChange { pageIndex in
             monitoredPage = pageIndex
         }
 
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== previousSystemAgentChat)
         #expect(monitoredPage == view.activePageIndex)
     }
 
@@ -327,9 +346,7 @@ struct OnboardingViewSmokeTests {
                 permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
-            let priorChat = view.systemAgentState.chat
             view.aiSetup.manualKey = "route-a-secret"
-            view.systemAgentState.isPresented = true
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Gateway B",
                 serviceHost: nil,
@@ -347,8 +364,6 @@ struct OnboardingViewSmokeTests {
 
             #expect(state.connectionMode == .remote)
             #expect(view.aiSetup.manualKey.isEmpty)
-            #expect(!view.systemAgentState.isPresented)
-            #expect(view.systemAgentState.chat !== priorChat)
             #expect(!OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-b",
                 defaults: defaults))
@@ -386,8 +401,6 @@ struct OnboardingViewSmokeTests {
         view.aiSetup.manualKey = "route-a-secret"
         view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
-        let priorChat = view.systemAgentState.chat
-        view.systemAgentState.isPresented = true
         view.remoteProbeState = .ok(
             view.remoteGatewayProbeInput,
             RemoteGatewayProbeSuccess(authSource: .sharedToken))
@@ -411,8 +424,6 @@ struct OnboardingViewSmokeTests {
         #expect(view.aiSetup.phase == .idle)
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== priorChat)
         #expect(view.remoteProbeState == .idle)
         #expect(view.remoteAuthIssue == nil)
         #expect(gatewaySession.snapshotMakeCount() == 0)
@@ -442,9 +453,7 @@ struct OnboardingViewSmokeTests {
                 permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
-            let priorChat = view.systemAgentState.chat
             view.aiSetup.manualKey = "pending-secret"
-            view.systemAgentState.isPresented = true
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Gateway A",
                 serviceHost: nil,
@@ -461,8 +470,6 @@ struct OnboardingViewSmokeTests {
             view.selectRemoteGateway(gateway)
 
             #expect(view.aiSetup.manualKey == "pending-secret")
-            #expect(view.systemAgentState.isPresented)
-            #expect(view.systemAgentState.chat === priorChat)
             #expect(OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-a",
                 defaults: defaults))
@@ -483,16 +490,12 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         state.connectionMode = .remote
         let view = OnboardingView(state: state, systemAgentDefaults: defaults)
-        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "route-a-secret"
-        view.systemAgentState.isPresented = true
 
         view.selectLocalGateway()
 
         #expect(state.connectionMode == .local)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== priorChat)
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
@@ -506,15 +509,11 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         state.connectionMode = .local
         let view = OnboardingView(state: state, systemAgentDefaults: defaults)
-        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "pending-secret"
-        view.systemAgentState.isPresented = true
 
         view.selectLocalGateway()
 
         #expect(view.aiSetup.manualKey == "pending-secret")
-        #expect(view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat === priorChat)
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
@@ -525,16 +524,12 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         state.connectionMode = .local
         let view = OnboardingView(state: state, systemAgentDefaults: defaults)
-        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "local-secret"
-        view.systemAgentState.isPresented = true
 
         view.selectUnconfiguredGateway()
 
         #expect(state.connectionMode == .unconfigured)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== priorChat)
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 

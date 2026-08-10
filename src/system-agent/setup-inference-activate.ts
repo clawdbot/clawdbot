@@ -15,7 +15,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveUserPath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
@@ -139,6 +141,7 @@ async function activateSetupInferenceUnredacted(
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
   let codexRegistryNeedsReload = false;
   let codexRegistryReloaded = false;
+  let codexProbePluginRegistry: PluginRegistry | undefined;
   try {
     const plan = await buildTestPlan({
       kind: params.kind,
@@ -271,7 +274,7 @@ async function activateSetupInferenceUnredacted(
       };
 
       // The Gateway registry predates a runtime installed by this request.
-      // Refresh and load the exact Codex harness before auth snapshots it.
+      // Retain the refreshed generation for both owner capture and the live probe.
       const refreshPluginRegistry =
         deps.refreshPluginRegistryAfterConfigMutation ??
         (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
@@ -285,7 +288,7 @@ async function activateSetupInferenceUnredacted(
         logger: { warn: (message) => (registryRefreshWarning = message) },
       });
       try {
-        const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+        codexProbePluginRegistry = loadAgentRuntimePluginRegistryHandle({
           config: testPlan.config,
           workspaceDir: tempDir,
           selections: [
@@ -297,7 +300,7 @@ async function activateSetupInferenceUnredacted(
             },
           ],
         });
-        if (!pluginRegistry) {
+        if (!codexProbePluginRegistry) {
           throw new Error("The Codex runtime plugin registry is unavailable.");
         }
       } catch (error) {
@@ -388,13 +391,13 @@ async function activateSetupInferenceUnredacted(
 
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot;
     try {
-      stagedOwnerPluginArtifacts = (
-        deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts
-      )({
-        config: stagedExecutionRoute.runConfig,
-        executionRoute: stagedExecutionRoute,
-        deps,
-      });
+      stagedOwnerPluginArtifacts = withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
+        (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
+          config: stagedExecutionRoute.runConfig,
+          executionRoute: stagedExecutionRoute,
+          deps,
+        }),
+      );
     } catch {
       return {
         ok: false,
@@ -409,16 +412,18 @@ async function activateSetupInferenceUnredacted(
     }
     let test: Awaited<ReturnType<typeof runSetupInferenceTest>>;
     try {
-      test = await runSetupInferenceTest({
-        plan: testPlan,
-        tempDir,
-        deps,
-        // The setup probe is evidence, not an auth-store mutation. Manual keys
-        // already exist in the isolated store and every other route stays read-only.
-        authProfileStateMode: "read-only",
-        requireExecutionOwner: true,
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
+      test = await withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
+        runSetupInferenceTest({
+          plan: testPlan,
+          tempDir,
+          deps,
+          // The setup probe is evidence, not an auth-store mutation. Manual keys
+          // already exist in the isolated store and every other route stays read-only.
+          authProfileStateMode: "read-only",
+          requireExecutionOwner: true,
+          ...(params.signal ? { signal: params.signal } : {}),
+        }),
+      );
       throwIfSetupInferenceCancelled(params);
     } catch (error) {
       if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {

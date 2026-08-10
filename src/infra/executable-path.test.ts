@@ -1,4 +1,5 @@
 // Covers executable path detection and PATH lookup helpers.
+import { spawnSync } from "node:child_process";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -303,6 +304,46 @@ describe("resolveExecutable", () => {
 });
 
 describe("caller env PATHEXT propagation", () => {
+  it.runIf(process.platform === "win32")(
+    "accepts an explicit native executable when PATHEXT omits its suffix",
+    async () => {
+      await withTempDir({ prefix: "openclaw-explicit-exe-" }, async (base) => {
+        const executable = path.join(base, "trusted-probe.exe");
+        await fs.copyFile(process.execPath, executable);
+        const env = { ...process.env, PATH: base, PATHEXT: ".CMD" };
+
+        const direct = spawnSync(executable, ["--version"], {
+          env,
+          encoding: "utf8",
+          windowsHide: true,
+        });
+        expect(direct.error).toBeUndefined();
+        expect(direct.status).toBe(0);
+        expect(resolveExecutablePath(executable, { env })).toBe(executable);
+        expect(resolveExecutablePath("trusted-probe.exe", { env })).toBe(executable);
+        expect(resolveExecutablePath("trusted-probe", { env })).toBeUndefined();
+      });
+    },
+  );
+
+  it("keeps POSIX execute-permission checks for explicit native-looking paths", async () => {
+    await withTempDir({ prefix: "openclaw-explicit-posix-" }, async (base) => {
+      const executable = path.join(base, "trusted-probe.exe");
+      await fs.writeFile(executable, "not executable\n", "utf8");
+      const accessSpy = vi.spyOn(nodeFs, "accessSync").mockImplementation(() => {
+        throw new Error("not executable");
+      });
+      try {
+        withMockedPlatform("linux", () => {
+          expect(resolveExecutablePath(executable, { env: { PATHEXT: ".CMD" } })).toBeUndefined();
+        });
+        expect(accessSpy).toHaveBeenCalledWith(executable, nodeFs.constants.X_OK);
+      } finally {
+        accessSpy.mockRestore();
+      }
+    });
+  });
+
   it("resolveExecutableFromPathEnv uses caller env PATHEXT on Windows", async () => {
     const orig = process.env.PATHEXT;
     process.env.PATHEXT = ".TXT";

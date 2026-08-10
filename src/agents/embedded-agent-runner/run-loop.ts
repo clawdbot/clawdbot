@@ -1,10 +1,6 @@
 /** Prepared embedded-agent loop and cleanup. */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import {
-  resolveContextEngine,
-  resolveContextEngineOwnerPluginId,
-} from "../../context-engine/registry.js";
+import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -13,8 +9,14 @@ import {
 } from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
+import {
+  createContextEngineLogicalTurnLease,
+  selectContextEngineForTranscriptHost,
+} from "../harness/context-engine-logical-turn.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
@@ -113,7 +115,6 @@ export async function runPreparedEmbeddedLoop(
     profileFailureStore,
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
-    advanceAttemptAuthProfile,
     maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer,
     getApiKeyInfo,
@@ -262,21 +263,42 @@ export async function runPreparedEmbeddedLoop(
     getLastProfileId: () => preparedRuntime.snapshot().lastProfileId,
     getSessionId: () => sessionPromptState.sessionId,
     harnessOwnsTransport: () => preparedRuntime.snapshot().pluginHarnessOwnsTransport,
+    getRuntimeAuthOwnerId: () => preparedRuntime.snapshot().agentHarness.id,
     getApiKeyInfo,
+    advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
   });
-  // Resolve the context engine once and reuse across retries to avoid
-  // repeated initialization/connection overhead per attempt.
-  ensureContextEnginesInitialized();
-  const contextEngine = await measureEmbeddedAgentPreparation(
-    "context-engine",
-    () =>
-      resolveContextEngine(params.config, {
-        agentDir,
-        workspaceDir: resolvedWorkspace,
-      }),
-    { config: params.config },
-  );
-  const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
+  const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
+  const contextEngineLogicalTurnLease =
+    params.contextEngineLogicalTurnLease ??
+    (await measureEmbeddedAgentPreparation(
+      "context-engine",
+      () =>
+        createContextEngineLogicalTurnLease({
+          config: params.config,
+          agentDir,
+          workspaceDir: resolvedWorkspace,
+        }),
+      { config: params.config },
+    ));
+  selectContextEngineForTranscriptHost({
+    lease: contextEngineLogicalTurnLease,
+    host: {
+      id: `agent-harness:${agentHarness.id}`,
+      label: `agent harness "${agentHarness.id}"`,
+      capabilities: agentHarness.contextEngineHostCapabilities ?? [],
+    },
+    operation: "agent-run",
+    recorder: params.userTurnTranscriptRecorder,
+  });
+  await drainPendingContextEngineTurnsBeforeRun({
+    admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+    isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
+    lease: contextEngineLogicalTurnLease,
+  });
+  const contextEngine = contextEngineLogicalTurnLease.begin().engine;
+  const resolveContextEnginePluginId = () =>
+    contextEngineLogicalTurnLease.effectiveEnginePluginId ??
+    resolveContextEngineOwnerPluginId(contextEngine);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
   try {
@@ -467,17 +489,14 @@ export async function runPreparedEmbeddedLoop(
         emptyErrorRetries,
         overloadProfileRotations,
         overloadProfileRotationLimit: failoverRetryController.overloadProfileRotationLimit,
-        rateLimitProfileRotations: failoverRetryController.rateLimitProfileRotations,
-        rateLimitProfileRotationLimit: failoverRetryController.rateLimitProfileRotationLimit,
         sameModelIdleTimeoutRetries,
         previousRetryFailoverReason: lastRetryFailoverReason,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-        maybeEscalateRateLimitProfileFallback:
-          failoverRetryController.maybeEscalateRateLimitProfileFallback,
         maybeRetrySameModelRateLimit: failoverRetryController.maybeRetrySameModelRateLimit,
         maybeBackoffBeforeOverloadFailover:
           failoverRetryController.maybeBackoffBeforeOverloadFailover,
-        advanceAttemptAuthProfile,
+        advanceAuthProfile: failoverRetryController.advanceAuthProfile,
+        advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
         traceAttempts,
         suspendForFailure,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
@@ -581,6 +600,11 @@ export async function runPreparedEmbeddedLoop(
         return terminalTimeoutResult;
       }
 
+      const terminalAuthPlan = preparedRuntime.snapshot().activePreparedAuthPlan;
+      const requestTransportOverrides =
+        terminalAuthPlan.modelRoute?.requestTransportOverrides ??
+        terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
+        "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
         runParams: params,
         retryState: terminalRetryState,
@@ -617,6 +641,8 @@ export async function runPreparedEmbeddedLoop(
         modelId,
         modelTransportId: effectiveModel.id ?? modelId,
         modelTransportApi: effectiveModel.api ?? model.api,
+        ...(effectiveModel.baseUrl ? { modelTransportBaseUrl: effectiveModel.baseUrl } : {}),
+        requestTransportOverrides,
         authProfileId: lastProfileId,
         profileFailureStore,
         attemptAuthProfileStore,
@@ -643,15 +669,17 @@ export async function runPreparedEmbeddedLoop(
     forgetPromptBuildDrainCacheForRun(params.runId);
     clearProviderPromptState(params.runId);
     stopRuntimeAuthRefreshTimer();
-    await runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step: "context-engine-dispose",
-      log,
-      cleanup: async () => {
-        await contextEngine.dispose?.();
-      },
-    });
+    if (ownsContextEngineLogicalTurnLease) {
+      await runAgentCleanupStep({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        step: "context-engine-dispose",
+        log,
+        cleanup: async () => {
+          await contextEngineLogicalTurnLease.dispose();
+        },
+      });
+    }
     if (params.cleanupBundleMcpOnRunEnd === true) {
       await runAgentCleanupStep({
         runId: params.runId,

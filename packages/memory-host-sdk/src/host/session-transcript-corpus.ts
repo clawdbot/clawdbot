@@ -1,4 +1,4 @@
-// Accessor-backed transcript corpus discovery for memory/QMD session indexing.
+// Accessor-backed transcript corpus discovery for memory session indexing.
 import fsSync from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
@@ -440,7 +440,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
 }
 
 /**
- * Lists transcript corpus entries for QMD/memory indexing.
+ * Lists transcript corpus entries for memory indexing.
  *
  * Active sessions come from the session accessor seam; retained reset/delete
  * transcript artifacts remain explicit file artifacts until core owns archive

@@ -1,8 +1,9 @@
-// Covers message-action media hydration, sandbox path normalization,
-// attachments, and channel/plugin media source aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Covers message-action media hydration, sandbox path normalization,
+// attachments, and channel/plugin media source aliases.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -31,6 +32,8 @@ const channelResolutionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
   resolveOutboundChannelPlugin: channelResolutionMocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
 }));
@@ -115,12 +118,7 @@ const runDrySend = (params: {
     sandboxRoot: params.sandboxRoot,
   });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireActionPayload(
   result: Awaited<ReturnType<typeof runMessageAction>>,
@@ -303,6 +301,27 @@ describe("runMessageAction media behavior", () => {
     expect(result.kind).toBe("send");
     const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
     expect(sendArgs.asVoice).toBe(true);
+  });
+
+  it("copies the normalized idempotency key into send execution context", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+        idempotencyKey: " run-1:message-tool:send-1:fingerprint ",
+      },
+    });
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
+      "run-1:message-tool:send-1:fingerprint",
+    );
+    expect(requireRecord(sendArgs.ctx).plugin).toBe(workspacePlugin);
+    expect(channelResolutionMocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
   });
 
   it("rejects plugin-declined attachment actions before loading media", async () => {

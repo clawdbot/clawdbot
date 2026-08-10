@@ -23,12 +23,15 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
-import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import {
+  resolveCodexAppServerHomeDir,
+  resolveCodexAppServerLocalHomeDir,
+  withEphemeralCodexAuthStore,
+} from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
-  resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
   type CodexAppServerHomeScope,
   type CodexAppServerStartOptions,
@@ -489,11 +492,7 @@ async function withCodexHomeEnvironment(
   agentDir: string,
   pluginConfig?: unknown,
 ): Promise<CodexAppServerStartOptions> {
-  const codexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
-    ? startOptions.env[CODEX_HOME_ENV_VAR]
-    : startOptions.homeScope === "user"
-      ? resolveCodexAppServerUserHomeDir(process.env)
-      : resolveCodexAppServerHomeDir(agentDir);
+  const codexHome = resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;

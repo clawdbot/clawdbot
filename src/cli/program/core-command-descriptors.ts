@@ -49,6 +49,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "database",
+    description: "Inspect shared-state schema compatibility and write ownership",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "migrate",
     description: "Import state from another agent system",
     hasSubcommands: true,

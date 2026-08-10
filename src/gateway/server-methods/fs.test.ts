@@ -4,16 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { fsHandlers } from "./fs.js";
 
-const tempRoots: string[] = [];
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-listdir-"));
-  tempRoots.push(root);
-  // macOS tmpdir is a /var -> /private/var symlink; the handler returns resolved paths.
-  return await fs.realpath(root);
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function call(
   params: Record<string, unknown>,
@@ -26,15 +20,9 @@ async function call(
   return respond.mock.calls[0];
 }
 
-afterEach(async () => {
-  for (const root of tempRoots.splice(0)) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
 describe("fs.listDir", () => {
   it("lists only directories, visible before hidden, in byte order", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-fs-listdir-");
     await fs.mkdir(path.join(root, "zeta"));
     await fs.mkdir(path.join(root, "alpha"));
     await fs.mkdir(path.join(root, ".hidden"));
@@ -58,7 +46,7 @@ describe("fs.listDir", () => {
   });
 
   it("follows directory symlinks and skips file or broken symlinks", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-fs-listdir-");
     await fs.mkdir(path.join(root, "real"));
     await fs.writeFile(path.join(root, "plain.txt"), "file");
     fsSync.symlinkSync(path.join(root, "real"), path.join(root, "linked-dir"));
@@ -99,7 +87,7 @@ describe("fs.listDir", () => {
   });
 
   it("reports missing directories as request errors", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-fs-listdir-");
     const [ok, , error] = expectDefined(
       await call({ path: path.join(root, "does-not-exist") }),
       'await call({ path: path.join(root, "does-not-exist") }) test invariant',

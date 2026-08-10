@@ -2063,6 +2063,7 @@ function parseCliJsonl(
   let sessionId: string | undefined;
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
+  let diagnosticUsage: CliUsage | undefined;
   const texts: string[] = [];
   let streamJsonText = "";
   let pendingMessageSeparator = false;
@@ -2085,6 +2086,11 @@ function parseCliJsonl(
       resumeCheckpointId =
         pickCliResumeCheckpointId({ backend, providerId, parsed }) ?? resumeCheckpointId;
       const nextUsage = readCliUsage(parsed);
+      const isClaudeTerminalResult =
+        isClaudeStreamJsonDialect({ backend, providerId }) && parsed.type === "result";
+      if (isClaudeTerminalResult && nextUsage && usage) {
+        diagnosticUsage = nextUsage;
+      }
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
         usage = nextUsage ?? usage;
@@ -2161,6 +2167,7 @@ function parseCliJsonl(
           ...claudeResult,
           text,
           ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          ...(diagnosticUsage ? { diagnosticUsage } : {}),
         };
         segmentStart = streamJsonText.length;
         currentMessageStart = segmentStart;
@@ -2256,6 +2263,7 @@ export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;
   providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   outputMode?: "json" | "jsonl" | "text";
   fallbackSessionId?: string;
 }): CliOutput {
@@ -2264,7 +2272,20 @@ export function parseCliOutput(params: {
     return { text: params.raw.trim(), sessionId: params.fallbackSessionId };
   }
   if (outputMode === "jsonl") {
-    const parsed = parseCliJsonl(params.raw, params.backend, params.providerId);
+    let parsed: CliOutput | null;
+    if (params.parseJsonlEvent) {
+      const parser = createCliJsonlStreamingParser({
+        backend: params.backend,
+        providerId: params.providerId,
+        parseJsonlEvent: params.parseJsonlEvent,
+        onAssistantDelta: () => {},
+      });
+      parser.push(params.raw);
+      parser.finish();
+      parsed = parser.getOutput();
+    } else {
+      parsed = parseCliJsonl(params.raw, params.backend, params.providerId);
+    }
     if (parsed) {
       return parsed;
     }

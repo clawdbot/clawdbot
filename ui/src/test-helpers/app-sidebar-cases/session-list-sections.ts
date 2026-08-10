@@ -30,11 +30,13 @@ describe("AppSidebar session section visibility", () => {
     ).toBe("true");
     expect(list?.firstElementChild?.classList.contains("sidebar-recent-session--draft")).toBe(true);
     expect(list?.querySelector(".sidebar-recent-session--draft")?.textContent?.trim()).toBe(
-      "New thread",
+      "New session",
     );
-    expect(
-      list?.querySelector(".sidebar-recent-session--draft .sidebar-session-indicator"),
-    ).toBeNull();
+    const draftLead = list?.querySelector(
+      ".sidebar-recent-session--draft .sidebar-session-indicator",
+    );
+    expect(draftLead).not.toBeNull();
+    expect(draftLead?.childElementCount).toBe(0);
     expect(
       list?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
     ).toHaveLength(0);
@@ -139,9 +141,9 @@ describe("AppSidebar session section visibility", () => {
     expect(threads).not.toBeNull();
     expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
 
-    const sort = threads?.querySelector<HTMLButtonElement>('[aria-label="Sort threads"]');
+    const sort = threads?.querySelector<HTMLButtonElement>('[aria-label="Sort sessions"]');
     expect(sort).not.toBeNull();
-    expect(threads?.querySelector('[aria-label="New thread"]')).not.toBeNull();
+    expect(threads?.querySelector('[aria-label="New session"]')).not.toBeNull();
     sort?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();

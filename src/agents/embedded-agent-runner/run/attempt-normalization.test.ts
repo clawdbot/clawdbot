@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
   listSessionEntries: vi.fn(() => []),
@@ -15,21 +16,20 @@ beforeEach(() => {
 });
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("uses the marker session id as the fallback compatibility key", () => {
+  it("leaves the key absent when a marker has no stored mapping", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
         sessionId: "stale-outer-session",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "main",
       sessionId: "marker-session",
-      sessionKey: "marker-session",
       storePath: "/tmp/sessions.json",
     });
   });
 
-  it("uses the configured default agent for an unscoped compatibility key", () => {
+  it("uses the configured default agent without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         config: {
@@ -39,15 +39,14 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         sessionFile: "compat-session",
         sessionId: "compat-session",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
       sessionId: "compat-session",
-      sessionKey: "compat-session",
       storePath: "/tmp/worker/sessions.json",
     });
   });
 
-  it("uses an adopted target session id when no session key is available", () => {
+  it("preserves an adopted session id without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         sessionFile: "",
@@ -58,11 +57,51 @@ describe("buildContextEngineCompactionSessionTarget", () => {
           storePath: "/tmp/sessions.json",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "main",
       sessionId: "adopted-session",
-      sessionKey: "adopted-session",
       storePath: "/tmp/sessions.json",
+    });
+  });
+});
+
+describe("createEmbeddedRunSessionPromptState", () => {
+  it("keeps the admitted writer fence private across context-engine target adoption", () => {
+    const state = createEmbeddedRunSessionPromptState({
+      runParams: {
+        agentId: "main",
+        prompt: "hello",
+        runId: "run-b",
+        sessionFile: "agent:main:main",
+        sessionId: "session-before",
+        sessionKey: "agent:main:main",
+        sessionTarget: {
+          agentId: "main",
+          expectedLifecycleRevision: "revision-a",
+          expectedWriterRunId: "run-b",
+          sessionId: "session-before",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      } as never,
+      lifecycleGeneration: "generation-a",
+      resolvedSessionKey: "agent:main:main",
+      sessionAgentId: "main",
+    });
+
+    state.sessionTarget = {
+      agentId: "main",
+      sessionId: "session-after",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+    };
+
+    expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
+    expect(state.sessionWriterFence).toEqual({
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-b",
     });
   });
 });

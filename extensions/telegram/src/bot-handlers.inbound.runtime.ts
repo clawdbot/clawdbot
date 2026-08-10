@@ -35,8 +35,8 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramThreadParams,
   getTelegramTextParts,
+  resolveTelegramMessageThreadSpec,
   resolveTelegramPrimaryMedia,
-  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -57,7 +57,8 @@ export function createTelegramHandlerInboundRuntime(
   messageRuntime: TelegramHandlerMessageRuntime,
 ) {
   const {
-    mediaRuntimeWithAbort,
+    resolveMediaRuntime,
+    recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
@@ -225,26 +226,23 @@ export function createTelegramHandlerInboundRuntime(
     }
 
     const nativeMedia = resolveTelegramPrimaryMedia(msg);
+    const mediaRuntime = resolveMediaRuntime();
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
       media = await resolveMedia({
         ctx,
         maxBytes: mediaMaxBytes,
-        ...mediaRuntimeWithAbort,
+        ...mediaRuntime,
       });
+      if (media) {
+        await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
+      }
     } catch (mediaErr) {
       const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
       const warningThreadParams = buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup,
-          isForum,
-          messageThreadId: resolvedThreadId ?? dmThreadId,
-        }),
+        resolveTelegramMessageThreadSpec(msg, isForum),
       );
-      if (
-        mediaRuntimeWithAbort.abortSignal?.aborted &&
-        isDurablyRetryableInboundMediaError(mediaErr)
-      ) {
+      if (mediaRuntime.abortSignal?.aborted && isDurablyRetryableInboundMediaError(mediaErr)) {
         // Abort mid-media-resolution must stay retryable for live updates too;
         // a clean claim release would settle the update as handled and silently
         // drop the message during shutdown or deadline cancellation.

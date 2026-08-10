@@ -66,6 +66,10 @@ The dashboard update card names what the app will update:
   managed local Gateway, or another install the app does not own. The button
   runs that Gateway's normal update flow instead of changing the Mac app.
 
+Either button asks for confirmation first. The card hands the update to the app
+only after you choose **Update Mac app and restart**, so a misclick never starts
+Sparkle.
+
 A failed coordinated update stays in its setup-style window with retry,
 [update guide](/install/updating), and Discord actions. Automatic repair never
 downgrades a newer Gateway or overrides an `extended-stable` channel pin.
@@ -78,8 +82,9 @@ updates only the local Mac node runtime and skips the notification when the
 remote Gateway is older than the app.
 
 Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
-to beta app builds; `stable`, `extended-stable`, and missing or unknown values
-stay on stable app builds.
+to beta app builds; `extended-stable` accepts only extended-stable app releases,
+so it stays quiet when no matching app release exists. `stable`, missing, and
+unknown values stay on stable app builds.
 
 ## Open dashboard links
 

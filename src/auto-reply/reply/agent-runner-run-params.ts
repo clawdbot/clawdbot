@@ -100,6 +100,7 @@ export function buildEmbeddedRunBaseParams(params: {
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
+    conversationToolPolicy: params.run.conversationToolPolicy,
     channelContext: params.run.channelContext,
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,

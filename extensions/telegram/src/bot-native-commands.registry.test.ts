@@ -187,6 +187,36 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("keeps a custom menu description while registering the same-name plugin handler", async () => {
+    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
+    registerPairPluginCommand();
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(
+        {},
+        {
+          telegramCfg: {
+            customCommands: [{ command: "pair", description: "Configured pair menu" }],
+          },
+        },
+      ),
+      bot,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands.filter((command) => command.command === "pair")).toEqual([
+      { command: "pair", description: "Configured pair menu" },
+    ]);
+
+    await requireCommandHandler(
+      commandHandlers,
+      "pair",
+    )(createPrivateCommandContext({ match: "now" }));
+
+    expectLastDeliveredReplyText("paired:now");
+    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
   it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
     const { bot, commandHandlers, setMyCommands, sendMessage } = createCommandBot();
 

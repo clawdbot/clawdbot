@@ -1,7 +1,6 @@
 /**
  * Builds subscription params and cleans up embedded attempt resources.
  */
-import { toErrorObject } from "../../../infra/errors.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
@@ -29,7 +28,7 @@ async function waitForEmbeddedAbortSettle(params: {
 
   let timeout: NodeJS.Timeout | undefined;
   // Abort settlement is advisory cleanup; timeout or errors are logged but do
-  // not block releasing the session write-lock.
+  // not block disposing attempt-owned resources.
   const outcome = await Promise.race([
     params.promise
       .then(() => "settled" as const)
@@ -65,10 +64,8 @@ export function buildEmbeddedSubscriptionParams(
 }
 
 /**
- * Tears down per-attempt resources in lock-safe order: remove guards, settle
- * aborted prompts, flush tool results, release the session lock, then dispose
- * runtimes. Lock release errors are reported after best-effort disposal so a
- * failed lock does not leak spawned runtimes.
+ * Tears down per-attempt resources after the transcript lifecycle has drained:
+ * remove guards, settle aborted prompts, flush tool results, then dispose runtimes.
  */
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
@@ -81,49 +78,31 @@ export async function cleanupEmbeddedAttemptResources(params: {
   sessionManager: unknown;
   bundleMcpRuntime?: { dispose(): Promise<void> | void };
   bundleLspRuntime?: { dispose(): Promise<void> | void };
-  sessionLock: { release(): Promise<void> | void };
   aborted?: boolean;
   abortSettlePromise?: Promise<unknown> | null;
-  skipSessionFlush?: boolean;
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
-  let sessionLockReleaseError: unknown;
   try {
-    try {
-      params.removeToolResultContextGuard?.();
-    } catch {
-      /* best-effort */
-    }
-    if (params.aborted && params.abortSettlePromise) {
-      await waitForEmbeddedAbortSettle({
-        promise: params.abortSettlePromise,
-        runId: params.runId ?? "unknown",
-        sessionId: params.sessionId ?? "unknown",
-      });
-    }
-    // PERF: When the run was aborted (user stop / timeout), skip the expensive
-    // waitForIdle (up to 30 s) and flush pending tool results synchronously so
-    // the session write-lock is released without leaving orphaned tool calls.
-    if (!params.skipSessionFlush) {
-      try {
-        await params.flushPendingToolResultsAfterIdle({
-          agent: params.session?.agent as IdleAwareAgent | null | undefined,
-          sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
-          ...(params.aborted ? { timeoutMs: 0 } : {}),
-        });
-      } catch {
-        /* best-effort */
-      }
-    }
-  } finally {
-    try {
-      // Release the write-lock before disposing runtimes so another attempt can
-      // recover even if runtime disposal stalls or throws.
-      await params.sessionLock.release();
-    } catch (err) {
-      sessionLockReleaseError = err;
-    }
+    params.removeToolResultContextGuard?.();
+  } catch {
+    /* best-effort */
+  }
+  if (params.aborted && params.abortSettlePromise) {
+    await waitForEmbeddedAbortSettle({
+      promise: params.abortSettlePromise,
+      runId: params.runId ?? "unknown",
+      sessionId: params.sessionId ?? "unknown",
+    });
+  }
+  try {
+    await params.flushPendingToolResultsAfterIdle({
+      agent: params.session?.agent as IdleAwareAgent | null | undefined,
+      sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
+      ...(params.aborted ? { timeoutMs: 0 } : {}),
+    });
+  } catch {
+    /* best-effort */
   }
 
   try {
@@ -140,9 +119,5 @@ export async function cleanupEmbeddedAttemptResources(params: {
     await params.bundleLspRuntime?.dispose();
   } catch {
     /* best-effort */
-  }
-
-  if (sessionLockReleaseError) {
-    throw toErrorObject(sessionLockReleaseError, "Non-Error thrown");
   }
 }

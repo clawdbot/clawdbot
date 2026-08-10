@@ -1,14 +1,17 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveStorePath } from "../../../config/sessions.js";
+import { resolveStorePath, SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntries,
   loadSessionEntry,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import { emitAgentEventIfCurrent } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   parseAgentSessionKey,
@@ -20,8 +23,13 @@ import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
 } from "../../command/session.js";
+import {
+  AGENT_RUN_SUPERSEDED_ERROR,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+} from "../../run-termination.js";
 import { redactRunIdentifier } from "../../workspace-run.js";
 import { log } from "../logger.js";
+import { supersedeEmbeddedAgentRunByRunId } from "../runs.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 
@@ -71,9 +79,9 @@ export function buildContextEngineCompactionSessionTarget(params: {
       ? candidateSessionKey
       : candidateSessionKey && !suppliedEntry
         ? candidateSessionKey
-        : (preferredMarkerSessionKey ?? (markerMatches.length === 0 ? marker.sessionId : undefined))
+        : preferredMarkerSessionKey
     : undefined;
-  if (marker && !markerSessionKey) {
+  if (marker && markerMatches.length > 0 && !markerSessionKey) {
     throw new Error("Legacy compaction transcript identity is ambiguous");
   }
   if (
@@ -90,7 +98,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     ? targetSessionKey
     : marker
       ? markerSessionKey
-      : (targetSessionKey ?? suppliedSessionKey ?? targetSessionId ?? params.sessionId);
+      : (targetSessionKey ?? suppliedSessionKey);
   const agentId =
     targetAgentId ??
     marker?.agentId ??
@@ -141,6 +149,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
       async () => ({
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         inputTokens: undefined,
         outputTokens: undefined,
         cacheRead: undefined,
@@ -196,10 +205,19 @@ export function backfillSessionKey(params: {
   }
 }
 
-export function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
+type AgentSessionWriterAdmissionSnapshot = {
+  agentId?: string;
+  entry: InternalSessionEntry;
+  sessionKey: string;
+  storePath: string;
+};
+
+export function assertAgentHarnessRunAdmission(
+  params: RunEmbeddedAgentParams,
+): AgentSessionWriterAdmissionSnapshot | undefined {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
-    return;
+    return undefined;
   }
   const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath =
@@ -221,4 +239,92 @@ export function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): 
   if (admissionError) {
     throw new Error(admissionError);
   }
+  return durableEntry
+    ? {
+        ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+        entry: durableEntry as InternalSessionEntry,
+        sessionKey,
+        storePath,
+      }
+    : undefined;
+}
+
+export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): Promise<
+  | {
+      expectedLifecycleRevision: string | undefined;
+      expectedWriterRunId: string;
+    }
+  | undefined
+> {
+  const snapshot = assertAgentHarnessRunAdmission(params);
+  if (!snapshot) {
+    return undefined;
+  }
+  const expectedSessionId = params.sessionId;
+  const expectedLifecycleRevision = snapshot.entry.lifecycleRevision;
+  if (snapshot.entry.sessionId !== expectedSessionId) {
+    throw new Error(`Session changed before writer admission: ${snapshot.sessionKey}`);
+  }
+
+  const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
+  const claimed = await updateSessionEntry(
+    {
+      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+      sessionKey: snapshot.sessionKey,
+      storePath: snapshot.storePath,
+    },
+    (entry) => {
+      if (
+        entry.sessionId !== expectedSessionId ||
+        entry.lifecycleRevision !== expectedLifecycleRevision
+      ) {
+        throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
+      }
+      return {
+        activeWriterRunId: params.runId,
+      } as Partial<InternalSessionEntry> as Partial<SessionEntry>;
+    },
+    { skipMaintenance: true },
+  );
+  if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
+    throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
+  }
+  if (previousWriterRunId && previousWriterRunId !== params.runId) {
+    // The replacement must own the durable row before the incumbent is made
+    // terminal. A failed claim leaves the still-authoritative run untouched.
+    const superseded = supersedeEmbeddedAgentRunByRunId(previousWriterRunId, () => {
+      const previousLifecycleGeneration =
+        getAgentRunContext(previousWriterRunId)?.lifecycleGeneration;
+      const recorded = emitAgentEventIfCurrent({
+        runId: previousWriterRunId,
+        ...(previousLifecycleGeneration
+          ? { lifecycleGeneration: previousLifecycleGeneration }
+          : {}),
+        stream: "lifecycle",
+        sessionKey: snapshot.sessionKey,
+        sessionId: expectedSessionId,
+        ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+        data: {
+          phase: "end",
+          aborted: true,
+          status: AGENT_RUN_SUPERSEDED_STOP_REASON,
+          stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON,
+          error: AGENT_RUN_SUPERSEDED_ERROR,
+          endedAt: Date.now(),
+        },
+      });
+      if (!recorded) {
+        throw new Error(`Could not record superseded writer outcome: ${previousWriterRunId}`);
+      }
+    });
+    log.warn(
+      `[session-writer] replacing claim session=${sanitizeForLog(snapshot.sessionKey)} ` +
+        `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
+        `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=${superseded}`,
+    );
+  }
+  return {
+    expectedLifecycleRevision,
+    expectedWriterRunId: params.runId,
+  };
 }

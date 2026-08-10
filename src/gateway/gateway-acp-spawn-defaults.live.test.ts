@@ -10,8 +10,8 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../agents/acp-spawn.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
+import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -41,7 +41,7 @@ const LIVE_TIMEOUT_MS = resolvePositiveInteger(
 );
 
 function snapshotAcpSpawnDefaultsLiveEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
+  return snapshotLiveEnv(["CODEX_HOME"]);
 }
 
 function resolvePositiveInteger(raw: string | undefined, fallback: number): number {

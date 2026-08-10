@@ -1,8 +1,9 @@
-// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import {
@@ -80,12 +81,7 @@ async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEven
   return hoisted.trajectoryEvents.filter((event) => event.workspaceDir === workspaceDir);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
   expect(value, label).toBeInstanceOf(Array);
@@ -3237,8 +3233,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(false);
   });
 
-  it("releases the session lock even when teardown cleanup throws", async () => {
-    const releaseMock = vi.fn(async () => {});
+  it("disposes the session even when teardown cleanup throws", async () => {
     const disposeMock = vi.fn();
     const flushMock = vi.fn(async () => {
       throw new Error("flush failed");
@@ -3250,12 +3245,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
       bundleLspRuntime: undefined,
-      sessionLock: { release: releaseMock },
     });
 
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
-    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });
 

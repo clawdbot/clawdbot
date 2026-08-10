@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside, resolveOpenedFileRealPathForHandle } from "../../infra/fs-safe.js";
 import { runCommandBuffered } from "../../process/exec.js";
+import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   gitFileMode,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -26,44 +27,54 @@ async function readOpenedWorkspaceFile(params: {
   expectedPath: string;
   root?: string;
 }): Promise<WorkspaceFileSnapshot> {
-  const before = await params.handle.stat();
+  const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
+  const before = await params.handle.stat({ bigint: true });
   const realPath = await resolveOpenedFileRealPathForHandle(params.handle, params.expectedPath);
   if (!before.isFile() || (params.root && !isPathInside(params.root, realPath))) {
     throw new Error("Gateway workspace file changed while it was being read");
   }
-  if (before.size > MAX_RECONCILIATION_FILE_BYTES) {
+  if (before.size > BigInt(MAX_RECONCILIATION_FILE_BYTES)) {
     return { type: "unsupported" };
   }
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  let size = 0;
-  for (;;) {
-    const { bytesRead } = await params.handle.read(buffer, 0, buffer.length, size);
-    if (bytesRead === 0) {
-      break;
+  const identity = workspaceStatIdentity("gateway", before);
+  let sha256 = hashMemo?.get(identity);
+  let size = Number(before.size);
+  if (sha256) {
+    if (metrics) {
+      metrics.memoHitCount += 1;
     }
-    size += bytesRead;
-    if (size > MAX_RECONCILIATION_FILE_BYTES) {
-      return { type: "unsupported" };
+  } else {
+    const hashStartedAt = performance.now();
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    size = 0;
+    for (;;) {
+      const { bytesRead } = await params.handle.read(buffer, 0, buffer.length, size);
+      if (bytesRead === 0) {
+        break;
+      }
+      size += bytesRead;
+      if (size > MAX_RECONCILIATION_FILE_BYTES) {
+        return { type: "unsupported" };
+      }
+      hash.update(buffer.subarray(0, bytesRead));
     }
-    hash.update(buffer.subarray(0, bytesRead));
+    sha256 = hash.digest("hex");
+    if (metrics) {
+      metrics.contentHashCount += 1;
+      metrics.contentHashDurationMs += performance.now() - hashStartedAt;
+    }
   }
-  const after = await params.handle.stat();
-  if (
-    after.size !== size ||
-    after.size !== before.size ||
-    after.mtimeMs !== before.mtimeMs ||
-    after.ctimeMs !== before.ctimeMs ||
-    after.ino !== before.ino ||
-    after.dev !== before.dev
-  ) {
+  const after = await params.handle.stat({ bigint: true });
+  if (after.size !== BigInt(size) || workspaceStatIdentity("gateway", after) !== identity) {
     throw new Error("Gateway workspace file changed while it was being read");
   }
+  hashMemo?.set(identity, sha256);
   return {
     type: "file",
-    mode: gitFileMode(after.mode & 0o777),
+    mode: gitFileMode(Number(after.mode & 0o777n)),
     size,
-    sha256: hash.digest("hex"),
+    sha256,
   };
 }
 
@@ -77,7 +88,11 @@ export async function readWorkspaceFileSnapshot(
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
-    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute, root });
+    return await readOpenedWorkspaceFile({
+      handle,
+      expectedPath: absolute,
+      root,
+    });
   } finally {
     await handle.close();
   }

@@ -1,6 +1,7 @@
 // Normalizes error objects for codes, names, messages, and redacted logs.
 import { formatErrorMessage as formatSharedErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactSensitiveText } from "../logging/redact.js";
+export { hasErrnoCode, isErrno, isMissingPathError } from "./errno.js";
 
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
@@ -51,20 +52,6 @@ export function collectErrorGraphCandidates(
   }
 
   return candidates;
-}
-
-/**
- * Type guard for NodeJS.ErrnoException (any error with a `code` property).
- */
-export function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
-}
-
-/**
- * Check if an error has a specific errno code.
- */
-export function hasErrnoCode(err: unknown, code: string): boolean {
-  return isErrno(err) && err.code === code;
 }
 
 export function formatErrorMessage(err: unknown): string {

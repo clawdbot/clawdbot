@@ -35,7 +35,7 @@
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .wizard-step__option small {

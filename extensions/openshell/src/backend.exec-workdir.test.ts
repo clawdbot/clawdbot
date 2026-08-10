@@ -1,8 +1,12 @@
 // Openshell tests cover backend-owned exec workdir validation behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
@@ -40,7 +44,7 @@ vi.mock("./cli.js", async (importOriginal) => {
   };
 });
 
-const tempDirs: string[] = [];
+const tempWorkspaces: TempWorkspace[] = [];
 
 function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
   return {
@@ -68,12 +72,6 @@ function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"
   };
 }
 
-async function makeTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
 describe("openshell backend exec workdir validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -98,9 +96,7 @@ describe("openshell backend exec workdir validation", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
   });
 
   it("reuses validation-time workspace preparation for the following exec", async () => {
@@ -108,7 +104,12 @@ describe("openshell backend exec workdir validation", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "fixture");
     vi.stubEnv("LANG", "en_US.UTF-8");
     vi.stubEnv("NODE_ENV", "test");
-    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-openshell-workspace-",
+    });
+    tempWorkspaces.push(workspace);
+    const workspaceDir = workspace.dir;
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
     const backendFactory = createOpenShellSandboxBackendFactory({
       pluginConfig: resolveOpenShellPluginConfig({
@@ -158,7 +159,12 @@ describe("openshell backend exec workdir validation", () => {
   });
 
   it("does not reuse validation-time workspace preparation after discard", async () => {
-    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-openshell-workspace-",
+    });
+    tempWorkspaces.push(workspace);
+    const workspaceDir = workspace.dir;
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
     const backendFactory = createOpenShellSandboxBackendFactory({
       pluginConfig: resolveOpenShellPluginConfig({

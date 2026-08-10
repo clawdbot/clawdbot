@@ -292,7 +292,28 @@ describe("minimax image-generation provider", () => {
     expect((request.headers as Headers).get("x-minimax-image-policy")).toBe("enabled");
   });
 
-  it("keeps the dedicated global image endpoint when text config uses the global API host", async () => {
+  it.each([
+    {
+      title: "keeps the dedicated global image endpoint when text config uses the global API host",
+      providerBaseUrl: "https://api.minimax.io/anthropic",
+      expectedEndpoint: "https://api.minimax.io/v1/image_generation",
+    },
+    {
+      title: "does not inherit unrelated MiniMax text endpoint hosts for image generation",
+      providerBaseUrl: "https://api.minimax.chat/anthropic",
+      expectedEndpoint: "https://api.minimax.io/v1/image_generation",
+    },
+    {
+      title: "infers the dedicated CN image endpoint from MiniMax provider config",
+      providerBaseUrl: "https://api.minimaxi.com/anthropic",
+      expectedEndpoint: "https://api.minimaxi.com/v1/image_generation",
+    },
+    {
+      title: "ignores private custom text endpoints for image generation",
+      providerBaseUrl: "http://127.0.0.1:8080/anthropic",
+      expectedEndpoint: "https://api.minimax.io/v1/image_generation",
+    },
+  ])("$title", async ({ providerBaseUrl, expectedEndpoint }) => {
     mockMinimaxApiKey();
     const fetchMock = mockSuccessfulMinimaxImageResponse();
 
@@ -305,7 +326,7 @@ describe("minimax image-generation provider", () => {
         models: {
           providers: {
             minimax: {
-              baseUrl: "https://api.minimax.io/anthropic",
+              baseUrl: providerBaseUrl,
               models: [],
             },
           },
@@ -313,31 +334,7 @@ describe("minimax image-generation provider", () => {
       },
     });
 
-    expectImageGenerationUrl(fetchMock, "https://api.minimax.io/v1/image_generation");
-  });
-
-  it("does not inherit unrelated MiniMax text endpoint hosts for image generation", async () => {
-    mockMinimaxApiKey();
-    const fetchMock = mockSuccessfulMinimaxImageResponse();
-
-    const provider = buildMinimaxImageGenerationProvider();
-    await provider.generateImage({
-      provider: "minimax",
-      model: "image-01",
-      prompt: "draw a cat",
-      cfg: {
-        models: {
-          providers: {
-            minimax: {
-              baseUrl: "https://api.minimax.chat/anthropic",
-              models: [],
-            },
-          },
-        },
-      },
-    });
-
-    expectImageGenerationUrl(fetchMock, "https://api.minimax.io/v1/image_generation");
+    expectImageGenerationUrl(fetchMock, expectedEndpoint);
   });
 
   it("uses the dedicated CN image endpoint when CN API host is configured", async () => {
@@ -351,30 +348,6 @@ describe("minimax image-generation provider", () => {
       model: "image-01",
       prompt: "draw a cat",
       cfg: {},
-    });
-
-    expectImageGenerationUrl(fetchMock, "https://api.minimaxi.com/v1/image_generation");
-  });
-
-  it("infers the dedicated CN image endpoint from MiniMax provider config", async () => {
-    mockMinimaxApiKey();
-    const fetchMock = mockSuccessfulMinimaxImageResponse();
-
-    const provider = buildMinimaxImageGenerationProvider();
-    await provider.generateImage({
-      provider: "minimax",
-      model: "image-01",
-      prompt: "draw a cat",
-      cfg: {
-        models: {
-          providers: {
-            minimax: {
-              baseUrl: "https://api.minimaxi.com/anthropic",
-              models: [],
-            },
-          },
-        },
-      },
     });
 
     expectImageGenerationUrl(fetchMock, "https://api.minimaxi.com/v1/image_generation");
@@ -402,29 +375,5 @@ describe("minimax image-generation provider", () => {
     });
 
     expectImageGenerationUrl(fetchMock, "https://api.minimaxi.com/v1/image_generation");
-  });
-
-  it("ignores private custom text endpoints for image generation", async () => {
-    mockMinimaxApiKey();
-    const fetchMock = mockSuccessfulMinimaxImageResponse();
-
-    const provider = buildMinimaxImageGenerationProvider();
-    await provider.generateImage({
-      provider: "minimax",
-      model: "image-01",
-      prompt: "draw a cat",
-      cfg: {
-        models: {
-          providers: {
-            minimax: {
-              baseUrl: "http://127.0.0.1:8080/anthropic",
-              models: [],
-            },
-          },
-        },
-      },
-    });
-
-    expectImageGenerationUrl(fetchMock, "https://api.minimax.io/v1/image_generation");
   });
 });

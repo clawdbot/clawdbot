@@ -1,6 +1,6 @@
 import type { Message } from "grammy/types";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
-import { buildTelegramThreadParams, resolveTelegramThreadSpec } from "./bot/helpers.js";
+import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackButton = {
@@ -8,6 +8,11 @@ export type TelegramCallbackButton = {
   callback_data: string;
   style?: "danger" | "success" | "primary";
 };
+
+type TelegramCallbackReplyParams = Omit<
+  NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
+  "direct_messages_topic_id" | "message_thread_id"
+>;
 
 export interface TelegramCallbackMessageActions {
   editCallbackMessage: (
@@ -25,17 +30,16 @@ export interface TelegramCallbackMessageActions {
   >;
   replyToCallbackChat: (
     text: string,
-    replyParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2],
+    replyParams?: TelegramCallbackReplyParams,
   ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>;
 }
 
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
-  isGroup: boolean;
   isForum: boolean;
 }): TelegramCallbackMessageActions {
-  const { bot, callbackMessage, isGroup, isForum } = params;
+  const { bot, callbackMessage, isForum } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
       ? { business_connection_id: callbackMessage.business_connection_id }
@@ -77,27 +81,13 @@ export function createTelegramCallbackMessageActions(params: {
     return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
   };
 
-  const replyToCallbackChat = async (
-    text: string,
-    replyParams?: Parameters<typeof bot.api.sendMessage>[2],
-  ) => {
+  const replyToCallbackChat = async (text: string, replyParams?: TelegramCallbackReplyParams) => {
     const threadParams = buildTelegramThreadParams(
-      resolveTelegramThreadSpec({
-        isGroup,
-        isForum,
-        messageThreadId: callbackMessage.message_thread_id,
-      }),
+      resolveTelegramMessageThreadSpec(callbackMessage, isForum),
     );
-    const topicParams = {
-      ...callbackBusinessParams,
-      ...threadParams,
-      ...(callbackMessage.direct_messages_topic?.topic_id != null
-        ? { direct_messages_topic_id: callbackMessage.direct_messages_topic.topic_id }
-        : {}),
-    };
     const mergedParams =
-      Object.keys(topicParams).length > 0 || replyParams
-        ? { ...topicParams, ...replyParams }
+      callbackBusinessParams || threadParams || replyParams
+        ? { ...replyParams, ...callbackBusinessParams, ...threadParams }
         : replyParams;
     return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
   };

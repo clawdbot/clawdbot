@@ -99,6 +99,31 @@ extension OnboardingView {
         isLocal && executableReady && !installing
     }
 
+    static func shouldReviseCLIActivationFailure(
+        gatewayStatus: GatewayProcessManager.Status,
+        isLocal: Bool,
+        executableReady: Bool,
+        installed: Bool) -> Bool
+    {
+        guard isLocal, executableReady, !installed else { return false }
+        return switch gatewayStatus {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
+    }
+
+    func reviseCLIActivationFailureIfGatewayReady(_ status: GatewayProcessManager.Status) {
+        guard Self.shouldReviseCLIActivationFailure(
+            gatewayStatus: status,
+            isLocal: state.connectionMode == .local,
+            executableReady: cliExecutableReady,
+            installed: cliInstalled)
+        else { return }
+        cliInstalled = true
+        cliStatusKnown = true
+        cliStatus = nil
+    }
+
     func finishExistingCLIActivation() async {
         defer {
             installingCLI = false

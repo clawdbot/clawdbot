@@ -11,6 +11,7 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 
+/** @type {ChangedScope} */
 const FULL_SCOPE = {
   runNode: true,
   runMacos: true,
@@ -23,6 +24,7 @@ const FULL_SCOPE = {
   runUiTests: true,
 };
 
+/** @type {ChangedScope} */
 const EMPTY_SCOPE = {
   runNode: false,
   runMacos: false,
@@ -39,22 +41,34 @@ const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
+const APPLE_SHARED_CONTRACT_FIXTURE_RE =
+  /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const MACOS_SCRIPT_SCOPE_RE =
   /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
+const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
+  /^src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.mjs|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
+const WINDOWS_FILE_URL_SCOPE_RE =
+  /^(?:src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =
-  /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mjs|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:direct-run\.mjs|format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mts|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|mts|js)|lib\/(?:direct-run\.(?:mjs|mts)|format-generated-module\.mts|tsx-cli-shim\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(extensions\/mxc\/test\/(?:mxc-backend|sandbox-policy-loader)\.test\.ts$|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive\.worker|store\.session-lifecycle-mutation)\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/(?:exec-allowlist-pattern|fs-safe-remove|ssh-client\.windows|update-managed-service-handoff|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+  /^(extensions\/mxc\/test\/(?:mxc-backend|sandbox-policy-loader)\.test\.ts$|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive\.worker|store\.session-lifecycle-mutation)\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/(?:exec-allowlist-pattern|fs-safe-remove|ssh-client\.windows|update-managed-service-handoff-(?:command|lifecycle)|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+const WINDOWS_SECRETREF_SCOPE_RE =
+  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:fs-safe|fs-safe-defaults|permissions)\.ts|src\/secrets\/(?:resolve|resolve-errors|test-node-command\.test-support)\.ts|src\/security\/audit-fs\.ts|src\/test-utils\/vitest-spies\.ts|test\/e2e\/qa-lab\/runtime\/doctor-auth-secretref-checks\.e2e\.test\.ts|test\/fixtures\/windows-acl-tools-unavailable\.mjs)$/;
+const WINDOWS_SECRETREF_TEST_SCOPE_RE =
+  /^(?:src\/commands\/doctor-gateway-auth-token\.windows\.test\.ts|src\/secrets\/test-node-command\.test-support\.ts|test\/e2e\/qa-lab\/runtime\/doctor-auth-secretref-checks\.e2e\.test\.ts|test\/fixtures\/windows-acl-tools-unavailable\.mjs)$/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
+const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
+  /^src\/auto-reply\/usage-bar\/template(?:\.windows\.test)?\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
@@ -62,10 +76,10 @@ const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 
-export class ControlUiGeneratedArtifactsMixedError extends Error {}
-export class NativeGeneratedArtifactsMixedError extends Error {}
+class ControlUiGeneratedArtifactsMixedError extends Error {}
+class NativeGeneratedArtifactsMixedError extends Error {}
 const CHROMIUM_UI_TEST_SCOPE_RE =
-  /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$|package\.json$|\.github\/workflows\/ci\.yml$)/;
+  /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mts$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 // Android base resources are co-owned: source PRs edit their English content,
@@ -84,17 +98,15 @@ const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$/;
 const NODE_FAST_CI_ROUTING_SCOPE_RE =
-  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/(?:test-projects\.test-support|lib\/(?:changed-path-facts|ci-changed-node-test-plan))\.d\.mts$|scripts\/lib\/(?:changed-path-facts|ci-changed-node-test-plan)\.mjs$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|changed-path-facts|ci-changed-node-test-plan|run-vitest|test-projects)\.test\.ts$)/;
+  /^(scripts\/ci-changed-scope\.mjs$|scripts\/(?:check-changed|run-vitest)\.(?:mjs|mts)$|scripts\/test-projects(?:\.test-support)?\.mts$|scripts\/lib\/changed-path-facts\.mjs$|scripts\/lib\/ci-changed-node-test-plan\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope(?:\.[^/]+)?\.test\.ts$|test\/scripts\/(?:changed-lanes|changed-path-facts|ci-changed-node-test-plan|run-vitest|test-projects)\.test\.ts$)/;
 const NODE_FAST_SCOPE_RE = new RegExp(
   `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
 );
 
 /**
+ * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
  * @returns {ChangedScope}
- */
-/**
- * Detects high-level CI scope from changed file paths.
  */
 export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -138,7 +150,11 @@ export function detectChangedScope(changedPaths) {
 
     if (
       !NATIVE_PROTOCOL_GEN_RE.test(path) &&
-      (MACOS_NATIVE_RE.test(path) || MACOS_SCRIPT_SCOPE_RE.test(path) || isAppleSwiftConfig)
+      (MACOS_NATIVE_RE.test(path) ||
+        MACOS_SCRIPT_SCOPE_RE.test(path) ||
+        WORKSPACE_RSYNC_RECEIVER_SCOPE_RE.test(path) ||
+        APPLE_SHARED_CONTRACT_FIXTURE_RE.test(path) ||
+        isAppleSwiftConfig)
     ) {
       runMacos = true;
     }
@@ -158,8 +174,16 @@ export function detectChangedScope(changedPaths) {
     if (
       (WINDOWS_SCOPE_RE.test(path) ||
         WINDOWS_SQLITE_SCOPE_RE.test(path) ||
-        WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
-      (!facts.isTestOnly || WINDOWS_TEST_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path))
+        WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
+        WINDOWS_SECRETREF_SCOPE_RE.test(path) ||
+        WINDOWS_DAEMON_SCOPE_RE.test(path) ||
+        WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path)) &&
+      (!facts.isTestOnly ||
+        WINDOWS_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
+        WINDOWS_SECRETREF_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_DAEMON_SCOPE_RE.test(path) ||
+        WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }
@@ -205,6 +229,8 @@ export function detectChangedScope(changedPaths) {
  * Generated Control UI locale snapshots belong in their isolated automation PR.
  * Mixing them into a source PR recreates deterministic rebase conflicts.
  * @param {string[]} changedPaths
+ * @param {string} [branchName]
+ * @returns {void}
  */
 export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchName = "") {
   if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
@@ -235,6 +261,11 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   );
 }
 
+/**
+ * @param {string[]} changedPaths
+ * @param {string[]} generatedPaths
+ * @returns {boolean}
+ */
 function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
   const requiredOwners = [
     ".gitattributes",
@@ -288,6 +319,10 @@ function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
   });
 }
 
+/**
+ * @param {string[] | null} changedPaths
+ * @returns {boolean}
+ */
 export function shouldStrictControlUiI18n(changedPaths) {
   return (
     changedPaths === null ||
@@ -299,6 +334,8 @@ export function shouldStrictControlUiI18n(changedPaths) {
  * Native translations and platform resources are committed by one serialized
  * automation PR. Source PRs own only source plus the stable-ID inventory.
  * @param {string[]} changedPaths
+ * @param {string} [branchName]
+ * @returns {void}
  */
 export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName = "") {
   if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
@@ -332,6 +369,10 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   );
 }
 
+/**
+ * @param {string[] | null} changedPaths
+ * @returns {boolean}
+ */
 export function shouldStrictNativeI18n(changedPaths) {
   return (
     changedPaths === null ||
@@ -339,6 +380,7 @@ export function shouldStrictNativeI18n(changedPaths) {
   );
 }
 
+/** @returns {string} */
 function resolveChangedBranchName() {
   const githubBranch = process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME;
   if (githubBranch) {
@@ -351,6 +393,11 @@ function resolveChangedBranchName() {
   }
 }
 
+/**
+ * @param {Readonly<Record<string, string | undefined>>} [env]
+ * @param {string} [branchName]
+ * @returns {string}
+ */
 export function resolveAllowedGeneratedMixBranch(
   env = process.env,
   branchName = resolveChangedBranchName(),
@@ -372,6 +419,10 @@ export function resolveAllowedGeneratedMixBranch(
   return "";
 }
 
+/**
+ * @param {string[] | null | undefined} changedPaths
+ * @returns {boolean}
+ */
 export function shouldRunNativeI18n(changedPaths) {
   return (
     !Array.isArray(changedPaths) ||
@@ -381,11 +432,9 @@ export function shouldRunNativeI18n(changedPaths) {
 }
 
 /**
+ * Detects whether node-fast CI can cover the changed paths.
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
- */
-/**
- * Detects whether node-fast CI can cover the changed paths.
  */
 export function detectNodeFastScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -435,11 +484,9 @@ function detectInstallSmokeScopeForPath(path) {
 }
 
 /**
+ * Detects whether install-smoke CI should run for changed paths.
  * @param {string[]} changedPaths
  * @returns {InstallSmokeScope}
- */
-/**
- * Detects whether install-smoke CI should run for changed paths.
  */
 export function detectInstallSmokeScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -462,13 +509,12 @@ export function detectInstallSmokeScope(changedPaths) {
 }
 
 /**
+ * Lists changed paths for CI base/head inputs.
  * @param {string} base
  * @param {string} [head]
  * @param {string} [cwd]
+ * @param {boolean} [preferMergeHeadFirstParent]
  * @returns {string[]}
- */
-/**
- * Lists changed paths for CI base/head inputs.
  */
 export function listChangedPaths(
   base,
@@ -497,12 +543,14 @@ export function listChangedPaths(
 }
 
 /**
+ * Writes CI scope decisions to GitHub Actions output.
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
  * @param {InstallSmokeScope} [installSmokeScope]
- */
-/**
- * Writes CI scope decisions to GitHub Actions output.
+ * @param {NodeFastScope} [nodeFastScope]
+ * @param {boolean} [runNativeI18n]
+ * @param {string[] | null} [changedPaths]
+ * @returns {void}
  */
 export function writeGitHubOutput(
   scope,
@@ -563,11 +611,17 @@ export function writeGitHubOutput(
   );
 }
 
+/** @returns {boolean} */
 function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
-/** @param {string[]} argv */
+/**
+ * @param {string[]} argv
+ * @param {number} index
+ * @param {string} optionName
+ * @returns {string}
+ */
 function readRefValue(argv, index, optionName) {
   const value = argv[index + 1];
   if (value === undefined || value === "" || value.startsWith("-")) {
@@ -576,7 +630,10 @@ function readRefValue(argv, index, optionName) {
   return value;
 }
 
-/** @param {string[]} argv */
+/**
+ * @param {string[]} argv
+ * @returns {{ base: string; head: string; mergeHeadFirstParent: boolean }}
+ */
 export function parseArgs(argv) {
   const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {

@@ -35,6 +35,17 @@ import type {
 
 const log = createSubsystemLogger("gateway/terminal");
 
+// Task binding is manager-private metadata: public terminal ownership stays
+// conversation-scoped while lifecycle cleanup can target the exact producer.
+type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
+
+function terminalOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  if (owner?.kind !== "agent") {
+    return false;
+  }
+  return owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey;
+}
+
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index for
  * connection owners and viewers so disconnect cleanup stays bounded.
@@ -42,7 +53,7 @@ const log = createSubsystemLogger("gateway/terminal");
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly byConn = new Map<string, Set<string>>();
-  private readonly pendingOpens = new Set<TerminalPendingOpen>();
+  private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
   // Connection-owned opens still awaiting spawn. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
@@ -381,6 +392,22 @@ export class TerminalSessionManager {
     return true;
   }
 
+  /** Closes every live or spawning PTY owned by one exact agent session or task. */
+  closeAgentSessions(agentSessionKey: string): number {
+    for (const [pending, owner] of this.pendingOpens) {
+      if (terminalOwnerMatches(owner, agentSessionKey)) {
+        pending.abort("terminal closed because its task ended");
+      }
+    }
+    const owned = [...this.sessions.values()].filter(
+      (session) => !session.closed && terminalOwnerMatches(session.owner, agentSessionKey),
+    );
+    for (const session of owned) {
+      this.finalize(session, "closed", {});
+    }
+    return owned.length;
+  }
+
   /**
    * Rebinds a connection-owned session, or co-attaches a viewer to an
    * agent-owned session. Operator-to-operator attach remains take-over; only
@@ -473,7 +500,7 @@ export class TerminalSessionManager {
   }
 
   private trackPendingOpen(owner: TerminalOwner, pending: TerminalPendingOpen): void {
-    this.pendingOpens.add(pending);
+    this.pendingOpens.set(pending, owner);
     if (owner.kind !== "conn") {
       return;
     }
@@ -548,7 +575,7 @@ export class TerminalSessionManager {
   closeDisallowedAgents(isAllowed: (agentId: string) => boolean): void {
     // Config can change while spawn is awaiting the native PTY import. Mark the
     // pending open so it kills the process instead of registering stale access.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       if (!isAllowed(pending.agentId)) {
         pending.abort("terminal closed because the agent policy changed");
       }
@@ -599,7 +626,7 @@ export class TerminalSessionManager {
    */
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       pending.abort("gateway closed during terminal open");
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.

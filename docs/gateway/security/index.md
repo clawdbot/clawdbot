@@ -287,7 +287,7 @@ Hook payloads are untrusted content even when delivery comes from systems you co
 
 ## Command authorization
 
-Slash commands and directives are honored only for authorized senders, derived from channel allowlists/pairing plus `commands.useAccessGroups` (see [Configuration](/gateway/configuration) and [Slash commands](/tools/slash-commands)). If a channel allowlist is empty or includes `"*"`, commands are effectively open for that channel.
+Slash commands and directives are honored only for authorized senders. Configure an explicit per-provider `commands.allowFrom` list, or let command authorization follow channel allowlists and pairing state. Access-group entries referenced by channel allowlists are resolved automatically; there is no opt-in toggle. If a channel allowlist is empty or includes `"*"`, commands are effectively open for that channel. See [Access groups](/channels/access-groups) and [Slash commands](/tools/slash-commands).
 
 `/exec` is a session-only convenience for authorized operators - it does not write config or change other sessions.
 
@@ -396,9 +396,13 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      { id: "personal", workspace: "~/.openclaw/workspace-personal", sandbox: { mode: "off" } },
-    ],
+    entries: {
+      personal: {
+        default: true,
+        workspace: "~/.openclaw/workspace-personal",
+        sandbox: { mode: "off" },
+      },
+    },
   },
 }
 ```
@@ -408,9 +412,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -418,7 +422,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -428,9 +432,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
@@ -465,7 +469,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -483,6 +487,21 @@ Enabling browser control gives the model a real browser. If that profile already
 - Keep Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public internet.
 - Disable browser proxy routing when not needed (`gateway.nodes.browser.mode="off"`).
 - Chrome MCP existing-session mode is not "safer" - it can act as you in whatever that host Chrome profile can reach.
+- Browser Relay Authentication v2 never sends the persistent extension relay
+  key. The extension and external CDP clients verify a signed server challenge
+  before returning a short-lived, one-time, connection-bound HMAC proof. Proofs
+  bind the protocol version, role, transport, method, resource, flow, profile,
+  and relay instance; replay on the same or another socket fails.
+- `browser.extensionRelay.allowLegacyAuth` defaults to `true` for one migration
+  window. This temporarily accepts old Bearer, Basic, and token-subprotocol
+  relay clients. Update every relay client, then set it to `false`. V2 clients
+  never downgrade after a failed proof or unsupported response.
+- Chrome extension pairing stores its access mode in extension-owned Chrome
+  storage, not Gateway config. **All tabs** exposes every eligible ordinary tab
+  in that Chrome profile except session-paused tabs; **Selected tabs** uses the
+  OpenClaw tab group as its ACL. Existing pairings migrate to **Selected tabs**,
+  while new personal-browser pairings recommend **All tabs**. Incognito and
+  internal Chrome pages remain excluded in either mode.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)
@@ -491,7 +510,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
-- In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
+- In strict mode, use wildcard-aware `allowedHostnames` entries for patterns like `*.example.com` and exact host exceptions, including otherwise-blocked names like `localhost`.
 - Direct navigation requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, and some background/subresource paths can bypass it. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
 
@@ -500,8 +519,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
   browser: {
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.example.com", "example.com"],
-      allowedHostnames: ["localhost"],
+      allowedHostnames: ["*.example.com", "example.com", "localhost"],
     },
   },
 }
@@ -663,11 +681,9 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 
 The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
 
-- `gateway.controlUi.allowInsecureAuth`: local compatibility toggle. On localhost, allows Control UI auth without device identity when the page loads over non-secure HTTP. Does not bypass pairing checks and does not relax remote (non-localhost) device identity requirements. Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
+- Token/password auth does not replace browser device identity over remote plain HTTP. Use HTTPS (for example, Tailscale Serve) or open the UI on `127.0.0.1` from the Gateway host.
 - `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input. Older configs preserve authenticated, pairing-only Control UI access for remediation until a browser reopened over HTTPS or localhost completes the bounded, explicit self-pairing migration; do not add it to current config.
-- Separate from those flags, a successful `gateway.auth.mode: "trusted-proxy"` can admit **operator** Control UI sessions without device identity - an intentional auth-mode behavior, not an `allowInsecureAuth` shortcut, and it does not extend to node-role Control UI sessions.
-
-`openclaw security audit` warns when `allowInsecureAuth` is enabled.
+- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags
 
@@ -675,7 +691,6 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
-    - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
     - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`

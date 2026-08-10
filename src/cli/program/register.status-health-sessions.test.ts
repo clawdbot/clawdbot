@@ -1,5 +1,6 @@
-// Register status/health/session tests cover status-related command registration.
 import { Command } from "commander";
+// Register status/health/session tests cover status-related command registration.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 
@@ -59,12 +60,7 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectCommandOptions(command: MockCalls, expected: Record<string, unknown>) {
   expect(command.mock.calls).toHaveLength(1);

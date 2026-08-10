@@ -12,6 +12,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
 import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
 
@@ -42,13 +43,7 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
     sessionManager: {
       buildSessionContext: () => ({ messages: repairedMessages }),
     },
-    sessionLockController: {
-      releaseForPrompt: vi.fn(async () => {
-        order.push("release-prompt-lock");
-      }),
-      isPromptSubmissionBlockedError: vi.fn(() => false),
-    },
-    withOwnedSessionWriteLock: vi.fn(async (operation) => await operation()),
+    withOwnedTranscriptWrite: vi.fn(async (operation) => await operation()),
     waitForPendingEvents: vi.fn(async () => {
       order.push("pending-events");
     }),
@@ -102,6 +97,66 @@ beforeEach(() => {
 });
 
 describe("finalizeEmbeddedAttemptStreamPhase", () => {
+  it("does not settle a provider failure before partial presentation finishes", async () => {
+    let resolvePartial: (() => void) | undefined;
+    const onPartialReply = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePartial = resolve;
+        }),
+    );
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-partial-provider-failure",
+      onBeforeTerminalDelivery: async () => undefined,
+      onPartialReply,
+    });
+    const failedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "partial answer" }],
+      stopReason: "error",
+      errorMessage: "provider failed after partial",
+      provider: "test-provider",
+      model: "test-model",
+    };
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
+    });
+    emit({ type: "message_end", message: failedAssistant });
+    emit({ type: "agent_end", messages: [failedAssistant], willRetry: false });
+
+    const fixture = createFixture({
+      waitForPendingEvents: subscription.waitForPendingEvents,
+      getBeforeAgentFinalizeRevisionReason: () => undefined,
+    });
+    mocks.settleStream.mockResolvedValue({
+      promptError: new Error("provider failed after partial"),
+      promptErrorSource: "prompt",
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [failedAssistant],
+      sessionIdUsed: "session-1",
+      lastAssistant: failedAssistant,
+      currentAttemptAssistant: failedAssistant,
+      currentAttemptCompletedAssistant: failedAssistant,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    });
+    mocks.completeAfterTurn.mockResolvedValue({ sessionIdUsed: "session-1" });
+
+    const finalize = finalizeEmbeddedAttemptStreamPhase(fixture.input);
+    await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(mocks.settleStream).not.toHaveBeenCalled();
+
+    resolvePartial?.();
+    await finalize;
+    expect(mocks.settleStream).toHaveBeenCalledOnce();
+  });
+
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const sessionManager = SessionManager.inMemory();
     const promptId = sessionManager.appendMessage({
@@ -217,13 +272,7 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     });
 
     expect(fixture.activeSession.agent.state.messages).toBe(fixture.repairedMessages);
-    expect(fixture.order).toEqual([
-      "pending-events",
-      "release-prompt-lock",
-      "settle",
-      "settled-published",
-      "after-turn",
-    ]);
+    expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
     expect(mocks.settleStream).toHaveBeenCalledWith(
       expect.objectContaining({
         runAbortDeadlineAtMs: 123,
@@ -246,17 +295,89 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     );
   });
 
-  it("settles an aborted run when prompt release returns its recorded cancellation reason", async () => {
-    const cancellationReason = new Error("cancelled by operator");
-    const fixture = createFixture({
-      sessionLockController: {
-        releaseForPrompt: vi.fn(async () => {
-          throw cancellationReason;
-        }),
-        isPromptSubmissionBlockedError: (error: unknown) => error === cancellationReason,
-      } as never,
-      repairedRejectedThinkingReplay: false,
+  it("proceeds to settlement when pending subscription events never settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = createFixture();
+      // A hung delivery handler must not dead-end the turn until the run budget.
+      fixture.input.waitForPendingEvents = vi.fn(() => new Promise<never>(() => {}));
+      const settledStream = {
+        promptError: null,
+        promptErrorSource: null,
+        timedOutDuringCompaction: false,
+        compactionOccurredThisAttempt: false,
+        messagesSnapshot: [],
+        sessionIdUsed: "session-1",
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: undefined,
+        attemptUsage: undefined,
+        cacheBreak: null,
+        lastCallUsage: undefined,
+        promptCache: undefined,
+      };
+      mocks.settleStream.mockResolvedValue(settledStream);
+      mocks.completeAfterTurn.mockResolvedValue({
+        sessionIdUsed: "session-1",
+        sessionFileUsed: "session.jsonl",
+      });
+
+      const finalize = finalizeEmbeddedAttemptStreamPhase(fixture.input);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(mocks.settleStream).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(finalize).resolves.toEqual({
+        sessionIdUsed: "session-1",
+        sessionFileUsed: "session.jsonl",
+      });
+      expect(mocks.settleStream).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the pending-events join once the run abort signal fires", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new Error("operator cancel"));
+    const fixture = createFixture();
+    fixture.input.settle.runAbortSignal = abortController.signal;
+    fixture.input.waitForPendingEvents = vi.fn(() => new Promise<never>(() => {}));
+    fixture.input.settle.readLifecycleState = () => ({
+      aborted: true,
+      timedOut: false,
+      timedOutDuringCompaction: false,
     });
+    const settledStream = {
+      promptError: null,
+      promptErrorSource: null,
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [],
+      sessionIdUsed: "session-1",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    };
+    mocks.settleStream.mockResolvedValue(settledStream);
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    await expect(finalizeEmbeddedAttemptStreamPhase(fixture.input)).resolves.toEqual({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+    expect(mocks.settleStream).toHaveBeenCalledOnce();
+  });
+
+  it("settles an aborted run with its recorded cancellation reason", async () => {
+    const cancellationReason = new Error("cancelled by operator");
+    const fixture = createFixture({ repairedRejectedThinkingReplay: false });
     fixture.input.settle.readLifecycleState = () => ({
       aborted: true,
       timedOut: false,
@@ -310,50 +431,6 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
         promptErrorSource: "compaction",
       }),
     );
-    expect(fixture.input.onSettled).not.toHaveBeenCalled();
-    expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
-  });
-
-  it("restores the rewound in-memory branch when prompt lock release fails", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
-    const rejectedId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Rejected first answer" }],
-      stopReason: "stop",
-      timestamp: 2,
-    } as never);
-    const originalMessages = sessionManager.buildSessionContext().messages;
-    const activeSession = { agent: { state: { messages: originalMessages } } };
-    const releaseError = new Error("prompt lock release failed");
-    const fixture = createFixture({
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      sessionLockController: {
-        releaseForPrompt: vi.fn(async () => {
-          throw releaseError;
-        }),
-        isPromptSubmissionBlockedError: () => false,
-      } as never,
-      repairedRejectedThinkingReplay: false,
-      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
-    });
-
-    await expect(finalizeEmbeddedAttemptStreamPhase(fixture.input)).rejects.toBe(releaseError);
-
-    expect(sessionManager.getLeafId()).toBe(promptId);
-    expect(activeSession.agent.state.messages).toEqual(
-      sessionManager.buildSessionContext().messages,
-    );
-    expect(JSON.stringify(activeSession.agent.state.messages)).not.toContain(
-      "Rejected first answer",
-    );
-    expect(mocks.settleStream).not.toHaveBeenCalled();
-    expect(fixture.input.onSettleErrorState).not.toHaveBeenCalled();
     expect(fixture.input.onSettled).not.toHaveBeenCalled();
     expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
   });

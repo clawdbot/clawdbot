@@ -71,6 +71,21 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
   );
 }
 
+/** Returns whether a policy removes at least one tool from the default surface. */
+export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
+  if (!policy) {
+    return false;
+  }
+  if (expandToolGroups(policy.deny ?? []).some((entry) => Boolean(normalizeToolName(entry)))) {
+    return true;
+  }
+  return (
+    Array.isArray(policy.allow) &&
+    policy.allow.length > 0 &&
+    !expandToolGroups(policy.allow).some((entry) => normalizeToolName(entry) === "*")
+  );
+}
+
 /** Replaces an allowlist with the normalized names of an effective tool array. */
 export function replaceWithEffectiveToolAllowlist(
   target: string[],

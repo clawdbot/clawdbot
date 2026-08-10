@@ -505,7 +505,7 @@
 "extensions: fish-audio":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/fish-audio/**"
+          - "extensions/fish-audio-speech/**"
           - "docs/providers/fish-audio.md"
           - "docs/tools/tts.md"
 "extensions: kilocode":
@@ -709,10 +709,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/sglang/**"
-"extensions: thread-ownership":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/thread-ownership/**"
 "extensions: vllm":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,5 +1,6 @@
 // Control UI tests cover dreaming behavior.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
@@ -44,7 +45,7 @@ beforeAll(() => {
         dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
         dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
         dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
-        repairArchivedThreadCorpus: "archived thread corpus",
+        repairArchivedThreadCorpus: "archived session corpus",
         repairArchivedIngestionState: "archived ingestion state",
         repairArchivedDreamDiary: "archived dream diary",
         repairNoChanges: "Dream cache repair finished with no changes.",
@@ -98,19 +99,6 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
     lookupSchemaPath: vi.fn(async () => null),
     patch: vi.fn(async () => true),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred promise callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {
@@ -1437,7 +1425,7 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
-      text: "Dream cache repair complete: archived thread corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+      text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
     });
     expect(state.dreamDiaryActionArchivePath).toBe(
       "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",

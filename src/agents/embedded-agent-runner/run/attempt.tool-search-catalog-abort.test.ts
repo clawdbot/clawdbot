@@ -53,51 +53,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
     tempPaths.length = 0;
   });
 
-  it("clears the registered run catalog when the run aborts during prep", async () => {
-    const abortController = new AbortController();
-    const prompt = vi.fn(async () => {});
-    const abortError = new Error("stopped during lock acquisition");
-    abortError.name = "AbortError";
-    let markLockRequested!: () => void;
-    const lockRequested = new Promise<void>((resolve) => {
-      markLockRequested = resolve;
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementationOnce(async (params) => {
-      markLockRequested();
-      await new Promise<void>((resolve) => {
-        params.signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      throw params.signal?.reason;
-    });
-    hoisted.createOpenClawCodingToolsMock.mockImplementation(() => catalogProbeTools());
-
-    const runId = "run-catalog-abort";
-    const attempt = createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:telegram:direct:123",
-      tempPaths,
-      sessionPrompt: prompt,
-      attemptOverrides: {
-        runId,
-        abortSignal: abortController.signal,
-        disableTools: false,
-        config: {
-          tools: { toolSearch: { enabled: true, mode: "tools" } },
-        },
-      },
-    });
-    await lockRequested;
-    const catalogRef = requireAttemptCatalogRef();
-    expect(catalogRef.current?.entries).toContainEqual(
-      expect.objectContaining({ name: "cataloged_probe_tool" }),
-    );
-
-    abortController.abort(abortError);
-    await expect(attempt).rejects.toBe(abortError);
-
-    expect(catalogRef.current).toBeUndefined();
-  });
-
   it.each([
     {
       mode: "code-mode",

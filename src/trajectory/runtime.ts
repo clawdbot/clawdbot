@@ -59,7 +59,7 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
   "messages",
   "systemPrompt",
 ] as const;
-const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache", "prompt"] as const;
+const OVERSIZE_PRESERVED_DATA_KEYS = ["stopReason", "usage", "promptCache", "prompt"] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
 
@@ -116,7 +116,7 @@ function truncateOversizedTrajectoryEvent(
 
   const buildTruncatedEventLine = (includeDroppedFields: boolean): string | undefined => {
     const data: Record<string, unknown> = { ...baseData };
-    for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+    for (const key of OVERSIZE_PRESERVED_DATA_KEYS) {
       if (preservedDataKeys.has(key)) {
         data[key] = originalData[key];
       }
@@ -139,7 +139,7 @@ function truncateOversizedTrajectoryEvent(
     return undefined;
   }
 
-  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+  for (const key of OVERSIZE_PRESERVED_DATA_KEYS) {
     if (!Object.hasOwn(originalData, key)) {
       continue;
     }

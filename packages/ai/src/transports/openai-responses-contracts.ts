@@ -1,7 +1,8 @@
-import type { Api } from "@openclaw/llm-core";
+import type { Api, ProviderReplayState } from "@openclaw/llm-core";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
+  ResponseCompactionItem,
   ResponseInput,
   ResponseOutputMessage,
   ResponseReasoningItem,
@@ -20,8 +21,10 @@ export const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error detai
 export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
 export type OpenAIResponsesReasoningReplayMetadata = {
   v: 1;
   source: "openai-responses";
@@ -36,6 +39,10 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   id?: string;
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
+export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
+  type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE;
+  baseUrlHash: string;
+};
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
@@ -49,7 +56,7 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
   egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "encrypted-content-retry";
+  payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;

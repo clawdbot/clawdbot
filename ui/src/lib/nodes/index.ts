@@ -1,12 +1,15 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
+// Presentation-free by contract: destructive confirmations belong to the owning page,
+// because native window.confirm silently returns false in webviews with no dialog bridge
+// and would end the action with no outcome and no recorded reason.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
-import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 
@@ -159,7 +162,7 @@ type ExecApprovalsState = NodesRequestState & {
   chatError?: string | null;
 };
 
-export type NodesPageDataState = NodesState & DevicesState & ExecApprovalsState;
+export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
 
 type StoredIdentity = {
   version: 1;
@@ -179,9 +182,9 @@ const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
-export function createInitialNodesState(
+export function createInitialDevicesState(
   snapshot: Partial<NodesGatewaySnapshot> = {},
-): NodesPageDataState {
+): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
@@ -291,10 +294,6 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
   if (!client || !state.connected) {
     return;
   }
-  const confirmed = window.confirm("Reject this device pairing request?");
-  if (!confirmed) {
-    return;
-  }
   const generation = state.requestGeneration;
   try {
     await client.request("device.pair.reject", { requestId });
@@ -343,8 +342,6 @@ async function reloadInventory(state: InventoryState, opts?: { error?: string })
   }
 }
 
-// Confirmation for these removals lives in the page (in-page dialog): native
-// window.confirm silently returns false in webviews without a dialog bridge.
 export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
   const client = state.client;
   if (!client || !state.connected) {
@@ -398,10 +395,6 @@ export async function approveNodePairingRequest(state: InventoryState, requestId
 
 export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
   if (!state.client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm("Reject this node pairing request?");
-  if (!confirmed) {
     return;
   }
   try {
@@ -465,10 +458,6 @@ export async function revokeDeviceToken(
 ) {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm(`Revoke token for ${params.deviceId} (${params.role})?`);
-  if (!confirmed) {
     return;
   }
   const generation = state.requestGeneration;
@@ -652,7 +641,7 @@ export function removeExecApprovalsFormValue(
 }
 
 function deviceAuthStorageKey(gatewayUrl: string): string {
-  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
+  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function removeLegacyDeviceAuthStore(storage: Storage | null) {

@@ -8,7 +8,7 @@ import {
   collectRootDependencyOwnershipAudit,
   collectRootDependencyOwnershipCheckErrors,
   collectModuleSpecifiers,
-} from "../../scripts/root-dependency-ownership-audit.mjs";
+} from "../../scripts/root-dependency-ownership-audit.mts";
 
 const tempDirs: string[] = [];
 

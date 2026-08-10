@@ -1,3 +1,4 @@
+import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -31,7 +32,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
             totalTokens: 300_010,
             inputTokens: 300_000,
             cachedInputTokens: 250_000,
+            cacheWriteInputTokens: 5_000,
             outputTokens: 10,
+            reasoningOutputTokens: 4,
           },
         },
       }),
@@ -39,7 +42,16 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "codex_app_server.usage",
-      data: { modelContextWindow: 875_900, promptTokens: 300_000 },
+      data: {
+        activeContextTokens: 300_010,
+        cachedInputTokens: 250_000,
+        cacheWriteInputTokens: 5_000,
+        inputTokens: 300_000,
+        modelContextWindow: 875_900,
+        outputTokens: 10,
+        promptTokens: 300_000,
+        reasoningOutputTokens: 4,
+      },
     });
   });
 
@@ -112,7 +124,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
             totalTokens: 12,
             inputTokens: 5,
             cachedInputTokens: 2,
+            cacheWriteInputTokens: 1,
             outputTokens: 7,
+            reasoningOutputTokens: 3,
           },
         },
       }),
@@ -121,15 +135,24 @@ describe("CodexAppServerEventProjector usage projection", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["done"]);
-    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
-    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 3,
+    expectUsageFields(result.attemptUsage, {
+      input: 2,
       output: 7,
       cacheRead: 2,
+      cacheWrite: 1,
+      total: 12,
+    });
+    expect(result.attemptUsage?.reasoningTokens).toBe(3);
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+    expectUsageFields(result.lastAssistant?.usage, {
+      input: 2,
+      output: 7,
+      cacheRead: 2,
+      cacheWrite: 1,
       total: 12,
     });
     expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
+    expect(normalizeUsage(result.lastAssistant?.usage)?.reasoningTokens).toBe(3);
   });
 
   it.each([

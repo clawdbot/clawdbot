@@ -1,4 +1,3 @@
-import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -6,11 +5,12 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
-import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
@@ -76,7 +76,7 @@ type AttemptTranscriptOwnership =
     }
   | {
       kind: "runtime-target";
-      sessionTarget?: ContextEngineSessionTarget;
+      sessionTarget?: AgentRunSessionTarget;
     };
 
 type AttemptControl = {
@@ -217,6 +217,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
+    conversationToolPolicy: params.conversationToolPolicy,
     messageActionTurnCapability: params.messageActionTurnCapability,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
@@ -386,6 +387,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,

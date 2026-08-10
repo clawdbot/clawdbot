@@ -55,7 +55,6 @@ final class GatewayProcessManager {
 
     private struct LaunchAgentStartupContext {
         let port: Int
-        let enableResult: LaunchAgentEnableResult
         let readinessPID: Int32?
         let readinessRevision: UInt64
     }
@@ -113,6 +112,8 @@ final class GatewayProcessManager {
     private var launchAgentReadinessCandidate: LaunchAgentReadinessCandidate?
     private var launchAgentReadinessRevision: UInt64 = 0
     private var launchAgentInstallGeneration: UInt64?
+    private var launchAgentFreshInstallGeneration: UInt64?
+    private var profilePortConflict: String?
     private var lastObservedGatewayPID: Int32?
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
@@ -146,6 +147,16 @@ final class GatewayProcessManager {
             self.logger.info("gateway process skipped: remote mode active")
             return
         }
+        if active, self.profilePortConflict != nil {
+            self.profilePortConflict = nil
+            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(nil) }
+        }
+        if active, let conflict = GatewayEnvironment.profileGatewayPortConflict() {
+            self.desiredActive = false
+            self.recordProfilePortConflict(conflict)
+            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+            return
+        }
         self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
         self.refreshEnvironmentStatus()
@@ -159,6 +170,7 @@ final class GatewayProcessManager {
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
         guard !CommandResolver.connectionModeIsRemote() else { return false }
         guard self.desiredActive else { return false }
+        guard self.profilePortConflict == nil else { return false }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
@@ -278,6 +290,7 @@ final class GatewayProcessManager {
             }
         }
 
+        var isReadinessRepair = false
         if let pid = launchAgent.reusablePID {
             let failure = LaunchAgentReadinessFailure(port: request.port, pid: pid)
             if self.launchAgentReadinessFailure != failure {
@@ -291,6 +304,7 @@ final class GatewayProcessManager {
                 return .skipped
             }
 
+            isReadinessRepair = true
             self.appendLog(
                 "[gateway] launchd pid \(pid) failed readiness on port \(request.port); repairing\n")
             self.logger.warning(
@@ -309,6 +323,7 @@ final class GatewayProcessManager {
         // Keep replacement evidence until a healthy audit refreshes the control channel. Startup
         // and persistence calls coalesce, so the later caller may not receive `installed` itself.
         self.launchAgentInstallGeneration = request.generation
+        self.launchAgentFreshInstallGeneration = isReadinessRepair ? nil : request.generation
         return .installed()
     }
 
@@ -317,9 +332,16 @@ final class GatewayProcessManager {
         startingPID: Int32?) async -> LaunchAgentReadinessFailure?
     {
         guard let startingPID,
-              let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port),
+              let pid = await self.reusableLaunchdPIDOwningPort(port: port),
               pid == startingPID
         else {
+            return nil
+        }
+        return LaunchAgentReadinessFailure(port: port, pid: pid)
+    }
+
+    private func reusableLaunchdPIDOwningPort(port: Int) async -> Int32? {
+        guard let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port) else {
             return nil
         }
         // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
@@ -327,7 +349,7 @@ final class GatewayProcessManager {
         if let listener = await PortGuardian.shared.describe(port: port), listener.pid != pid {
             return nil
         }
-        return LaunchAgentReadinessFailure(port: port, pid: pid)
+        return pid
     }
 
     private func setLaunchAgentReadinessState(
@@ -346,6 +368,15 @@ final class GatewayProcessManager {
             self.status = .stopped
             return
         }
+        guard OpenClawConfigFile.migrateRetiredAppMetadataForGatewayStart() else {
+            let message =
+                "Could not repair retired macOS config metadata. Run `openclaw doctor --fix`, then retry."
+            self.status = .failed(message)
+            self.lastFailureReason = message
+            self.appendLog("[gateway] \(message)\n")
+            self.logger.error("gateway config metadata migration failed")
+            return
+        }
         // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
         // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
         switch self.status {
@@ -360,21 +391,30 @@ final class GatewayProcessManager {
         self.logger.debug("gateway start requested")
 
         // First try to latch onto an already-running gateway to avoid spawning a duplicate.
-        let task = Task { [weak self] in
+        self.beginGatewayStartTask(generation: startGeneration) { [weak self] in
             guard let self else { return }
-            defer {
-                if self.gatewayStartTaskGeneration == startGeneration {
-                    self.gatewayStartTask = nil
-                    self.gatewayStartTaskGeneration = nil
-                }
-            }
             if await self.attachExistingGatewayAfterPendingDisable(startGeneration: startGeneration) {
                 return
             }
             await self.enableLaunchdGateway(startGeneration: startGeneration)
         }
-        self.gatewayStartTaskGeneration = startGeneration
-        self.gatewayStartTask = task
+    }
+
+    private func beginGatewayStartTask(
+        generation: UInt64,
+        operation: @escaping @MainActor @Sendable () async -> Void)
+    {
+        self.gatewayStartTaskGeneration = generation
+        self.gatewayStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.gatewayStartTaskGeneration == generation {
+                    self.gatewayStartTask = nil
+                    self.gatewayStartTaskGeneration = nil
+                }
+            }
+            await operation()
+        }
     }
 
     func waitForStartupAttempt() async {
@@ -393,6 +433,7 @@ final class GatewayProcessManager {
         self.lastFailureReason = nil
         self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
         self.launchAgentInstallGeneration = nil
+        self.launchAgentFreshInstallGeneration = nil
         // Queued work belongs to the previous lifecycle. The active enable cannot be cancelled
         // safely, so the disable waits for its drain and wins unless a newer start supersedes it.
         self.launchAgentEnablePendingRequest = nil
@@ -493,6 +534,11 @@ final class GatewayProcessManager {
         guard self.isCurrentGatewayStart(startGeneration) else { return true }
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
+        if hasListener,
+           await !(self.profileOwnsGateway(instance, port: port))
+        {
+            return true
+        }
 
         let attemptAttach = {
             try await self.probeGatewayHealth(timeoutMs: 2000)
@@ -505,6 +551,9 @@ final class GatewayProcessManager {
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let attachedInstance = await PortGuardian.shared.describe(port: port)
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
+                if await !(self.profileOwnsGateway(attachedInstance, port: port)) {
+                    return true
+                }
                 let snap = decodeHealthSnapshot(from: data)
                 let attachedInstanceText = attachedInstance.map { self.describe(instance: $0) }
                 let details = self.describe(details: attachedInstanceText, port: port, snap: snap)
@@ -550,6 +599,45 @@ final class GatewayProcessManager {
 
         self.existingGatewayDetails = nil
         return false
+    }
+
+    static func profileAllowsExistingGatewayAttachment(
+        profile: AppProfile,
+        listenerPID: Int32?,
+        managedServicePID: Int32?) -> Bool
+    {
+        guard profile.isActive else { return true }
+        guard let listenerPID, let managedServicePID else { return false }
+        return listenerPID == managedServicePID
+    }
+
+    private func profileOwnsGateway(_ instance: PortGuardian.Descriptor?, port: Int) async -> Bool {
+        guard AppProfile.current.isActive else { return true }
+        let managedPID = await GatewayLaunchAgentManager.runningGatewayPID()
+        guard Self.profileAllowsExistingGatewayAttachment(
+            profile: .current,
+            listenerPID: instance?.pid,
+            managedServicePID: managedPID)
+        else {
+            await self.failProfilePortOwnership(port: port)
+            return false
+        }
+        return true
+    }
+
+    private func failProfilePortOwnership(port: Int) async {
+        let message = "Gateway port \(port) is already owned by another process or OpenClaw profile. " +
+            "Set gateway.port to a free port for profile \(AppProfile.current.name ?? "named")."
+        self.recordProfilePortConflict(message)
+        await GatewayEndpointStore.shared.setLocalUnavailableReason(message)
+    }
+
+    private func recordProfilePortConflict(_ message: String) {
+        self.profilePortConflict = message
+        self.status = .failed(message)
+        self.lastFailureReason = message
+        self.appendLog("[gateway] \(message)\n")
+        self.logger.error("\(message, privacy: .public)")
     }
 
     private func describe(details instance: String?, port: Int, snap: HealthSnapshot?) -> String {
@@ -654,7 +742,6 @@ extension GatewayProcessManager {
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         return LaunchAgentStartupContext(
             port: port,
-            enableResult: enableResult,
             readinessPID: readinessPID,
             readinessRevision: self.launchAgentReadinessRevision)
     }
@@ -663,17 +750,48 @@ extension GatewayProcessManager {
         guard let context = await self.prepareLaunchdGatewayStart(startGeneration: startGeneration) else {
             return
         }
-        // Best-effort: wait for the gateway to accept connections.
-        let deadline = Date().addingTimeInterval(6)
+        await self.observeLaunchdGatewayReadiness(context: context, startGeneration: startGeneration)
+    }
+
+    private func observeLaunchdGatewayReadiness(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64,
+        readinessWindow: TimeInterval = 6,
+        // Fresh installs keep probing through the same first-run migration budget as the CLI.
+        firstInstallReadinessBudget: TimeInterval = GatewayLaunchAgentManager.startupMigrationTolerance) async
+    {
+        let startedAt = Date()
+        var deadline = startedAt.addingTimeInterval(readinessWindow)
+        let finalProbeDeadline = startedAt.addingTimeInterval(
+            max(readinessWindow, firstInstallReadinessBudget))
         var latestRetryDisposition: GatewayProbeFailureDisposition?
-        while Date() < deadline {
-            guard !Task.isCancelled else { return }
-            guard self.isCurrentGatewayStart(startGeneration) else { return }
+        var readinessPID = context.readinessPID
+        var freshInstallGraceAuthorized = false
+        var responsiveStartupProgressObserved = false
+        readinessLoop: while true {
+            guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
+            while Date() >= deadline {
+                guard deadline < finalProbeDeadline else { break readinessLoop }
+                let extensionAuthorization = await self.authorizeReadinessExtension(
+                    context: context,
+                    startGeneration: startGeneration,
+                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
+                    freshInstallGraceAuthorized: freshInstallGraceAuthorized,
+                    readinessPID: readinessPID)
+                guard extensionAuthorization.allowed else { break readinessLoop }
+                readinessPID = extensionAuthorization.readinessPID
+                freshInstallGraceAuthorized = true
+                deadline = min(
+                    deadline.addingTimeInterval(readinessWindow),
+                    finalProbeDeadline)
+                guard Date() < finalProbeDeadline else { break readinessLoop }
+            }
             do {
                 let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return }
                 let instance = await PortGuardian.shared.describe(port: context.port)
+                guard await self.profileOwnsGateway(instance, port: context.port) else { return }
                 guard self.publishLaunchdGatewayReady(
                     instance: instance,
                     context: context,
@@ -698,6 +816,9 @@ extension GatewayProcessManager {
                 case .retryWithoutRepair:
                     // A responsive transient invalidates older connection-failure evidence.
                     latestRetryDisposition = .retryWithoutRepair
+                    if self.probeFailureShowsStartupProgress(error) {
+                        responsiveStartupProgressObserved = true
+                    }
                 }
                 let retryDelay = min(0.4, max(0, deadline.timeIntervalSinceNow))
                 if retryDelay > 0 {
@@ -706,13 +827,11 @@ extension GatewayProcessManager {
             }
         }
 
-        // Only a PID that survived this entire readiness cycle may be replaced later. launchd can
-        // restart the service while polling; that replacement needs its own full startup chance.
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
         if latestRetryDisposition == .retryWithRepair {
             await self.finishLaunchAgentReadinessFailure(
                 port: context.port,
-                startingPID: context.readinessPID,
+                startingPID: readinessPID,
                 startGeneration: startGeneration,
                 expectedReadinessRevision: context.readinessRevision)
         } else {
@@ -720,6 +839,55 @@ extension GatewayProcessManager {
                 startGeneration: startGeneration,
                 expectedReadinessRevision: context.readinessRevision)
         }
+    }
+
+    private func authorizeReadinessExtension(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64,
+        responsiveStartupProgressObserved: Bool,
+        freshInstallGraceAuthorized: Bool,
+        readinessPID: Int32?) async -> (allowed: Bool, readinessPID: Int32?)
+    {
+        if responsiveStartupProgressObserved || freshInstallGraceAuthorized {
+            // One live response or verified launchd owner authorizes the bounded migration window;
+            // repeating launchd status at every boundary would expand the wall-clock budget.
+            let isCurrent = !Task.isCancelled &&
+                self.isCurrentGatewayStart(startGeneration) &&
+                self.launchAgentReadinessRevision == context.readinessRevision
+            return (isCurrent, readinessPID)
+        }
+        let reusablePID = await self.currentInstallReusableLaunchdPID(
+            context: context,
+            startGeneration: startGeneration)
+        return (reusablePID != nil, reusablePID)
+    }
+
+    private func currentInstallReusableLaunchdPID(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64) async -> Int32?
+    {
+        guard self.isCurrentFreshInstallReadiness(
+            context: context,
+            startGeneration: startGeneration)
+        else { return nil }
+        guard let reusablePID = await self.reusableLaunchdPIDOwningPort(port: context.port) else {
+            return nil
+        }
+        guard self.isCurrentFreshInstallReadiness(
+            context: context,
+            startGeneration: startGeneration)
+        else { return nil }
+        return reusablePID
+    }
+
+    private func isCurrentFreshInstallReadiness(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64) -> Bool
+    {
+        !Task.isCancelled &&
+            self.launchAgentFreshInstallGeneration == startGeneration &&
+            self.isCurrentGatewayStart(startGeneration) &&
+            self.launchAgentReadinessRevision == context.readinessRevision
     }
 
     private func publishLaunchdGatewayReady(
@@ -741,8 +909,7 @@ extension GatewayProcessManager {
         let previouslyObservedPIDChanged = Self.gatewayPIDChanged(
             from: self.lastObservedGatewayPID,
             to: instance?.pid)
-        let launchAgentReplaced = context.enableResult.installed ||
-            self.launchAgentInstallGeneration == startGeneration ||
+        let launchAgentReplaced = self.launchAgentInstallGeneration == startGeneration ||
             endpointPIDChanged ||
             previouslyObservedPIDChanged
         self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
@@ -755,6 +922,9 @@ extension GatewayProcessManager {
         self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
         if self.launchAgentInstallGeneration == startGeneration {
             self.launchAgentInstallGeneration = nil
+        }
+        if self.launchAgentFreshInstallGeneration == startGeneration {
+            self.launchAgentFreshInstallGeneration = nil
         }
         self.refreshLog()
         return true
@@ -847,6 +1017,11 @@ extension GatewayProcessManager {
         }
     }
 
+    private func probeFailureShowsStartupProgress(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.code.uppercased() == "UNAVAILABLE"
+    }
+
     private func probeFailureIsCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         let nsError = error as NSError
@@ -891,6 +1066,8 @@ extension GatewayProcessManager {
         launchAgentInstalled: Bool = false) async -> Bool
     {
         let startGeneration = self.gatewayStartGeneration
+        if await self.observeCurrentGatewayStart(generation: startGeneration) == true { return true }
+        guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return false }
         let readinessCandidate = self.launchAgentReadinessCandidate
         let readinessFailure = self.launchAgentReadinessFailure
         let readinessRevision = self.launchAgentReadinessRevision
@@ -907,6 +1084,7 @@ extension GatewayProcessManager {
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return false }
                 let instance = await PortGuardian.shared.describe(port: readinessPort)
+                guard await self.profileOwnsGateway(instance, port: readinessPort) else { return false }
                 return self.publishGatewayReadinessSuccess(
                     instance: instance,
                     startGeneration: startGeneration,
@@ -922,7 +1100,7 @@ extension GatewayProcessManager {
                 case .fail:
                     await self.finishResponsiveGatewayProbeFailure(
                         error,
-                        port: readinessCandidate?.failure.port ?? GatewayEnvironment.gatewayPort(),
+                        port: readinessPort,
                         startGeneration: startGeneration,
                         expectedCandidate: readinessCandidate,
                         expectedReadinessRevision: readinessRevision)
@@ -946,6 +1124,20 @@ extension GatewayProcessManager {
             readinessRevision: readinessRevision,
             latestRetryDisposition: latestRetryDisposition)
         return false
+    }
+
+    private func observeCurrentGatewayStart(generation: UInt64) async -> Bool? {
+        guard self.gatewayStartTaskGeneration == generation else { return nil }
+        while self.gatewayStartTaskGeneration == generation {
+            // Cancellation interrupts the sleep, so a waiter can leave without touching the owner.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled, self.isCurrentGatewayStart(generation) else { return false }
+        }
+        guard !Task.isCancelled, self.isCurrentGatewayStart(generation) else { return false }
+        return switch self.status {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
     }
 
     private func publishGatewayReadinessSuccess(
@@ -985,6 +1177,9 @@ extension GatewayProcessManager {
         self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
         if self.launchAgentInstallGeneration == startGeneration {
             self.launchAgentInstallGeneration = nil
+        }
+        if self.launchAgentFreshInstallGeneration == startGeneration {
+            self.launchAgentFreshInstallGeneration = nil
         }
         self.refreshLog()
         return true
@@ -1090,6 +1285,11 @@ extension GatewayProcessManager {
 
     func _testClearLaunchAgentInstallEvidence() {
         self.launchAgentInstallGeneration = nil
+        self.launchAgentFreshInstallGeneration = nil
+    }
+
+    func _testHasLaunchAgentFreshInstallEvidence() -> Bool {
+        self.launchAgentFreshInstallGeneration != nil
     }
 
     func _testSetLastObservedGatewayPID(_ pid: Int32?) {
@@ -1199,6 +1399,48 @@ extension GatewayProcessManager {
 
     func _testPendingLaunchAgentPort() -> Int? {
         self.launchAgentEnablePendingRequest?.port
+    }
+
+    func _testResetGatewayStartTask() {
+        self.desiredActive = false
+        self.gatewayStartGeneration &+= 1
+        self.gatewayStartTask?.cancel()
+        self.gatewayStartTask = nil
+        self.gatewayStartTaskGeneration = nil
+    }
+
+    func _testFinishGatewayReadinessTimeout() async {
+        await self.finishGatewayReadinessTimeout(
+            startGeneration: self.gatewayStartGeneration,
+            readinessCandidate: self.launchAgentReadinessCandidate,
+            readinessFailure: self.launchAgentReadinessFailure,
+            readinessRevision: self.launchAgentReadinessRevision,
+            latestRetryDisposition: .retryWithRepair)
+    }
+
+    func _testStartLaunchdGatewayReadiness(
+        port: Int,
+        pid: Int32,
+        readinessWindow: TimeInterval,
+        firstInstallReadinessBudget: TimeInterval)
+    {
+        self.desiredActive = true
+        self.status = .starting
+        self.gatewayStartGeneration &+= 1
+        let generation = self.gatewayStartGeneration
+        let readinessRevision = self.launchAgentReadinessRevision
+        self.launchAgentInstallGeneration = generation
+        self.launchAgentFreshInstallGeneration = generation
+        self.beginGatewayStartTask(generation: generation) { [weak self] in
+            await self?.observeLaunchdGatewayReadiness(
+                context: LaunchAgentStartupContext(
+                    port: port,
+                    readinessPID: pid,
+                    readinessRevision: readinessRevision),
+                startGeneration: generation,
+                readinessWindow: readinessWindow,
+                firstInstallReadinessBudget: firstInstallReadinessBudget)
+        }
     }
 }
 #endif

@@ -168,16 +168,9 @@ skills, skill dependency installers, and plugin install/update sources.
   Optional allowlist of directories that may contain the policy executable.
 </ParamField>
 
-<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
-  Bypasses command path ownership and permission checks. Use only when the
-  path is protected by another mechanism.
-</ParamField>
-
-<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
-  Allows the configured command path to be a symlink. The resolved target
-  must still satisfy the other path checks. Interpreter script arguments must
-  be direct regular files, not symlinks.
-</ParamField>
+The policy command and interpreter script arguments must be direct regular
+files with trusted ownership, restricted permissions, and verifiable parent
+directories. Symlinks and insecure paths are rejected.
 
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
@@ -301,11 +294,11 @@ different visible skill set per agent.
     defaults: {
       skills: ["github", "weather"], // shared baseline
     },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults entirely
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults entirely
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```

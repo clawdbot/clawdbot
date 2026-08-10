@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
-import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { clampText } from "../../lib/format.ts";
@@ -13,7 +13,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
-export type VisibleBoardDock = Exclude<BoardTab["chatDock"], "hidden">;
 export type ResolvedBoardView = {
   provider: BoardProvider;
   snapshot: BoardViewSnapshot;
@@ -22,7 +21,7 @@ export type ResolvedBoardView = {
   activeTabId: string;
   activeTabReadOnly: boolean;
   dock: BoardTab["chatDock"];
-  reopenDock: VisibleBoardDock;
+  reopenDock: BoardVisibleChatDock;
 };
 
 export const boardChatDockLayout = createDockPanelLayout({
@@ -118,9 +117,9 @@ export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
 export const WORKSPACE_RAIL_MAX_WIDTH = 280;
 export const SESSION_RAIL_DOCK_MIN_WIDTH = 1080;
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new thread after the active run or queued messages finish.";
+  "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Thread list is still refreshing. Try New Chat again in a moment.";
+  "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
 

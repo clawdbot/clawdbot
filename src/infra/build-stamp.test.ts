@@ -1,8 +1,8 @@
 // Tests build stamp file parsing and fallback behavior.
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { writeBuildStamp } from "../../scripts/build-stamp.mjs";
-import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { writeBuildStamp } from "../../scripts/build-stamp.mts";
+import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 describe("build-stamp script", () => {

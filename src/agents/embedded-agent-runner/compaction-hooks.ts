@@ -209,7 +209,7 @@ export function buildBeforeCompactionHookMetrics(params: {
 export async function runBeforeCompactionHooks(params: {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;
-  sessionKey?: string;
+  sessionKey: string;
   sessionAgentId: string;
   workspaceDir: string;
   messageProvider?: string;
@@ -221,8 +221,8 @@ export async function runBeforeCompactionHooks(params: {
     sessionKey: string;
   }) => void | Promise<void>;
 }) {
-  const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
-  const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const missingSessionKey = false;
+  const hookSessionKey = params.sessionKey;
   try {
     const hookEvent = createInternalHookEvent("session", "compact:before", hookSessionKey, {
       sessionId: params.sessionId,

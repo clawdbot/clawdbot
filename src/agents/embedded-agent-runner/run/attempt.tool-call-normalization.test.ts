@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   sanitizeOpenAIResponsesReplayForStream,
@@ -45,12 +46,7 @@ async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unkn
   return events;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireAssistantMessage(message: AgentMessage | undefined): AssistantMessage {
   if (!message || message.role !== "assistant") {
