@@ -41,9 +41,7 @@ import { VERSION } from "../version.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { openClawStateDatabaseCache as stateDbCache } from "./openclaw-state-db-cache.js";
-export {
-  registerOpenClawStateDatabaseLifecycleListener,
-} from "./openclaw-state-db-cache.js";
+export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,

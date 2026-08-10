@@ -149,10 +149,10 @@ function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
   if (terminalFailure) {
     throw terminalFailure;
   }
+}
 
-  function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: unknown): void {
-    notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: path.resolve(pathname), error });
-  }
+function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: unknown): void {
+  notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: path.resolve(pathname), error });
 }
 
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
