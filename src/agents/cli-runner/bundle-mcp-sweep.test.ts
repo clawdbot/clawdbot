@@ -50,6 +50,7 @@ function sweep(root: string, over?: Parameters<typeof sweepOrphanedBundleMcpTemp
     listCommandLines: () => ["node /usr/bin/unrelated"],
     isPidAlive: () => true,
     readStartTicks: async () => START,
+    settleMs: 0,
     ...over,
   });
 }
@@ -288,6 +289,49 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     expect(result.removed).toEqual([]);
     expect(result.kept).toEqual([racing]);
     await expect(fs.stat(racing)).resolves.toBeDefined();
+  });
+
+  it("settles after the death verdict, so a child that execs post-verdict is argv-visible by the re-scan", async () => {
+    const racing = await createDir(root, "settle-race", { owner: { pid: 4242 } });
+    const order: string[] = [];
+    let execed = false;
+    const result = await sweep(root, {
+      settleMs: 5_000,
+      // Stands in for the fork→exec transition: the child becomes argv-visible
+      // only once the settle has elapsed.
+      sleep: async () => {
+        order.push("settle");
+        execed = true;
+      },
+      listCommandLines: () => {
+        order.push("scan");
+        return execed
+          ? [`claude --mcp-config ${path.join(racing, "mcp.json")}`]
+          : ["node /usr/bin/unrelated"];
+      },
+      isPidAlive: () => false,
+    });
+    expect(order).toEqual(["scan", "settle", "scan"]); // settle sits between the two scans
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([racing]);
+    await expect(fs.stat(racing)).resolves.toBeDefined();
+  });
+
+  it("actually waits on the real timer path (no injected sleep)", async () => {
+    const doomed = await createDir(root, "real-settle", { owner: { pid: 4242 } });
+    const startedAt = Date.now();
+    // No `sleep` override: this exercises the module's own timer.
+    const result = await sweep(root, { settleMs: 120, isPidAlive: () => false });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(100); // timer really elapsed
+    expect(result.removed).toEqual([doomed]); // and the removal still happens after it
+  });
+
+  it("does not settle when there is nothing to remove", async () => {
+    await createDir(root, "live-owner"); // owner alive → no candidates
+    const sleep = vi.fn(async () => {});
+    const result = await sweep(root, { settleMs: 5_000, sleep });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.removed).toEqual([]);
   });
 
   it("keeps legacy empty dirs (mcp.json already gone) — still never auto-removed", async () => {

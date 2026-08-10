@@ -55,6 +55,31 @@ const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
 const PROCESS_SCAN_TIMEOUT_MS = 10_000;
 
 /**
+ * Pause between proving an owner dead (phase 1) and the final argv re-scan
+ * (phase 2). It closes the residual time-of-check/time-of-use window: a child
+ * forked by the dying gateway but not yet `exec`ed carries the parent's argv,
+ * so no argv references its config until `exec` lands. That child was forked
+ * strictly before its owner died, which is strictly before the death verdict
+ * here — so waiting any interval longer than a fork→exec transition (µs, via
+ * libuv's immediate `execvp`) guarantees it is argv-visible by the re-scan and
+ * the dir is kept. Five seconds is ~6 orders of magnitude of headroom, paid
+ * once at startup inside a post-ready sidecar that blocks no run.
+ */
+const POST_VERDICT_SETTLE_MS = 5_000;
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    // Deliberately NOT unref'd. An unref'd timer does not hold the event loop,
+    // so a runtime with nothing else pending exits before it fires and the
+    // sweep's promise never settles (Node exits 13, "Unfinished Top-Level
+    // Await" — observed on a real host). The cost of keeping it ref'd is that a
+    // shutdown landing inside the settle waits it out; correctness of the sweep
+    // is worth more than shaving seconds off an already-graceful stop.
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
  * Owner identity is encoded in the temp dir NAME, not a sibling file:
  * `<prefix><pid>-<boot8>-<startTicks>-<mkdtemp suffix>`. The name is produced
  * atomically by `mkdtemp`, so a prepared run carries durable ownership with no
@@ -348,6 +373,10 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   currentBoot?: string;
   /** Override the current PID-namespace tag (tests). Defaults to the host ns inode on Linux. */
   currentNs?: string;
+  /** Override the post-verdict settle delay in ms (tests pass 0). */
+  settleMs?: number;
+  /** Override the delay implementation (tests). */
+  sleep?: (ms: number) => Promise<void>;
   log?: { warn: (msg: string) => void };
 }): Promise<{ removed: string[]; kept: string[] }> {
   const tmpRoot = params?.tmpRoot ?? os.tmpdir();
@@ -431,10 +460,20 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     return { removed, kept };
   }
 
-  // Phase 2 — re-scan argv immediately before removing. A CLI child can spawn
-  // between the first snapshot and now (a queued run whose owner died just as
-  // its child started), so a fresh reference means keep. An unusable (empty)
-  // re-scan is treated as unknown and keeps every candidate (fail-closed).
+  // Phase 1.5 — settle. Every candidate's owner is now provably dead, so any
+  // child of it was forked strictly before that death. Waiting here lets a
+  // child caught mid-fork complete its `exec` and become argv-visible, which
+  // turns the re-scan below from a narrowing heuristic into a decisive check
+  // (see POST_VERDICT_SETTLE_MS).
+  const settleMs = params?.settleMs ?? POST_VERDICT_SETTLE_MS;
+  if (settleMs > 0) {
+    await (params?.sleep ?? defaultSleep)(settleMs);
+  }
+
+  // Phase 2 — re-scan argv immediately before removing. After the settle above,
+  // any surviving child of a dead owner has execed and carries the config path
+  // in its argv, so a fresh reference means keep. An unusable (empty) re-scan is
+  // treated as unknown and keeps every candidate (fail-closed).
   const recheck = await (params?.listCommandLines ?? listProcessCommandLines)();
   const recheckUsable = recheck.length > 0;
   for (const dir of candidates) {
