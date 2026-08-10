@@ -1,14 +1,17 @@
 // Slack plugin module implements secret contract behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
   createChannelSecretTargetRegistryEntries,
   getChannelSurface,
+  hasConfiguredSecretInputValue,
   hasOwnProperty,
   type ResolverContext,
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { slackChannelHasImplicitDefaultAccount } from "./accounts.js";
 
 export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "slack",
@@ -26,6 +29,22 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: slack, surface } = resolved;
+  // Slack account listing starts an implicit default account from top-level
+  // credentials even when every named account overrides them.  The shared
+  // surface helper only lists explicit accounts, so top-level SecretRefs would
+  // be marked inactive and orphaned when all accounts override.  Synthesize the
+  // implicit default surface entry here, reusing the same eligibility predicate
+  // as account listing (see slackChannelHasImplicitDefaultAccount) so the two
+  // paths agree on when a default account exists.
+  const hasValue = (value: unknown) => hasConfiguredSecretInputValue(value, params.defaults);
+  if (
+    surface.channelEnabled &&
+    surface.hasExplicitAccounts &&
+    slackChannelHasImplicitDefaultAccount(slack, hasValue) &&
+    !surface.accounts.some(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+  ) {
+    surface.accounts.push({ accountId: DEFAULT_ACCOUNT_ID, account: {}, enabled: true });
+  }
   const resolveMode = (value: unknown) =>
     value === "http" || value === "socket" || value === "relay" ? value : undefined;
   const baseMode = resolveMode(slack.mode) ?? "socket";

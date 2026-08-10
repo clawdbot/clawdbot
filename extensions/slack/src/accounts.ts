@@ -12,7 +12,7 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -63,52 +63,52 @@ const {
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
   nestedObjectKeys: ["botLoopProtection", "relay"],
-  hasImplicitDefaultAccount: (cfg) => {
-    const slack = cfg.channels?.slack;
-    if (slack?.postAs === "user") {
-      const hasUserToken =
-        hasConfiguredAccountValue(slack.userToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
-      if (!hasUserToken) {
-        return false;
-      }
-      if (slack.mode === "http") {
-        return hasConfiguredAccountValue(slack.signingSecret);
-      }
-      if (slack.mode === "relay") {
-        return (
-          hasConfiguredAccountValue(slack.relay?.url) &&
-          hasConfiguredAccountValue(slack.relay?.authToken) &&
-          hasConfiguredAccountValue(slack.relay?.gatewayId)
-        );
-      }
-      return (
-        hasConfiguredAccountValue(slack.appToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
-      );
-    }
-    const hasBotToken =
-      hasConfiguredAccountValue(slack?.botToken) ||
-      hasConfiguredAccountValue(process.env.SLACK_BOT_TOKEN);
-    if (!hasBotToken) {
+  hasImplicitDefaultAccount: (cfg) =>
+    slackChannelHasImplicitDefaultAccount(cfg.channels?.slack, hasConfiguredAccountValue),
+});
+
+/**
+ * Shared implicit-default-account predicate for the Slack channel root.
+ *
+ * Slack synthesizes a `default` account from top-level credentials even when named
+ * accounts exist, as long as the root config carries the credentials needed to start
+ * one. Account listing and secret-contract collection must agree on this eligibility
+ * so root SecretRefs are resolved for the implicit default instead of being orphaned.
+ *
+ * `hasValue` is parameterized: account listing passes {@link hasConfiguredAccountValue}
+ * (plaintext + env fallback), while secret-contract collection passes a SecretRef-aware
+ * check (`hasConfiguredSecretInputValue`) since env vars are reached through SecretRef
+ * resolution, not direct `process.env` reads.
+ */
+export function slackChannelHasImplicitDefaultAccount(
+  slack: Record<string, unknown> | undefined,
+  hasValue: (value: unknown) => boolean,
+): boolean {
+  if (!slack) {
+    return false;
+  }
+  if (slack.postAs === "user") {
+    if (!hasValue(slack.userToken) && !hasValue(process.env.SLACK_USER_TOKEN)) {
       return false;
     }
-    if (slack?.mode === "http") {
-      return hasConfiguredAccountValue(slack.signingSecret);
-    }
-    if (slack?.mode === "relay") {
-      return (
-        hasConfiguredAccountValue(slack.relay?.url) &&
-        hasConfiguredAccountValue(slack.relay?.authToken) &&
-        hasConfiguredAccountValue(slack.relay?.gatewayId)
-      );
-    }
+  } else if (!hasValue(slack.botToken) && !hasValue(process.env.SLACK_BOT_TOKEN)) {
+    return false;
+  }
+  const mode = slack.mode;
+  if (mode === "http") {
+    return hasValue(slack.signingSecret);
+  }
+  if (mode === "relay") {
+    const relay = slack.relay;
     return (
-      hasConfiguredAccountValue(slack?.appToken) ||
-      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
+      isRecord(relay) &&
+      hasValue(relay.url) &&
+      hasValue(relay.authToken) &&
+      hasValue(relay.gatewayId)
     );
-  },
-});
+  }
+  return hasValue(slack.appToken) || hasValue(process.env.SLACK_APP_TOKEN);
+}
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 

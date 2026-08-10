@@ -157,6 +157,57 @@ describe("secrets runtime snapshot channel inactive variants", () => {
     expect(warningPaths).toContain("channels.slack.accounts.work.appToken");
   });
 
+  it("resolves Slack top-level botToken SecretRef for the implicit default account when named accounts override botToken", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          slack: {
+            enabled: true,
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "SLACK_BOT_TOKEN",
+            },
+            appToken: {
+              source: "env",
+              provider: "default",
+              id: "SLACK_APP_TOKEN",
+            },
+            accounts: {
+              sage: {
+                enabled: true,
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "SAGE_SLACK_BOT_TOKEN",
+                },
+                appToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "SAGE_SLACK_APP_TOKEN",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        SLACK_BOT_TOKEN: "xoxb-default-bot-token",
+        SLACK_APP_TOKEN: "xapp-default-app-token",
+        SAGE_SLACK_BOT_TOKEN: "xoxb-sage-bot-token",
+        SAGE_SLACK_APP_TOKEN: "xapp-sage-app-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+    });
+
+    expect(snapshot.config.channels?.slack?.botToken).toBe("xoxb-default-bot-token");
+    expect(snapshot.config.channels?.slack?.appToken).toBe("xapp-default-app-token");
+    expect(snapshot.config.channels?.slack?.accounts?.sage?.botToken).toBe("xoxb-sage-bot-token");
+    expect(snapshot.config.channels?.slack?.accounts?.sage?.appToken).toBe("xapp-sage-app-token");
+    expect(snapshot.warnings).toStrictEqual([]);
+  });
+
   it("treats top-level Google Chat serviceAccount as inactive when enabled accounts override it", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
