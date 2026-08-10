@@ -5039,6 +5039,7 @@ describe("runCodexAppServerAttempt", () => {
       const expectedTurnStarts =
         harness.requests.filter((request) => request.method === "turn/start").length + 1;
       const params = createParams(sessionFile, workspaceDir, { prompt, runId });
+      params.trigger = "user";
       const message = {
         role: "user" as const,
         content: prompt,

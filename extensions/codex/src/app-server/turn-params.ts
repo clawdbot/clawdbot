@@ -79,7 +79,8 @@ export function buildTurnStartParams(
         config: params.config,
       });
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
-  const currentSenderContext = buildCodexCurrentSenderContextValue(params);
+  const currentSenderContext =
+    params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
   const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
     ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
