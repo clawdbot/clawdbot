@@ -10,6 +10,7 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
+import { assertCronJobStateTimestamps } from "../state-timestamp.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
@@ -36,7 +37,7 @@ import {
 } from "./jobs-tool-policy.js";
 import {
   assertAnnounceDeliveryChannelSupport,
-  assertCronExpressionSatisfiable,
+  assertTimeScheduleSatisfiable,
   assertDeliverySupport,
   assertFailureDestinationSupport,
   assertMainSessionAgentId,
@@ -138,6 +139,8 @@ export function createJob(
   // Schedule activation is stamped only by committed scheduling mutations.
   // Accepting caller state here would let imports spoof restart catch-up ownership.
   delete initialState.scheduleActivatedAtMs;
+  delete initialState.autoDisabled;
+  assertCronJobStateTimestamps(initialState);
   const job: CronStoredJob = {
     id,
     ...(declarationKey ? { declarationKey } : {}),
@@ -204,7 +207,7 @@ export function createJob(
   assertDeliverySupport(job);
   assertAnnounceDeliveryChannelSupport(job, opts?.configuredChannels);
   assertFailureDestinationSupport(job);
-  assertCronExpressionSatisfiable(job, now, computeJobNextRunAtMs);
+  assertTimeScheduleSatisfiable(job, now, computeJobNextRunAtMs);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -360,6 +363,7 @@ export function applyJobPatch(
     // alone owns the boundary that decides whether restart catch-up can run.
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.autoDisabled;
+    assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };
   }
   if (patch.enabled === true) {
@@ -415,7 +419,7 @@ export function applyJobPatch(
     opts?.scheduleValidationNowMs !== undefined &&
     (patch.schedule !== undefined || patch.enabled === true)
   ) {
-    assertCronExpressionSatisfiable(job, opts.scheduleValidationNowMs, computeJobNextRunAtMs);
+    assertTimeScheduleSatisfiable(job, opts.scheduleValidationNowMs, computeJobNextRunAtMs);
   }
 }
 
@@ -542,7 +546,7 @@ export function applyDeclarativeJobSpec(
   assertDeliverySupport(job);
   assertAnnounceDeliveryChannelSupport(job, opts.configuredChannels);
   assertFailureDestinationSupport(job);
-  assertCronExpressionSatisfiable(job, opts.nowMs, computeJobNextRunAtMs);
+  assertTimeScheduleSatisfiable(job, opts.nowMs, computeJobNextRunAtMs);
 }
 
 function mergeCronDelivery(

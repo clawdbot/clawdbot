@@ -40,6 +40,7 @@ import {
   isRunnableJob,
 } from "./timer-runnable.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
+import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 function deferPendingBackoffMissedCronSlots(
   state: CronServiceState,
@@ -440,13 +441,23 @@ async function applyStartupCatchupOutcomes(
           continue;
         }
         if (typeof deferred.delayMs === "number") {
-          const runAtMs = baseNow + deferred.delayMs + offset - staggerMs;
+          const runAtMs = resolveNextRunAtMsOrDisable({
+            state,
+            job,
+            candidate: baseNow + deferred.delayMs + offset - staggerMs,
+            context: "startup_catchup_delay",
+          });
           job.state.nextRunAtMs = runAtMs;
           job.state.startupCatchupAtMs = runAtMs;
           offset += staggerMs;
           continue;
         }
-        const runAtMs = baseNow + offset;
+        const runAtMs = resolveNextRunAtMsOrDisable({
+          state,
+          job,
+          candidate: baseNow + offset,
+          context: "startup_catchup_stagger",
+        });
         job.state.nextRunAtMs = runAtMs;
         job.state.startupCatchupAtMs = runAtMs;
         offset += staggerMs;

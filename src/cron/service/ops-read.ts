@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
+import { assertCronJobStateTimestamps } from "../state-timestamp.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -113,6 +114,7 @@ export async function recordExternalFailure(
     const postPersistNotifications: DeferredCronNotifications = [];
     const now = state.deps.nowMs();
     const sourceIdentity = job.state.streamSourceIdentity;
+    assertCronJobStateTimestamps(statePatch);
     Object.assign(job.state, statePatch);
     job.state.streamSourceIdentity = sourceIdentity;
     // Source restarts are counted separately, but terminal exhaustion should

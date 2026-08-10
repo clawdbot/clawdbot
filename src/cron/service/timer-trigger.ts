@@ -1,6 +1,8 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { CronConfig } from "../../config/types.cron.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronDeliveryStatus,
   CronFailureNotificationDelivery,
@@ -10,6 +12,7 @@ import type {
 } from "../types.js";
 import { DEFAULT_ERROR_BACKOFF_SCHEDULE_MS, errorBackoffMs, isJobEnabled } from "./jobs.js";
 import type { CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
+import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
@@ -35,6 +38,77 @@ type QueuedSystemEventHandle = {
   remove?: () => boolean | void;
 };
 
+/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
+export function resolveNextRunAtMsOrDisable(params: {
+  state: CronServiceState;
+  job: CronJob;
+  candidate: unknown;
+  context: string;
+}): number | undefined {
+  const nextRunAtMs = asDateTimestampMs(params.candidate);
+  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
+    return nextRunAtMs;
+  }
+  params.job.enabled = false;
+  params.state.deps.log.warn(
+    {
+      jobId: params.job.id,
+      jobName: params.job.name,
+      context: params.context,
+    },
+    "cron: disabling job because its next run is outside the supported Date range",
+  );
+  return undefined;
+}
+
+/** Persists non-busy trigger evaluation state without touching payload-run history. */
+export function applyTriggerEvaluationState(
+  job: CronJob,
+  triggerEval: CronTriggerEvalOutcome,
+  evaluatedAtMs: number,
+): void {
+  if (triggerEval.busy) {
+    return;
+  }
+  job.state.lastTriggerEvalAtMs = evaluatedAtMs;
+  job.state.triggerEvalCount = (job.state.triggerEvalCount ?? 0) + 1;
+  if (triggerEval.stateChanged) {
+    job.state.triggerState = triggerEval.state;
+  }
+  if (triggerEval.fired) {
+    job.state.lastTriggerFireAtMs = evaluatedAtMs;
+  }
+}
+
+/** Persists fired/error trigger metadata and disarms successful once triggers. */
+export function applyTriggerRunResult(
+  job: CronJob,
+  result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
+  opts?: { scheduleOwnership?: "current" | "stale"; triggerOwnership?: "current" | "stale" },
+): void {
+  if (!result.triggerEval || opts?.triggerOwnership === "stale") {
+    return;
+  }
+  // Failed payloads keep the old state so the next evaluation re-detects the event.
+  const persistedEval =
+    result.status === "ok"
+      ? result.triggerEval
+      : { ...result.triggerEval, stateChanged: false, state: undefined };
+  applyTriggerEvaluationState(job, persistedEval, result.endedAt);
+  if (
+    opts?.scheduleOwnership !== "stale" &&
+    result.triggerEval.fired &&
+    job.trigger?.once === true &&
+    result.status === "ok"
+  ) {
+    if (job.schedule.kind === "stream") {
+      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+    }
+    job.enabled = false;
+    job.state.nextRunAtMs = undefined;
+  }
+}
+
 export function resolveCronNextRunWithLowerBound(params: {
   state: CronServiceState;
   job: CronJob;
@@ -53,7 +127,12 @@ export function resolveCronNextRunWithLowerBound(params: {
     );
     return undefined;
   }
-  return Math.max(params.naturalNext, params.lowerBoundMs);
+  return resolveNextRunAtMsOrDisable({
+    state: params.state,
+    job: params.job,
+    candidate: Math.max(params.naturalNext, params.lowerBoundMs),
+    context: params.context,
+  });
 }
 
 export function resolveTransientCronRetryDecision(params: {

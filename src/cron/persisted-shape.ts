@@ -1,12 +1,16 @@
-import { compileSafeRegex } from "../security/safe-regex.js";
 /** Validates persisted cron job records before loading them from disk/state. */
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import { compileSafeRegex } from "../security/safe-regex.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { getInvalidCronJobStateTimestampField } from "./state-timestamp.js";
 
 /** Structural rejection code for persisted cron jobs that cannot be loaded safely. */
 type InvalidPersistedCronJobReason =
   | "missing-id"
   | "missing-schedule"
   | "invalid-schedule"
+  | "invalid-state"
+  | "unsatisfiable-schedule"
   | "invalid-trigger"
   | "missing-payload"
   | "invalid-payload";
@@ -18,6 +22,9 @@ export function getInvalidPersistedCronJobReason(
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
+  }
+  if (getInvalidCronJobStateTimestampField(candidate.state)) {
+    return "invalid-state";
   }
   const schedule = candidate.schedule;
   if (!schedule || Array.isArray(schedule)) {
@@ -50,13 +57,33 @@ export function getInvalidPersistedCronJobReason(
   }
   if (scheduleKind === "every") {
     const everyMs = scheduleRecord.everyMs;
-    if (typeof everyMs !== "number" || !Number.isFinite(everyMs) || everyMs <= 0) {
+    const anchorMs = scheduleRecord.anchorMs;
+    if (
+      typeof everyMs !== "number" ||
+      !Number.isInteger(everyMs) ||
+      everyMs <= 0 ||
+      everyMs > MAX_DATE_TIMESTAMP_MS ||
+      (anchorMs !== undefined &&
+        (typeof anchorMs !== "number" ||
+          !Number.isInteger(anchorMs) ||
+          anchorMs < 0 ||
+          anchorMs > MAX_DATE_TIMESTAMP_MS))
+    ) {
       return "invalid-schedule";
     }
   }
   if (scheduleKind === "cron") {
     const expr = scheduleRecord.expr;
-    if (typeof expr !== "string" || expr.trim().length === 0) {
+    const staggerMs = scheduleRecord.staggerMs;
+    if (
+      typeof expr !== "string" ||
+      expr.trim().length === 0 ||
+      (staggerMs !== undefined &&
+        (typeof staggerMs !== "number" ||
+          !Number.isInteger(staggerMs) ||
+          staggerMs < 0 ||
+          staggerMs > MAX_DATE_TIMESTAMP_MS))
+    ) {
       return "invalid-schedule";
     }
   }

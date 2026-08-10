@@ -1,10 +1,12 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
 import { createCronServiceState } from "./service/state.js";
+import { runMissedJobs } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { saveCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
@@ -13,6 +15,21 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("CronService startup catch-up repair scoping", () => {
+  function createDateBoundaryEveryJob(id: string, nextRunAtMs: number): CronJob {
+    return {
+      id,
+      name: `job-${id}`,
+      enabled: true,
+      createdAtMs: nextRunAtMs - 60_000,
+      updatedAtMs: nextRunAtMs - 60_000,
+      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: `tick-${id}` },
+      state: { nextRunAtMs },
+    };
+  }
+
   function createHourlyCronJob(id: string, nextRunAtMs: number): CronJob {
     return {
       id,
@@ -141,6 +158,47 @@ describe("CronService startup catch-up repair scoping", () => {
     expect(repaired?.state.nextRunAtMs).not.toBe(staleFutureSlot);
 
     state.stopped = true;
+    await store.cleanup();
+  });
+
+  it("disables startup catch-up deferrals that exceed the Date range", async () => {
+    const store = await makeStorePath();
+    const now = MAX_DATE_TIMESTAMP_MS - 2_000;
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createDateBoundaryEveryJob("date-limit-0", now - 60_000),
+        createDateBoundaryEveryJob("date-limit-1", now - 50_000),
+        createDateBoundaryEveryJob("date-limit-2", now - 40_000),
+      ],
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      maxMissedJobsPerRestart: 1,
+      missedJobStaggerMs: 5_000,
+    });
+
+    await runMissedJobs(state);
+
+    const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
+    expect(deferred).toHaveLength(2);
+    for (const job of deferred) {
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.startupCatchupAtMs).toBeUndefined();
+    }
+    expect((await loadCronStore(store.storePath)).jobs).toEqual(
+      expect.arrayContaining(
+        deferred.map((job) => expect.objectContaining({ id: job.id, enabled: false })),
+      ),
+    );
+
     await store.cleanup();
   });
 });

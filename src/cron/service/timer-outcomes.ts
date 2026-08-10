@@ -5,7 +5,6 @@ import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
@@ -29,9 +28,12 @@ import {
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
 import {
+  applyTriggerEvaluationState,
+  applyTriggerRunResult,
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
   resolveDisabledHeartbeatOneShotRetryDecision,
+  resolveNextRunAtMsOrDisable,
   resolveTransientCronRetryDecision,
   shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
@@ -62,6 +64,17 @@ export function resolveCronRunTriggerOwnership(params: {
     params.admittedJob.trigger?.once !== params.currentJob.trigger?.once
     ? "stale"
     : "current";
+}
+
+function assignNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  candidate: unknown;
+  context: string;
+}): number | undefined {
+  const nextRunAtMs = resolveNextRunAtMsOrDisable(params);
+  params.job.state.nextRunAtMs = nextRunAtMs;
+  return nextRunAtMs;
 }
 
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
@@ -219,17 +232,25 @@ export function applyJobResult(
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           job.enabled = true;
-          job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
-          state.deps.log.info(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveSkipped: retryDecision.consecutiveSkipped,
-              backoffMs: retryDecision.backoffMs,
-              nextRunAtMs: job.state.nextRunAtMs,
-            },
-            "cron: scheduling one-shot retry after disabled heartbeat",
-          );
+          if (
+            assignNextRunAtMs({
+              state,
+              job,
+              candidate: result.endedAt + retryDecision.backoffMs,
+              context: "disabled_heartbeat_retry",
+            }) !== undefined
+          ) {
+            state.deps.log.info(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveSkipped: retryDecision.consecutiveSkipped,
+                backoffMs: retryDecision.backoffMs,
+                nextRunAtMs: job.state.nextRunAtMs,
+              },
+              "cron: scheduling one-shot retry after disabled heartbeat",
+            );
+          }
         } else {
           job.enabled = false;
           job.state.nextRunAtMs = undefined;
@@ -258,18 +279,26 @@ export function applyJobResult(
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
-          job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
-          state.deps.log.info(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              backoffMs: retryDecision.backoffMs,
-              nextRunAtMs: job.state.nextRunAtMs,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: scheduling one-shot retry after transient error",
-          );
+          if (
+            assignNextRunAtMs({
+              state,
+              job,
+              candidate: result.endedAt + retryDecision.backoffMs,
+              context: "one_shot_retry",
+            }) !== undefined
+          ) {
+            state.deps.log.info(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                backoffMs: retryDecision.backoffMs,
+                nextRunAtMs: job.state.nextRunAtMs,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: scheduling one-shot retry after transient error",
+            );
+          }
         } else {
           // Permanent error or max retries exhausted: disable.
           // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
@@ -354,25 +383,36 @@ export function applyJobResult(
       };
       if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
         normalNext = computeNormalNext();
-        const retryNextRunAtMs = result.endedAt + retryDecision.backoffMs;
         if (normalNext === undefined) {
           // Preserve the unresolved-cron guard (#66019): do not synthesize a
           // retry when the schedule cannot produce a next scheduled slot.
-        } else if (retryNextRunAtMs < normalNext) {
-          job.state.nextRunAtMs = retryNextRunAtMs;
-          state.deps.log.info(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              backoffMs: retryDecision.backoffMs,
-              nextRunAtMs: job.state.nextRunAtMs,
-              normalNextRunAtMs: normalNext,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: scheduling recurring retry after transient error",
-          );
-          return shouldDelete;
+        } else {
+          const retryNextRunAtMs = resolveNextRunAtMsOrDisable({
+            state,
+            job,
+            candidate: result.endedAt + retryDecision.backoffMs,
+            context: "recurring_retry",
+          });
+          if (retryNextRunAtMs === undefined) {
+            job.state.nextRunAtMs = undefined;
+            return shouldDelete;
+          }
+          if (retryNextRunAtMs < normalNext) {
+            job.state.nextRunAtMs = retryNextRunAtMs;
+            state.deps.log.info(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                backoffMs: retryDecision.backoffMs,
+                nextRunAtMs: job.state.nextRunAtMs,
+                normalNextRunAtMs: normalNext,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: scheduling recurring retry after transient error",
+            );
+            return shouldDelete;
+          }
         }
       }
       // Apply exponential backoff for errored jobs to prevent retry storms.
@@ -381,7 +421,25 @@ export function applyJobResult(
         DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
       );
       normalNext = computeNormalNext();
-      const backoffNext = result.endedAt + backoff;
+      if (normalNext === undefined && job.schedule.kind === "every") {
+        assignNextRunAtMs({
+          state,
+          job,
+          candidate: undefined,
+          context: "error_backoff",
+        });
+        return shouldDelete;
+      }
+      const backoffNext = resolveNextRunAtMsOrDisable({
+        state,
+        job,
+        candidate: result.endedAt + backoff,
+        context: "error_backoff",
+      });
+      if (backoffNext === undefined) {
+        job.state.nextRunAtMs = undefined;
+        return shouldDelete;
+      }
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
         job.schedule.kind === "cron"
@@ -419,13 +477,17 @@ export function applyJobResult(
       });
       // The operator trigger floor is a safety policy and outranks a job-local
       // pacing bound. Non-trigger jobs retain the exact pacing clamp contract.
-      const nextRunAtMs = job.trigger
-        ? Math.max(
-            pacedNextRunAtMs,
-            result.endedAt + Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs()),
-          )
-        : pacedNextRunAtMs;
-      job.state.nextRunAtMs = nextRunAtMs;
+      const nextRunAtMs = assignNextRunAtMs({
+        state,
+        job,
+        candidate: job.trigger
+          ? Math.max(
+              pacedNextRunAtMs ?? Number.NaN,
+              result.endedAt + Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs()),
+            )
+          : pacedNextRunAtMs,
+        context: "pacing",
+      });
       job.state.pacedNextRunAtMs = nextRunAtMs;
     } else if (isJobEnabled(job)) {
       let naturalNext: number | undefined;
@@ -464,9 +526,24 @@ export function applyJobResult(
         });
       } else {
         job.state.nextRunAtMs =
-          naturalNext !== undefined && job.trigger
-            ? Math.max(naturalNext, result.endedAt + resolveCronTriggerMinIntervalMs())
-            : naturalNext;
+          naturalNext === undefined && job.schedule.kind === "every"
+            ? resolveNextRunAtMsOrDisable({
+                state,
+                job,
+                candidate: undefined,
+                context: "completion",
+              })
+            : naturalNext !== undefined && job.trigger
+              ? resolveNextRunAtMsOrDisable({
+                  state,
+                  job,
+                  candidate: Math.max(
+                    naturalNext,
+                    result.endedAt + resolveCronTriggerMinIntervalMs(),
+                  ),
+                  context: "trigger_completion",
+                })
+              : naturalNext;
       }
     } else {
       job.state.nextRunAtMs = undefined;
@@ -474,59 +551,6 @@ export function applyJobResult(
   }
 
   return shouldDelete;
-}
-
-function applyTriggerEvaluationState(
-  job: CronJob,
-  triggerEval: CronTriggerEvalOutcome,
-  evaluatedAtMs: number,
-): void {
-  if (triggerEval.busy) {
-    return;
-  }
-  job.state.lastTriggerEvalAtMs = evaluatedAtMs;
-  job.state.triggerEvalCount = (job.state.triggerEvalCount ?? 0) + 1;
-  if (triggerEval.stateChanged) {
-    job.state.triggerState = triggerEval.state;
-  }
-  if (triggerEval.fired) {
-    job.state.lastTriggerFireAtMs = evaluatedAtMs;
-  }
-}
-
-/** Persists fired/error evaluation metadata and applies successful once-disarm policy. */
-export function applyTriggerRunResult(
-  job: CronJob,
-  result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
-  opts?: { scheduleOwnership?: CronScheduleOwnership; triggerOwnership?: CronTriggerOwnership },
-): void {
-  if (!result.triggerEval || opts?.triggerOwnership === "stale") {
-    return;
-  }
-  // Fired-run trigger state persists only on payload success: a failed or
-  // skipped run keeps the previous state so the next evaluation re-detects
-  // the change and fires again instead of silently losing the event.
-  const persistedEval =
-    result.status === "ok"
-      ? result.triggerEval
-      : { ...result.triggerEval, stateChanged: false, state: undefined };
-  applyTriggerEvaluationState(job, persistedEval, result.endedAt);
-  // A once trigger disarms only after the fired payload succeeds. Errors keep
-  // it armed so the normal backoff path can evaluate and retry later.
-  if (
-    opts?.scheduleOwnership !== "stale" &&
-    result.triggerEval.fired &&
-    job.trigger?.once === true &&
-    result.status === "ok"
-  ) {
-    if (job.schedule.kind === "stream") {
-      // Auto-disable is a source retirement just like an explicit disable. Rotate
-      // in the same persisted result so queued sibling batches cannot gain admission.
-      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
-    }
-    job.enabled = false;
-    job.state.nextRunAtMs = undefined;
-  }
 }
 
 /** Commits payload-script state only after the complete cron run succeeds. */
@@ -592,7 +616,21 @@ export function applyTriggerNoFireResult(
     // Quiet ticks still advance the schedule; the floor prevents scripts from
     // becoming a headless hot loop even when cron resolves inside the window.
     job.state.nextRunAtMs =
-      naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs);
+      naturalNext === undefined
+        ? job.schedule.kind === "every"
+          ? resolveNextRunAtMsOrDisable({
+              state,
+              job,
+              candidate: undefined,
+              context: "quiet_trigger",
+            })
+          : undefined
+        : resolveNextRunAtMsOrDisable({
+            state,
+            job,
+            candidate: Math.max(naturalNext, result.endedAt + floorMs),
+            context: "quiet_trigger",
+          });
   } catch (err) {
     recordScheduleComputeError({
       state,

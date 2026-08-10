@@ -1,4 +1,5 @@
 /** Computes at/every/cron schedule timestamps with bounded Croner caching. */
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron, CronDate } from "croner";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../infra/format-time/parse-offsetless-zoned-datetime.js";
@@ -211,6 +212,9 @@ function resolveValidatedNextCronOccurrenceMs(
 
 /** Computes the next scheduled run timestamp after now for at/every/cron schedules. */
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+  if (asDateTimestampMs(nowMs) === undefined) {
+    return undefined;
+  }
   if (schedule.kind === "at") {
     const atMs = parseAbsoluteTimeMs(schedule.at);
     if (atMs === null) {
@@ -224,15 +228,21 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     if (everyMsRaw === undefined) {
       return undefined;
     }
-    const everyMs = Math.max(1, Math.floor(everyMsRaw));
+    const everyMs = Math.floor(everyMsRaw);
+    if (everyMs < 1) {
+      return undefined;
+    }
     const anchorRaw = coerceFiniteScheduleNumber(schedule.anchorMs);
+    if (schedule.anchorMs !== undefined && (anchorRaw === undefined || anchorRaw < 0)) {
+      return undefined;
+    }
     const anchor = Math.max(0, Math.floor(anchorRaw ?? nowMs));
     if (nowMs < anchor) {
       return anchor;
     }
     const elapsed = nowMs - anchor;
     const steps = Math.floor(elapsed / everyMs) + 1;
-    return anchor + steps * everyMs;
+    return asDateTimestampMs(anchor + steps * everyMs);
   }
 
   if (schedule.kind === "on-exit" || schedule.kind === "stream") {
@@ -281,7 +291,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
 
 /** Computes the previous cron-expression run timestamp before now. */
 export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
-  if (schedule.kind !== "cron") {
+  if (schedule.kind !== "cron" || asDateTimestampMs(nowMs) === undefined) {
     return undefined;
   }
   const cron = resolveCronFromSchedule(schedule);

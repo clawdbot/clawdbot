@@ -1,4 +1,5 @@
 /** Builds stable identities for cron scheduling inputs. */
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
@@ -13,8 +14,13 @@ function readString(record: Record<string, unknown>, key: string): string | unde
   return normalizeOptionalString(record[key]);
 }
 
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+function readScheduleTime(record: Record<string, unknown>, key: string): number | undefined {
   return coerceFiniteScheduleNumber(record[key]);
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const parsed = parseStrictFiniteNumber(record[key]);
+  return parsed !== undefined && Math.abs(parsed) <= Number.MAX_SAFE_INTEGER ? parsed : undefined;
 }
 
 function readStaggerMs(record: Record<string, unknown>): number | undefined {
@@ -39,8 +45,8 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>):
   const rawKind = readString(schedule, "kind")?.toLowerCase();
   const expr = readString(schedule, "expr");
   const at = readString(schedule, "at");
-  const everyMs = readNumber(schedule, "everyMs");
-  const anchorMs = readNumber(schedule, "anchorMs");
+  const everyMs = readScheduleTime(schedule, "everyMs");
+  const anchorMs = readScheduleTime(schedule, "anchorMs");
   const tz = readString(schedule, "tz");
   const staggerMs = readStaggerMs(schedule);
   const kind =
