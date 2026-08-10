@@ -219,21 +219,32 @@ describe("executeAgentTurn: message tool progress", () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params.run("anthropic", "primary").catch(() => undefined);
-      await params.run("custom", "plugin-fallback").catch(() => undefined);
       return {
-        result: await params.run("openai", "fallback"),
-        provider: "openai",
-        model: "fallback",
+        result: await params.run("custom", "plugin-fallback"),
+        provider: "custom",
+        model: "plugin-fallback",
         attempts: [],
       };
     });
     state.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
-    state.runEmbeddedAgentMock
-      .mockRejectedValueOnce(new Error("plugin fallback failed"))
-      .mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const prepared = params as EmbeddedAgentParams & {
+        sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+        forceMessageTool?: boolean;
+        onPreparedHarnessSourceReplyDeliveryMode?: (
+          mode: "automatic" | "message_tool_only",
+        ) => void;
+      };
+      // Preliminary custom-harness selection is tool-owned, but the prepared
+      // route/auth/transport facts authoritatively select the automatic owner.
+      prepared.sourceReplyDeliveryMode = "automatic";
+      prepared.forceMessageTool = false;
+      prepared.onPreparedHarnessSourceReplyDeliveryMode?.("automatic");
+      return {
         payloads: [{ text: "Short fallback final" }],
         meta: {},
-      });
+      };
+    });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
@@ -264,27 +275,15 @@ describe("executeAgentTurn: message tool progress", () => {
       resolvedVerboseLevel: "off",
     });
 
-    const pluginParams = state.runEmbeddedAgentMock.mock.calls[0]?.[0] as {
+    const embeddedParams = state.runEmbeddedAgentMock.mock.calls[0]?.[0] as {
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
       forceMessageTool?: boolean;
     };
-    const embeddedParams = state.runEmbeddedAgentMock.mock.calls[1]?.[0] as {
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-      forceMessageTool?: boolean;
-    };
-    expect(pluginParams).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
-      forceMessageTool: true,
-    });
     expect(embeddedParams).toMatchObject({
       sourceReplyDeliveryMode: "automatic",
       forceMessageTool: false,
     });
-    expect(onCandidateMode.mock.calls).toEqual([
-      ["message_tool_only"],
-      ["message_tool_only"],
-      ["automatic"],
-    ]);
+    expect(onCandidateMode.mock.calls).toEqual([["message_tool_only"], ["automatic"]]);
 
     expect(execution.kind).toBe("success");
     if (execution.kind !== "success") {

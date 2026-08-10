@@ -352,6 +352,8 @@ export type RunEmbeddedAgentParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Re-resolve a runtime-derived source mode from the authoritative prepared harness. */
+  onPreparedHarnessSourceReplyDeliveryMode?: (mode: SourceReplyDeliveryMode) => void;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];

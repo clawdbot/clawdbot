@@ -3,7 +3,6 @@ import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import { selectAgentHarness } from "../../agents/harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
@@ -96,30 +95,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     const useCliExecution =
       pinnedCliRuntime !== undefined ||
       (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, params.runtimeConfig));
-    const embeddedHarness = useCliExecution
-      ? undefined
-      : selectAgentHarness({
-          provider,
-          modelId: model,
-          config: params.runtimeConfig,
-          agentId: turn.followupRun.run.agentId,
-          sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-          agentHarnessId:
-            activeEntry?.modelSelectionLocked === true ? activeEntry.agentHarnessId : undefined,
-          agentHarnessRuntimeOverride: sessionRuntimeOverride,
-        });
-    const harnessVisibleReplies =
-      embeddedHarness?.deliveryDefaults?.visibleReplies ??
-      embeddedHarness?.deliveryDefaults?.sourceVisibleReplies;
     return {
       candidateRun,
       sessionRuntimeOverride,
       cliExecutionProvider,
       useCliExecution,
-      runtimeDefaultSourceReplyDeliveryMode:
-        useCliExecution || harnessVisibleReplies === "message_tool"
-          ? ("message_tool_only" as const)
-          : ("automatic" as const),
     };
   };
   return params.timing.measure("model_fallback", () =>
@@ -199,10 +179,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         );
         const candidateRun = runtime.candidateRun;
         const candidateSourceReplyDeliveryMode =
-          sourceReplyDeliveryModeOrigin === "runtime_default"
-            ? runtime.runtimeDefaultSourceReplyDeliveryMode
+          sourceReplyDeliveryModeOrigin === "runtime_default" && runtime.useCliExecution
+            ? "message_tool_only"
             : turn.followupRun.run.sourceReplyDeliveryMode;
-        if (candidateSourceReplyDeliveryMode) {
+        const applySourceReplyDeliveryModeBeforeInvocation =
+          sourceReplyDeliveryModeOrigin !== "runtime_default" || runtime.useCliExecution;
+        if (candidateSourceReplyDeliveryMode && applySourceReplyDeliveryModeBeforeInvocation) {
           candidateRun.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
           turn.followupRun.run.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
           if (turn.opts) {
@@ -294,7 +276,17 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             assistantErrorPersistedAcrossFallback = true;
           },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
-          sourceRepliesAreToolOnly: candidateSourceReplyDeliveryMode === "message_tool_only",
+          onPreparedHarnessSourceReplyDeliveryMode:
+            sourceReplyDeliveryModeOrigin === "runtime_default"
+              ? (mode) => {
+                  candidateRun.sourceReplyDeliveryMode = mode;
+                  turn.followupRun.run.sourceReplyDeliveryMode = mode;
+                  if (turn.opts) {
+                    turn.opts.sourceReplyDeliveryMode = mode;
+                  }
+                  sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(mode);
+                }
+              : undefined,
           messageToolDeliveryState,
           onCompactionCount: (count) => {
             params.state.autoCompactionCount += count;

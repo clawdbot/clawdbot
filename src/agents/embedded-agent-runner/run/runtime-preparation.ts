@@ -496,6 +496,17 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedRunAdmission: params.preparedRunAdmission,
   });
 
+  if (params.onPreparedHarnessSourceReplyDeliveryMode) {
+    // Route/auth/transport preparation owns the final harness selection. Publishing
+    // an earlier guess can either suppress a valid final or leak a private one.
+    const visibleReplies =
+      agentHarness.deliveryDefaults?.visibleReplies ??
+      agentHarness.deliveryDefaults?.sourceVisibleReplies;
+    const mode = visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    params.sourceReplyDeliveryMode = mode;
+    params.forceMessageTool = mode === "message_tool_only";
+    params.onPreparedHarnessSourceReplyDeliveryMode(mode);
+  }
   return {
     admittedRunContext,
     provider,

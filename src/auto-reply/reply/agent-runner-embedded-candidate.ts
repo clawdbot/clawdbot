@@ -89,7 +89,9 @@ export async function runEmbeddedFallbackCandidate(params: {
   >;
   notifyAgentRunStart: () => void;
   notifyUserAboutCompaction: boolean;
-  sourceRepliesAreToolOnly: boolean;
+  onPreparedHarnessSourceReplyDeliveryMode?: NonNullable<
+    RunEmbeddedAgentParams["onPreparedHarnessSourceReplyDeliveryMode"]
+  >;
   messageToolDeliveryState: MessageToolDeliveryState;
   preserveProgressCallbackStartOrder: boolean;
   presentation: EmbeddedPresentation;
@@ -195,6 +197,7 @@ export async function runEmbeddedFallbackCandidate(params: {
       sessionKey: turn.sessionKey,
       milestone: "before_embedded_run",
     });
+    let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () =>
       runEmbeddedAgent({
         preparedRunAdmission: params.preparedRunAdmission,
@@ -230,6 +233,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        onPreparedHarnessSourceReplyDeliveryMode: params.onPreparedHarnessSourceReplyDeliveryMode,
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -354,22 +358,26 @@ export async function runEmbeddedFallbackCandidate(params: {
               await turn.opts?.onReasoningEnd?.();
             }
           : undefined,
-        onAgentEvent: createAgentRunEventHandler({
-          turn,
-          lifecycleBackstop,
-          notifyAgentRunStart: params.notifyAgentRunStart,
-          sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
-          messageToolDeliveryState: params.messageToolDeliveryState,
-          provider: params.provider,
-          model: params.model,
-          runId: params.runId,
-          effectiveSessionId: params.effectiveRun.sessionId,
-          notifyUserAboutCompaction: params.notifyUserAboutCompaction,
-          onCompactionCompleted: () => {
-            attemptCompactionCount += 1;
-            return attemptCompactionCount;
-          },
-        }),
+        onAgentEvent: (event) => {
+          eventHandler ??= createAgentRunEventHandler({
+            turn,
+            lifecycleBackstop,
+            notifyAgentRunStart: params.notifyAgentRunStart,
+            sourceRepliesAreToolOnly:
+              turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+            messageToolDeliveryState: params.messageToolDeliveryState,
+            provider: params.provider,
+            model: params.model,
+            runId: params.runId,
+            effectiveSessionId: params.effectiveRun.sessionId,
+            notifyUserAboutCompaction: params.notifyUserAboutCompaction,
+            onCompactionCompleted: () => {
+              attemptCompactionCount += 1;
+              return attemptCompactionCount;
+            },
+          });
+          return eventHandler(event);
+        },
         // Flush-before-tool requires a handler even when regular block streaming is off.
         onBlockReply: params.presentation.blockReplyHandler,
         onBlockReplyFlush:
