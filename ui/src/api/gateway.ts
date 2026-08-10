@@ -47,6 +47,7 @@ import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
 } from "../lib/nodes/index.ts";
+import { migrateCloudSessionRecoveryScope } from "../lib/sessions/cloud-recovery.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
@@ -254,6 +255,20 @@ function formatBrowserWebSocketConstructorError(err: unknown, url: string): Gate
   };
 }
 
+async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
+  if (!material || typeof crypto === "undefined" || !crypto.subtle) {
+    return "";
+  }
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+  } catch {
+    return "";
+  }
+}
+
 async function buildGatewayConnectDevice(params: {
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
   client: GatewayConnectClientInfo;
@@ -302,6 +317,7 @@ export class GatewayBrowserClient {
   private deviceTokenRetryBudgetUsed = false;
   private recoveryScopeValue = "";
   private recoveryScopeResolved = false;
+  private recoveryScopeGeneration = 0;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
@@ -416,6 +432,7 @@ export class GatewayBrowserClient {
     connectChallengeTs: number | null | undefined,
     generation: number,
   ): Promise<ConnectPlan> {
+    this.recoveryScopeGeneration = generation;
     this.recoveryScopeResolved = false;
     const role = CONTROL_UI_OPERATOR_ROLE;
     const client: GatewayConnectClientInfo = {
@@ -519,7 +536,24 @@ export class GatewayBrowserClient {
         scopes,
       });
     }
-    this.recoveryScopeValue = hello.auth?.recoveryScope ?? "";
+    void this.resolveRecoveryScope(hello, plan);
+  }
+
+  private async resolveRecoveryScope(hello: GatewayHelloOk, plan: ConnectPlan) {
+    const serverScope = hello.auth?.recoveryScope;
+    const legacyScope = await deriveLegacyV4RecoveryScope(
+      hello.auth?.deviceToken ??
+        plan.selectedAuth.authDeviceToken ??
+        plan.selectedAuth.resolvedDeviceToken ??
+        plan.selectedAuth.authToken,
+    );
+    if (plan.generation !== this.recoveryScopeGeneration || !this.client.connected) {
+      return;
+    }
+    if (serverScope && legacyScope) {
+      migrateCloudSessionRecoveryScope(this.opts.url, legacyScope, serverScope);
+    }
+    this.recoveryScopeValue = serverScope ?? legacyScope;
     this.recoveryScopeResolved = true;
     this.opts.onRecoveryScopeChange?.();
   }

@@ -1,4 +1,5 @@
 /** @vitest-environment node */
+import { createHash } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
@@ -12,6 +13,10 @@ import {
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
 } from "../lib/nodes/index.ts";
 import * as nodes from "../lib/nodes/index.ts";
+import {
+  readCloudSessionRecovery,
+  writeCloudSessionRecovery,
+} from "../lib/sessions/cloud-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -1061,6 +1066,108 @@ describe("GatewayBrowserClient", () => {
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.scopes).toEqual(
       [...CONTROL_UI_OPERATOR_SCOPES].toSorted(),
     );
+    client.stop();
+  });
+
+  it("keeps the shipped credential scope for an older v4 Gateway", async () => {
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          deviceToken: STORED_CRED,
+        },
+      },
+    });
+
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe(legacyScope);
+    expect(client.recoveryScopeReady).toBe(true);
+    client.stop();
+  });
+
+  it("does not let a stale hello digest publish or migrate recovery", async () => {
+    useNodeFakeTimers();
+    const sessionStorage = createStorageMock();
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    const recovery = {
+      sessionKey: "agent:cloud:stale",
+      messageId: "message-stale",
+      message: "keep the current connection",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      recoveryScope: legacyScope,
+      phase: "sending" as const,
+    };
+    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    const staleDigest = createDeferred<ArrayBuffer>();
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "req-stale-scope",
+      subtle: { digest: vi.fn(() => staleDigest.promise) },
+    });
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+    firstWs.emitMessage({
+      type: "res",
+      id: firstConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [], recoveryScope: "server-stale" },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+
+    firstWs.emitClose(1006, "socket lost");
+    localStorage.clear();
+    await vi.advanceTimersByTimeAsync(800);
+    const secondWs = getLatestWebSocket();
+    const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-current");
+    secondWs.emitMessage({
+      type: "res",
+      id: secondConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [], recoveryScope: "server-current" },
+      },
+    });
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+
+    staleDigest.resolve(Uint8Array.from(createHash("sha256").update(STORED_CRED).digest()).buffer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.recoveryScope).toBe("server-current");
+    expect(onRecoveryScopeChange).toHaveBeenCalledTimes(1);
+    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
+      recovery,
+    );
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
     client.stop();
   });
 

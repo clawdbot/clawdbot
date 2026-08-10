@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -27,7 +28,6 @@ import { formatError } from "../../server-utils.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
-import { resolveGatewayRecoveryScope } from "../ws-shared-generation.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -77,15 +77,20 @@ export async function sendGatewayHello(
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
+  // Prefer the authenticated human; otherwise credential rotation must rotate recovery ownership.
+  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  const recoveryScopeMaterial = authenticatedPrincipal
+    ? ["principal", authenticatedPrincipal, device?.id ?? ""]
+    : deviceToken?.token
+      ? ["device-token", deviceToken.token]
+      : sessionSharedGatewaySessionGeneration
+        ? ["shared-auth", sessionSharedGatewaySessionGeneration, device?.id ?? ""]
+        : device?.id
+          ? ["device", device.id]
+          : undefined;
   const recoveryScope =
-    role === "operator"
-      ? resolveGatewayRecoveryScope({
-          deviceToken: deviceToken?.token,
-          deviceId: device?.id,
-          // Keep proxy aliases and casing on the canonical profile-owned recovery path.
-          authenticatedPrincipal: authenticatedUserProfileId ?? authResult.user,
-          sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
-        })
+    role === "operator" && recoveryScopeMaterial
+      ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
