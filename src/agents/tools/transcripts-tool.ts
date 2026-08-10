@@ -89,7 +89,9 @@ function ownsTranscriptSession(
       : isLocalMainOperator;
   }
   if (!ctx.agentId) {
-    return !providerUsesAccountOwnership;
+    // The SDK permits a channel-less tool without an agent id; keep that local
+    // operator surface able to manage the ownerless captures it starts.
+    return !providerUsesAccountOwnership || !channel;
   }
   if (typeof ownerAgentId === "string") {
     if (ownerAgentId !== ctx.agentId) {
