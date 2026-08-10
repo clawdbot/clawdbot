@@ -73,7 +73,7 @@ workspace lock. Restore refuses if any affected skill changed after cleanup.
 
 The daily boundary is persisted per workspace, so Gateway restarts do not
 repeat a successful review. Review is admitted only for collections of at most
-200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged
+200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
 
 ## Chat
