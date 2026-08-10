@@ -5051,7 +5051,7 @@ describe("runCodexAppServerAttempt", () => {
         getAdmissionReceipt: () => undefined,
         markRuntimePersistencePending() {},
         markRuntimePersisted() {},
-      } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
       const run = runCodexAppServerAttempt(params);
       await vi.waitFor(
         () =>
