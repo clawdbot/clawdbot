@@ -5,7 +5,7 @@ import {
   computeJobNextRunAtMs,
   hasScheduledNextRunAtMs,
   resolveJobErrorBackoffUntilMs,
-} from "./service/jobs.js";
+} from "./service/jobs-scheduling.js";
 import type { CronJob } from "./types.js";
 
 const EVERY_30_MIN_MS = 30 * 60_000;

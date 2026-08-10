@@ -8,7 +8,7 @@ import {
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { createCronServiceState } from "./state.js";
 import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult } from "./timer.js";

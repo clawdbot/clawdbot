@@ -32,3 +32,13 @@ export type CronRunLogEntry = {
   nextRunAtMs?: number;
   triggerFired?: boolean;
 } & CronRunTelemetry;
+
+export function isCronRunStatus(value: unknown): value is CronRunStatus {
+  return value === "ok" || value === "error" || value === "skipped";
+}
+
+export function isCronDeliveryStatus(value: unknown): value is CronDeliveryStatus {
+  return ["delivered", "not-delivered", "unknown", "not-requested"].includes(
+    value as CronDeliveryStatus,
+  );
+}

@@ -2,11 +2,8 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Cron } from "croner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  coerceFiniteScheduleNumber,
-  computeNextRunAtMs,
-  computePreviousRunAtMs,
-} from "./schedule.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
 import {
   clearCronScheduleCacheForTest,
   getCronScheduleCacheMaxForTest,

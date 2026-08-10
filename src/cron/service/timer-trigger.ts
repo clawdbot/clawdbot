@@ -10,7 +10,11 @@ import type {
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
-import { DEFAULT_ERROR_BACKOFF_SCHEDULE_MS, errorBackoffMs, isJobEnabled } from "./jobs.js";
+import {
+  DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  errorBackoffMs,
+  isJobEnabled,
+} from "./jobs-scheduling.js";
 import type { CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
 import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";

@@ -5,11 +5,8 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
-import {
-  coerceFiniteScheduleNumber,
-  computeNextRunAtMs,
-  computePreviousRunAtMs,
-} from "../schedule.js";
+import { coerceFiniteScheduleNumber } from "../schedule-number.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
@@ -206,7 +203,6 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
 }
 
 function isPendingErrorBackoffSlot(params: {
-  state: CronServiceState;
   job: CronJob;
   nextRunAtMs: number;
   nowMs: number;
@@ -216,12 +212,8 @@ function isPendingErrorBackoffSlot(params: {
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
 }
 
-function shouldRepairFutureCronNextRunAtMs(params: {
-  state: CronServiceState;
-  job: CronJob;
-  nowMs: number;
-}): boolean {
-  const { state, job, nowMs } = params;
+function shouldRepairFutureCronNextRunAtMs(params: { job: CronJob; nowMs: number }): boolean {
+  const { job, nowMs } = params;
   const nextRun = job.state.nextRunAtMs;
   if (
     job.schedule.kind !== "cron" ||
@@ -236,7 +228,7 @@ function shouldRepairFutureCronNextRunAtMs(params: {
   // Error retries may intentionally use a non-cron future timestamp while
   // backoff is pending. Once the retry window has elapsed, stale future cron
   // slots should be eligible for the same repair as ordinary schedule state.
-  if (isPendingErrorBackoffSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
+  if (isPendingErrorBackoffSlot({ job, nextRunAtMs: nextRun, nowMs })) {
     return false;
   }
   let naturalNext: number | undefined;
@@ -625,7 +617,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
     return (
       !hasForcePreservedNextRun &&
-      (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) &&
+      (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })) &&
       recomputeJobNextRunAtMs({ state, job, nowMs: now })
     );
   });
@@ -699,7 +691,7 @@ export function recomputeNextRunsForMaintenance(
         !hasPendingStartupCatchup &&
         !hasPendingPacedNextRun &&
         !hasForcePreservedNextRun &&
-        shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
+        shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })
       ) {
         changed = recomputeJob(job, now) || changed;
       } else if (

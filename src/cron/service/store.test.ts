@@ -7,7 +7,7 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { findJobOrThrow } from "./jobs.js";
+import { findJobOrThrow } from "./jobs-scheduling.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 

@@ -8,8 +8,6 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
 
-export { coerceFiniteScheduleNumber } from "./schedule-number.js";
-
 const CRON_EVAL_CACHE_MAX = 512;
 const DAY_MS = 86_400_000;
 const cronEvalCache = new Map<string, Cron>();

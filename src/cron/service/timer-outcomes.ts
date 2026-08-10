@@ -18,7 +18,7 @@ import {
   errorBackoffMs,
   isJobEnabled,
   recordScheduleComputeError,
-} from "./jobs.js";
+} from "./jobs-scheduling.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { tryFinishCronTaskRun, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
@@ -387,18 +387,16 @@ export function applyJobResult(
           // Preserve the unresolved-cron guard (#66019): do not synthesize a
           // retry when the schedule cannot produce a next scheduled slot.
         } else {
-          const retryNextRunAtMs = resolveNextRunAtMsOrDisable({
+          const retryNextRunAtMs = assignNextRunAtMs({
             state,
             job,
             candidate: result.endedAt + retryDecision.backoffMs,
             context: "recurring_retry",
           });
           if (retryNextRunAtMs === undefined) {
-            job.state.nextRunAtMs = undefined;
             return shouldDelete;
           }
           if (retryNextRunAtMs < normalNext) {
-            job.state.nextRunAtMs = retryNextRunAtMs;
             state.deps.log.info(
               {
                 jobId: job.id,
@@ -430,14 +428,13 @@ export function applyJobResult(
         });
         return shouldDelete;
       }
-      const backoffNext = resolveNextRunAtMsOrDisable({
+      const backoffNext = assignNextRunAtMs({
         state,
         job,
         candidate: result.endedAt + backoff,
         context: "error_backoff",
       });
       if (backoffNext === undefined) {
-        job.state.nextRunAtMs = undefined;
         return shouldDelete;
       }
       // Use whichever is later: the natural next run or the backoff delay.
@@ -525,25 +522,19 @@ export function applyJobResult(
           context: "completion",
         });
       } else {
-        job.state.nextRunAtMs =
-          naturalNext === undefined && job.schedule.kind === "every"
-            ? resolveNextRunAtMsOrDisable({
-                state,
-                job,
-                candidate: undefined,
-                context: "completion",
-              })
-            : naturalNext !== undefined && job.trigger
-              ? resolveNextRunAtMsOrDisable({
-                  state,
-                  job,
-                  candidate: Math.max(
-                    naturalNext,
-                    result.endedAt + resolveCronTriggerMinIntervalMs(),
-                  ),
-                  context: "trigger_completion",
-                })
-              : naturalNext;
+        const triggerNext =
+          naturalNext !== undefined && job.trigger
+            ? Math.max(naturalNext, result.endedAt + resolveCronTriggerMinIntervalMs())
+            : naturalNext;
+        job.state.nextRunAtMs = triggerNext;
+        if (triggerNext !== undefined || job.schedule.kind === "every") {
+          assignNextRunAtMs({
+            state,
+            job,
+            candidate: triggerNext,
+            context: job.trigger ? "trigger_completion" : "completion",
+          });
+        }
       }
     } else {
       job.state.nextRunAtMs = undefined;
@@ -615,22 +606,16 @@ export function applyTriggerNoFireResult(
     const floorMs = Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs());
     // Quiet ticks still advance the schedule; the floor prevents scripts from
     // becoming a headless hot loop even when cron resolves inside the window.
-    job.state.nextRunAtMs =
-      naturalNext === undefined
-        ? job.schedule.kind === "every"
-          ? resolveNextRunAtMsOrDisable({
-              state,
-              job,
-              candidate: undefined,
-              context: "quiet_trigger",
-            })
-          : undefined
-        : resolveNextRunAtMsOrDisable({
-            state,
-            job,
-            candidate: Math.max(naturalNext, result.endedAt + floorMs),
-            context: "quiet_trigger",
-          });
+    job.state.nextRunAtMs = naturalNext;
+    if (naturalNext !== undefined || job.schedule.kind === "every") {
+      assignNextRunAtMs({
+        state,
+        job,
+        candidate:
+          naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs),
+        context: "quiet_trigger",
+      });
+    }
   } catch (err) {
     recordScheduleComputeError({
       state,

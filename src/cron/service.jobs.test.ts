@@ -2,15 +2,13 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
-  applyDeclarativeJobSpec,
-  applyJobPatch,
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
-  createJob,
   nextWakeAtMs,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
-} from "./service/jobs.js";
+} from "./service/jobs-scheduling.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
@@ -805,6 +803,35 @@ describe("cron tool authority defaults", () => {
     });
   });
 
+  it("repairs a missing anchor when converging an unchanged every schedule", () => {
+    const createdAtMs = now - 30_000;
+    const job = createJob(createMockState(now), {
+      name: "legacy declaration",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    job.createdAtMs = createdAtMs;
+    job.schedule = { kind: "every", everyMs: 60_000 };
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { enabledExplicit: false, nowMs: now },
+    );
+
+    expect(job.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: createdAtMs });
+  });
+
   it("adopts explicit authority when a declaration becomes tool-bearing", () => {
     const job: CronJob = {
       id: "declared-trigger",
@@ -1277,6 +1304,38 @@ describe("cron stagger defaults", () => {
     applyJobPatch(job, {
       schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
     });
+
+    expect(job.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "America/Los_Angeles",
+      staggerMs: 120_000,
+    });
+  });
+
+  it("preserves staggering when declarative convergence keeps the cron expression", () => {
+    const now = Date.now();
+    const job = createJob(createMockState(now), {
+      name: "declared hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { enabledExplicit: false, nowMs: now },
+    );
 
     expect(job.schedule).toEqual({
       kind: "cron",

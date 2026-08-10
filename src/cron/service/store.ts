@@ -12,8 +12,8 @@ import {
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
+import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
-import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();

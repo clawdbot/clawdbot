@@ -1,5 +1,5 @@
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
