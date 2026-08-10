@@ -200,13 +200,6 @@ describe("media-understanding runtime", () => {
   });
 
   it("falls back to the default agent directory when neither agentDir nor agentId is provided", async () => {
-    // GOTCHA: plugin callers (e.g. a browser tool describing a screenshot)
-    // routinely have neither an explicit agentDir nor an agentId handy --
-    // this must not leave agentDir undefined, or image understanding hard
-    // -fails downstream with "Image understanding requires agentDir"
-    // (openclaw/openclaw#121293). describePreparedImageWithModel already
-    // falls back to resolveDefaultAgentDir in this exact situation;
-    // runMediaUnderstandingFile must do the same.
     mocks.normalizeMediaAttachments.mockReturnValue([
       { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
     ]);
