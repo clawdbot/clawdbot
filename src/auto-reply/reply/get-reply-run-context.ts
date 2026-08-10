@@ -24,6 +24,7 @@ import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applySessionHints } from "./body.js";
+import { resolveTurnModelOverride } from "./dispatch-from-config.harness-defaults.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
@@ -111,8 +112,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const inboundEventKind = promptSessionCtx.InboundEventKind;
-  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode: promptStableMode } =
-    resolvePromptSourceReplyMode({ promptSessionCtx, opts });
+  const { sourceReplyDeliveryMode, injectedSessionStableMode } = resolvePromptSourceReplyMode({
+    promptSessionCtx,
+    opts,
+  });
   // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
   // stable-mode injection; resolve the same session-stable fact here so their
   // binding facts and messageToolPolicyHash match dispatched chat turns —
@@ -125,7 +128,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const sessionPromptSourceReplyDeliveryMode =
-    opts?.sessionPromptSourceReplyDeliveryMode ??
+    injectedSessionStableMode ??
     (isSyntheticTurn && sessionEntry
       ? resolveSessionStableReplyMode({
           cfg,
@@ -134,10 +137,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           sessionAgentId: agentId,
           sessionKey,
           sessionStore,
-          turnModelOverride:
-            isHeartbeat && opts ? normalizeOptionalString(opts.heartbeatModelOverride) : undefined,
+          turnModelOverride: resolveTurnModelOverride(opts),
         })
-      : promptStableMode);
+      : sourceReplyDeliveryMode);
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,

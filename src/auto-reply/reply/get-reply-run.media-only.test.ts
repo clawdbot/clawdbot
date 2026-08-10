@@ -3243,6 +3243,41 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
+  it("resolves origin-less sessions as internal for synthetic stable facts", async () => {
+    vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
+    // An entry with no persisted delivery origin has only ever been driven
+    // internally; the wake provider ("heartbeat") must not leak into the
+    // stable context as a non-internal surface or the fact diverges from
+    // dispatch's live webchat turns.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-internal",
+      updatedAt: 1,
+      systemSent: true,
+      chatType: "direct",
+    };
+
+    await runPrepared({
+      cfg: { session: {}, channels: {}, agents: { defaults: {} } },
+      opts: { isHeartbeat: true },
+      isNewSession: false,
+      systemSent: true,
+      sessionEntry,
+      ctx: {
+        ...createInboundBody("scheduled wake"),
+        Provider: "heartbeat",
+        SessionKey: "agent:main:main",
+      },
+      sessionCtx: {
+        ...createSessionBody("scheduled wake"),
+        Provider: "heartbeat",
+        ChatType: "direct",
+      },
+    });
+
+    const run = requireRunReplyAgentCall(0).followupRun.run;
+    expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
+  });
+
   it("downgrades the synthetic stable mode when the message tool is policy-denied", async () => {
     vi.mocked(buildGroupChatContext).mockImplementation(({ sourceReplyDeliveryMode }) =>
       ["group", sourceReplyDeliveryMode ?? "automatic"].join(":"),

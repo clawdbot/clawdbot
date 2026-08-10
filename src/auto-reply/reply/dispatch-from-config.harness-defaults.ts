@@ -24,7 +24,6 @@ import {
   loadSessionStoreEntry,
   resolveSessionStorePathCore,
 } from "./dispatch-from-config.runtime.js";
-import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
@@ -98,7 +97,7 @@ function resolveHarnessDefaultParentSessionKey(params: {
 }
 
 export function resolveTurnModelOverride(
-  replyOptions: DispatchFromConfigParams["replyOptions"],
+  replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
 ): string | undefined {
   if (replyOptions?.isHeartbeat !== true) {
     return undefined;
