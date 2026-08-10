@@ -104,15 +104,11 @@ function planGenerationToolAvailability(params: {
       }),
     );
   }
-  // Prefer the shared helper so config-auth + snapshot stay one owner with factories/tests.
-  // Snapshot is still passed via process/current metadata; explicit models already returned above.
-  return hasGenerationToolAvailability({
-    cfg: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+  return hasSnapshotCapabilityAvailability({
+    snapshot: params.snapshot,
     authStore: params.authStore,
-    modelConfig: params.modelConfig,
-    providerKey: params.providerKey,
+    key: params.providerKey,
+    config: params.config,
   });
 }
 
@@ -457,3 +453,5 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
         })),
   };
 }
+
+export { hasGenerationToolAvailability };
