@@ -1,7 +1,10 @@
 // Subagent registry archive tests cover keep/delete cleanup modes, retryable
 // session deletion, and context-engine lifecycle callbacks.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGateway } from "../gateway/call.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
+import { resetDetachedTaskLifecycleRuntimeForTests } from "../tasks/task-runtime.test-helpers.js";
 
 const taskRuntimeMocks = vi.hoisted(() => ({
   finalizeTaskRunByRunId: vi.fn<(_params: unknown) => unknown[]>(() => [{}]),
@@ -96,6 +99,93 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 // upstream's, which pushed that file past the 1000-line lint budget. Splitting
 // keeps every assertion rather than suppressing the rule.
 describe("subagent registry archive behavior (continuation work)", () => {
+  let mod: typeof import("./subagent-registry.test-helpers.js");
+  let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
+  let createSubagentRunRecord: typeof import("./subagent-test-fixtures.test-helpers.js").createSubagentRunRecord;
+
+  beforeAll(async () => {
+    ({ createCanonicalSubagentRunFixture } =
+      await import("./subagent-registry.persistence.test-support.js"));
+    ({ createSubagentRunRecord } = await import("./subagent-test-fixtures.test-helpers.js"));
+    mod = await import("./subagent-registry.test-helpers.js");
+  });
+
+  const setRegistryTestDeps = (
+    overrides: NonNullable<Parameters<typeof mod.testing.setDepsForTest>[0]> = {},
+  ) => {
+    mod.testing.setDepsForTest({
+      callGateway,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadAgentRuntimePluginRegistryHandle: vi.fn(),
+      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
+        params.completeBatch([params.settledEntry.runId]);
+        return false;
+      }),
+      ...overrides,
+    });
+  };
+
+  const addCanonicalSubagentRunForTests = (
+    entry: Parameters<typeof mod.addSubagentRunForTests>[0],
+  ) => {
+    mod.addSubagentRunForTests(createCanonicalSubagentRunFixture(createSubagentRunRecord(entry)));
+  };
+
+  const waitForNoRequesterRuns = async () => {
+    await vi.waitFor(() => {
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    });
+  };
+
+  beforeEach(() => {
+    resetDetachedTaskLifecycleRuntimeForTests();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    vi.mocked(callGateway).mockReset();
+    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
+        return { status: "pending" };
+      }
+      return {};
+    });
+    loadConfigMock.mockClear();
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReset().mockReturnValue(false);
+    vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
+    taskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
+    taskStatusMocks.findTaskByRunIdForStatus.mockReset();
+    taskStatusMocks.listTasksForSessionKeyForStatus.mockReset();
+    taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([]);
+    sessionAccessorMocks.listSessionEntriesReadOnly.mockReset();
+    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([]);
+    taskStatusMocks.findTaskByRunIdForStatus.mockImplementation((runId: string) => {
+      const entry = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((candidate) => candidate.runId === runId);
+      return entry
+        ? ({
+            taskId: `task-${runId}`,
+            runId,
+            runtime: "subagent",
+            childSessionKey: entry.childSessionKey,
+            createdAt: entry.createdAt,
+            status: "cancelled",
+            error: SUBAGENT_KILL_TASK_ERROR,
+          } as never)
+        : undefined;
+    });
+    setRegistryTestDeps();
+    mod.resetSubagentRegistryForTests({ persist: false });
+  });
+
+  afterEach(() => {
+    resetDetachedTaskLifecycleRuntimeForTests();
+    mod.testing.setDepsForTest();
+    mod.resetSubagentRegistryForTests({ persist: false });
+    vi.useRealTimers();
+  });
+
   it("defers archive eviction without session identity while continuation work is live", async () => {
     const childSessionKey = "agent:main:subagent:delete-work-live";
     mod.addSubagentRunForTests({
