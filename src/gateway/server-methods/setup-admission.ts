@@ -1,50 +1,60 @@
+import { resolveStateDir } from "../../config/paths.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../../infra/file-lock.js";
+import { withSetupMigrationTargetLock } from "../../wizard/setup.migration-snapshot.js";
+
 export const SETUP_ADMISSION_BUSY_MESSAGE =
   "OpenClaw setup is already in progress; try again when it finishes.";
 
-let setupAdmissionInProgress = false;
+let wizardSessionInProgress = false;
 
 export class SetupAdmissionBusyError extends Error {}
 
-/** Acquire the process-wide setup mutation lease without queueing. */
-function tryAcquireSetupAdmission(): (() => void) | undefined {
-  if (setupAdmissionInProgress) {
-    return undefined;
-  }
-  setupAdmissionInProgress = true;
-  return () => {
-    setupAdmissionInProgress = false;
+export async function runExclusiveSystemAgentSetupActivation<T>(
+  task: () => Promise<T>,
+): Promise<T> {
+  let admitted = false;
+  const admittedTask = async () => {
+    admitted = true;
+    return await task();
   };
-}
-
-/** Admit a setup session and hold its lease until the runner settles. */
-export function createAdmittedSetupSession<T extends { whenSettled(): Promise<unknown> }>(
-  createSession: () => T,
-): T | undefined {
-  const releaseAdmission = tryAcquireSetupAdmission();
-  if (!releaseAdmission) {
-    return undefined;
-  }
   try {
-    const session = createSession();
-    void session.whenSettled().then(releaseAdmission, releaseAdmission);
-    return session;
+    return await withSetupMigrationTargetLock(resolveStateDir(), admittedTask, { wait: false });
   } catch (error) {
-    releaseAdmission();
+    if (!admitted && (error as { code?: unknown }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
+      throw new SetupAdmissionBusyError(SETUP_ADMISSION_BUSY_MESSAGE);
+    }
     throw error;
   }
 }
 
-/** Admit one setup mutation without queueing work past a caller timeout. */
-export async function runExclusiveSystemAgentSetupActivation<T>(
-  task: () => Promise<T>,
-): Promise<T> {
-  const release = tryAcquireSetupAdmission();
-  if (!release) {
-    throw new SetupAdmissionBusyError(SETUP_ADMISSION_BUSY_MESSAGE);
+export async function createAdmittedWizardSession<T extends { whenSettled(): Promise<unknown> }>(
+  createSession: () => T,
+  lockSetupTarget = true,
+): Promise<T | undefined> {
+  if (wizardSessionInProgress) {
+    return undefined;
   }
+  wizardSessionInProgress = true;
+  const releaseSession = () => {
+    wizardSessionInProgress = false;
+  };
   try {
-    return await task();
-  } finally {
-    release();
+    const session = lockSetupTarget
+      ? await new Promise<T>((resolve, reject) => {
+          void runExclusiveSystemAgentSetupActivation(async () => {
+            const createdSession = createSession();
+            resolve(createdSession);
+            await createdSession.whenSettled();
+          }).catch(reject);
+        })
+      : createSession();
+    void session.whenSettled().then(releaseSession, releaseSession);
+    return session;
+  } catch (error) {
+    releaseSession();
+    if (error instanceof SetupAdmissionBusyError) {
+      return undefined;
+    }
+    throw error;
   }
 }

@@ -21,7 +21,7 @@ import {
   type WizardStep,
 } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
-import { createAdmittedSetupSession, SETUP_ADMISSION_BUSY_MESSAGE } from "./setup-admission.js";
+import { createAdmittedWizardSession, SETUP_ADMISSION_BUSY_MESSAGE } from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -110,15 +110,6 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
-    const running = context.findRunningWizard();
-    if (running) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "wizard already running", { retryable: true }),
-      );
-      return;
-    }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
     const createSession = () =>
@@ -151,9 +142,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
               ),
             ),
           );
-    // The setup lease follows the runner, not the session map: cancellation can
-    // purge ownership before a cancellation-locked persistent effect has settled.
-    const session = flow === "setup" ? createAdmittedSetupSession(createSession) : createSession();
+    const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {
       respond(
         false,

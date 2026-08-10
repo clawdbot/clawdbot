@@ -47,6 +47,15 @@ async function invokeWizard(
   return readSuccessfulResponse(respond);
 }
 
+async function cancelWizardSessions(
+  sessions: Map<string, import("../../wizard/session.js").WizardSession>,
+) {
+  for (const session of sessions.values()) {
+    session.cancel();
+    await session.whenSettled();
+  }
+}
+
 describe("wizard session lookup", () => {
   it.each([
     { method: "wizard.next", params: { sessionId: "expired" } },
@@ -346,9 +355,7 @@ describe("wizard setup ownership", () => {
     } as never);
     expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
 
-    for (const session of tracker.wizardSessions.values()) {
-      session.cancel();
-    }
+    await cancelWizardSessions(tracker.wizardSessions);
   });
 
   it.each([
@@ -376,9 +383,7 @@ describe("wizard setup ownership", () => {
     expect(receivedInstallDaemon).toBe(expected);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
 
-    for (const session of tracker.wizardSessions.values()) {
-      session.cancel();
-    }
+    await cancelWizardSessions(tracker.wizardSessions);
   });
 });
 
@@ -394,9 +399,7 @@ describe("wizard step serialization", () => {
     const result = await invokeWizard("wizard.start", {}, context);
     expect(result.step).toMatchObject({ sensitive: true });
     expect(result.step).not.toHaveProperty("initialValue");
-    for (const session of context.wizardSessions.values()) {
-      session.cancel();
-    }
+    await cancelWizardSessions(context.wizardSessions);
   });
 
   it("keeps a plain default but strips the next sensitive one from wizard.next", async () => {
@@ -426,8 +429,6 @@ describe("wizard step serialization", () => {
     const nextResult = await invokeWizard("wizard.next", params, context);
     expect(nextResult.step).toMatchObject({ sensitive: true });
     expect(nextResult.step).not.toHaveProperty("initialValue");
-    for (const session of context.wizardSessions.values()) {
-      session.cancel();
-    }
+    await cancelWizardSessions(context.wizardSessions);
   });
 });

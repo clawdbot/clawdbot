@@ -362,8 +362,9 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
 }
 
 function throwIfResetFailed(failures: string[]): void {
-  if (failures.length > 0) {
-    throw new Error(`Reset failed to remove required state:\n${failures.join("\n")}`);
+  const uniqueFailures = [...new Set(failures)];
+  if (uniqueFailures.length > 0) {
+    throw new Error(`Reset failed to remove required state:\n${uniqueFailures.join("\n")}`);
   }
 }
 

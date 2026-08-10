@@ -215,9 +215,7 @@ async function loadGatewayOnboardModules(): Promise<void> {
     await import("./onboard-non-interactive/local.test-support.js"));
 }
 
-function getPseudoPort(base: number): number {
-  return base + (process.pid % 1000);
-}
+const getPseudoPort = (base: number): number => base + (process.pid % 1000);
 
 const runtime = createThrowingRuntime();
 
@@ -407,13 +405,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     testConfigStore.clear();
     capturedReplaceConfigFileCalls.length = 0;
     configWritePluginLeaseDepths.length = 0;
-    readConfigFileSnapshotMock.mockClear();
-    ensureWorkspaceAndSessionsMock.mockClear();
-    installGatewayDaemonNonInteractiveMock.mockClear();
-    healthCommandMock.mockClear();
-    gatewayServiceMock.isLoaded.mockClear();
-    gatewayServiceMock.readRuntime.mockClear();
-    readLastGatewayErrorLineMock.mockClear();
+    vi.clearAllMocks();
   });
 
   it("serializes concurrent onboarding runs sharing one state directory", async () => {
@@ -684,7 +676,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   }, 60_000);
 
   it("persists skipBootstrap and skips workspace bootstrap creation", async () => {
-    ensureWorkspaceAndSessionsMock.mockClear();
     await withStateDir("state-skip-bootstrap-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
 

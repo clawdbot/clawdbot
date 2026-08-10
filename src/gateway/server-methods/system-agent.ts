@@ -51,7 +51,7 @@ import {
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
 import {
-  createAdmittedSetupSession,
+  createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
   SETUP_ADMISSION_BUSY_MESSAGE,
   SetupAdmissionBusyError,
@@ -327,18 +327,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    if (context.findRunningWizard()) {
-      respondRetryableSetupUnavailable(respond, "wizard already running");
-      return;
-    }
     const sessionId = params.sessionId;
-    const session = createAdmittedSetupSession(
+    const session = await createAdmittedWizardSession(
       () =>
         new WizardSession(
           async (prompter, signal, runnerSession) => {
-            // Match setup.activate's lock order: setup admission before the Gateway
-            // queue. Both stay held for the session, so a relaunched client cannot
-            // start competing setup work while this server-owned flow can commit.
             const result = await runSystemAgentGatewayTask(async () => {
               const { activateSetupInference } =
                 await import("../../system-agent/setup-inference.js");
@@ -386,12 +379,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    if (context.findRunningWizard()) {
-      respondRetryableSetupUnavailable(respond, "wizard already running");
-      return;
-    }
     const sessionId = params.sessionId;
-    const session = createAdmittedSetupSession(
+    const session = await createAdmittedWizardSession(
       () =>
         new WizardSession(
           async (prompter, signal, runnerSession) => {

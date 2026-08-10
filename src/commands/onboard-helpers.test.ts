@@ -302,13 +302,14 @@ describe("handleReset", () => {
     );
   });
 
-  it("fails closed on unreadable session state but still removes a selected workspace", async () => {
+  it("deduplicates unreadable session state while still attempting workspace removal", async () => {
     const homeDir = tempDirs.make("openclaw-reset-session-enumeration-");
     const stateDir = path.join(homeDir, ".openclaw");
-    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceDir = path.join(stateDir, "agents");
     fs.mkdirSync(workspaceDir, { recursive: true });
     const inspectError = Object.assign(new Error("permission denied"), { code: "EACCES" });
     const readdir = vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(inspectError);
+    mocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
     try {
@@ -320,8 +321,11 @@ describe("handleReset", () => {
           OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
         },
         async () => {
-          await expect(handleReset("full", workspaceDir, runtime)).rejects.toThrow(
-            path.join(stateDir, "agents"),
+          const failure = await handleReset("full", workspaceDir, runtime).catch(
+            (error: unknown) => error,
+          );
+          expect(failure).toEqual(
+            new Error(`Reset failed to remove required state:\n${workspaceDir}`),
           );
         },
       );
@@ -332,7 +336,7 @@ describe("handleReset", () => {
     expect(mocks.movePathToTrash).toHaveBeenCalledWith(expectedTrashSourcePath(workspaceDir), {
       allowedRoots: [path.dirname(expectedTrashSourcePath(workspaceDir))],
     });
-    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
+    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
   it("attempts workspace removal even when state deletion planning fails", async () => {

@@ -1,11 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withSetupMigrationTargetLock } from "../../wizard/setup.migration-snapshot.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const mocks = vi.hoisted(() => ({ stateDir: "" }));
+
+vi.mock("../../config/paths.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js")),
+  resolveStateDir: () => mocks.stateDir,
+}));
+
 import {
-  createAdmittedSetupSession,
+  createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
 } from "./setup-admission.js";
 
 describe("setup admission", () => {
+  beforeEach(() => {
+    mocks.stateDir = tempDirs.make("openclaw-setup-admission-");
+  });
+
   it("rejects concurrent work instead of queueing it", async () => {
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
@@ -39,31 +55,87 @@ describe("setup admission", () => {
     await expect(runExclusiveSystemAgentSetupActivation(async () => "ok")).resolves.toBe("ok");
   });
 
+  it("does not misclassify a task's own file-lock timeout as setup contention", async () => {
+    const taskError = Object.assign(new Error("config lock timed out"), {
+      code: "file_lock_timeout",
+    });
+
+    await expect(
+      runExclusiveSystemAgentSetupActivation(async () => {
+        throw taskError;
+      }),
+    ).rejects.toBe(taskError);
+  });
+
   it("holds an admitted session lease until its runner settles", async () => {
     const settled = createDeferred();
-    createAdmittedSetupSession(() => ({
+    await createAdmittedWizardSession(() => ({
       whenSettled: () => settled.promise,
     }));
 
-    expect(
-      createAdmittedSetupSession(() => ({ whenSettled: () => Promise.resolve() })),
-    ).toBeUndefined();
+    await expect(
+      createAdmittedWizardSession(() => ({ whenSettled: () => Promise.resolve() })),
+    ).resolves.toBeUndefined();
     settled.resolve();
     await settled.promise;
-    await Promise.resolve();
-    const next = createAdmittedSetupSession(() => ({ whenSettled: () => Promise.resolve() }));
-    expect(next).toBeDefined();
-    await next?.whenSettled();
+    await vi.waitFor(async () => {
+      const next = await createAdmittedWizardSession(() => ({
+        whenSettled: () => Promise.resolve(),
+      }));
+      expect(next).toBeDefined();
+      await next?.whenSettled();
+    });
   });
 
-  it("releases an admitted session lease when construction fails", () => {
-    expect(() =>
-      createAdmittedSetupSession(() => {
+  it("releases an admitted session lease when construction fails", async () => {
+    await expect(
+      createAdmittedWizardSession(() => {
         throw new Error("construction failed");
       }),
-    ).toThrow("construction failed");
-    expect(
-      createAdmittedSetupSession(() => ({ whenSettled: () => Promise.resolve() })),
-    ).toBeDefined();
+    ).rejects.toThrow("construction failed");
+    await expect(
+      createAdmittedWizardSession(() => ({ whenSettled: () => Promise.resolve() })),
+    ).resolves.toBeDefined();
+  });
+
+  it("reserves wizard admission while setup waits to acquire its target lock", async () => {
+    const lockAcquired = createDeferred();
+    const releaseLock = createDeferred();
+    const lockOwner = withSetupMigrationTargetLock(mocks.stateDir, async () => {
+      lockAcquired.resolve();
+      await releaseLock.promise;
+    });
+    await lockAcquired.promise;
+
+    const setupAttempt = createAdmittedWizardSession(() => ({
+      whenSettled: () => Promise.resolve(),
+    }));
+    const channelFactory = vi.fn(() => ({ whenSettled: () => Promise.resolve() }));
+    await expect(createAdmittedWizardSession(channelFactory, false)).resolves.toBeUndefined();
+    expect(channelFactory).not.toHaveBeenCalled();
+    await expect(setupAttempt).resolves.toBeUndefined();
+
+    releaseLock.resolve();
+    await lockOwner;
+  });
+
+  it("rejects Gateway setup while the canonical onboarding target lock is held", async () => {
+    const lockAcquired = createDeferred();
+    const releaseLock = createDeferred();
+    const lockOwner = withSetupMigrationTargetLock(mocks.stateDir, async () => {
+      lockAcquired.resolve();
+      await releaseLock.promise;
+    });
+    await lockAcquired.promise;
+
+    const task = vi.fn(async () => "unexpected");
+    await expect(runExclusiveSystemAgentSetupActivation(task)).rejects.toThrow(
+      "setup is already in progress",
+    );
+    expect(task).not.toHaveBeenCalled();
+
+    releaseLock.resolve();
+    await lockOwner;
+    await expect(runExclusiveSystemAgentSetupActivation(async () => "ok")).resolves.toBe("ok");
   });
 });
