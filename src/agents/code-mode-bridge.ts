@@ -16,8 +16,8 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "./swarm-code-mode.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
+} from "./subagents/swarm/swarm-code-mode.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import {
   waitForCollectorCompletion,

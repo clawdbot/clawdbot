@@ -13,7 +13,7 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
+import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {

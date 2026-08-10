@@ -1,5 +1,5 @@
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../../../shared/json-schema.types.js";
 
 export function validateStructuredOutputSchema(
   schema: Record<string, unknown>,
