@@ -96,6 +96,9 @@ type SessionsPageRequestScope = {
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
 
+/** Type-only, so the dialog itself stays behind its lazy boundary. */
+type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
+
 type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
 
 class SessionsPage extends OpenClawLightDomElement {
@@ -1044,23 +1047,33 @@ class SessionsPage extends OpenClawLightDomElement {
     }
   }
 
+  /** A dialog that never opens still owes the operator a visible outcome. */
+  private async loadInputDialog(): Promise<InputDialogOpener | null> {
+    try {
+      return (await import("../../components/input-dialog.ts")).showInputDialog;
+    } catch (error) {
+      this.error = String(error);
+      return null;
+    }
+  }
+
   private async requestNewCategory(sessionKey?: string) {
-    const { showInputDialog } = await import("../../components/input-dialog.ts");
-    // Identity is captured now, with the row the operator acted on, not after the
-    // catalog write; by then a refresh may have replaced or repaged it.
+    // Identity is read before any await: a refresh during the dialog's chunk load
+    // would otherwise hand back the row that replaced the one acted on.
     const expectedSessionId = sessionKey
       ? this.result?.sessions.find((row) => row.key === sessionKey)?.sessionId
       : undefined;
-    await this.withDialogLifecycle((signal) =>
-      showInputDialog({
+    await this.withDialogLifecycle(async (signal) => {
+      const showInputDialog = await this.loadInputDialog();
+      await showInputDialog?.({
         signal,
         title: t("sessionsView.newGroupTitle"),
         label: t("sessionsView.newGroupPrompt"),
         submitLabel: t("sessionsView.newGroupCreate"),
         requireValue: true,
         submit: (name) => this.writeNewCategory(name, sessionKey, expectedSessionId),
-      }),
-    );
+      });
+    });
   }
 
   /**
@@ -1102,14 +1115,16 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async renameSession(row: GatewaySessionRow) {
-    const { showInputDialog } = await import("../../components/input-dialog.ts");
-    const value = await this.withDialogLifecycle((signal) =>
-      showInputDialog({
-        signal,
-        title: t("sessionsView.renameSessionPrompt"),
-        defaultValue: normalizeOptionalString(row.label) ?? "",
-      }),
-    );
+    const value = await this.withDialogLifecycle(async (signal) => {
+      const showInputDialog = await this.loadInputDialog();
+      return (
+        (await showInputDialog?.({
+          signal,
+          title: t("sessionsView.renameSessionPrompt"),
+          defaultValue: normalizeOptionalString(row.label) ?? "",
+        })) ?? null
+      );
+    });
     if (value === null) {
       return;
     }

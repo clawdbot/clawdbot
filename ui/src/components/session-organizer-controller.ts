@@ -33,6 +33,7 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
+type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
 
 export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
@@ -413,15 +414,32 @@ export class SessionOrganizerController implements ReactiveController {
     this.finishSidebarEntryDrag();
   }
 
+  /** A dialog that never opens still owes the operator a visible outcome. */
+  private async loadInputDialog(): Promise<InputDialogOpener | null> {
+    try {
+      return (await import("./input-dialog.ts")).showInputDialog;
+    } catch (error) {
+      const scope = this.host.sessionData.beginSessionMutation();
+      if (scope) {
+        this.host.sessionData.publishSessionMutationError(scope, error);
+      }
+      return null;
+    }
+  }
+
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const { showInputDialog } = await import("./input-dialog.ts");
-    const nextLabel = await this.withDialogLifecycle((signal) =>
-      showInputDialog({
-        signal,
-        title: t("sessionsView.renameSessionPrompt"),
-        defaultValue: session.label,
-      }),
-    );
+    // The lifecycle is armed before the chunk load, so a sidebar that disconnects
+    // mid-import cannot have a dialog open behind it once the chunk resolves.
+    const nextLabel = await this.withDialogLifecycle(async (signal) => {
+      const showInputDialog = await this.loadInputDialog();
+      return (
+        (await showInputDialog?.({
+          signal,
+          title: t("sessionsView.renameSessionPrompt"),
+          defaultValue: session.label,
+        })) ?? null
+      );
+    });
     if (nextLabel === null) {
       return;
     }
@@ -434,17 +452,17 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    const { showInputDialog } = await import("./input-dialog.ts");
-    await this.withDialogLifecycle((signal) =>
-      showInputDialog({
+    await this.withDialogLifecycle(async (signal) => {
+      const showInputDialog = await this.loadInputDialog();
+      await showInputDialog?.({
         signal,
         title: t("sessionsView.newGroupTitle"),
         label: t("sessionsView.newGroupPrompt"),
         submitLabel: t("sessionsView.newGroupCreate"),
         requireValue: true,
         submit: (name) => this.writeSessionGroup(name, sessions),
-      }),
-    );
+      });
+    });
   }
 
   /**
