@@ -1,7 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
-export type PluginCommandNativeMetadata = Readonly<{
+type PluginCommandNativeMetadata = Readonly<{
   name: string;
   description: string;
   descriptionLocalizations?: Readonly<Record<string, string>>;
