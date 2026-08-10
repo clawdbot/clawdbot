@@ -1,8 +1,14 @@
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 // Telegram tests cover bot native commands plugin behavior.
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listNativeCommandSpecsForConfig } from "openclaw/plugin-sdk/native-command-registry";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -19,11 +25,6 @@ import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./c
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
-let clearPluginCommands: typeof import("openclaw/plugin-sdk/plugin-runtime").clearPluginCommands;
-let registerPluginCommand: typeof import("openclaw/plugin-sdk/plugin-runtime").registerPluginCommand;
-let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createEmptyPluginRegistry;
-let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
-let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
@@ -142,18 +143,13 @@ function replyAt(params: Record<string, unknown>, index = 0) {
   return reply;
 }
 
-describe("registerTelegramNativeCommands", () => {
-  beforeAll(async () => {
-    ({ clearPluginCommands, registerPluginCommand } =
-      await import("openclaw/plugin-sdk/plugin-runtime"));
-    ({ createEmptyPluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/channel-test-helpers"));
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
-      await import("./bot-native-commands.js"));
-  });
+resetPluginRuntimeStateForTest();
+setActivePluginRegistry(createEmptyPluginRegistry());
+({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
+  await import("./bot-native-commands.js"));
+registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
+describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();

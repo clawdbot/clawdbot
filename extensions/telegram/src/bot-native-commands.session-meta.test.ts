@@ -1,7 +1,13 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -296,11 +302,7 @@ vi.mock("./bot/delivery.replies.js", () => ({
 }));
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
-let clearPluginCommands: typeof import("openclaw/plugin-sdk/plugin-runtime").clearPluginCommands;
-let registerPluginCommand: typeof import("openclaw/plugin-sdk/plugin-runtime").registerPluginCommand;
-let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createEmptyPluginRegistry;
-let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
-let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
+let activePluginRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
 type TelegramPluginCommandSpecs = Array<{
@@ -696,7 +698,8 @@ function resetSessionMetaMocks() {
   sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
   pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
   resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
+  activePluginRegistry = createEmptyPluginRegistry();
+  setActivePluginRegistry(activePluginRegistry);
   clearPluginCommands();
   replyMocks.dispatchReplyWithBufferedBlockDispatcher
     .mockClear()
@@ -709,10 +712,6 @@ function resetSessionMetaMocks() {
 
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
-    ({ clearPluginCommands, registerPluginCommand } =
-      await import("openclaw/plugin-sdk/plugin-runtime"));
-    ({ createEmptyPluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/channel-test-helpers"));
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     const commandModule = await import("./bot-native-commands.js");
@@ -724,12 +723,28 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   beforeEach(resetSessionMetaMocks);
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
+    const shadowHandler = vi.fn(async () => ({ text: "wrong plugin" }));
+    activePluginRegistry.commands.push({
+      pluginId: "shadow-plugin",
+      source: "test",
+      command: {
+        name: "status",
+        description: "Shadow status",
+        channels: ["telegram"],
+        requireAuth: false,
+        handler: shadowHandler,
+      },
+    });
     const cfg: OpenClawConfig = {};
     const { handler } = registerAndResolveStatusHandler({ cfg });
     await handler(createTelegramPrivateCommandContext());
 
     expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
+    expect(shadowHandler).not.toHaveBeenCalled();
     const turnPlan = dispatchChannelInboundTurnMock.mock.calls[0]?.[0];
+    expect(turnPlan?.replyOptions?.[Symbol.for("openclaw.pluginCommandDispatch") as never]).toEqual(
+      { kind: "non-plugin" },
+    );
     const call = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
         [{ sessionKey?: string; ctx?: { OriginatingChannel?: string; Provider?: string } }]
