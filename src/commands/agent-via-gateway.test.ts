@@ -488,6 +488,19 @@ describe("agentCliCommand", () => {
     }, remoteGatewayConfig);
   });
 
+  it("skips remote roster loading for an explicit agent", async () => {
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", agent: "ops" }, runtime);
+
+      const methods = callGateway.mock.calls.map(
+        ([requestValue]) => requireRecord(requestValue, "gateway request").method,
+      );
+      expect(methods).toEqual(["agent"]);
+    }, remoteGatewayConfig);
+  });
+
   it.each([
     { ownership: "sole" as const, agents: ["ops"] },
     { ownership: "legacy" as const, agents: ["ops", "research"] },

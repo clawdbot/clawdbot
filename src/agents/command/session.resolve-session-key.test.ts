@@ -1,6 +1,7 @@
 // Covers cross-store session-key resolution for multi-agent session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -239,6 +240,42 @@ describe("resolveSessionKeyForRequest", () => {
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "ops" }),
+    );
+  });
+
+  it("creates a missing session-id target under the retained owner", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
+    mockSessionStores({});
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        session: { store: "/stores/{agentId}.json" },
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+      },
+      "ops",
+    );
+
+    const result = resolveSessionKeyForRequest({ cfg, sessionId: "new-session" });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.sessionKey).toBe("agent:ops:explicit:new-session");
+  });
+
+  it("fails closed when creating a session-id target in an ownerless fleet", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
+    mockSessionStores({});
+    const cfg = {
+      session: { store: "/stores/{agentId}.json" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() => resolveSessionKeyForRequest({ cfg, sessionId: "new-session" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
     );
   });
 

@@ -573,21 +573,21 @@ async function normalizeSessionKeyOptsForDispatch(
   let selectionCfg: OpenClawConfig | undefined;
   let remoteGatewayRoster: RemoteGatewayRoster | undefined;
   if (opts.local !== true) {
-    let cfg = readGatewayDispatchConfig();
+    const cfg = readGatewayDispatchConfig();
     normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg };
-    if (usesRemoteGateway(cfg)) {
+    selectionCfg = cfg;
+  }
+  if (!agentIdRaw && !hasExplicitSessionTarget && !(opts.local === true && rawTo)) {
+    let cfg =
+      opts.local === true
+        ? await loadRuntimeConfig()
+        : (selectionCfg ?? readGatewayDispatchConfig());
+    if (opts.local !== true && usesRemoteGateway(cfg)) {
       const loaded = await loadRemoteGatewayRosterWithShellEnvFallback(cfg);
       cfg = loaded.config;
       remoteGatewayRoster = loaded.roster;
       normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg, remoteGatewayRoster };
     }
-    selectionCfg = cfg;
-  }
-  if (!agentIdRaw && !hasExplicitSessionTarget && !(opts.local === true && rawTo)) {
-    const cfg =
-      opts.local === true
-        ? await loadRuntimeConfig()
-        : (selectionCfg ?? readGatewayDispatchConfig());
     selectionCfg = cfg;
     const selectedAgentId = resolveImplicitCliAgentId(cfg, remoteGatewayRoster);
     const implicitSoleAgent = remoteGatewayRoster

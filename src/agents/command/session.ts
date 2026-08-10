@@ -416,6 +416,7 @@ export function resolveSessionKeyForRequestCore(opts: {
   if (requestedSessionId && !sessionKey) {
     const explicitSessionAgentId =
       requestedAgentId ??
+      tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
       resolveDefaultAgentId(opts.cfg, {
         surface: "agent command session creation",
         hint: "Pass --agent <id> when creating a session from --session-id.",
