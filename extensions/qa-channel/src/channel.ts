@@ -68,6 +68,7 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
     accountId: ctx.accountId,
     to: ctx.to,
     text,
+    isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
