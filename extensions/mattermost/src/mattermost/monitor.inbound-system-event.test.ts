@@ -1848,6 +1848,72 @@ describe("mattermost inbound user posts", () => {
     expect(updates.at(-1)).not.toContain("ThinkingChecking");
   });
 
+  it("cleans up observed message-tool delivery when tool progress is disabled", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const draftStream = {
+      update: vi.fn(),
+      flush: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+      retainTerminalText: vi.fn(async () => true),
+      stop: vi.fn(async () => {}),
+    };
+    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: {
+            mode: "progress",
+            progress: {
+              label: false,
+              toolProgress: false,
+              finalDelivery: "separate",
+            },
+          },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
+      await params.replyOptions?.onObservedReplyDelivery?.();
+      abortController.abort();
+      throw new Error("late turn failure");
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: progressConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-progress-without-tools",
+      message: "reason, then send with the message tool",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBeUndefined();
+    expect(replyOptions?.onObservedReplyDelivery).toBeTypeOf("function");
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.retainTerminalText).not.toHaveBeenCalled();
+  });
+
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
