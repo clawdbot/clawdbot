@@ -29,11 +29,8 @@ import type {
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import {
-  systemAgentHandlers,
-  runExclusiveSystemAgentSetupActivation,
-  type SystemAgentChatSession,
-} from "./system-agent.js";
+import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
+import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({
@@ -306,33 +303,6 @@ async function callChat(
 }
 
 describe("openclaw.setup", () => {
-  it("rejects a concurrent activation instead of queueing stale work", async () => {
-    const firstStarted = createDeferred();
-    const releaseFirst = createDeferred();
-    const events: string[] = [];
-
-    const first = runExclusiveSystemAgentSetupActivation(async () => {
-      events.push("first:start");
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      events.push("first:end");
-    });
-    await firstStarted.promise;
-
-    const secondTask = vi.fn(async () => events.push("second:start", "second:end"));
-    expect(events).toEqual(["first:start"]);
-    await expect(runExclusiveSystemAgentSetupActivation(secondTask)).rejects.toThrow(
-      "setup is already in progress",
-    );
-    expect(secondTask).not.toHaveBeenCalled();
-    releaseFirst.resolve();
-    await first;
-    expect(events).toEqual(["first:start", "first:end"]);
-
-    await runExclusiveSystemAgentSetupActivation(async () => events.push("third:start"));
-    expect(events).toEqual(["first:start", "first:end", "third:start"]);
-  });
-
   it("returns a retryable busy error while another activation is running", async () => {
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
@@ -366,16 +336,42 @@ describe("openclaw.setup", () => {
     }
   });
 
-  it("releases the activation slot when the owning task fails", async () => {
-    await expect(
-      runExclusiveSystemAgentSetupActivation(async () => {
-        throw new Error("probe failed");
-      }),
-    ).rejects.toThrow("probe failed");
+  it.each([
+    [
+      "openclaw.setup.auth.start" as const,
+      { sessionId: "busy-auth", authChoice: "github-copilot" },
+    ],
+    ["openclaw.setup.prepare.start" as const, { sessionId: "busy-prepare", authChoice: "ollama" }],
+  ])("rejects %s before creating a wizard session when setup is busy", async (method, params) => {
+    const ownerStarted = createDeferred();
+    const releaseOwner = createDeferred();
+    const owner = runExclusiveSystemAgentSetupActivation(async () => {
+      ownerStarted.resolve();
+      await releaseOwner.promise;
+    });
+    await ownerStarted.promise;
+    const { wizardSessions, context } = makeWizardContext();
 
-    const nextTask = vi.fn(async () => "ok");
-    await expect(runExclusiveSystemAgentSetupActivation(nextTask)).resolves.toBe("ok");
-    expect(nextTask).toHaveBeenCalledOnce();
+    try {
+      const { calls, respond } = makeRespond();
+      await systemAgentHandler(method)({ params, respond, context } as never);
+
+      expect(calls).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: {
+            code: "UNAVAILABLE",
+            message: "OpenClaw setup is already in progress; try again when it finishes.",
+            retryable: true,
+          },
+        },
+      ]);
+      expect(wizardSessions.size).toBe(0);
+    } finally {
+      releaseOwner.resolve();
+      await owner;
+    }
   });
   it("starts provider auth as an interactive wizard session", async () => {
     const { wizardSessions, context } = makeWizardContext();
@@ -467,7 +463,6 @@ describe("openclaw.setup", () => {
       allowConfigSizeDrop: false,
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
       baseHash: "prepare-base-hash",
-      migrationBaseConfig: verifiedConfig,
     });
   });
 });

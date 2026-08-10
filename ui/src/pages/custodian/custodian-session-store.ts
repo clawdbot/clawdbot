@@ -67,6 +67,7 @@ export class CustodianSessionStore {
   private sessionVariant: CustodianSessionVariant | null = null;
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
+  private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
   private sessionClient: GatewayBrowserClient | null = null;
@@ -261,6 +262,7 @@ export class CustodianSessionStore {
 
   openChannelsFromOnboarding(): void {
     this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
     this.emit();
     this.context?.navigate("channels");
   }
@@ -316,10 +318,24 @@ export class CustodianSessionStore {
   }
 
   exitSetup(): void {
+    // Leaving setup revokes navigation authority from every in-flight reply.
+    // The destination surface separately decides whether to retain or rotate context.
+    this.revokeNavigationAuthority();
     this.context?.navigate("chat");
   }
 
+  private revokeNavigationAuthority(): void {
+    this.requestAbort?.abort();
+    this.requestAbort = null;
+    this.requestEpoch += 1;
+    this.sending = false;
+    this.questionReplyUncertain = false;
+    this.retryParams = null;
+    this.error = null;
+  }
+
   openModelSetup(): void {
+    this.revokeNavigationAuthority();
     this.context?.navigate("model-setup");
   }
 
@@ -588,6 +604,9 @@ export class CustodianSessionStore {
     ) {
       return "rejected";
     }
+    this.requestAbort?.abort();
+    const requestAbort = new AbortController();
+    this.requestAbort = requestAbort;
     const epoch = ++this.requestEpoch;
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
@@ -601,6 +620,7 @@ export class CustodianSessionStore {
       const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
         onSent: () => (delivery = "sent"),
+        signal: requestAbort.signal,
       });
       delivery = "received";
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
@@ -672,6 +692,9 @@ export class CustodianSessionStore {
       }
       return eventNudgeState.classifyCustodianSendFailure(error, delivery);
     } finally {
+      if (this.requestAbort === requestAbort) {
+        this.requestAbort = null;
+      }
       if (epoch === this.requestEpoch) {
         this.sending = false;
       }

@@ -893,7 +893,6 @@ describe("SystemAgentChatEngine", () => {
       {
         allowConfigSizeDrop: false,
         baseHash: "skills-base-hash",
-        migrationBaseConfig: baseConfig,
       },
     );
     expect(appendAuditEntry).toHaveBeenCalledWith(
@@ -1354,7 +1353,6 @@ describe("SystemAgentChatEngine", () => {
       {
         allowConfigSizeDrop: false,
         baseHash: "gateway-base-hash",
-        migrationBaseConfig: baseConfig,
         afterWrite: {
           mode: "none",
           reason: "Gateway setup defers runtime apply until explicit restart",
@@ -1806,7 +1804,6 @@ describe("SystemAgentChatEngine", () => {
       }),
       expect.objectContaining({
         baseHash: "base-hash",
-        migrationBaseConfig: baseConfig,
       }),
     );
     expect(currentConfig).toEqual(concurrentConfig);

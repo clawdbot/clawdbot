@@ -247,7 +247,6 @@ async function runHostedConfigWizard(params: {
   const committedConfig = await writeWizardConfigFile(result.nextConfig, {
     allowConfigSizeDrop: false,
     baseHash: snapshot.hash,
-    migrationBaseConfig: baseConfig,
     ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
   });
   await result.afterWrite?.(committedConfig);

@@ -85,6 +85,40 @@ vi.mock("../config/config.js", () => ({
       ownedConfigPathForWrite: "/tmp/openclaw.json",
     },
   }),
+  resolveConfigWriteAfterWrite: (afterWrite?: { mode: string }) => afterWrite ?? { mode: "auto" },
+  transformConfigFileWithRetry: async (
+    params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
+  ) => {
+    const maxAttempts = params.maxAttempts ?? 5;
+    for (let attempt = 0; ; attempt += 1) {
+      const snapshot = await mocks.readConfigFileSnapshot();
+      const previousHash = snapshot.hash ?? null;
+      const config =
+        params.base === "runtime"
+          ? (snapshot.runtimeConfig ?? snapshot.config)
+          : (snapshot.sourceConfig ?? snapshot.config);
+      try {
+        const transformed = await params.transform(config, { snapshot, previousHash, attempt });
+        const committed = await params.commit!({
+          nextConfig: transformed.nextConfig,
+          snapshot,
+          ...(previousHash ? { baseHash: previousHash } : {}),
+          writeOptions: params.writeOptions,
+          afterWrite: { mode: "auto" },
+        });
+        return { nextConfig: committed.config };
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          error.name !== "ConfigMutationConflictError" ||
+          (error as { retryable?: boolean }).retryable === false ||
+          attempt === maxAttempts - 1
+        ) {
+          throw error;
+        }
+      }
+    }
+  },
   writeConfigFile: mocks.writeConfigFile,
   replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
@@ -962,7 +996,6 @@ describe("runConfigureWizard", () => {
     let callCount = 0;
     const originalHash = "hash-before-plugin-mutation";
     const newHashAfterMutation = "hash-after-plugin-mutation";
-    const finalHashAfterWrite = "hash-after-wizard-write";
 
     mocks.replaceConfigFile.mockImplementation(
       async (params: { nextConfig: unknown; baseHash?: string }) => {
@@ -982,6 +1015,12 @@ describe("runConfigureWizard", () => {
 
     // Mock readConfigFileSnapshot to return different hashes/configs on each call
     mocks.readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: originalHash,
+        config: baseConfig,
+        sourceConfig: baseConfig,
+      })
       .mockResolvedValueOnce({
         ...EMPTY_CONFIG_SNAPSHOT,
         hash: originalHash,
@@ -1018,11 +1057,6 @@ describe("runConfigureWizard", () => {
           },
         },
         valid: true,
-      })
-      .mockResolvedValueOnce({
-        ...EMPTY_CONFIG_SNAPSHOT,
-        hash: finalHashAfterWrite,
-        config: {},
       });
 
     await runConfigureWizard({ command: "configure", sections: ["workspace"] }, createRuntime());
@@ -1074,6 +1108,6 @@ describe("runConfigureWizard", () => {
     ).rejects.toThrow("config path changed since last load");
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 });
