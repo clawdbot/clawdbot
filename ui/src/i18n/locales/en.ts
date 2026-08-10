@@ -212,6 +212,11 @@ export const en: TranslationMap = {
       dismissExplanation:
         "This removes the current request but does not block the sender. They can request access again later.",
       notifyRequester: "Notify the requester after approval",
+      memoryProfile: "Memory profile",
+      noMemoryProfile: "Do not link a memory profile",
+      memoryProfileHelp:
+        "Optionally link this verified sender to an existing Gateway profile. The selected profile owns the sender's private memory; the approving administrator is recorded only for audit.",
+      memoryProfilesLoading: "Loading available profiles…",
       makeCommandOwner: "Also make this sender the first command owner",
       commandOwnerHelp:
         "Command owners can run privileged commands and approve dangerous actions. This option is only available while no owner is configured.",

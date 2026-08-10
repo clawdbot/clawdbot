@@ -26,6 +26,15 @@ function formatRequestTime(value: string): string {
   return Number.isFinite(time) ? formatRelativeTimestamp(time) : value;
 }
 
+function selectValue(event: Event): string | null {
+  const value = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : "";
+  return value || null;
+}
+
+function profileLabel(profile: NonNullable<ChannelsProps["pairingProfiles"]>[number]): string {
+  return profile.displayName?.trim() || profile.id;
+}
+
 function filteredAccounts(props: ChannelsProps): ChannelsPairingAccount[] {
   const accounts = props.pairingSnapshot?.accounts ?? [];
   return props.pairingChannelFilter
@@ -325,6 +334,39 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
                     })}
                 />
                 <span>${t("channels.pairing.notifyRequester")}</span>
+              </label>
+            `
+          : nothing}
+        ${approving && props.canAdmin
+          ? html`
+              <label class="channels-pairing-dialog__option">
+                <span>${t("channels.pairing.memoryProfile")}</span>
+                <select
+                  class="settings-select"
+                  .value=${prompt.targetProfileId ?? ""}
+                  ?disabled=${props.pairingProfilesLoading}
+                  @change=${(event: Event) =>
+                    props.onPairingPromptChange({ targetProfileId: selectValue(event) })}
+                >
+                  <option value="">${t("channels.pairing.noMemoryProfile")}</option>
+                  ${(props.pairingProfiles ?? []).map(
+                    (profile) =>
+                      html`<option value=${profile.id}>
+                        ${profileLabel(profile)} · ${profile.id}
+                      </option>`,
+                  )}
+                </select>
+                <span class="settings-row__desc">${t("channels.pairing.memoryProfileHelp")}</span>
+                ${props.pairingProfilesLoading
+                  ? html`<span class="settings-row__desc"
+                      >${t("channels.pairing.memoryProfilesLoading")}</span
+                    >`
+                  : nothing}
+                ${props.pairingProfilesError
+                  ? html`<span class="settings-row__desc" role="alert"
+                      >${props.pairingProfilesError}</span
+                    >`
+                  : nothing}
               </label>
             `
           : nothing}

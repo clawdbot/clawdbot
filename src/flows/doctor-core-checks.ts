@@ -58,6 +58,7 @@ const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+const MEMORY_SHARED_MAIN_DM_SCOPE_CHECK_ID = "core/doctor/memory-shared-main-dm-scope";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
@@ -286,6 +287,33 @@ const gatewayConfigCheck: HealthCheck = {
       });
     }
     return findings;
+  },
+};
+
+const memorySharedMainDmScopeCheck: HealthCheck = {
+  id: MEMORY_SHARED_MAIN_DM_SCOPE_CHECK_ID,
+  kind: "core",
+  description: "Direct messages routed through a shared main session cannot use private memory.",
+  async detect(ctx) {
+    const globalSharedMain = (ctx.cfg.session?.dmScope ?? "main") === "main";
+    const routeSharedMain = ctx.cfg.bindings?.some(
+      (binding) => "session" in binding && binding.session?.dmScope === "main",
+    );
+    if (!globalSharedMain && !routeSharedMain) {
+      return [];
+    }
+    return [
+      {
+        checkId: MEMORY_SHARED_MAIN_DM_SCOPE_CHECK_ID,
+        severity: "info",
+        message:
+          "Private memory is unavailable for direct messages routed through a shared-main session.",
+        path: globalSharedMain ? "session.dmScope" : "bindings[].session.dmScope",
+        requirement: "private-memory direct-message isolation",
+        fixHint:
+          'Set session.dmScope to "per-channel-peer", or to "per-account-channel-peer" when the same channel has multiple accounts. Doctor does not rewrite session.dmScope.',
+      },
+    ];
   },
 };
 
@@ -1370,6 +1398,7 @@ export function createCoreHealthChecks(
 ): readonly SplitHealthCheckInput[] {
   return [
     gatewayConfigCheck,
+    memorySharedMainDmScopeCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),

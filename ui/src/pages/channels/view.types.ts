@@ -13,6 +13,7 @@ import type {
   SignalStatus,
   SlackStatus,
   TelegramStatus,
+  UserProfile,
   WhatsAppStatus,
 } from "../../api/types.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
@@ -25,6 +26,8 @@ export type ChannelPairingPrompt = {
   request: ChannelsPairingRequest;
   notify: boolean;
   bootstrapCommandOwner: boolean;
+  /** An explicit durable profile creates the verified memory binding on approval. */
+  targetProfileId: string | null;
 };
 
 export type ChannelsProps = {
@@ -42,6 +45,9 @@ export type ChannelsProps = {
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
   pairingNotice: string | null;
+  pairingProfiles: readonly UserProfile[] | null;
+  pairingProfilesLoading: boolean;
+  pairingProfilesError: string | null;
   canManagePairing: boolean;
   canAdmin: boolean;
   whatsappMessage: string | null;
@@ -78,7 +84,9 @@ export type ChannelsProps = {
   onPairingApprove: (request: ChannelsPairingRequest) => void;
   onPairingDismiss: (request: ChannelsPairingRequest) => void;
   onPairingPromptChange: (
-    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
+    patch: Partial<
+      Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "targetProfileId">
+    >,
   ) => void;
   onPairingPromptCancel: () => void;
   onPairingPromptConfirm: () => void;

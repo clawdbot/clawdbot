@@ -40,7 +40,7 @@ export async function recordInboundSession(params: {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
   const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
-  const metaTask = runtime
+  const recordTask = runtime
     .recordInboundSessionMeta({
       storePath,
       sessionKey: canonicalSessionKey,
@@ -48,15 +48,35 @@ export async function recordInboundSession(params: {
       groupResolution,
       createIfMissing,
     })
-    .catch(async (err: unknown) => {
-      try {
-        await Promise.resolve(params.onRecordError(err));
-      } catch {
-        // Error reporting must not reject the detached metadata task.
+    .then(async (entry) => {
+      if (!entry || !ctx.AgentId?.trim()) {
+        return entry;
       }
+      // This runs after the session writer committed the node mapping. Only an
+      // opaque loader-issued proof attached to this exact context can select a
+      // private subject; every other inbound kind becomes explicit ambiguity.
+      const { admitInboundMemorySessionContext } =
+        await import("../state/memory-session-subject.js");
+      admitInboundMemorySessionContext({
+        context: ctx,
+        sessionKey: canonicalSessionKey,
+        sessionId: entry.sessionId,
+        options: { agentId: ctx.AgentId },
+      });
+      return entry;
     });
+  const metaTask = recordTask.catch(async (err: unknown) => {
+    try {
+      await Promise.resolve(params.onRecordError(err));
+    } catch {
+      // Error reporting is observational; the recording failure still aborts the turn.
+    }
+  });
   params.trackSessionMetaTask?.(metaTask);
-  void metaTask;
+  // A subject is immutable session provenance, not best-effort metadata. Do
+  // not let dispatch start until the committed node has either admitted it or
+  // made the recording failure visible to the turn owner.
+  await recordTask;
 
   const update = params.updateLastRoute;
   if (!update) {

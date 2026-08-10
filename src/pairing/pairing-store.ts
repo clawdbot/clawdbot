@@ -1,16 +1,26 @@
 // Persists pairing challenges and approved channel account bindings in shared SQLite state.
 import crypto from "node:crypto";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type { DatabaseSync } from "node:sqlite";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedChannelMemoryIdentity } from "../channels/message-access/memory-identity-admission.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import {
+  deleteMemoryIdentityPairingReceiptInTransaction,
+  ensureMemoryIdentitySchema,
+  linkMemoryIdentityPairingReceiptInTransaction,
+  stageAdmittedMemoryIdentityPairingReceiptInTransaction,
+  type MemoryIdentityPairingLink,
+} from "../state/memory-identity.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveUserProfileId } from "../state/user-profiles.js";
 import { resolveAllowFromAccountId } from "./pairing-store-keys.js";
 import {
   readChannelPairingState,
@@ -59,10 +69,10 @@ function isExpired(entry: PairingRequest, nowMs: number): boolean {
 
 function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
   const kept: PairingRequest[] = [];
-  let removed = false;
+  const removed: PairingRequest[] = [];
   for (const req of reqs) {
     if (isExpired(req, nowMs)) {
-      removed = true;
+      removed.push(req);
       continue;
     }
     kept.push(req);
@@ -75,7 +85,7 @@ function resolveLastSeenAt(entry: PairingRequest): number {
 }
 
 function normalizePairingAccountId(accountId?: string): string {
-  return normalizeLowercaseStringOrEmpty(accountId);
+  return normalizeLowercaseStringOrEmpty(accountId) ? normalizeAccountId(accountId) : "";
 }
 
 function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: string): boolean {
@@ -84,7 +94,7 @@ function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: str
 
 function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number) {
   if (maxPending <= 0 || reqs.length <= maxPending) {
-    return { requests: reqs, removed: false };
+    return { requests: reqs, removed: [] as PairingRequest[] };
   }
   const grouped = new Map<string, Array<{ index: number; request: PairingRequest }>>();
   for (const [index, entry] of reqs.entries()) {
@@ -110,8 +120,27 @@ function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number
     }
   }
   return droppedIndexes.size === 0
-    ? { requests: reqs, removed: false }
-    : { requests: reqs.filter((_, index) => !droppedIndexes.has(index)), removed: true };
+    ? { requests: reqs, removed: [] as PairingRequest[] }
+    : {
+        requests: reqs.filter((_, index) => !droppedIndexes.has(index)),
+        removed: reqs.filter((_, index) => droppedIndexes.has(index)),
+      };
+}
+
+function deleteMemoryIdentityReceiptsForRemovedRequests(params: {
+  db: DatabaseSync;
+  channel: PairingChannel;
+  requests: readonly PairingRequest[];
+}): void {
+  for (const request of params.requests) {
+    deleteMemoryIdentityPairingReceiptInTransaction({
+      db: params.db,
+      channel: params.channel,
+      accountId: resolvePairingRequestAccountId(request),
+      pairingRequestId: request.id,
+      pairingRequestCreatedAt: request.createdAt,
+    });
+  }
 }
 
 function randomCode(): string {
@@ -257,7 +286,12 @@ export async function listChannelPairingRequests(
     const state = readChannelPairingStateFromDatabase(database, channel);
     const expired = pruneExpiredRequests(state.requests, Date.now());
     const capped = pruneExcessRequestsByAccount(expired.requests, CHANNEL_PAIRING_PENDING_MAX);
-    if (expired.removed || capped.removed) {
+    deleteMemoryIdentityReceiptsForRemovedRequests({
+      db: database.db,
+      channel,
+      requests: [...expired.removed, ...capped.removed],
+    });
+    if (expired.removed.length > 0 || capped.removed.length > 0) {
       state.requests = capped.requests;
       writeChannelPairingStateToDatabase(database, channel, state);
     }
@@ -285,12 +319,17 @@ export async function upsertChannelPairingRequest(params: {
   env?: NodeJS.ProcessEnv;
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
+  /** Opaque loader admission; only core can consume it into a private receipt. */
+  memoryIdentityAdmission?: unknown;
 }): Promise<{ code: string; created: boolean }> {
   const env = params.env ?? process.env;
+  if (params.memoryIdentityAdmission) {
+    ensureMemoryIdentitySchema({ env });
+  }
   return runOpenClawStateWriteTransaction((database) => {
     const now = new Date().toISOString();
     const id = normalizeId(params.id);
-    const accountId = normalizePairingAccountId(params.accountId) || DEFAULT_ACCOUNT_ID;
+    const accountId = normalizeAccountId(params.accountId);
     const baseMeta = params.meta
       ? Object.fromEntries(
           Object.entries(params.meta)
@@ -301,6 +340,11 @@ export async function upsertChannelPairingRequest(params: {
     const meta = { ...baseMeta, accountId };
     const state = readChannelPairingStateFromDatabase(database, params.channel);
     const expired = pruneExpiredRequests(state.requests, Date.now());
+    deleteMemoryIdentityReceiptsForRemovedRequests({
+      db: database.db,
+      channel: params.channel,
+      requests: expired.removed,
+    });
     let requests = expired.requests;
     const existingIndex = requests.findIndex(
       (request) => request.id === id && requestMatchesAccountId(request, accountId),
@@ -312,25 +356,58 @@ export async function upsertChannelPairingRequest(params: {
     if (existingIndex >= 0) {
       const existing = requests[existingIndex];
       const code = normalizeOptionalString(existing?.code) || generateUniqueCode(existingCodes);
-      requests[existingIndex] = {
+      const request = {
         id,
         code,
         createdAt: existing?.createdAt ?? now,
         lastSeenAt: now,
         meta,
       };
-      state.requests = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX).requests;
+      if (params.memoryIdentityAdmission) {
+        stageAdmittedMemoryIdentityPairingReceiptInTransaction({
+          db: database.db,
+          admission: params.memoryIdentityAdmission as AdmittedChannelMemoryIdentity,
+          channel: params.channel,
+          accountId,
+          pairingRequestId: request.id,
+          pairingRequestCreatedAt: request.createdAt,
+          expiresAt: Date.parse(request.createdAt) + CHANNEL_PAIRING_PENDING_TTL_MS,
+        });
+      } else {
+        // A refreshed request without newly attested sender evidence must not
+        // retain a receipt minted for an older ingress event.
+        deleteMemoryIdentityPairingReceiptInTransaction({
+          db: database.db,
+          channel: params.channel,
+          accountId,
+          pairingRequestId: request.id,
+          pairingRequestCreatedAt: request.createdAt,
+        });
+      }
+      requests[existingIndex] = request;
+      const capped = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX);
+      deleteMemoryIdentityReceiptsForRemovedRequests({
+        db: database.db,
+        channel: params.channel,
+        requests: capped.removed,
+      });
+      state.requests = capped.requests;
       writeChannelPairingStateToDatabase(database, params.channel, state);
       return { code, created: false };
     }
 
     const capped = pruneExcessRequestsByAccount(requests, CHANNEL_PAIRING_PENDING_MAX);
+    deleteMemoryIdentityReceiptsForRemovedRequests({
+      db: database.db,
+      channel: params.channel,
+      requests: capped.removed,
+    });
     requests = capped.requests;
     const accountRequestCount = requests.filter((request) =>
       requestMatchesAccountId(request, accountId),
     ).length;
     if (CHANNEL_PAIRING_PENDING_MAX > 0 && accountRequestCount >= CHANNEL_PAIRING_PENDING_MAX) {
-      if (expired.removed || capped.removed) {
+      if (expired.removed.length > 0 || capped.removed.length > 0) {
         state.requests = requests;
         writeChannelPairingStateToDatabase(database, params.channel, state);
       }
@@ -338,7 +415,19 @@ export async function upsertChannelPairingRequest(params: {
     }
 
     const code = generateUniqueCode(existingCodes);
-    state.requests = [...requests, { id, code, createdAt: now, lastSeenAt: now, meta }];
+    const request = { id, code, createdAt: now, lastSeenAt: now, meta };
+    if (params.memoryIdentityAdmission) {
+      stageAdmittedMemoryIdentityPairingReceiptInTransaction({
+        db: database.db,
+        admission: params.memoryIdentityAdmission as AdmittedChannelMemoryIdentity,
+        channel: params.channel,
+        accountId,
+        pairingRequestId: request.id,
+        pairingRequestCreatedAt: request.createdAt,
+        expiresAt: Date.parse(request.createdAt) + CHANNEL_PAIRING_PENDING_TTL_MS,
+      });
+    }
+    state.requests = [...requests, request];
     writeChannelPairingStateToDatabase(database, params.channel, state);
     return { code, created: true };
   }, sqliteOptionsForEnv(env));
@@ -351,21 +440,28 @@ type ResolvePairingRequestParams = {
   pairingAdapter?: ChannelPairingAdapter;
   matches: (request: PairingRequest) => boolean;
   approve: boolean;
+  memoryIdentityLink?: MemoryIdentityPairingLink;
 };
 
 async function resolveChannelPairingRequest(
   params: ResolvePairingRequestParams,
 ): Promise<{ id: string; entry: PairingRequest } | null> {
   const env = params.env ?? process.env;
-  return runOpenClawStateWriteTransaction((database) => {
+  let memoryIdentityReceiptUnavailable = false;
+  const resolved = runOpenClawStateWriteTransaction((database) => {
     const state = readChannelPairingStateFromDatabase(database, params.channel);
     const pruned = pruneExpiredRequests(state.requests, Date.now());
+    deleteMemoryIdentityReceiptsForRemovedRequests({
+      db: database.db,
+      channel: params.channel,
+      requests: pruned.removed,
+    });
     const accountId = normalizePairingAccountId(params.accountId);
     const index = pruned.requests.findIndex(
       (request) => requestMatchesAccountId(request, accountId) && params.matches(request),
     );
     if (index < 0) {
-      if (pruned.removed) {
+      if (pruned.removed.length > 0) {
         state.requests = pruned.requests;
         writeChannelPairingStateToDatabase(database, params.channel, state);
       }
@@ -374,6 +470,23 @@ async function resolveChannelPairingRequest(
     const entry = pruned.requests[index];
     if (!entry) {
       return null;
+    }
+    const entryAccountId = resolvePairingRequestAccountId(entry);
+    if (params.approve && params.memoryIdentityLink) {
+      // Link and ordinary pairing approval share the same commit. A missing or
+      // replayed receipt must leave the request pending and the allowlist intact.
+      const binding = linkMemoryIdentityPairingReceiptInTransaction({
+        db: database.db,
+        channel: params.channel,
+        accountId: entryAccountId,
+        pairingRequestId: entry.id,
+        pairingRequestCreatedAt: entry.createdAt,
+        link: params.memoryIdentityLink,
+      });
+      if (!binding) {
+        memoryIdentityReceiptUnavailable = true;
+        return null;
+      }
     }
     pruned.requests.splice(index, 1);
     state.requests = pruned.requests;
@@ -400,11 +513,32 @@ async function resolveChannelPairingRequest(
         state.allowFrom ??= {};
         state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];
       }
+      if (!params.memoryIdentityLink) {
+        deleteMemoryIdentityPairingReceiptInTransaction({
+          db: database.db,
+          channel: params.channel,
+          accountId: entryAccountId,
+          pairingRequestId: entry.id,
+          pairingRequestCreatedAt: entry.createdAt,
+        });
+      }
+    } else {
+      deleteMemoryIdentityPairingReceiptInTransaction({
+        db: database.db,
+        channel: params.channel,
+        accountId: entryAccountId,
+        pairingRequestId: entry.id,
+        pairingRequestCreatedAt: entry.createdAt,
+      });
     }
 
     writeChannelPairingStateToDatabase(database, params.channel, state);
     return { id: entry.id, entry };
   }, sqliteOptionsForEnv(env));
+  if (memoryIdentityReceiptUnavailable) {
+    throw new Error("memory identity pairing receipt is missing, expired, or already used");
+  }
+  return resolved;
 }
 
 export async function approveChannelPairingCode(params: {
@@ -432,13 +566,34 @@ export async function approveChannelPairingRequest(params: {
   accountId: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  /** Gateway-only: explicit owner and authenticated approval provenance. */
+  memoryIdentityLink?: {
+    targetProfileId: string;
+    createdByProfileId: string;
+  };
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
   if (!requestId) {
     return null;
   }
+  const env = params.env ?? process.env;
+  let memoryIdentityLink: MemoryIdentityPairingLink | undefined;
+  if (params.memoryIdentityLink) {
+    ensureMemoryIdentitySchema({ env });
+    const targetProfileId = resolveUserProfileId(params.memoryIdentityLink.targetProfileId, {
+      env,
+    });
+    const createdByProfileId = resolveUserProfileId(params.memoryIdentityLink.createdByProfileId, {
+      env,
+    });
+    if (!targetProfileId || !createdByProfileId) {
+      throw new Error("memory identity target or approving Gateway profile is unavailable");
+    }
+    memoryIdentityLink = { targetProfileId, createdByProfileId };
+  }
   return resolveChannelPairingRequest({
     ...params,
+    memoryIdentityLink,
     matches: (request) => resolveChannelPairingRequestId(params.channel, request) === requestId,
     approve: true,
   });

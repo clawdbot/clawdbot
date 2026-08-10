@@ -243,7 +243,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "channels.pairing.approve": async ({ params, respond, context }) => {
+  "channels.pairing.approve": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -272,12 +272,35 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
       invalidPairingAccount(respond, parsed.channel, parsed.accountId);
       return;
     }
+    const targetProfileId = parsed.targetProfileId;
+    const authenticatedProfileId = targetProfileId
+      ? client?.authenticatedUserProfile?.profileId
+      : undefined;
+    if (targetProfileId && !authenticatedProfileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "memory identity pairing approval requires an authenticated Gateway profile",
+        ),
+      );
+      return;
+    }
     try {
       const approved = await approveChannelPairingRequest({
         channel: account.plugin.id,
         accountId: account.accountId,
         requestId: parsed.requestId,
         pairingAdapter: account.plugin.pairing,
+        ...(targetProfileId && authenticatedProfileId
+          ? {
+              memoryIdentityLink: {
+                targetProfileId,
+                createdByProfileId: authenticatedProfileId,
+              },
+            }
+          : {}),
       });
       if (!approved) {
         respond(

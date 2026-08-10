@@ -76,7 +76,12 @@ type PluginRuntimeChannelContextRegistry = {
   }) => () => void;
 };
 
+type ChannelMemoryIdentityAdmission =
+  import("../../channels/message-access/memory-identity-admission.js").ChannelMemoryIdentityAdmission;
+
 export type PluginRuntimeChannel = {
+  /** Per-adapter post-transport-auth attestation; injected only by the loader. */
+  memoryIdentityAdmission: ChannelMemoryIdentityAdmission;
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
     chunkMarkdownText: typeof import("../../auto-reply/chunk.js").chunkMarkdownText;

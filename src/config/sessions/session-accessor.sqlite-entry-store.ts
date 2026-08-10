@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { ensureMemorySessionSubjectForSessionEntryInTransaction } from "../../state/memory-session-subject-lifecycle.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -580,6 +581,7 @@ export function writeSessionEntry(
   entry: SessionEntry,
   options: {
     allowStoredAliases?: boolean;
+    memorySubjectImportQuarantine?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
   } = {},
@@ -693,6 +695,17 @@ export function writeSessionEntry(
       database.db,
       db.updateTable("session_nodes").set({ entry_valid: 1 }).where("session_key", "=", sessionKey),
     );
+    // The lifecycle owner writes this after the node mapping in the same
+    // commit. Non-channel sources become persisted ambiguity; a channel must
+    // defer to its exact post-transport context before selecting a user.
+    ensureMemorySessionSubjectForSessionEntryInTransaction({
+      database,
+      sessionKey,
+      sessionId: normalizedEntry.sessionId,
+      deferToInboundChannelAdmission: normalizedEntry.createdVia === "channel",
+      entry: normalizedEntry,
+      quarantineImport: options.memorySubjectImportQuarantine === true,
+    });
   });
   executeSqliteQuerySync(
     database.db,

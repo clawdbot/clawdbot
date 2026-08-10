@@ -107,6 +107,10 @@ export class IncognitoAgentDatabasePathCollisionError extends Error {
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
+const stateOptionsByAgentDatabase = new WeakMap<
+  OpenClawAgentDatabase,
+  OpenClawStateDatabaseOptions
+>();
 const incognitoDatabases = new WeakSet<OpenClawAgentDatabase>();
 const cachedDatabaseOpenFailures = new Map<string, unknown>();
 const cachedDatabaseLeases = new Map<
@@ -354,6 +358,7 @@ export function openOpenClawAgentDatabase(
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
+    stateOptionsByAgentDatabase.set(database, options.env ? { env: options.env } : {});
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
       validatedAgentDatabasePaths.set(pathname, agentId);
@@ -402,6 +407,18 @@ export function openOpenClawAgentDatabase(
     }
     throw closeError ?? error;
   }
+}
+
+/** Feature owners that already hold an agent DB can preserve its state-root affinity. */
+export function getOpenClawAgentDatabaseStateOptions(
+  database: OpenClawAgentDatabase,
+): OpenClawStateDatabaseOptions {
+  return stateOptionsByAgentDatabase.get(database) ?? {};
+}
+
+/** Incognito databases are process-held and must not acquire durable memory authority. */
+export function isOpenClawAgentDatabaseIncognito(database: OpenClawAgentDatabase): boolean {
+  return incognitoDatabases.has(database);
 }
 
 /** Run a synchronous immediate transaction against an agent database. */
