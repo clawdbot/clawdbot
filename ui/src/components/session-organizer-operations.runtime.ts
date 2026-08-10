@@ -678,12 +678,15 @@ export async function deleteSession(
   host: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
+  // The chat header shares this operation, so the opt-out is opt-in per caller:
+  // only the sidebar the setting names may offer it, and the default keeps asking.
+  options: { offerSkip?: boolean } = {},
 ) {
   const confirmed = await showConfirmDialog({
     message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
     confirmLabel: t("common.delete"),
     danger: true,
-    skipPreference: sessionDeleteSkipPreference(scope),
+    ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
   });
   if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;

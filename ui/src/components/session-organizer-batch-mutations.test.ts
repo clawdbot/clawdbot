@@ -476,7 +476,7 @@ describe("session organizer destructive confirmations", () => {
     patchSettings({ sessionDeleteConfirm: false });
     const harness = createHarness(destructiveHarness);
 
-    await deleteSession(harness.host, sessionRow(0), harness.scope);
+    await deleteSession(harness.host, sessionRow(0), harness.scope, { offerSkip: true });
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(harness.deleteOne).toHaveBeenCalledOnce();
@@ -487,7 +487,9 @@ describe("session organizer destructive confirmations", () => {
     patchSettings({ sessionDeleteConfirm: true });
     const harness = createHarness(destructiveHarness);
 
-    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope, {
+      offerSkip: true,
+    });
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await pending;
 
@@ -528,7 +530,9 @@ describe("session organizer destructive confirmations", () => {
   it("refreshes the appearance settings view when the operator opts out", async () => {
     const harness = createHarness(destructiveHarness);
 
-    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope, {
+      offerSkip: true,
+    });
     const actions = await waitForConfirmDialogActions();
     const skip = actions
       .closest("openclaw-modal-dialog")
@@ -544,6 +548,21 @@ describe("session organizer destructive confirmations", () => {
     // A mounted Settings -> Appearance only rereads settings on this signal.
     expect(harness.refreshTheme).toHaveBeenCalledOnce();
     expect(loadSettings().sessionDeleteConfirm).toBe(false);
+  });
+
+  it("offers no opt-out to callers that share this delete outside the sidebar", async () => {
+    // The chat-pane header calls deleteSession too; the setting names the
+    // sidebar, so an opted-out operator must still be asked here.
+    patchSettings({ sessionDeleteConfirm: false });
+    const harness = createHarness(destructiveHarness);
+
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    answerConfirmDialog(actions, "confirm");
+    await pending;
+
+    expect(harness.deleteOne).toHaveBeenCalledOnce();
   });
 
   it("never opens the stop confirm for a reclaim target with an active run", async () => {
