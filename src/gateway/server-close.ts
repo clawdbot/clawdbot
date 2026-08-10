@@ -4,6 +4,8 @@ import type { Server as HttpServer } from "node:http";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocketServer } from "ws";
+import { disposeAcpSessionManagerInstance } from "../acp/control-plane/manager.core.js";
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
@@ -580,7 +582,12 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
 }
 
 async function disposeRuntimeWithShutdownGrace(params: {
-  label: "plugin-services" | "bundle-mcp" | "bundle-lsp" | "embedding-providers";
+  label:
+    | "acp-session-manager"
+    | "plugin-services"
+    | "bundle-mcp"
+    | "bundle-lsp"
+    | "embedding-providers";
   dispose: () => Promise<void>;
   graceMs: number;
   warnings: string[];
@@ -855,6 +862,15 @@ export function createGatewayCloseHandler(
           }
         });
       }
+      await measureCloseStep("acp-session-manager", () =>
+        disposeRuntimeWithShutdownGrace({
+          label: "acp-session-manager",
+          dispose: () =>
+            disposeAcpSessionManagerInstance(getAcpSessionManager(), "gateway-shutdown"),
+          graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
+          warnings,
+        }),
+      );
       if (params.pluginServices) {
         await measureCloseStep("plugin-services", () =>
           // A stalled plugin must not prevent later runtime and child-process cleanup.

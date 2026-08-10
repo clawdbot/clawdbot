@@ -62,6 +62,20 @@ import {
 import { SessionActorQueue } from "./session-actor-queue.js";
 
 const DEFAULT_ACP_MAX_CONCURRENT_SESSIONS = Number.POSITIVE_INFINITY;
+const ACP_SESSION_MANAGER_DISPOSERS = new WeakMap<
+  AcpSessionManager,
+  (reason: string) => Promise<void>
+>();
+
+/** Internal shutdown seam that keeps disposal off the public manager surface. */
+export async function disposeAcpSessionManagerInstance(
+  manager: AcpSessionManager,
+  reason: string,
+): Promise<void> {
+  const dispose = ACP_SESSION_MANAGER_DISPOSERS.get(manager);
+  if (!dispose) throw new Error("ACP session manager disposer unavailable");
+  await dispose(reason);
+}
 
 /** Coordinates ACP session metadata, runtime handles, per-session queues, and turn execution. */
 export class AcpSessionManager {
@@ -79,6 +93,13 @@ export class AcpSessionManager {
 
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
     this.deps = deps;
+    ACP_SESSION_MANAGER_DISPOSERS.set(this, async (reason) => {
+      for (const activeTurn of this.activeTurnBySession.values()) {
+        activeTurn.abortController.abort();
+      }
+      await this.runtimeHandles.closeAll({ actorQueue: this.actorQueue, reason });
+      this.activeTurnBySession.clear();
+    });
   }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
