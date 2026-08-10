@@ -1,7 +1,16 @@
-import { readExistingClawInstallRecordSync } from "./provenance-runtime-read.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
+import { registerRuntimeConfigSnapshotPreparer } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { readExistingClawInstallSchemaVersionsSync } from "./provenance-runtime-read.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 
 const frozenToolAllowPolicies = new WeakSet<object>();
+type PreparedClawToolPolicy =
+  | { kind: "current" }
+  | { kind: "legacy" }
+  | { kind: "state-error"; error: unknown };
+const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
 
 export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
   if (policy) {
@@ -12,6 +21,44 @@ export function markFrozenClawToolAllowPolicy(policy: object | undefined): void 
 export function isFrozenClawToolAllowPolicy(policy: object | undefined): boolean {
   return policy ? frozenToolAllowPolicies.has(policy) : false;
 }
+
+export function prepareClawToolPolicyConsent(
+  config: OpenClawConfig,
+  options: OpenClawStateDatabaseOptions & {
+    readSchemaVersions?: typeof readExistingClawInstallSchemaVersionsSync;
+  } = {},
+): void {
+  const candidates = listAgentEntries(config).flatMap((agent) => {
+    const tools = agent.tools;
+    return tools && (tools.profile || tools.allow?.length) ? [{ agentId: agent.id, tools }] : [];
+  });
+  if (candidates.length === 0) {
+    return;
+  }
+  let schemaVersions;
+  try {
+    schemaVersions = (options.readSchemaVersions ?? readExistingClawInstallSchemaVersionsSync)(
+      options,
+    );
+  } catch (error) {
+    for (const candidate of candidates) {
+      preparedClawToolPolicies.set(candidate.tools, { kind: "state-error", error });
+    }
+    return;
+  }
+  for (const candidate of candidates) {
+    const schemaVersion = schemaVersions.get(candidate.agentId);
+    if (!schemaVersion) {
+      preparedClawToolPolicies.delete(candidate.tools);
+      continue;
+    }
+    preparedClawToolPolicies.set(candidate.tools, {
+      kind: schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION ? "current" : "legacy",
+    });
+  }
+}
+
+registerRuntimeConfigSnapshotPreparer((config) => prepareClawToolPolicyConsent(config));
 
 class ClawToolProfileConsentError extends Error {
   constructor(agentId: string) {
@@ -35,6 +82,7 @@ class ClawToolProfileConsentStateError extends Error {
 }
 
 export function resolveClawToolPolicyConsent(params: {
+  agentTools?: object;
   agentId?: string;
   hasAgentAllowlist: boolean;
   ownsProfile: boolean;
@@ -43,19 +91,15 @@ export function resolveClawToolPolicyConsent(params: {
   if (!params.agentId || (!params.ownsProfile && !params.hasAgentAllowlist)) {
     return { frozen: false };
   }
-  let record;
-  try {
-    record = readExistingClawInstallRecordSync(params.agentId);
-  } catch (error) {
-    // This synchronous security gate cannot use the asynchronous snapshot
-    // recovery path. Never interpret an unreadable ownership record as absent.
-    throw new ClawToolProfileConsentStateError(params.agentId, error);
-  }
-  if (!record) {
+  const prepared = params.agentTools ? preparedClawToolPolicies.get(params.agentTools) : undefined;
+  if (!prepared) {
     return { frozen: false };
   }
+  if (prepared.kind === "state-error") {
+    throw new ClawToolProfileConsentStateError(params.agentId, prepared.error);
+  }
   if (
-    record.schemaVersion !== CLAW_INSTALL_RECORD_SCHEMA_VERSION ||
+    prepared.kind === "legacy" ||
     (params.ownsProfile && (params.profile !== "full" || !params.hasAgentAllowlist))
   ) {
     throw new ClawToolProfileConsentError(params.agentId);

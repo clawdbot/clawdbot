@@ -9,6 +9,10 @@ import {
 } from "../agents/conversation-tool-policy-pipeline.js";
 import { applyToolPolicyPipeline } from "../agents/tool-policy-pipeline.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -20,6 +24,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -47,14 +52,17 @@ describe("Claw tool policy consent provenance", () => {
     const before = readFileSync(databasePath);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
 
+    const config = {
+      agents: {
+        list: [{ id: "worker", tools: { profile: "full" as const, allow: ["read"] } }],
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+
     expect(() =>
       resolveConversationCapabilityProfile({
         agentId: "worker",
-        config: {
-          agents: {
-            list: [{ id: "worker", tools: { profile: "full", allow: ["read"] } }],
-          },
-        },
+        config,
       }),
     ).toThrow("Cannot verify the installed tool authority");
     expect(readFileSync(databasePath)).toEqual(before);
@@ -76,9 +84,11 @@ describe("Claw tool policy consent provenance", () => {
     );
     persistClawInstallRecord(plan, { env });
 
+    const config = { agents: { list: [plan.agent.config] } };
+    setRuntimeConfigSnapshot(config);
     const capabilityProfile = resolveConversationCapabilityProfile({
       agentId: "worker",
-      config: { agents: { list: [plan.agent.config] } },
+      config,
     });
     const policies = resolveConversationToolPolicies({ capabilityProfile });
     const filtered = applyToolPolicyPipeline({
@@ -98,19 +108,21 @@ describe("Claw tool policy consent provenance", () => {
       .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
       .run("openclaw.clawInstallRecord.v1", "worker");
 
+    const legacyConfig = {
+      agents: {
+        list: [
+          {
+            ...plan.agent.config,
+            tools: { profile: "coding" as const },
+          },
+        ],
+      },
+    };
+    setRuntimeConfigSnapshot(legacyConfig);
     expect(() =>
       resolveConversationCapabilityProfile({
         agentId: "worker",
-        config: {
-          agents: {
-            list: [
-              {
-                ...plan.agent.config,
-                tools: { profile: "coding" },
-              },
-            ],
-          },
-        },
+        config: legacyConfig,
       }),
     ).toThrow("uses a legacy dynamic tool policy");
   });
@@ -131,12 +143,14 @@ describe("Claw tool policy consent provenance", () => {
     );
     persistClawInstallRecord(plan, { env });
 
+    const config = {
+      tools: { profile: "minimal" as const },
+      agents: { list: [plan.agent.config] },
+    };
+    setRuntimeConfigSnapshot(config);
     const capabilityProfile = resolveConversationCapabilityProfile({
       agentId: "worker",
-      config: {
-        tools: { profile: "minimal" },
-        agents: { list: [plan.agent.config] },
-      },
+      config,
     });
     const policies = resolveConversationToolPolicies({ capabilityProfile });
     const filtered = applyToolPolicyPipeline({

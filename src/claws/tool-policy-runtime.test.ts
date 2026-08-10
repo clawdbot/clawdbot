@@ -1,23 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  prepareClawToolPolicyConsent,
+  resolveClawToolPolicyConsent,
+} from "./tool-policy-runtime.js";
 
-const provenance = vi.hoisted(() => ({
-  record: undefined as { schemaVersion: string } | undefined,
-}));
-
-vi.mock("./provenance-runtime-read.js", () => ({
-  readExistingClawInstallRecordSync: () => provenance.record,
-}));
-
-import { resolveClawToolPolicyConsent } from "./tool-policy-runtime.js";
+function prepare(schemaVersion: "openclaw.clawInstallRecord.v1" | "openclaw.clawInstallRecord.v2") {
+  const tools = { profile: schemaVersion.endsWith(".v2") ? "full" : "coding", allow: ["read"] };
+  const readSchemaVersions = vi.fn(() => new Map([["worker", schemaVersion]]));
+  prepareClawToolPolicyConsent(
+    { agents: { list: [{ id: "worker", tools }] } },
+    { readSchemaVersions },
+  );
+  return { tools, readSchemaVersions };
+}
 
 describe("resolveClawToolPolicyConsent", () => {
-  beforeEach(() => {
-    provenance.record = undefined;
-  });
-
   it("leaves ordinary non-Claw profiles dynamic", () => {
+    const tools = { profile: "coding" };
     expect(
       resolveClawToolPolicyConsent({
+        agentTools: tools,
         agentId: "worker",
         profile: "coding",
         ownsProfile: true,
@@ -26,35 +28,37 @@ describe("resolveClawToolPolicyConsent", () => {
     ).toEqual({ frozen: false });
   });
 
-  it("fails closed for legacy Claw profile provenance", () => {
-    provenance.record = { schemaVersion: "openclaw.clawInstallRecord.v1" };
+  it("fails closed for prepared legacy Claw profile provenance", () => {
+    const { tools } = prepare("openclaw.clawInstallRecord.v1");
 
     expect(() =>
       resolveClawToolPolicyConsent({
+        agentTools: tools,
         agentId: "worker",
         profile: "coding",
         ownsProfile: true,
-        hasAgentAllowlist: false,
+        hasAgentAllowlist: true,
       }),
     ).toThrow("uses a legacy dynamic tool policy");
   });
 
-  it("marks current Claw profile provenance as frozen", () => {
-    provenance.record = { schemaVersion: "openclaw.clawInstallRecord.v2" };
-
-    expect(
+  it("reuses prepared current provenance without runtime reads", () => {
+    const { tools, readSchemaVersions } = prepare("openclaw.clawInstallRecord.v2");
+    const resolve = () =>
       resolveClawToolPolicyConsent({
+        agentTools: tools,
         agentId: "worker",
         profile: "full",
         ownsProfile: true,
         hasAgentAllowlist: true,
-      }),
-    ).toEqual({ frozen: true });
+      });
+
+    expect(resolve()).toEqual({ frozen: true });
+    expect(resolve()).toEqual({ frozen: true });
+    expect(readSchemaVersions).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat an inherited global profile as Claw-owned authority", () => {
-    provenance.record = { schemaVersion: "openclaw.clawInstallRecord.v2" };
-
     expect(
       resolveClawToolPolicyConsent({
         agentId: "worker",

@@ -413,6 +413,7 @@ export function resolveEffectiveToolPolicy(params: {
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
   const clawToolPolicyConsent = resolveClawToolPolicyConsent({
+    agentTools,
     agentId,
     profile,
     ownsProfile: profileSource === "agent",
