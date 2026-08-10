@@ -15851,7 +15851,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 30,
+      "line": 31,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Dashboard",
       "surface": "apple",
@@ -15859,7 +15859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 37,
+      "line": 38,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Done",
       "surface": "apple",
@@ -15867,7 +15867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 47,
+      "line": 48,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Dashboard needs a connected gateway",
       "surface": "apple",
@@ -15875,7 +15875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 49,
+      "line": 50,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Connect to your gateway to open this session dashboard.",
       "surface": "apple",
@@ -27635,7 +27635,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 44,
+      "line": 45,
       "path": "apps/ios/Sources/Terminal/TerminalHubScreen.swift",
       "source": "Terminal",
       "surface": "apple",
@@ -27643,7 +27643,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 56,
+      "line": 57,
       "path": "apps/ios/Sources/Terminal/TerminalHubScreen.swift",
       "source": "Gateway settings",
       "surface": "apple",
@@ -27651,7 +27651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 70,
+      "line": 71,
       "path": "apps/ios/Sources/Terminal/TerminalHubScreen.swift",
       "source": "Terminal needs a connected gateway",
       "surface": "apple",
@@ -27659,7 +27659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 72,
+      "line": 73,
       "path": "apps/ios/Sources/Terminal/TerminalHubScreen.swift",
       "source": "Connect to your gateway to open a shell in the agent workspace.",
       "surface": "apple",
@@ -27667,7 +27667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 78,
+      "line": 79,
       "path": "apps/ios/Sources/Terminal/TerminalHubScreen.swift",
       "source": "Open Gateway Settings",
       "surface": "apple",
@@ -28411,11 +28411,19 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 108,
+      "line": 163,
       "path": "apps/ios/Sources/Web/AuthenticatedControlUIWebView.swift",
-      "source": "[\\(host)]",
+      "source": "[\\(self.host)]",
       "surface": "apple",
-      "id": "native.apple.944004de80cfc8b7"
+      "id": "native.apple.14f48d546ce49e7b"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 165,
+      "path": "apps/ios/Sources/Web/AuthenticatedControlUIWebView.swift",
+      "source": ":\\(self.port)",
+      "surface": "apple",
+      "id": "native.apple.9b8a559e7afe79e7"
     },
     {
       "kind": "plist-string",
