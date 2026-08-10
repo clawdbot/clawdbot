@@ -1868,6 +1868,7 @@ export function registerControlUiAndPairingSuite(): void {
             type?: string;
             auth?: {
               deviceToken?: string;
+              recoveryScope?: string;
               role?: string;
               scopes?: string[];
             };
