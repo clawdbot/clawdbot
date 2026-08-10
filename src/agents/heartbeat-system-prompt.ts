@@ -47,16 +47,20 @@ function resolveHeartbeatConfigForSystemPrompt(
   return { ...defaults, ...overrides };
 }
 
+function isAgentExplicitlyEnrolledForHeartbeat(config: OpenClawConfig, agentId: string): boolean {
+  const resolvedAgentId = normalizeAgentId(agentId);
+  return listAgentEntries(config).some(
+    (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
+  );
+}
+
 // Explicit heartbeat config on any agent means only those agents are opted in;
 // shared defaults without an owner enroll every configured agent.
 function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string): boolean {
-  const resolvedAgentId = normalizeAgentId(agentId);
   const agents = listAgentEntries(config);
   const hasExplicitHeartbeatAgents = agents.some((entry) => Boolean(entry?.heartbeat));
   if (hasExplicitHeartbeatAgents) {
-    return agents.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
-    );
+    return isAgentExplicitlyEnrolledForHeartbeat(config, agentId);
   }
   if (isHeartbeatSharedAcrossAgents(config)) {
     return true;
@@ -64,7 +68,7 @@ function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string
   const heartbeatOwnerAgentId = tryResolveHeartbeatOwnerAgentId(config);
   return (
     heartbeatOwnerAgentId !== undefined &&
-    resolvedAgentId === normalizeAgentId(heartbeatOwnerAgentId)
+    normalizeAgentId(agentId) === normalizeAgentId(heartbeatOwnerAgentId)
   );
 }
 
@@ -92,9 +96,15 @@ function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
     : false;
   const defaultAgentId = params.defaultAgentId ?? tryResolveHeartbeatOwnerAgentId(params.config);
   const agentId = params.agentId ?? defaultAgentId;
+  const explicitlyEnrolledAgent =
+    params.config && agentId
+      ? isAgentExplicitlyEnrolledForHeartbeat(params.config, agentId)
+      : false;
   if (
     !agentId ||
-    (!heartbeatSharedAcrossAgents && normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId))
+    (!explicitlyEnrolledAgent &&
+      !heartbeatSharedAcrossAgents &&
+      normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId))
   ) {
     return false;
   }

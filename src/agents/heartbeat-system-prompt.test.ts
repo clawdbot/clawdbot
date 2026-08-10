@@ -101,6 +101,28 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
     ).toBeDefined();
   });
 
+  it("includes the heartbeat section only for explicitly enrolled agents", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        list: [{ id: "ops" }, { id: "research", heartbeat: { every: "30m" } }],
+      },
+    };
+
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config,
+        agentId: "research",
+      }),
+    ).toBeDefined();
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config,
+        agentId: "ops",
+      }),
+    ).toBeUndefined();
+  });
+
   it("honors default-agent overrides for the prompt text", () => {
     // Defaults establish cadence/shape, but the default agent can override the
     // final visible prompt text.
@@ -141,7 +163,7 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
     ).toContain("Recurring tasks are automations");
   });
 
-  it("does not inject the heartbeat section for non-default agents", () => {
+  it("includes the heartbeat section for explicitly enrolled non-default agents", () => {
     expect(
       resolveHeartbeatPromptForSystemPrompt({
         config: {
@@ -164,6 +186,6 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
         agentId: "ops",
         defaultAgentId: "main",
       }),
-    ).toBeUndefined();
+    ).toContain("Ops prompt");
   });
 });
