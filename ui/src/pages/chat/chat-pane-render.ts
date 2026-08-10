@@ -104,6 +104,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const placement = selectedSession?.placement;
+    const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
+    const placementRunError = terminalReason
+      ? { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) }
+      : null;
     const visibleWorkspaceConflict =
       workspaceConflict &&
       this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
@@ -350,7 +355,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
       suggestionComposer: suggestionViewer,
-      typingLabel: multiIdentity ? this.typingLabel() : null,
+      typingActors: multiIdentity ? this.typingActorViews() : [],
       onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
@@ -380,7 +385,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
-      runError: catalogKey ? null : (state.chatRunError ?? null),
+      runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,
       approvalErrors: approvalSnapshot?.approvalErrors,
@@ -418,15 +423,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       composerControls: catalogKey
         ? nothing
         : renderChatPaneComposerControls({
-            paneId: this.paneId,
             state,
             selectedSession,
             agentDefaultModel,
             modelAccess: mutationAccess.model,
             effortAccess: mutationAccess.effort,
-            preferencesBrowserOnly:
-              this.context.runtimeConfig.state.connected &&
-              this.context.runtimeConfig.canPatch === false,
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
@@ -594,10 +595,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
-    const primary = this.renderBoardPrimary(board, chat, {
-      activeRunId: observerRunId,
-      lastReadAt: selectedSession?.lastReadAt,
-    });
+    const primary = this.renderBoardPrimary(board, chat);
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,
@@ -682,7 +680,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       layout: sidebarLayout,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelMutationEnabled: {
-        chat: Boolean(board.activeTabId) && !board.activeTabReadOnly && board.provider.canMutate,
+        chat: Boolean(board.activeTabId) && board.provider.canMutate,
       },
       panelTemplates,
       primary,

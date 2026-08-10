@@ -24,6 +24,36 @@
       "translated": "Android का अनुसरण करें · $systemLanguageTag"
     },
     {
+      "id": "native.android.0eb613765dffd7d5",
+      "source": "Chat failed",
+      "translated": "चैट विफल"
+    },
+    {
+      "id": "native.android.49b641d61b32710e",
+      "source": "Reply to OpenClaw…",
+      "translated": "OpenClaw को उत्तर दें…"
+    },
+    {
+      "id": "native.android.c17863b62b70d822",
+      "source": "Reply",
+      "translated": "उत्तर दें"
+    },
+    {
+      "id": "native.android.8700c1dee5524079",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.2028e1559e760da1",
+      "source": "You",
+      "translated": "आप"
+    },
+    {
+      "id": "native.android.38a6e56b90d42b9f",
+      "source": "Chat",
+      "translated": "चैट"
+    },
+    {
       "id": "native.android.2932b1c5134668df",
       "source": "Every ${days}d",
       "translated": "हर ${days} दिन"
@@ -18619,6 +18649,11 @@
       "translated": "अपडेट जांचें…"
     },
     {
+      "id": "native.apple.2318ba3118a022eb",
+      "source": "App updates are unavailable while a profile is active.",
+      "translated": "प्रोफ़ाइल सक्रिय होने पर ऐप अपडेट उपलब्ध नहीं हैं।"
+    },
+    {
       "id": "native.apple.ddec1d4e5e5b43cb",
       "source": "Updates unavailable in this build.",
       "translated": "इस बिल्ड में अपडेट उपलब्ध नहीं हैं।"
@@ -20209,6 +20244,11 @@
       "translated": "नोट: Accessibility या Screen Recording सक्षम करने के बाद macOS को OpenClaw रीस्टार्ट करने की आवश्यकता हो सकती है।"
     },
     {
+      "id": "native.apple.974d1478dd99ffb0",
+      "source": "Login-agent restart is unavailable under a profile.",
+      "translated": "प्रोफ़ाइल के अंतर्गत Login-agent पुनरारंभ उपलब्ध नहीं है।"
+    },
+    {
       "id": "native.apple.e52d463773aef1e1",
       "source": "Restart OpenClaw",
       "translated": "OpenClaw रीस्टार्ट करें"
@@ -20322,11 +20362,6 @@
       "id": "native.apple.e7d1ee5662c1d646",
       "source": "Degraded",
       "translated": "कमज़ोर"
-    },
-    {
-      "id": "native.apple.0397fa643df26663",
-      "source": "Test",
-      "translated": "परीक्षण"
     },
     {
       "id": "native.apple.a8af393b84d63ab8",
@@ -20519,14 +20554,14 @@
       "translated": "Gateway कनेक्शन विफल रहा।"
     },
     {
-      "id": "native.apple.8a9259535246e7cf",
-      "source": "OpenClaw needs attention",
-      "translated": "OpenClaw को ध्यान देने की आवश्यकता है"
-    },
-    {
       "id": "native.apple.412b40dec8b94e09",
       "source": "Open Connection settings to fix it.",
       "translated": "इसे ठीक करने के लिए Connection settings खोलें।"
+    },
+    {
+      "id": "native.apple.8a9259535246e7cf",
+      "source": "OpenClaw needs attention",
+      "translated": "OpenClaw को ध्यान देने की आवश्यकता है"
     },
     {
       "id": "native.apple.0bec3829fd3ff778",
@@ -20747,16 +20782,6 @@
       "id": "native.apple.a861b3a0aafb24cc",
       "source": "Launch at login",
       "translated": "लॉगिन पर लॉन्च करें"
-    },
-    {
-      "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "आपके साइन इन करने के बाद OpenClaw को अपने आप शुरू करें।"
-    },
-    {
-      "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "लॉगिन पर लॉन्च सक्षम करने से पहले OpenClaw को Applications में ले जाएँ।"
     },
     {
       "id": "native.apple.927819c087ca3520",
@@ -21199,6 +21224,21 @@
       "translated": "लॉग खोलें"
     },
     {
+      "id": "native.apple.39f0173209fd7e74",
+      "source": "Launch at login is unavailable while an app profile is active.",
+      "translated": "ऐप प्रोफ़ाइल सक्रिय होने पर लॉगिन पर लॉन्च उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.405e74c96498b7c0",
+      "source": "Automatically start OpenClaw after you sign in.",
+      "translated": "आपके साइन इन करने के बाद OpenClaw को अपने आप शुरू करें।"
+    },
+    {
+      "id": "native.apple.8b74758a60f78642",
+      "source": "Move OpenClaw to Applications before enabling launch at login.",
+      "translated": "लॉगिन पर लॉन्च सक्षम करने से पहले OpenClaw को Applications में ले जाएँ।"
+    },
+    {
       "id": "native.apple.4d96b20de25a9ddf",
       "source": "probe degraded",
       "translated": "probe degraded"
@@ -21312,21 +21352,6 @@
       "id": "native.apple.12d83e5f01c98fc0",
       "source": "\\(status.label) presence",
       "translated": "\\(status.label) उपस्थिति"
-    },
-    {
-      "id": "native.apple.ee499f632a5076c5",
-      "source": "Android",
-      "translated": "Android"
-    },
-    {
-      "id": "native.apple.57ca2baac54a05fc",
-      "source": "Sparkles",
-      "translated": "चमक"
-    },
-    {
-      "id": "native.apple.c9a63d0f5247185d",
-      "source": "Plain",
-      "translated": "सादा"
     },
     {
       "id": "native.apple.3f4378c2de189ec9",
@@ -21784,6 +21809,11 @@
       "translated": "\\(self.label):"
     },
     {
+      "id": "native.apple.5ca13315339f6c15",
+      "source": "Persistent Mac node service unavailable under app profile; runtime node remains available.",
+      "translated": "ऐप प्रोफ़ाइल के अंतर्गत स्थायी Mac नोड सेवा उपलब्ध नहीं है; रनटाइम नोड उपलब्ध रहता है।"
+    },
+    {
       "id": "native.apple.800d9fd07f5dde85",
       "source": "Finish",
       "translated": "समाप्त करें"
@@ -21872,26 +21902,6 @@
       "id": "native.apple.51a8291ef11e844d",
       "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
       "translated": "विवरण ऊपर प्रत्येक विकल्प पर सूचीबद्ध हैं। आप लॉगिन ठीक करके फिर से प्रयास कर सकते हैं, या नीचे API key या token से कनेक्ट कर सकते हैं।"
-    },
-    {
-      "id": "native.apple.6526ced182e1fe50",
-      "source": "Your AI is ready",
-      "translated": "आपका AI तैयार है"
-    },
-    {
-      "id": "native.apple.5d8998398be53d6f",
-      "source": "Setup details",
-      "translated": "सेटअप विवरण"
-    },
-    {
-      "id": "native.apple.1967fcaeb9e74257",
-      "source": "Copy setup details",
-      "translated": "सेटअप विवरण कॉपी करें"
-    },
-    {
-      "id": "native.apple.c90ec3f0f60d21bc",
-      "source": "Choose a different AI…",
-      "translated": "कोई दूसरा AI चुनें…"
     },
     {
       "id": "native.apple.e0458fcb8c0536ea",
@@ -22434,16 +22444,6 @@
       "translated": " · ssh \\(parsed.port)"
     },
     {
-      "id": "native.apple.4bad86566d023a64",
-      "source": "Grant permissions",
-      "translated": "अनुमतियाँ दें"
-    },
-    {
-      "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "ये macOS permissions OpenClaw को इस Mac पर apps को automate करने और context capture करने देती हैं। Status अपने-आप update होता है।"
-    },
-    {
       "id": "native.apple.42af85cdf91d0264",
       "source": "Getting things ready",
       "translated": "चीज़ें तैयार की जा रही हैं"
@@ -22509,11 +22509,6 @@
       "translated": "आप पूरी तरह तैयार हैं!"
     },
     {
-      "id": "native.apple.9f73f753266a9fa2",
-      "source": "Finish opens the chat — say hi to your new agent.",
-      "translated": "Finish chat खोलता है — अपने नए agent को hi कहें।"
-    },
-    {
       "id": "native.apple.678dee9dedd72ce4",
       "source": "Configure later",
       "translated": "बाद में कॉन्फ़िगर करें"
@@ -22522,16 +22517,6 @@
       "id": "native.apple.f87bc67e676d1289",
       "source": "Pick Local or Remote in Settings → General whenever you’re ready.",
       "translated": "जब भी आप तैयार हों, Settings → General में Local या Remote चुनें।"
-    },
-    {
-      "id": "native.apple.2eb061cd9d5f19fe",
-      "source": "Remote gateway checklist",
-      "translated": "Remote gateway चेकलिस्ट"
-    },
-    {
-      "id": "native.apple.952e85bfb2d4b4f5",
-      "source": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.",
-      "translated": "अपने gateway host पर: `openclaw` पैकेज इंस्टॉल/अपडेट करें और सुनिश्चित करें कि क्रेडेंशियल मौजूद हैं\n(आमतौर पर `~/.openclaw/credentials/oauth.json`)। फिर ज़रूरत पड़ने पर दोबारा कनेक्ट करें।"
     },
     {
       "id": "native.apple.4e5ccb411db3e80f",
@@ -22597,36 +22582,6 @@
       "id": "native.apple.e54dfc2913c56f6f",
       "source": "Launch at login",
       "translated": "लॉगिन पर लॉन्च करें"
-    },
-    {
-      "id": "native.apple.040f2884f928f376",
-      "source": "Skills included",
-      "translated": "शामिल Skills"
-    },
-    {
-      "id": "native.apple.e38ea89bafb6b75d",
-      "source": "Refresh",
-      "translated": "रीफ़्रेश करें"
-    },
-    {
-      "id": "native.apple.38fc7e2b80c4e0fa",
-      "source": "Couldn’t load skills from the Gateway.",
-      "translated": "Gateway से Skills लोड नहीं हो सकीं।"
-    },
-    {
-      "id": "native.apple.3b06694a81edc126",
-      "source": "Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).",
-      "translated": "सुनिश्चित करें कि Gateway चल रहा है और कनेक्टेड है, फिर रीफ़्रेश दबाएँ (या Settings → Skills खोलें)।"
-    },
-    {
-      "id": "native.apple.b6de2a51e5fb8397",
-      "source": "Details: \\(error)",
-      "translated": "विवरण: \\(error)"
-    },
-    {
-      "id": "native.apple.b82621bc28d4c6e3",
-      "source": "No skills reported yet.",
-      "translated": "अभी तक कोई Skills रिपोर्ट नहीं की गई हैं।"
     },
     {
       "id": "native.apple.048e9cc88fb7af55",
@@ -23884,6 +23839,11 @@
       "translated": "सेटअप आवश्यक"
     },
     {
+      "id": "native.apple.5bea2c67b8d4ccf9",
+      "source": "Bundled",
+      "translated": "Bundled"
+    },
+    {
       "id": "native.apple.1b2cab26853b1074",
       "source": "Managed",
       "translated": "प्रबंधित"
@@ -23987,11 +23947,6 @@
       "id": "native.apple.6b59063df92d2991",
       "source": "Skill enabled",
       "translated": "Skill सक्षम है"
-    },
-    {
-      "id": "native.apple.5bea2c67b8d4ccf9",
-      "source": "Bundled",
-      "translated": "Bundled"
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",

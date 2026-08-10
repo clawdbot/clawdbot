@@ -15,7 +15,7 @@ import {
   loadTranscriptEvents,
   patchSessionEntry,
 } from "./session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 

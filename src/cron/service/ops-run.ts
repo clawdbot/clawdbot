@@ -4,7 +4,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   activatePreparedManualRun,

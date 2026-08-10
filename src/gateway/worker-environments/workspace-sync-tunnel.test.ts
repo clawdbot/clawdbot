@@ -984,7 +984,7 @@ describe("worker tunnel manager", () => {
           sessionId: "session:symlink-sync",
           generation: 2,
         }),
-      ).rejects.toThrow("worker workspace symlink escapes the sync root");
+      ).rejects.toThrow("Cloud workspace symlink is not portable or escapes the sync root");
     } finally {
       await handle.stop();
       await fs.rm(root, { recursive: true });

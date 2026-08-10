@@ -20,6 +20,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -51,7 +52,7 @@ import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
-import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
+import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
 type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWithSurfaces>[0];
@@ -447,6 +448,44 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
     HOME: path.dirname(stateDir),
     OPENCLAW_STATE_DIR: stateDir,
   };
+}
+
+type VoiceWakeRoutingTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "voicewake_routing_config" | "voicewake_routing_routes"
+>;
+
+function seedCanonicalVoiceWakeRouting(stateDir: string, trigger: string): void {
+  const updatedAtMs = Date.now();
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const routingDb = getNodeSqliteKysely<VoiceWakeRoutingTestDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        routingDb.insertInto("voicewake_routing_config").values({
+          config_key: "default",
+          version: 1,
+          default_target_mode: "current",
+          default_target_agent_id: null,
+          default_target_session_key: null,
+          updated_at_ms: updatedAtMs,
+        }),
+      );
+      executeSqliteQuerySync(
+        db,
+        routingDb.insertInto("voicewake_routing_routes").values({
+          config_key: "default",
+          position: 0,
+          trigger,
+          target_mode: "agent",
+          target_agent_id: "main",
+          target_session_key: null,
+          updated_at_ms: updatedAtMs,
+        }),
+      );
+    },
+    { env: createEnv(stateDir) },
+  );
 }
 
 type MixedCommitFailureFixture = {
@@ -2327,13 +2366,7 @@ describe("state migrations", () => {
     const triggersPath = path.join(settingsDir, "voicewake.json");
     const routingPath = path.join(settingsDir, "voicewake-routing.json");
     await setVoiceWakeTriggers(["wake"], stateDir);
-    await setVoiceWakeRoutingConfig(
-      {
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "robot wake", target: { agentId: "main" } }],
-      },
-      stateDir,
-    );
+    seedCanonicalVoiceWakeRouting(stateDir, "robot wake");
     await fs.mkdir(settingsDir, { recursive: true });
     await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["wake"] }), "utf8");
     await fs.writeFile(
@@ -2446,13 +2479,7 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const cfg = createConfig();
     const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
-    await setVoiceWakeRoutingConfig(
-      {
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
-      },
-      stateDir,
-    );
+    seedCanonicalVoiceWakeRouting(stateDir, "sqlite wake");
     await fs.mkdir(path.dirname(routingPath), { recursive: true });
     await fs.writeFile(
       routingPath,
@@ -2486,13 +2513,7 @@ describe("state migrations", () => {
     const stateDir = path.join(root, ".openclaw");
     const cfg = createConfig();
     const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
-    await setVoiceWakeRoutingConfig(
-      {
-        defaultTarget: { mode: "current" },
-        routes: [{ trigger: "sqlite wake", target: { agentId: "main" } }],
-      },
-      stateDir,
-    );
+    seedCanonicalVoiceWakeRouting(stateDir, "sqlite wake");
     await fs.mkdir(path.dirname(routingPath), { recursive: true });
     await fs.writeFile(
       routingPath,

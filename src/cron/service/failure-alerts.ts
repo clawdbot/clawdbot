@@ -2,11 +2,12 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { cronFailureDetailLines } from "../failure-notification-text.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
@@ -173,16 +174,21 @@ function emitFailureAlert(
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
-  const truncatedError = truncateUtf16Safe(params.error?.trim() || "unknown reason", 200);
   const errorReason = params.status === "error" ? params.errorReason : undefined;
   // Keep alert bodies compact because they may route through chat channels
   // with notification previews and provider-specific message limits.
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+  const detailLines =
+    params.mode === "webhook"
+      ? [
+          ...(errorReason ? [`Cause: ${errorReason}`] : []),
+          `${detailLabel}: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`,
+        ]
+      : cronFailureDetailLines(errorReason);
   const text = [
     `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
-    ...(errorReason ? [`Cause: ${errorReason}`] : []),
-    `${detailLabel}: ${truncatedError}`,
+    ...detailLines,
   ].join("\n");
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
   const payload: ReplyPayload = {

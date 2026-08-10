@@ -9,6 +9,7 @@ import {
 } from "./event-projector-items.js";
 import {
   itemMeta,
+  isCommandBearingToolItem,
   itemToolArgs,
   itemToolResult,
   shouldSuppressChannelProgressForItem,
@@ -113,6 +114,9 @@ export class CodexEventProjection {
     if (!kind) {
       return;
     }
+    const name = itemName(item);
+    const args = itemToolArgs(item);
+    const commandBearing = isCommandBearingToolItem(item, args);
     const meta = itemMeta(item, this.toolProgress.toolProgressDetailMode());
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
@@ -123,8 +127,9 @@ export class CodexEventProjection {
         kind,
         title: itemTitle(item),
         status: params.phase === "start" ? "running" : itemStatus(item),
-        ...(itemName(item) ? { name: itemName(item) } : {}),
+        ...(name ? { name } : {}),
         ...(meta ? { meta } : {}),
+        ...(commandBearing ? { commandBearing: true } : {}),
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
       },
     });
@@ -144,6 +149,7 @@ export class CodexEventProjection {
     }
     const status = params.phase === "result" ? itemStatus(item) : "running";
     const args = itemToolArgs(item);
+    const commandBearing = isCommandBearingToolItem(item, args);
     const meta = itemMeta(item, this.toolProgress.toolProgressDetailMode());
     this.toolTranscript.recordTrajectoryEvent({ phase: params.phase, item, name, args, status });
     if (params.phase === "result") {
@@ -164,6 +170,7 @@ export class CodexEventProjection {
         itemId: item.id,
         toolCallId: item.id,
         ...(meta ? { meta } : {}),
+        ...(commandBearing ? { commandBearing: true } : {}),
         ...(params.phase === "start" && args ? { args } : {}),
         ...(params.phase === "result"
           ? {

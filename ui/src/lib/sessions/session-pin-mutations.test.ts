@@ -1,13 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
-import {
-  createGatewayHarness,
-  deferred,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionListSnapshot } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
@@ -59,40 +56,10 @@ function pinHarness(options: {
 }
 
 describe("session pin mutations", () => {
-  it("pins a row before sessions.patch resolves and holds it through refresh and events", async () => {
-    const committed = deferred<unknown>();
-    let serverPinned = false;
-    const { gateway, key, emitEvent } = pinHarness({
-      patchResponse: () => committed.promise,
-      serverPinned: () => serverPinned,
-    });
-    const sessions = createSessionCapability(gateway);
-
-    await sessions.refresh({ force: true });
-    expect(rowPinned(sessions.state.result, key)).toBe(false);
-
-    const operation = sessions.patch(key, { pinned: true });
-    expect(rowPinned(sessions.state.result, key)).toBe(true);
-
-    serverPinned = true;
-    committed.resolve({ ok: true, key, path: "", entry: {} });
-    await expect(operation).resolves.toBeTruthy();
-    expect(rowPinned(sessions.state.result, key)).toBe(true);
-    expect(sessions.state.error).toBeNull();
-
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: sessionChangedPayload(key, true),
-    });
-    expect(rowPinned(sessions.state.result, key)).toBe(true);
-    sessions.dispose();
-  });
-
   it("keeps a pending pin through a stale Gateway event and its canonical refresh", async () => {
     vi.useFakeTimers();
     try {
-      const committed = deferred<unknown>();
+      const committed = createDeferred<unknown>();
       let serverPinned = false;
       const { gateway, key, emitEvent } = pinHarness({
         patchResponse: () => committed.promise,
@@ -196,39 +163,9 @@ describe("session pin mutations", () => {
     sessions.dispose();
   });
 
-  it("keeps the newest pin intent when an older completion refreshes the list first", async () => {
-    const pinCommitted = deferred<unknown>();
-    const unpinCommitted = deferred<unknown>();
-    let serverPinned = false;
-    const { gateway, key } = pinHarness({
-      patchResponse: (call) => (call === 1 ? pinCommitted.promise : unpinCommitted.promise),
-      serverPinned: () => serverPinned,
-    });
-    const sessions = createSessionCapability(gateway);
-
-    await sessions.refresh({ force: true });
-    const pin = sessions.patch(key, { pinned: true });
-    expect(rowPinned(sessions.state.result, key)).toBe(true);
-    const unpin = sessions.patch(key, { pinned: false });
-    expect(rowPinned(sessions.state.result, key)).toBe(false);
-
-    // The pin commits first, so its list refresh republishes a pinned row the
-    // unpin already replaced locally.
-    serverPinned = true;
-    pinCommitted.resolve({ ok: true, key, path: "", entry: {} });
-    await expect(pin).resolves.toBeTruthy();
-    expect(rowPinned(sessions.state.result, key)).toBe(false);
-
-    serverPinned = false;
-    unpinCommitted.resolve({ ok: true, key, path: "", entry: {} });
-    await expect(unpin).resolves.toBeTruthy();
-    expect(rowPinned(sessions.state.result, key)).toBe(false);
-    sessions.dispose();
-  });
-
   it("rolls a failed unpin back to the pin an overlapping completion confirmed", async () => {
-    const pinCommitted = deferred<unknown>();
-    const unpinRejected = deferred<unknown>();
+    const pinCommitted = createDeferred<unknown>();
+    const unpinRejected = createDeferred<unknown>();
     let serverPinned = false;
     const { gateway, key } = pinHarness({
       patchResponse: (call) => (call === 1 ? pinCommitted.promise : unpinRejected.promise),

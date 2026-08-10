@@ -9,7 +9,7 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
-  it("keeps model and settings in the bottom bar and switches the primary action with input state", async () => {
+  it("keeps the model in the bottom bar, session settings in the header, and switches the primary action with input state", async () => {
     await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
@@ -100,7 +100,7 @@ suite.define(() => {
       );
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
-      const settings = composer.getByRole("button", { name: "View", exact: true });
+      const settings = page.locator(".chat-header-session-menu__trigger");
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
@@ -134,20 +134,9 @@ suite.define(() => {
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
         .toBe(true);
-      // The settings chip must sit centered between the footer divider and
-      // the card edge (the old asymmetric footer padding pinned it to the top).
       await expect
-        .poll(() =>
-          settings.evaluate((element) => {
-            const footer = element.closest(".agent-chat__composer-footer")?.getBoundingClientRect();
-            const chip = element.getBoundingClientRect();
-            if (!footer || !chip) {
-              return null;
-            }
-            return Math.abs(chip.top - footer.top - (footer.bottom - chip.bottom));
-          }),
-        )
-        .toBeLessThanOrEqual(1.5);
+        .poll(() => settings.evaluate((node) => node.closest(".chat-pane__header") != null))
+        .toBe(true);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
       await expect
         .poll(async () =>
@@ -329,20 +318,26 @@ suite.define(() => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const viewMenu = page.getByRole("menu", { name: "View" });
-      const viewDropdown = composer.locator("wa-dropdown.chat-view-menu");
+      const viewDropdown = page.locator("wa-dropdown.chat-header-session-menu");
+      const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
+      await viewMenu.hover();
       await expect
-        .poll(() => viewDropdown.locator(".chat-view-menu__text").allTextContents())
+        .poll(() =>
+          viewMenu
+            .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
+            .allTextContents(),
+        )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => viewMenu.isVisible()).toBe(false);
+      await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
 
       await textarea.fill("Send this message");
       await expect
@@ -384,23 +379,17 @@ suite.define(() => {
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
       await expect.poll(() => spark.isVisible()).toBe(true);
       await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
-      const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
-        await Promise.all([
-          settings.boundingBox(),
-          splitView.boundingBox(),
-          model.boundingBox(),
-          chatContent.boundingBox(),
-        ]);
-      expect(activeSettingsBox).not.toBeNull();
+      const [activeSplitViewBox, activeModelBox, activeChatContentBox] = await Promise.all([
+        splitView.boundingBox(),
+        model.boundingBox(),
+        chatContent.boundingBox(),
+      ]);
       expect(activeSplitViewBox).not.toBeNull();
       expect(activeModelBox).not.toBeNull();
       expect(activeChatContentBox).not.toBeNull();
-      if (!activeSettingsBox || !activeSplitViewBox || !activeModelBox || !activeChatContentBox) {
+      if (!activeSplitViewBox || !activeModelBox || !activeChatContentBox) {
         throw new Error("expected chat content and composer controls to have layout boxes");
       }
-      expect(activeModelBox.x).toBeGreaterThanOrEqual(
-        activeSettingsBox.x + activeSettingsBox.width - 1,
-      );
       // The opener lives in the always-on pane header at the chat area's top edge.
       const headerBox = await page.locator(".chat-pane__header").boundingBox();
       expect(headerBox).not.toBeNull();
@@ -453,16 +442,13 @@ suite.define(() => {
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
-      for (const control of [mobileModelBox, mobileSettingsBox, mobileContextBox]) {
+      for (const control of [mobileModelBox, mobileContextBox]) {
         expect(
-          Math.abs(
-            control.y + control.height / 2 - (mobileSettingsBox.y + mobileSettingsBox.height / 2),
-          ),
+          Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),
         ).toBeLessThanOrEqual(2);
       }
-      expect(mobileModelBox.x).toBeGreaterThanOrEqual(
-        mobileSettingsBox.x + mobileSettingsBox.width - 1,
-      );
+      expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
+      expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
       await expect
         .poll(async () => {

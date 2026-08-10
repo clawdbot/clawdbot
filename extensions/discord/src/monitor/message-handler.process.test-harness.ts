@@ -158,6 +158,8 @@ export type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
+      itemId?: string;
+      toolCallId?: string;
       name?: string;
       phase?: string;
       args?: Record<string, unknown>;
@@ -189,6 +191,7 @@ export type DispatchInboundParams = {
     }) => Promise<void> | void;
     onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
     onCommandOutput?: (payload: {
+      toolCallId?: string;
       phase?: string;
       name?: string;
       title?: string;

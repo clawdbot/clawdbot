@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -12,7 +12,6 @@ import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
-import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 const overlongUnicode = (unit: string, maxLength: number) => `${unit.repeat(maxLength - 1)}🦞tail`;
@@ -83,10 +82,6 @@ function expectOmittedResolvedAcknowledgement(result: {
 }
 
 describe("sessions tool", () => {
-  afterEach(() => {
-    sessionsResolutionTesting.setDepsForTest();
-  });
-
   it("uses the core owner gate", () => {
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
   });
@@ -158,8 +153,8 @@ describe("sessions tool", () => {
     const sessionKey = "agent:main:dashboard:finished";
     const sessionId = "finished-session";
     const lifecycleRevision = "finished-revision";
-    const callGateway = vi.fn(async (method: string) =>
-      method === "sessions.patch"
+    const callGateway = vi.fn(async (request: { method: string }) =>
+      request.method === "sessions.patch"
         ? { ok: true, entry: { sessionId, lifecycleRevision } }
         : { ok: true, deleted: true },
     );
@@ -172,15 +167,17 @@ describe("sessions tool", () => {
     await tool.execute("delete-session", { action: "delete", sessionKey });
 
     expect(callGateway.mock.calls).toEqual([
-      ["sessions.patch", { key: sessionKey, archived: true }],
+      [{ method: "sessions.patch", params: { key: sessionKey, archived: true } }],
       [
-        "sessions.delete",
         {
-          key: sessionKey,
-          archivedOnly: true,
-          expectedSessionId: sessionId,
-          expectedLifecycleRevision: lifecycleRevision,
-          deleteTranscript: true,
+          method: "sessions.delete",
+          params: {
+            key: sessionKey,
+            archivedOnly: true,
+            expectedSessionId: sessionId,
+            expectedLifecycleRevision: lifecycleRevision,
+            deleteTranscript: true,
+          },
         },
       ],
     ]);
@@ -189,8 +186,8 @@ describe("sessions tool", () => {
   it("forwards an explicit transcript-preservation choice on deletion", async () => {
     const sessionKey = "agent:main:dashboard:finished";
     const sessionId = "finished-session";
-    const callGateway = vi.fn(async (method: string) =>
-      method === "sessions.patch"
+    const callGateway = vi.fn(async (request: { method: string }) =>
+      request.method === "sessions.patch"
         ? { ok: true, entry: { sessionId } }
         : { ok: true, deleted: true },
     );
@@ -206,11 +203,14 @@ describe("sessions tool", () => {
       deleteTranscript: false,
     });
 
-    expect(callGateway).toHaveBeenLastCalledWith("sessions.delete", {
-      key: sessionKey,
-      archivedOnly: true,
-      expectedSessionId: sessionId,
-      deleteTranscript: false,
+    expect(callGateway).toHaveBeenLastCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: sessionKey,
+        archivedOnly: true,
+        expectedSessionId: sessionId,
+        deleteTranscript: false,
+      },
     });
   });
 
@@ -228,9 +228,12 @@ describe("sessions tool", () => {
     ).rejects.toThrow("archive did not return its session identity");
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-      key: sessionKey,
-      archived: true,
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: {
+        key: sessionKey,
+        archived: true,
+      },
     });
   });
 
@@ -245,9 +248,12 @@ describe("sessions tool", () => {
 
     await tool.execute("reset-session", { action: "reset", sessionKey });
 
-    expect(callGateway).toHaveBeenCalledWith("sessions.reset", {
-      key: sessionKey,
-      reason: "reset",
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.reset",
+      params: {
+        key: sessionKey,
+        reason: "reset",
+      },
     });
   });
 
@@ -290,38 +296,40 @@ describe("sessions tool", () => {
           thinkingLevel: "high",
         },
       );
-      const callGateway = vi.fn(async (method: string, params: Record<string, unknown>) => {
-        expect(method).toBe("sessions.patch");
-        expect(isAgentSessionModelPatchOrigin()).toBe(true);
-        await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
-          label: params.label as string,
-          model: "bad",
-          modelProvider: "broken",
-          modelOverride: "bad",
-          providerOverride: "broken",
-          modelOverrideSource: "user",
-          modelOverrideFallbackOriginProvider: undefined,
-          modelOverrideFallbackOriginModel: undefined,
-          authProfileOverride: "bad-profile",
-          authProfileOverrideSource: "user",
-          thinkingLevel: "low",
-          modelFallback: {
-            prevModel: "good",
-            prevProvider: "openai",
-            prevModelOverride: "good",
-            prevProviderOverride: "openai",
-            prevModelOverrideSource: "auto",
-            prevModelOverrideFallbackOriginProvider: "openai",
-            prevModelOverrideFallbackOriginModel: "primary",
-            prevAuthProfileOverride: "good-profile",
-            prevAuthProfileOverrideSource: "user",
-            prevThinkingLevel: "high",
-            ts: Date.now(),
-            source: "agent-patch",
-          },
-        }));
-        return { ok: true };
-      });
+      const callGateway = vi.fn(
+        async (request: { method: string; params: Record<string, unknown> }) => {
+          expect(request.method).toBe("sessions.patch");
+          expect(isAgentSessionModelPatchOrigin()).toBe(true);
+          await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+            label: request.params.label as string,
+            model: "bad",
+            modelProvider: "broken",
+            modelOverride: "bad",
+            providerOverride: "broken",
+            modelOverrideSource: "user",
+            modelOverrideFallbackOriginProvider: undefined,
+            modelOverrideFallbackOriginModel: undefined,
+            authProfileOverride: "bad-profile",
+            authProfileOverrideSource: "user",
+            thinkingLevel: "low",
+            modelFallback: {
+              prevModel: "good",
+              prevProvider: "openai",
+              prevModelOverride: "good",
+              prevProviderOverride: "openai",
+              prevModelOverrideSource: "auto",
+              prevModelOverrideFallbackOriginProvider: "openai",
+              prevModelOverrideFallbackOriginModel: "primary",
+              prevAuthProfileOverride: "good-profile",
+              prevAuthProfileOverrideSource: "user",
+              prevThinkingLevel: "high",
+              ts: Date.now(),
+              source: "agent-patch",
+            },
+          }));
+          return { ok: true };
+        },
+      );
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
         config: cfg,
@@ -340,10 +348,13 @@ describe("sessions tool", () => {
         model: "broken/bad",
       });
 
-      expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-        key: sessionKey,
-        label: "Research",
-        model: "broken/bad",
+      expect(callGateway).toHaveBeenCalledWith({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          label: "Research",
+          model: "broken/bad",
+        },
       });
       expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
         label: "Research",
@@ -582,10 +593,7 @@ describe("sessions tool", () => {
   });
 
   it("routes group actions to existing gateway methods", async () => {
-    const callGateway = vi.fn(async (method: string, params: Record<string, unknown>) => ({
-      method,
-      params,
-    }));
+    const callGateway = vi.fn(async (request: { method: string; params: unknown }) => request);
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
       callGateway: callGateway as never,
@@ -597,10 +605,10 @@ describe("sessions tool", () => {
     await tool.execute("delete", { action: "group_delete", name: "Later" });
 
     expect(callGateway.mock.calls).toEqual([
-      ["sessions.groups.list", {}],
-      ["sessions.groups.put", { names: ["Now", "Later"] }],
-      ["sessions.groups.rename", { name: "Now", to: "Next" }],
-      ["sessions.groups.delete", { name: "Later" }],
+      [{ method: "sessions.groups.list", params: {} }],
+      [{ method: "sessions.groups.put", params: { names: ["Now", "Later"] } }],
+      [{ method: "sessions.groups.rename", params: { name: "Now", to: "Next" } }],
+      [{ method: "sessions.groups.delete", params: { name: "Later" } }],
     ]);
     await expect(tool.execute("set-missing", { action: "group_set" })).rejects.toThrow(
       "names required",
@@ -636,9 +644,12 @@ describe("sessions tool", () => {
       label: "Movies",
     });
 
-    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-      key: "agent:main:main",
-      label: "Movies",
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: {
+        key: "agent:main:main",
+        label: "Movies",
+      },
     });
     expect(result.details).toEqual({
       status: "updated",
@@ -839,16 +850,22 @@ describe("sessions tool", () => {
       }
 
       await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(2));
-      expect(callGateway).toHaveBeenNthCalledWith(1, "sessions.patch", {
-        key: sessionKey,
-        model: "openai/luna",
-        thinkingLevel: "med",
-        expectedSessionId: sessionId,
+      expect(callGateway).toHaveBeenNthCalledWith(1, {
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          model: "openai/luna",
+          thinkingLevel: "med",
+          expectedSessionId: sessionId,
+        },
       });
-      expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.patch", {
-        key: sessionKey,
-        archived: true,
-        expectedSessionId: sessionId,
+      expect(callGateway).toHaveBeenNthCalledWith(2, {
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          archived: true,
+          expectedSessionId: sessionId,
+        },
       });
     });
   });
@@ -873,17 +890,24 @@ describe("sessions tool", () => {
 
     expect(callGateway.mock.calls).toEqual([
       [
-        "sessions.patch",
         {
-          key: "agent:main:main",
-          label: "Waiting on staging",
-          statusNote: "Blocked: need the staging password",
-          attention: "key",
-          ttlMinutes: 45,
-          archived: true,
+          method: "sessions.patch",
+          params: {
+            key: "agent:main:main",
+            label: "Waiting on staging",
+            statusNote: "Blocked: need the staging password",
+            attention: "key",
+            ttlMinutes: 45,
+            archived: true,
+          },
         },
       ],
-      ["sessions.patch", { key: "agent:main:main", label: null, attention: null }],
+      [
+        {
+          method: "sessions.patch",
+          params: { key: "agent:main:main", label: null, attention: null },
+        },
+      ],
     ]);
   });
 
@@ -902,11 +926,11 @@ describe("sessions tool", () => {
   });
 
   it("denies patch targets outside the caller session tree", async () => {
-    sessionsResolutionTesting.setDepsForTest({
-      callGateway: vi.fn(async () => ({ sessions: [] })) as never,
+    const callGateway = vi.fn(async () => ({ sessions: [] }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: callGateway as never,
     });
-    const callGateway = vi.fn();
-    const tool = createSessionsTool({ agentSessionKey: "agent:main:main", callGateway });
 
     await expect(
       tool.execute("patch-other", {
@@ -915,6 +939,9 @@ describe("sessions tool", () => {
         archived: true,
       }),
     ).rejects.toThrow("Session status visibility is restricted");
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: expect.objectContaining({ key: "agent:main:other" }),
+    });
   });
 });

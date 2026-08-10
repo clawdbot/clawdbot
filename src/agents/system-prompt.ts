@@ -601,7 +601,7 @@ function buildMessagingSection(params: {
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const visibleReplyInstruction = messageToolOnly
-    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
     : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
   const messageToolTargetInstruction = params.requireExplicitMessageTarget
     ? "- `send`: `target` + `message`; target required this turn."

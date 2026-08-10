@@ -14,16 +14,6 @@ export function sessionsResult(
   };
 }
 
-export function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  let reject: (error: unknown) => void = () => undefined;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
-}
-
 export function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
   let snapshot: {
     client: GatewayBrowserClient | null;

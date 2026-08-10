@@ -3206,6 +3206,32 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
+  it("repairs additive placement terminal columns in canonical physical order", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE worker_session_placements DROP COLUMN terminal_at_ms;
+      ALTER TABLE worker_session_placements DROP COLUMN terminal_reason;
+    `);
+    markStateDatabaseAsV5(legacyDb);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_session_placements)")
+      .all() as Array<{ name?: string }>;
+
+    expect(columns.map((column) => column.name).slice(-2)).toEqual([
+      "terminal_reason",
+      "terminal_at_ms",
+    ]);
+  });
+
   it("adds staged worker-result refs during the v5 state migration", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };

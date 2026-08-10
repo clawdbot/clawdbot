@@ -76,10 +76,10 @@ type SkillReadContent = {
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
+  totalLines: number;
   firstLineExceedsLimit: boolean;
 };
 
-const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
@@ -184,9 +184,15 @@ function extractReadTruncationDetails(
     typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
       ? Math.max(0, Math.floor(outputLinesRaw))
       : 0;
+  const totalLinesRaw = record.totalLines;
+  const totalLines =
+    typeof totalLinesRaw === "number" && Number.isFinite(totalLinesRaw)
+      ? Math.max(0, Math.floor(totalLinesRaw))
+      : 0;
   return {
     truncated: true,
     outputLines,
+    totalLines,
     firstLineExceedsLimit: record.firstLineExceedsLimit === true,
   };
 }
@@ -222,22 +228,6 @@ function stripReadTruncationContentDetails(
       truncation: restTruncation,
     },
   };
-}
-
-function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
-  const offset = args.offset;
-  return (
-    typeof offset === "number" &&
-    Number.isFinite(offset) &&
-    offset > 0 &&
-    error instanceof Error &&
-    OFFSET_BEYOND_EOF_RE.test(error.message)
-  );
-}
-
-function emptyReadResult(): AgentToolResult<unknown> {
-  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
-  return { content: [textBlock], details: undefined };
 }
 
 function missingDailyMemoryReadResult(relativePath: string): AgentToolResult<unknown> {
@@ -287,9 +277,6 @@ async function executeReadPage(params: {
   try {
     return await params.base.execute(params.toolCallId, params.args, params.signal);
   } catch (error) {
-    if (isOffsetBeyondEof(error, params.args)) {
-      return emptyReadResult();
-    }
     const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
     if (missingDailyMemoryPath && isNotFoundError(error)) {
       return missingDailyMemoryReadResult(missingDailyMemoryPath);
@@ -339,12 +326,16 @@ async function executeReadWithAdaptivePaging(params: {
     }
 
     const truncation = extractReadTruncationDetails(pageResult);
+    const pageEndLine = nextOffset - 1 + (truncation?.outputLines ?? 0);
+    const reachedEof =
+      Boolean(truncation?.truncated) && pageEndLine >= (truncation?.totalLines ?? 0);
     const canContinue =
       Boolean(truncation?.truncated) &&
       !truncation?.firstLineExceedsLimit &&
       (truncation?.outputLines ?? 0) > 0 &&
+      pageEndLine < (truncation?.totalLines ?? 0) &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
-    const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
+    const pageText = canContinue || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
     const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
 
@@ -1053,10 +1044,9 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    detectImageMimeType: async (absolutePath: string) => {
-      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+    detectImageMimeType: async (absolutePath: string, buffer: Buffer) => {
       const mime = await detectMime({ buffer, filePath: absolutePath });
-      return mime && mime.startsWith("image/") ? mime : undefined;
+      return mime?.startsWith("image/") ? mime : undefined;
     },
   } as const;
 }

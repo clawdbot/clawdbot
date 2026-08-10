@@ -5,12 +5,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
+  createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
@@ -65,6 +66,36 @@ describe("sandbox ssh helpers", () => {
       "example.com ssh-ed25519 AAAATEST\n",
     );
   });
+
+  it.each(["writeFile", "chmod"] as const)(
+    "removes the temp config directory when %s fails",
+    async (failurePoint) => {
+      const injectedError = new Error(`injected ${failurePoint} failure`);
+      const realMkdtemp = fs.mkdtemp.bind(fs);
+      let configDir: string | undefined;
+      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+        configDir = await realMkdtemp(prefix, options);
+        tempDirs.push(configDir);
+        return configDir;
+      });
+      if (failurePoint === "writeFile") {
+        vi.spyOn(fs, "writeFile").mockRejectedValueOnce(injectedError);
+      } else {
+        vi.spyOn(fs, "chmod").mockRejectedValueOnce(injectedError);
+      }
+
+      try {
+        const rejection = createSshSandboxSessionFromConfigText({
+          configText: "Host openclaw-test\n",
+        });
+        await expect(rejection).rejects.toBe(injectedError);
+        expect(configDir).toBeDefined();
+        await expect(fs.access(configDir as string)).rejects.toThrow();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   it("normalizes CRLF and escaped-newline private keys before writing temp files", async () => {
     const session = await createSshSandboxSessionFromSettings({

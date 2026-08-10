@@ -207,6 +207,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
+    liveEditDiffStateById: new Map(),
     itemActiveIds: new Set(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
@@ -851,8 +852,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         }),
     });
   };
-  const emitToolSummary = (toolName?: string, meta?: string) => {
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+  const emitToolSummary = (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => {
+    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
     });
     emitToolResultMessage(toolName, agg);
@@ -1349,6 +1355,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.liveEditDiffStateById.clear();
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
     state.itemCompletedCount = 0;
@@ -1459,6 +1466,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
     cleanupRunToolStartData(params.runId);
+    state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {

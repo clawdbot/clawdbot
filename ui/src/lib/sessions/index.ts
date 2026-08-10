@@ -348,6 +348,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           await roster.refresh({
             ...agentScope,
             includeDerivedTitles: true,
+            includeLastMessage: true,
             backgroundHydrate: true,
             force: true,
           });

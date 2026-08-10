@@ -12,12 +12,25 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function call(
   params: Record<string, unknown>,
   context: Record<string, unknown> = {
+    getRuntimeConfig: () => ({}),
     nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
   },
+  client: Record<string, unknown> = { connect: { scopes: ["operator.admin"] } },
 ) {
   const respond = vi.fn();
-  await fsHandlers["fs.listDir"]?.({ params, respond, context } as never);
+  await fsHandlers["fs.listDir"]?.({ params, respond, context, client } as never);
   return respond.mock.calls[0];
+}
+
+const writeClient = { connect: { scopes: ["operator.write"] } };
+
+function workspaceContext(workspace: string) {
+  return {
+    getRuntimeConfig: () => ({
+      agents: { list: [{ id: "main", default: true, workspace }] },
+    }),
+    nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
+  };
 }
 
 describe("fs.listDir", () => {
@@ -94,6 +107,74 @@ describe("fs.listDir", () => {
     );
     expect(ok).toBe(false);
     expect((error as { message?: string })?.message).toContain("ENOENT");
+  });
+
+  it("allows write-scoped browsing inside a configured workspace", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const nested = path.join(workspace, "packages");
+    await fs.mkdir(nested);
+
+    const [ok, result] = expectDefined(
+      await call({ path: nested }, workspaceContext(workspace), writeClient),
+      "write-scoped workspace listing",
+    );
+
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ path: nested, parent: workspace });
+  });
+
+  it("defaults write-scoped browsing to the workspace root and clamps its parent", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+
+    const [ok, result] = expectDefined(
+      await call({}, workspaceContext(workspace), writeClient),
+      "write-scoped workspace root listing",
+    );
+
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ path: workspace });
+    expect(result).not.toHaveProperty("parent");
+  });
+
+  it("rejects write-scoped browsing outside configured workspaces", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const outside = tempDirs.make("openclaw-fs-outside-");
+
+    const [ok, , error] = expectDefined(
+      await call({ path: outside }, workspaceContext(workspace), writeClient),
+      "write-scoped outside listing",
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: expect.stringContaining("operator.admin") });
+  });
+
+  it("rejects write-scoped browsing through a workspace symlink that escapes", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const outside = tempDirs.make("openclaw-fs-outside-");
+    const escape = path.join(workspace, "escape");
+    fsSync.symlinkSync(outside, escape);
+
+    const [ok, , error] = expectDefined(
+      await call({ path: escape }, workspaceContext(workspace), writeClient),
+      "write-scoped symlink escape listing",
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: expect.stringContaining("operator.admin") });
+  });
+
+  it("keeps missing workspace descendants as filesystem errors instead of scope errors", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const missing = path.join(workspace, "missing", "child");
+
+    const [ok, , error] = expectDefined(
+      await call({ path: missing }, workspaceContext(workspace), writeClient),
+      "write-scoped missing descendant listing",
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: expect.stringContaining("ENOENT") });
   });
 
   it("routes node listings through the connected node capability", async () => {

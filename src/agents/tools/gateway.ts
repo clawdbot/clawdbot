@@ -291,7 +291,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   method: string;
   callParams: unknown;
   opts: GatewayCallOptions;
-  target: GatewayOverrideTarget;
+  approvalRuntimeToken: string | undefined;
 }): DeviceIdentity | undefined {
   const isApprovalRuntimeMethod = APPROVAL_RUNTIME_METHODS.has(params.method);
   const isNodeApprovalReplay = isApprovalReplayNodeSystemRun(params.method, params.callParams);
@@ -299,6 +299,14 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     return undefined;
   }
   if (isApprovalRuntimeMethod && trimToUndefined(params.opts.gatewayUrl) !== undefined) {
+    return undefined;
+  }
+  if (params.approvalRuntimeToken !== undefined) {
+    // The approval-runtime token already proves this is the local approval bridge, and
+    // the gateway grants record visibility from it. Sending the shared device identity
+    // too would put the connect back under that device's paired role/scope baseline,
+    // so an operator paired before operator.approvals existed can never reach the
+    // prompt that would re-pair it. Same rule as the operator approvals client.
     return undefined;
   }
   try {
@@ -322,9 +330,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
         ].join(" "),
         { cause: error },
       );
-    }
-    if (params.target === "local") {
-      return undefined;
     }
     throw new Error(
       [
@@ -536,7 +541,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     method,
     callParams,
     opts,
-    target: gateway.target,
+    approvalRuntimeToken,
   });
   const callOptions = {
     url: gateway.url,

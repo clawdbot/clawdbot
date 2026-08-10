@@ -21,6 +21,148 @@ function projectHistoryTransports(message: Record<string, unknown>) {
 }
 
 describe("oversized multimodal chat history", () => {
+  it("projects one mixed-media message through every history boundary", async () => {
+    const inlineImage = Buffer.from("inline image").toString("base64");
+    const inlineAudio = Buffer.from("inline audio").toString("base64");
+    const inlineVideo = Buffer.from("inline video").toString("base64");
+    const rawMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "keep mixed media metadata" },
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: inlineImage,
+          path: "/tmp/private-image.png",
+          url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
+          source: {
+            type: "base64",
+            data: inlineImage,
+            blob: inlineImage,
+            url: "media://inbound/image-claim",
+          },
+        },
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          blob: inlineAudio,
+          filePath: String.raw`C:\private-audio.wav`,
+          audio_url: "media://inbound/audio-claim",
+          source: {
+            type: "url",
+            data: inlineAudio,
+            url: "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
+          },
+        },
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          data: inlineVideo,
+          localPath: String.raw`\\server\share\private-video.mp4`,
+          video_url:
+            "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
+          source: {
+            type: "url",
+            blob: inlineVideo,
+            url: "media://inbound/video-claim",
+          },
+        },
+      ],
+    };
+    const expected = projectChatDisplayMessages([rawMessage]);
+    const snapshot = buildSessionHistorySnapshot({ rawMessages: [rawMessage] }).history.messages;
+    const sseState = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "mixed-media", sessionKey: "agent:main:mixed-media" },
+      rawMessages: [],
+    });
+    const incremental = sseState.appendInlineMessage({ message: rawMessage })?.message;
+    const projections = [
+      ["projectChatDisplayMessages", expected],
+      ["session-history snapshot", snapshot],
+      ["incremental SSE state", incremental ? [incremental] : []],
+    ] as const;
+    for (const [boundary, messages] of projections) {
+      expect(messages, boundary).toHaveLength(1);
+      expect(messages[0], boundary).toMatchObject({
+        role: "user",
+        content: expected[0]?.content,
+      });
+      const serialized = JSON.stringify(messages);
+      for (const secret of [
+        inlineImage,
+        inlineAudio,
+        inlineVideo,
+        "private-image",
+        "private-audio",
+        "private-video",
+        "image-user",
+        "audio-user",
+        "video-user",
+        "image-secret",
+        "audio-secret",
+        "video-secret",
+        "image-fragment",
+        "audio-fragment",
+        "video-fragment",
+      ]) {
+        expect(serialized, `${boundary}: ${secret}`).not.toContain(secret);
+      }
+      expect(serialized, boundary).toContain("media://inbound/image-claim");
+      expect(serialized, boundary).toContain("media://inbound/audio-claim");
+      expect(serialized, boundary).toContain("media://inbound/video-claim");
+      expect(serialized, boundary).toContain("https://media.example/image.png");
+      expect(serialized, boundary).toContain("https://media.example/audio.wav");
+      expect(serialized, boundary).toContain("https://media.example/video.mp4");
+    }
+  });
+
+  it("projects media even when another block field is sanitized first", () => {
+    const payload = Buffer.from("short-circuit video payload");
+    const encoded = payload.toString("base64");
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          data: encoded,
+          blob: encoded,
+          path: "/private/short-circuit-video.mp4",
+          url: "https://media-user@media.example/video.mp4?signature=private-signature#private-fragment",
+          openclawReasoningReplay: { private: true },
+        },
+      ],
+    };
+
+    const messages = sanitizeChatHistoryMessages([message]);
+
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "video",
+            mimeType: "video/mp4",
+            url: "https://media.example/video.mp4",
+            omitted: true,
+            bytes: payload.length,
+          },
+        ],
+      },
+    ]);
+    const serialized = JSON.stringify(messages);
+    for (const privateValue of [
+      encoded,
+      "/private/short-circuit-video.mp4",
+      "media-user",
+      "private-signature",
+      "private-fragment",
+      "openclawReasoningReplay",
+    ]) {
+      expect(serialized).not.toContain(privateValue);
+    }
+  });
+
   it.each([
     {
       name: "native image data",

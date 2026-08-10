@@ -194,6 +194,9 @@ export function createCombinedSessionMcpRuntime(params: {
       }
       return mergeMcpToolCatalogs(peeked as McpToolCatalog[]);
     },
+    getServerRequestTimeoutMs(serverName) {
+      return serverOwner.get(serverName)?.getServerRequestTimeoutMs?.(serverName);
+    },
     markUsed() {
       lastUsedAt = Date.now();
       for (const part of parts) {

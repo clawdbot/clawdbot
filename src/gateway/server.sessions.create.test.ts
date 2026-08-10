@@ -59,10 +59,17 @@ import {
 
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
+type GenerateDashboardSessionTitle =
+  (typeof import("./dashboard-session-title.js"))["generateDashboardSessionTitle"];
 
 const sessionDiffBaselineMocks = vi.hoisted(() => ({
   ensure: vi.fn<EnsureSessionDiffBaseline>(),
   useReal: false,
+}));
+
+const dashboardTitleMocks = vi.hoisted(() => ({
+  actual: undefined as GenerateDashboardSessionTitle | undefined,
+  generate: vi.fn<GenerateDashboardSessionTitle>(),
 }));
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
@@ -75,6 +82,13 @@ vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
 });
 
+vi.mock("./dashboard-session-title.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./dashboard-session-title.js")>();
+  dashboardTitleMocks.actual = actual.generateDashboardSessionTitle;
+  dashboardTitleMocks.generate.mockImplementation(actual.generateDashboardSessionTitle);
+  return { ...actual, generateDashboardSessionTitle: dashboardTitleMocks.generate };
+});
+
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
@@ -84,6 +98,11 @@ beforeEach(() => {
   sessionDiffBaselineMocks.ensure.mockClear();
   // Baseline capture has dedicated owner coverage and one authenticated integration below.
   sessionDiffBaselineMocks.useReal = false;
+  dashboardTitleMocks.generate.mockReset();
+  if (!dashboardTitleMocks.actual) {
+    throw new Error("actual dashboard title generator was not loaded");
+  }
+  dashboardTitleMocks.generate.mockImplementation(dashboardTitleMocks.actual);
 });
 
 async function makeNonGitTempDir(prefix: string): Promise<string> {
@@ -953,6 +972,56 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   }
 });
 
+test("sessions.create derives its managed-worktree title from message and pasted text", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-title-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  const { ws } = await openClient({ scopes: ["operator.admin"] });
+  let worktreeId: string | undefined;
+  const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
+  const message = "Review this rollout [[reply_to_current]]";
+  const attachment = {
+    type: "file",
+    mimeType: "text/plain",
+    content: Buffer.from(pastedText).toString("base64"),
+  };
+  dashboardTitleMocks.generate.mockResolvedValueOnce("Attachment Repair");
+  try {
+    const created = await rpcReq<{
+      worktree: { id: string; branch: string };
+    }>(ws, "sessions.create", {
+      agentId: "main",
+      worktree: true,
+      message,
+      attachments: [attachment],
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    worktreeId = created.payload?.worktree.id;
+    expect(created.payload?.worktree.branch).toBe("openclaw/attachment-repair");
+    expect(dashboardTitleMocks.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        userMessage: message,
+        attachments: [attachment],
+      }),
+    );
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    ws.close();
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.create honors worktree name/base ref and persists worktree info", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
@@ -1223,12 +1292,61 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
 });
 
 test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
-  const created = await directSessionReq("sessions.create", { cwd: "/tmp/repo" });
+  const created = await directSessionReq(
+    "sessions.create",
+    { cwd: "/tmp/repo" },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
 
   expect(created.ok).toBe(true);
   expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
     "/tmp/repo",
   );
+});
+
+test("sessions.create allows a write-scoped cwd inside the configured workspace", async () => {
+  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
+  const cwd = path.join(workspace, "packages", "app");
+  await fs.mkdir(cwd, { recursive: true });
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  const { ws } = await openClient({
+    scopes: ["operator.write"],
+    deviceIdentityPath: path.join(workspace, "write-cwd-device.json"),
+  });
+  try {
+    const created = await rpcReq<{ entry?: { spawnedCwd?: string } }>(ws, "sessions.create", {
+      cwd,
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry?.spawnedCwd).toBe(cwd);
+  } finally {
+    ws.close();
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create rejects a write-scoped cwd outside configured workspaces", async () => {
+  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
+  const outside = tempDirs.make("openclaw-session-cwd-outside-");
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  const { ws } = await openClient({
+    scopes: ["operator.write"],
+    deviceIdentityPath: path.join(workspace, "outside-cwd-device.json"),
+  });
+  try {
+    const created = await rpcReq(ws, "sessions.create", { cwd: outside });
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+  } finally {
+    ws.close();
+    testState.agentConfig = undefined;
+  }
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
@@ -1259,7 +1377,11 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
 test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
   testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
   try {
-    const created = await directSessionReq("sessions.create", { cwd: "/tmp/outside" });
+    const created = await directSessionReq(
+      "sessions.create",
+      { cwd: "/tmp/outside" },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
 
     expect(created.ok).toBe(false);
     expect(created.error).toMatchObject({
@@ -1275,7 +1397,11 @@ test("sessions.create allows cwd within a sandboxed agent workspace", async () =
   testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
   try {
     const cwd = "/tmp/safe-workspace/packages/app";
-    const created = await directSessionReq("sessions.create", { cwd });
+    const created = await directSessionReq(
+      "sessions.create",
+      { cwd },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
 
     expect(created.ok).toBe(true);
     expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);

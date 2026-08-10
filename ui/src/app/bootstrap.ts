@@ -25,8 +25,8 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
-import { createBrowserAnnotationHandoff } from "./browser-annotation-handoff.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
+import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
@@ -55,6 +55,7 @@ import {
 import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
+import { isTerminalDocumentPath } from "./terminal-document-mode.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -262,6 +263,7 @@ export function bootstrapApplication(
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
+  const terminalDocument = isTerminalDocumentPath(startup.location.pathname, basePath);
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
   const sessionPathBuilderReady =
@@ -354,9 +356,12 @@ export function bootstrapApplication(
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
   const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
-  const browserAnnotationHandoff = createBrowserAnnotationHandoff();
+  const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
+  // /terminal is served by the Gateway's SPA fallback but renders before the
+  // shell; starting the page router would rewrite this special document to /chat.
+  const startsApplicationRouter = documentMode === null && !terminalDocument;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -458,7 +463,7 @@ export function bootstrapApplication(
     webPush,
     skillWorkshopRevision,
     initialUserMessage,
-    browserAnnotationHandoff,
+    chatAttachmentHandoff,
     navigate: (routeId, options) => {
       const location = routeLocation(routeId, options);
       if (!routerStarted) {
@@ -495,7 +500,7 @@ export function bootstrapApplication(
     cancelPendingGatewayConnection,
     start: () => {
       const stopRouter = () => router.stop();
-      if (!documentMode) {
+      if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
@@ -518,7 +523,7 @@ export function bootstrapApplication(
       steps.push(() => {
         void config.refresh({ skipWithoutAuthCandidate: true });
       });
-      if (!documentMode) {
+      if (startsApplicationRouter) {
         steps.push(async () => {
           const pendingNavigation = pendingRouterStartNavigation;
           pendingRouterStartNavigation = null;
@@ -577,7 +582,7 @@ export function bootstrapApplication(
       webPush.dispose();
       skillWorkshopRevision.clear();
       initialUserMessage.clear();
-      browserAnnotationHandoff.dispose();
+      chatAttachmentHandoff.dispose();
     },
   };
 }

@@ -28,15 +28,6 @@ const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json"
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const NATIVE_CLAIM_SUFFIX = ".native-importing";
 
-class DeviceIdentityMigrationRequiredError extends Error {
-  constructor(filePath: string) {
-    super(
-      `Legacy device identity exists at ${filePath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
-    );
-    this.name = "DeviceIdentityMigrationRequiredError";
-  }
-}
-
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   return {
     deviceId: stored.deviceId,
@@ -80,7 +71,9 @@ function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): voi
     pathMayExist(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
     pathMayExist(legacyPath)
   ) {
-    throw new DeviceIdentityMigrationRequiredError(legacyPath);
+    throw new Error(
+      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
   }
 }
 

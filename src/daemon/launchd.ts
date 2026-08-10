@@ -45,7 +45,7 @@ import {
   isSystemLaunchDaemonOwnershipError,
 } from "./launchd-system.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -167,7 +167,7 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -1025,7 +1025,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
@@ -1338,7 +1338,7 @@ async function writeLaunchAgentPlist({
   await ensureSecureDirectory(logDir);
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);

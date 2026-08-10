@@ -49,7 +49,8 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     return undefined;
   }
   const name = readStringValue(evt.data.name);
-  if (!name || !isCommandToolName(name)) {
+  const commandBearing = evt.data.commandBearing === true;
+  if (!name || (!commandBearing && !isCommandToolName(name))) {
     return undefined;
   }
   const result = readRecordValue(evt.data.result);
@@ -82,6 +83,7 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     exitCode !== undefined ||
     durationMs !== undefined ||
     cwd !== undefined ||
+    (commandBearing && typeof evt.data.isError === "boolean") ||
     (result !== undefined && Object.keys(result).length > 0);
   if (!hasConcreteCommandResult) {
     return undefined;

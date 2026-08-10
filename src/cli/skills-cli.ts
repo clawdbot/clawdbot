@@ -22,7 +22,7 @@ import {
   fetchClawHubSkillCard,
   fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
-} from "../infra/clawhub.js";
+} from "../infra/clawhub-skills.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,

@@ -359,7 +359,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
   const startupBindingBeforeRotation = startupBinding;
-  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+  const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
     bindingStore,
     identity: bindingIdentity,
@@ -369,6 +369,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     config: params.config,
     contextEngineActive: Boolean(activeContextEngine),
   });
+  startupBinding = startupBindingResolution.binding;
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
@@ -396,7 +397,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
-  const mutable = { startupBinding, pluginAppServer: appServer };
+  const mutable = {
+    startupBinding,
+    startupContextTokens: startupBindingResolution.startupContextTokens,
+    pluginAppServer: appServer,
+  };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;

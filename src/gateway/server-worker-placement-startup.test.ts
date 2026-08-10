@@ -8,14 +8,15 @@ import type { WorkerPlacementDispatchRequest } from "./worker-environments/servi
 
 type DispatchService = GatewayWorkerPlacementRuntime["dispatchService"];
 
+const REQUEST: WorkerPlacementDispatchRequest = {
+  sessionId: "session-1",
+  sessionKey: "agent:main:session-1",
+  agentId: "main",
+  profileId: "test",
+};
+
 describe("worker placement dispatch coordinator", () => {
   it("forwards the optional internal transition observer", async () => {
-    const request: WorkerPlacementDispatchRequest = {
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      agentId: "main",
-      profileId: "test",
-    };
     const observer = vi.fn();
     const dispatch = vi.fn().mockResolvedValue({ state: "active" });
     const service = {
@@ -26,9 +27,83 @@ describe("worker placement dispatch coordinator", () => {
       reconcileActive: vi.fn(),
     } as unknown as DispatchService;
 
-    await coordinateWorkerPlacementDispatch(service).dispatch(request, observer);
+    await coordinateWorkerPlacementDispatch(service).dispatch(REQUEST, observer);
 
-    expect(dispatch).toHaveBeenCalledWith(request, observer);
+    expect(dispatch).toHaveBeenCalledWith(REQUEST, observer);
+  });
+
+  it("coalesces an identical dispatch and rejects a conflicting in-flight request", async () => {
+    const dispatchStarted = createDeferred();
+    const releaseDispatch = createDeferred();
+    const active = { state: "active" };
+    const dispatch = vi.fn(async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      return active;
+    });
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn(),
+      reconcileActive: vi.fn(),
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service);
+
+    const first = coordinated.dispatch(REQUEST);
+    await dispatchStarted.promise;
+    await expect(
+      coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
+    ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    const retry = coordinated.dispatch(REQUEST);
+    releaseDispatch.resolve();
+
+    const [firstResult, retryResult] = await Promise.all([first, retry]);
+    expect(retryResult).toBe(firstResult);
+    expect(dispatch).toHaveBeenCalledOnce();
+
+    await coordinated.dispatch({ ...REQUEST, profileId: "another-profile" });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins a retry before a queued reconciliation after dispatch failure", async () => {
+    const dispatchStarted = createDeferred();
+    const releaseDispatch = createDeferred();
+    const dispatchError = new Error("provision failed");
+    const dispatch = vi.fn(async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      throw dispatchError;
+    });
+    const reconcileActive = vi.fn();
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn(),
+      reconcileActive,
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service);
+
+    const first = coordinated.dispatch(REQUEST);
+    await dispatchStarted.promise;
+    const reconciliation = coordinated.reconcileActive();
+    const retry = coordinated.dispatch(REQUEST);
+    const outcomes = Promise.allSettled([first, retry]);
+    releaseDispatch.resolve();
+
+    expect(await outcomes).toEqual([
+      { status: "rejected", reason: dispatchError },
+      { status: "rejected", reason: dispatchError },
+    ]);
+    await reconciliation;
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(reconcileActive).toHaveBeenCalledOnce();
+
+    await expect(coordinated.dispatch({ ...REQUEST, profileId: "another-profile" })).rejects.toBe(
+      dispatchError,
+    );
+    expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces full sweeps but runs a fresh targeted pass with its environment id", async () => {

@@ -5,7 +5,6 @@
 import { describe, expect, it } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
-import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -21,6 +20,7 @@ import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "./failover-error.js";
+import { classifyFailoverSignal } from "./failover/classify.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors

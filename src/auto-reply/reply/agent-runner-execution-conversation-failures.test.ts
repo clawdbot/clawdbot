@@ -6,7 +6,7 @@ import {
   createMockTypingSignaler,
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./agent-runner-failure-copy.js";
 
 const state = setupAgentRunnerExecutionTestState();
 

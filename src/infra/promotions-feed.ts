@@ -7,7 +7,7 @@ import {
   type ClawHubPromotionsFeedEntry,
   fetchClawHubPromotionsFeed,
   parseClawHubPromotionsFeed,
-} from "./clawhub.js";
+} from "./clawhub-promotions.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

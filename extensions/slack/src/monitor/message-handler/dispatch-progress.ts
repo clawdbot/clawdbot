@@ -79,7 +79,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         token: ctx.botToken,
         accountId: account.accountId,
         conversationChannelId: message.channel,
-        ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
+        eventScope: prepared.eventScope,
         // Impersonated Slack messages cannot be deleted. Keep the temporary
         // preview app-authored and apply custom identity only to final delivery.
         ...(!hasSlackCustomIdentity && slackIdentity ? { identity: slackIdentity } : {}),
@@ -334,7 +334,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: true,
     buildProgressEventLine: (input, options) =>
-      input.event === "tool" || input.event === "item"
+      input.event === "tool" || input.event === "item" || input.event === "command-output"
         ? buildChannelProgressDraftLineForEntry(account.config, input, options)
         : buildChannelProgressDraftLine(input, options),
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,

@@ -34,7 +34,7 @@ import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { resolveTrustedProxyControlUiScopes } from "./connect-admission.js";
+import { applyConnectionScopeCap } from "./connect-admission.js";
 import {
   isControlUiOwnerBootstrapProfile,
   isControlUiOperatorBootstrapProfile,
@@ -398,8 +398,8 @@ export async function authorizeGatewayConnectDevice(
       const trustedProxyAutoApproveScopes =
         allowTrustedProxyDeviceAutoApproval &&
         (pairing.request.isRepair !== true || isTrustedProxySameKeyUpgrade)
-          ? resolveTrustedProxyControlUiScopes({
-              requestedScopes: resolveTrustedProxyDeviceAutoApproveScopes({
+          ? applyConnectionScopeCap({
+              scopes: resolveTrustedProxyDeviceAutoApproveScopes({
                 requestedScopes: scopes,
                 hasRequestedScopes,
                 configuredScopes: trustedProxyAutoApproveConfig?.scopes,
