@@ -281,7 +281,7 @@ function runStandaloneMcpAppHost(config: {
       ? (value as Record<string, unknown>)
       : undefined;
   const errorMessage = (error: unknown, timeoutMessage: string) =>
-    asRecord(error)?.name === "TimeoutError"
+    asStandaloneRecord(error)?.name === "TimeoutError"
       ? timeoutMessage
       : error instanceof Error
         ? error.message
