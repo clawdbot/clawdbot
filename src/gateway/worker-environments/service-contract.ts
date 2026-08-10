@@ -1,4 +1,4 @@
-import type { WorkerDesktopApp } from "../../plugins/types.js";
+import type { WorkerDesktopApp } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
