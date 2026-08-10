@@ -5,14 +5,14 @@ import JSON5 from "json5";
 import { validateConfigObjectRaw } from "./validation-core.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
-export type DocsConfigFinding = {
+type DocsConfigFinding = {
   filePath: string;
   fenceStartLine: number;
   issuePath: string;
   message: string;
 };
 
-export type DocsConfigStats = {
+type DocsConfigStats = {
   filesScanned: number;
   fencesSeen: number;
   candidatesValidated: number;
@@ -24,7 +24,7 @@ export type DocsConfigStats = {
   skippedFragment: number;
 };
 
-export type DocsConfigAudit = {
+type DocsConfigAudit = {
   findings: DocsConfigFinding[];
   stats: DocsConfigStats;
 };
@@ -112,11 +112,7 @@ function stripIncludeKeys(value: unknown): unknown {
   );
 }
 
-/** Audits one Markdown document without filesystem fixtures. */
-export function auditConfigMarkdown(params: {
-  markdown: string;
-  filePath: string;
-}): DocsConfigAudit {
+function auditConfigMarkdown(params: { markdown: string; filePath: string }): DocsConfigAudit {
   const findings: DocsConfigFinding[] = [];
   const stats = emptyStats(1);
 

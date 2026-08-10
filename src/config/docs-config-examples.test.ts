@@ -1,11 +1,23 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { auditConfigMarkdown, auditDocsConfigExamples } from "./docs-config-examples.js";
-
-const fixturePath = "docs/fixture.md";
+import { auditDocsConfigExamples } from "./docs-config-examples.js";
 
 type SkipStat = "skippedFragment" | "skippedNonObject" | "skippedOptOut" | "skippedParseFailure";
+
+function auditMarkdown(markdown: string): ReturnType<typeof auditDocsConfigExamples> {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-config-"));
+  const docsRoot = path.join(repoRoot, "docs");
+  fs.mkdirSync(docsRoot);
+  fs.writeFileSync(path.join(docsRoot, "fixture.md"), markdown);
+  try {
+    return auditDocsConfigExamples({ repoRoot });
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+}
 
 describe("docs config examples", () => {
   it.each([
@@ -68,7 +80,7 @@ describe("docs config examples", () => {
       skipped: undefined,
     },
   ])("$name", ({ markdown, findings, skipped, issuePath }) => {
-    const audit = auditConfigMarkdown({ markdown, filePath: fixturePath });
+    const audit = auditMarkdown(markdown);
 
     expect(audit.findings).toHaveLength(findings);
     expect(audit.stats.candidatesValidated).toBe(skipped ? 0 : 1);
