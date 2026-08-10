@@ -239,6 +239,29 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
 });
 
 describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
+  it("canonicalizes binding account IDs the same way as runtime routing", () => {
+    const cfg = {
+      channels: { slack: { defaultAccount: "other", accounts: { work: {}, other: {} } } },
+      bindings: [
+        {
+          match: {
+            channel: "slack",
+            accountId: "WORK",
+            peer: { kind: "channel", id: "C01234567" },
+          },
+          agentId: "main",
+        },
+      ],
+    } as never;
+
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: "work" }),
+    ).toThrow(/requires configured Slack binding peers/);
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: "other" }),
+    ).not.toThrow();
+  });
+
   it("requires workspace scope only on bindings that apply to the Enterprise account", () => {
     const cfg = {
       channels: {

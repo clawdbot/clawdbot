@@ -1,4 +1,5 @@
 // Slack plugin module implements detected Enterprise Grid installation policy.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "../accounts.js";
@@ -173,16 +174,18 @@ export function assertEnterpriseSlackBindingsAreWorkspaceQualified(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }) {
-  const defaultAccountId = resolveDefaultSlackAccountId(params.cfg);
+  const accountId = normalizeAccountId(params.accountId);
+  const defaultAccountId = normalizeAccountId(resolveDefaultSlackAccountId(params.cfg));
   const configured = params.cfg.bindings?.filter((binding) => {
     if (binding.match.channel.trim().toLowerCase() !== "slack") {
       return false;
     }
-    const accountId = binding.match.accountId?.trim();
+    const bindingAccountId = binding.match.accountId?.trim();
     return (
-      accountId === "*" ||
-      accountId === params.accountId ||
-      (!accountId && params.accountId === defaultAccountId)
+      bindingAccountId === "*" ||
+      (bindingAccountId
+        ? normalizeAccountId(bindingAccountId) === accountId
+        : accountId === defaultAccountId)
     );
   });
   for (const binding of configured ?? []) {
