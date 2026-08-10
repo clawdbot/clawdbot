@@ -324,7 +324,15 @@ suite.define(() => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();
+    const afterShowMarker = "data-e2e-after-show";
+    await drawer.evaluate((element, marker) => {
+      element.removeAttribute(marker);
+      element.addEventListener("wa-after-show", () => element.setAttribute(marker, ""), {
+        once: true,
+      });
+    }, afterShowMarker);
     await page.keyboard.press("Enter");
+    await expect.poll(() => drawer.getAttribute(afterShowMarker)).toBe("");
 
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
