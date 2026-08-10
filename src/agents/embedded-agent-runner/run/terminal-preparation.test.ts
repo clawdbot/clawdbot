@@ -11,6 +11,7 @@ vi.mock("./run-attempt-result.js", () => ({
   buildTraceToolSummary: () => undefined,
 }));
 vi.mock("./tool-media-payloads.js", () => ({
+  getAttemptToolMediaAttachments: () => undefined,
   mergeAttemptToolMediaPayloads: ({ payloads }: { payloads?: unknown[] }) => payloads,
 }));
 

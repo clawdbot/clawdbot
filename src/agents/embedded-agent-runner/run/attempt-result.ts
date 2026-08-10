@@ -24,6 +24,7 @@ import {
   resolveSilentToolResultReplyPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
+import { markAttemptToolMediaAttachments } from "./tool-media-payloads.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -399,7 +400,6 @@ export function completeEmbeddedAttemptResult(
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
-    toolMediaAttachments: pendingToolMediaReply?.attachments,
     hostOwnedToolMediaUrls: pendingHostOwnedToolMediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -414,6 +414,7 @@ export function completeEmbeddedAttemptResult(
     clientToolCalls,
     yieldDetected: state.yieldDetected || undefined,
   };
+  markAttemptToolMediaAttachments(result, pendingToolMediaReply?.attachments);
   return finalizeEmbeddedAttempt({
     result,
     trajectoryRecorder: input.trajectoryRecorder,

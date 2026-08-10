@@ -12,6 +12,33 @@ import type { EmbeddedAgentRunResult } from "../types.js";
 
 /** Channel payload shape produced by embedded runs after auto-reply normalization. */
 type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
+type EmbeddedRunPayloadWithAttachments = EmbeddedRunPayload & {
+  attachments?: ReplyMediaAttachment[];
+};
+
+const attemptToolMediaAttachments = new WeakMap<object, readonly ReplyMediaAttachment[]>();
+
+export function markAttemptToolMediaAttachments<T extends object>(
+  attempt: T,
+  attachments: readonly ReplyMediaAttachment[] | undefined,
+): T {
+  if (!attachments?.length) {
+    attemptToolMediaAttachments.delete(attempt);
+    return attempt;
+  }
+  attemptToolMediaAttachments.set(
+    attempt,
+    Object.freeze(attachments.map((attachment) => Object.freeze(Object.assign({}, attachment)))),
+  );
+  return attempt;
+}
+
+export function getAttemptToolMediaAttachments(
+  attempt: object,
+): ReplyMediaAttachment[] | undefined {
+  const attachments = attemptToolMediaAttachments.get(attempt);
+  return attachments?.map((attachment) => Object.assign({}, attachment));
+}
 
 /**
  * Merges media emitted by tools into the channel payloads produced by the
@@ -26,7 +53,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-}): EmbeddedRunPayload[] | undefined {
+}): EmbeddedRunPayloadWithAttachments[] | undefined {
   // Trim and dedupe tool media before merging with assistant-owned payload media.
   const toolAttachmentByUrl = new Map<string, ReplyMediaAttachment>();
   const mediaUrls: string[] = [];
@@ -82,7 +109,10 @@ export function mergeAttemptToolMediaPayloads(params: {
       ? attachments
       : undefined;
   };
-  const buildMediaPayload = (urls: string[], includeAudio: boolean): EmbeddedRunPayload => {
+  const buildMediaPayload = (
+    urls: string[],
+    includeAudio: boolean,
+  ): EmbeddedRunPayloadWithAttachments => {
     const attachments = buildAlignedAttachments(urls);
     return {
       mediaUrls: urls.length ? urls : undefined,
@@ -98,7 +128,9 @@ export function mergeAttemptToolMediaPayloads(params: {
   const mergeableMediaUrls = shouldSplitHostOwnedMedia
     ? mediaUrls.filter((url) => !hostOwnedMediaUrlSet.has(url))
     : mediaUrls;
-  const appendHostOwnedMedia = (nextPayloads: EmbeddedRunPayload[]): EmbeddedRunPayload[] => {
+  const appendHostOwnedMedia = (
+    nextPayloads: EmbeddedRunPayloadWithAttachments[],
+  ): EmbeddedRunPayloadWithAttachments[] => {
     if (!shouldSplitHostOwnedMedia) {
       return nextPayloads;
     }
@@ -110,7 +142,9 @@ export function mergeAttemptToolMediaPayloads(params: {
     ];
   };
 
-  const payloads = params.payloads?.length ? [...params.payloads] : [];
+  const payloads: EmbeddedRunPayloadWithAttachments[] = params.payloads?.length
+    ? [...params.payloads]
+    : [];
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
     const payload = payloads.at(payloadIndex);

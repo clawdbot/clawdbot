@@ -5,7 +5,28 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+import {
+  getAttemptToolMediaAttachments,
+  markAttemptToolMediaAttachments,
+  mergeAttemptToolMediaPayloads,
+} from "./tool-media-payloads.js";
+
+describe("attempt tool media attachments", () => {
+  it("keeps attachment metadata out of the public attempt object", () => {
+    const attempt = {};
+    markAttemptToolMediaAttachments(attempt, [
+      { type: "image", mimeType: "image/png", trustedLocalMedia: true },
+    ]);
+
+    expect(attempt).toEqual({});
+    const firstRead = getAttemptToolMediaAttachments(attempt);
+    expect(firstRead).toEqual([{ type: "image", mimeType: "image/png", trustedLocalMedia: true }]);
+    firstRead?.push({ type: "audio" });
+    expect(getAttemptToolMediaAttachments(attempt)).toEqual([
+      { type: "image", mimeType: "image/png", trustedLocalMedia: true },
+    ]);
+  });
+});
 
 describe("mergeAttemptToolMediaPayloads", () => {
   it("attaches tool media to the first visible reply", () => {

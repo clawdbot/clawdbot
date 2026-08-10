@@ -23,7 +23,10 @@ import {
   isEmbeddedRunTerminalTimeout,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+import {
+  getAttemptToolMediaAttachments,
+  mergeAttemptToolMediaPayloads,
+} from "./tool-media-payloads.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function prepareEmbeddedRunTerminal(input: {
@@ -199,7 +202,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
     payloads,
     toolMediaUrls: attempt.toolMediaUrls,
-    toolMediaAttachments: attempt.toolMediaAttachments,
+    toolMediaAttachments: getAttemptToolMediaAttachments(attempt),
     // Preserve harness provenance through terminal delivery. Without it,
     // message-tool-only routes silently drop native runtime artifacts.
     hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,

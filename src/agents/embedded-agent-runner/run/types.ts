@@ -2,7 +2,6 @@
  * Shared result and attempt types for embedded-agent run internals.
  */
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
-import type { ReplyMediaAttachment } from "../../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
   SessionContextBudgetStatus,
@@ -291,7 +290,6 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
-  toolMediaAttachments?: ReplyMediaAttachment[];
   /**
    * Native artifacts produced and owned by the harness, never model-selected
    * dynamic-tool output. Core validates this as a subset of toolMediaUrls.
