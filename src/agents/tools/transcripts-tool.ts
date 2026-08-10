@@ -80,7 +80,6 @@ function ownsTranscriptSession(
     // later changes; only the channel-less local main agent may recover it.
     return typeof ownerAgentId === "string" ? !channel : isLocalMainOperator;
   }
-  const sourceAccountId = session.source.accountId?.trim();
   if (!provider) {
     // Without provider metadata, core cannot prove whether a legacy row
     // belonged to a binding namespace. Keep recovery on the recorded agent's
@@ -99,15 +98,9 @@ function ownsTranscriptSession(
       return false;
     }
     if (providerUsesAccountOwnership) {
-      if (!channel) {
-        return true;
-      }
-      // A binding provider's historical account can authorize only its own channel.
-      // Other remote surfaces must wait for Doctor to persist complete ownership.
-      return (
-        accountBindingChannels.includes(channel) &&
-        Boolean(sourceAccountId && ctx.agentAccountId?.trim() === sourceAccountId)
-      );
+      // Historical source locators are not authorization facts. Doctor must
+      // persist provider-attested ownership before any remote surface can act.
+      return !channel;
     }
     return true;
   }

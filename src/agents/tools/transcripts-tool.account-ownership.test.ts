@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { activeSessions } from "./transcripts-tool-runtime.js";
-import { createBoundTranscriptsTool, createTranscriptsTool } from "./transcripts-tool.js";
+import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
@@ -18,9 +18,7 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => ({
   listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
 }));
 
-async function makeStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-account-"));
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createTool(
   stateDir: string,
@@ -33,6 +31,15 @@ function createTool(
     agentId,
     ...(origin ? { agentChannel: origin.channel } : {}),
     ...(origin?.accountId ? { agentAccountId: origin.accountId } : {}),
+    caller: origin
+      ? {
+          kind: "channel",
+          channel: origin.channel,
+          ...(origin.accountId ? { accountId: origin.accountId } : {}),
+          senderId: "test-sender",
+          roleIds: [],
+        }
+      : { kind: "operator", source: "local" },
   });
 }
 
@@ -42,27 +49,25 @@ function storeFor(stateDir: string): TranscriptsStore {
   });
 }
 
-describe("transcripts tool account ownership", () => {
-  it("hides bound transcripts when trusted caller-channel provenance is unavailable", () => {
-    expect(
-      createBoundTranscriptsTool(
-        { agentChannel: "discord", gatewayCallerChannel: null },
-        "main",
-        { transcripts: { enabled: true } },
-        "account-a",
-      ),
-    ).toBeUndefined();
-    expect(
-      createBoundTranscriptsTool(
-        { agentChannel: "discord", gatewayCallerChannel: "discord" },
-        "main",
-        { transcripts: { enabled: true } },
-        "account-a",
-      )?.name,
-    ).toBe("transcripts");
-  });
+function discordAccountOwnership(
+  resolveAccountId: NonNullable<TranscriptSourceProvider["accessControl"]>["resolveAccountId"] = ({
+    source,
+  }) => ({ ok: true, value: source.accountId }),
+): NonNullable<TranscriptSourceProvider["accessControl"]> {
+  return {
+    channelId: "discord",
+    resolveAccountId,
+    authorize: async ({ caller, source }) =>
+      caller.kind === "operator" ||
+      (caller.channel === "discord" && caller.accountId === source.accountId)
+        ? { ok: true as const, value: undefined }
+        : { ok: false as const, error: "account denied" },
+  };
+}
 
+describe("transcripts tool account ownership", () => {
   afterEach(() => {
+    vi.useRealTimers();
     activeSessions.clear();
     closeOpenClawStateDatabaseForTest();
   });
@@ -72,8 +77,58 @@ describe("transcripts tool account ownership", () => {
     listTranscriptSourceProvidersMock.mockClear();
   });
 
+  it("binds account-bound imports to the trusted turn account", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-account-import-");
+    const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => ({
+      ok: true as const,
+      value: source.accountId,
+    }));
+    const importTranscript = vi.fn(async () => [{ text: "trusted import" }]);
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "account-bound-import",
+      accessControl: discordAccountOwnership(resolveAccountId),
+      name: "Account-bound Import",
+      sourceKinds: ["posthoc-transcript"],
+      importTranscript,
+    });
+    const ownerTool = createTool(stateDir, "main", {
+      channel: "discord",
+      accountId: "account-a",
+    });
+
+    await ownerTool.execute(
+      "call-account-bound-import",
+      {
+        action: "import",
+        providerId: "account-bound-import",
+        accountId: "account-b",
+        sessionId: "account-bound-import",
+        transcript: "trusted import",
+      },
+      undefined,
+      vi.fn(),
+    );
+
+    expect(resolveAccountId).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+    );
+    expect(importTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          source: expect.objectContaining({ accountId: "account-a" }),
+        }),
+      }),
+    );
+    await expect(storeFor(stateDir).readSession("account-bound-import")).resolves.toMatchObject({
+      source: { accountId: "account-a" },
+      metadata: {
+        agentId: "main",
+      },
+    });
+  });
+
   it("binds same-channel capture and lifecycle access to the trusted turn account", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "account-bound" }));
     const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => ({
@@ -83,8 +138,7 @@ describe("transcripts tool account ownership", () => {
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
-      accountBindingChannels: ["discord", "slack"],
-      resolveAccountId,
+      accessControl: discordAccountOwnership(resolveAccountId),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
@@ -123,8 +177,6 @@ describe("transcripts tool account ownership", () => {
       source: { accountId: "account-a" },
       metadata: {
         agentId: "main",
-        ownerAccountId: "account-a",
-        ownerChannel: "discord",
       },
     });
     expect(result.details).toMatchObject({ accountId: "account-a" });
@@ -181,9 +233,7 @@ describe("transcripts tool account ownership", () => {
     ).resolves.toMatchObject({ details: { active: [] } });
     await expect(
       ownerTool.execute("call-provider-missing-owner", { action: "status" }, undefined, vi.fn()),
-    ).resolves.toMatchObject({
-      details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
-    });
+    ).resolves.toMatchObject({ details: { active: [] } });
     await expect(
       createTool(stateDir, "main").execute(
         "call-local-operator-status",
@@ -238,7 +288,7 @@ describe("transcripts tool account ownership", () => {
       error: 'transcripts provider discord-voice could not use trusted account "account-a"',
     },
   ])("$name before persistence", async ({ resolve, error }) => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => {
       expect(source.accountId).toBe("account-a");
@@ -247,8 +297,7 @@ describe("transcripts tool account ownership", () => {
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
-      accountBindingChannels: ["discord"],
-      resolveAccountId,
+      accessControl: discordAccountOwnership(resolveAccountId),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
@@ -275,7 +324,7 @@ describe("transcripts tool account ownership", () => {
   });
 
   it("preserves explicit accounts for providers outside the turn channel namespace", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "google-meet",
@@ -310,13 +359,13 @@ describe("transcripts tool account ownership", () => {
     );
   });
 
-  it("requires trusted accounts only for starts from a provider's binding channel", async () => {
-    const stateDir = await makeStateDir();
+  it("starts account-bound providers only from a binding channel or local tool", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
-      accountBindingChannels: ["discord"],
+      accessControl: discordAccountOwnership(),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
@@ -330,6 +379,8 @@ describe("transcripts tool account ownership", () => {
     };
     const expectedError =
       "transcripts provider discord-voice requires trusted account context from discord";
+    const crossChannelError =
+      "transcripts provider discord-voice can only start from discord or a channel-less local tool";
 
     await expect(
       createTool(stateDir, "main", { channel: "webchat", accountId: "operator" }).execute(
@@ -338,7 +389,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).resolves.toMatchObject({ details: { sessionId: "webchat-start" } });
+    ).rejects.toThrow(crossChannelError);
     await expect(
       createTool(stateDir, "main", { channel: "discord" }).execute(
         "call-missing-account",
@@ -364,11 +415,12 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).resolves.toMatchObject({ details: { sessionId: "local-start" } });
-    expect(start).toHaveBeenCalledTimes(3);
+    expect(start).toHaveBeenCalledTimes(2);
+    await expect(storeFor(stateDir).readSession("webchat-start")).resolves.toBeUndefined();
   });
 
   it("does not treat provider lookup aliases as account binding channels", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const meetingAccountId = `meeting\n${"x".repeat(200)}`;
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     getTranscriptSourceProviderMock.mockReturnValue({
@@ -403,19 +455,19 @@ describe("transcripts tool account ownership", () => {
       }),
     );
     expect(result.details).toMatchObject({ accountId: meetingAccountId });
-    const text = result.content[0]?.text;
+    const text = result.content.find((entry) => entry.type === "text")?.text;
     expect(text?.split("\n")).toHaveLength(2);
     expect(text).not.toContain("x".repeat(65));
     expect(text).toContain('Account: "meeting\\n');
   });
 
-  it("preserves shipped agent ownership while binding matching legacy channel accounts", async () => {
-    const stateDir = await makeStateDir();
+  it("applies provider access to historical rows after the agent boundary", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
-      accountBindingChannels: ["discord"],
+      accessControl: discordAccountOwnership(),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
     });
@@ -462,16 +514,22 @@ describe("transcripts tool account ownership", () => {
     });
     const localMainTool = createTool(stateDir, "main");
 
-    for (const channelTool of [discordTool, webchatTool]) {
-      await expect(
-        channelTool.execute(
-          "call-ownerless-channel",
-          { action: "summarize", sessionId: "stable-ownerless" },
-          undefined,
-          vi.fn(),
-        ),
-      ).rejects.toThrow("transcripts session not found: stable-ownerless");
-    }
+    await expect(
+      discordTool.execute(
+        "call-ownerless-discord",
+        { action: "summarize", sessionId: "stable-ownerless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
+    await expect(
+      webchatTool.execute(
+        "call-ownerless-webchat",
+        { action: "summarize", sessionId: "stable-ownerless" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: stable-ownerless");
     await expect(
       localMainTool.execute(
         "call-ownerless-local",
@@ -481,24 +539,30 @@ describe("transcripts tool account ownership", () => {
       ),
     ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
 
-    for (const tool of [discordTool, localMainTool]) {
-      await expect(
-        tool.execute(
-          "call-main-owned-legacy",
-          { action: "summarize", sessionId: "beta-agent-only" },
-          undefined,
-          vi.fn(),
-        ),
-      ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
-    }
+    await expect(
+      discordTool.execute(
+        "call-main-owned-discord",
+        { action: "summarize", sessionId: "beta-agent-only" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
     await expect(
       webchatTool.execute(
-        "call-main-owned-other-channel",
+        "call-main-owned-webchat",
         { action: "summarize", sessionId: "beta-agent-only" },
         undefined,
         vi.fn(),
       ),
     ).rejects.toThrow("transcripts session not found: beta-agent-only");
+    await expect(
+      localMainTool.execute(
+        "call-main-owned-local",
+        { action: "summarize", sessionId: "beta-agent-only" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
     await expect(
       createTool(stateDir, "main", { channel: "discord", accountId: "account-b" }).execute(
         "call-main-owned-wrong-account",
@@ -508,28 +572,31 @@ describe("transcripts tool account ownership", () => {
       ),
     ).rejects.toThrow("transcripts session not found: beta-agent-only");
 
-    const researchTools = [
-      createTool(stateDir, "research", { channel: "discord", accountId: "account-a" }),
-      createTool(stateDir, "research"),
-    ];
-    for (const tool of researchTools) {
-      await expect(
-        tool.execute(
-          "call-named-agent-legacy",
-          { action: "summarize", sessionId: "beta-named-agent" },
-          undefined,
-          vi.fn(),
-        ),
-      ).resolves.toMatchObject({ details: { sessionId: "beta-named-agent" } });
-    }
+    const researchLocalTool = createTool(stateDir, "research");
+    await expect(
+      createTool(stateDir, "research", { channel: "discord", accountId: "account-a" }).execute(
+        "call-named-agent-discord",
+        { action: "summarize", sessionId: "beta-named-agent" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-named-agent" } });
     await expect(
       createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }).execute(
-        "call-named-agent-other-channel",
+        "call-named-agent-webchat",
         { action: "summarize", sessionId: "beta-named-agent" },
         undefined,
         vi.fn(),
       ),
     ).rejects.toThrow("transcripts session not found: beta-named-agent");
+    await expect(
+      researchLocalTool.execute(
+        "call-named-agent-local",
+        { action: "summarize", sessionId: "beta-named-agent" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-named-agent" } });
     await expect(
       localMainTool.execute(
         "call-named-agent-boundary",
@@ -599,7 +666,7 @@ describe("transcripts tool account ownership", () => {
   });
 
   it("preserves main-agent access to ownerless non-binding sessions", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
     const legacySession = {
       sessionId: "legacy-ownerless",
@@ -637,11 +704,11 @@ describe("transcripts tool account ownership", () => {
   });
 
   it("recovers shipped agent-owned account-less sessions only off-channel", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
-      accountBindingChannels: ["discord"],
+      accessControl: discordAccountOwnership(),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
     });
@@ -682,7 +749,7 @@ describe("transcripts tool account ownership", () => {
   });
 
   it("keeps named-agent ownership authoritative for non-binding sources", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
     const store = storeFor(stateDir);
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "meeting-provider",
@@ -727,11 +794,11 @@ describe("transcripts tool account ownership", () => {
     }
   });
 
-  it("keeps partial legacy ownership recoverable by its recorded agent only off-channel", async () => {
+  it("uses provider access for a recorded agent's historical session", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-account-");
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
-      accountBindingChannels: ["discord"],
+      accessControl: discordAccountOwnership(),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
     });
@@ -761,7 +828,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+    ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
     await expect(
       createTool(stateDir, "main").execute(
         "call-local-main",
@@ -770,5 +837,96 @@ describe("transcripts tool account ownership", () => {
         vi.fn(),
       ),
     ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+  });
+
+  it("does not stop a same-millisecond replacement owned by another account", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accessControl: discordAccountOwnership(({ source }) => ({
+        ok: true,
+        value: source.accountId ?? "account-a",
+      })),
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    } satisfies TranscriptSourceProvider);
+    const config = {
+      transcripts: {
+        enabled: true,
+        autoStart: [
+          {
+            providerId: "discord-voice",
+            sessionId: "account-bound-auto-start",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+        ],
+      },
+    };
+    const service = createTranscriptsAutoStartService({
+      config,
+      stateDir,
+      logger: { warn: vi.fn() },
+    });
+    const ownerTool = createTool(stateDir, "main", {
+      channel: "discord",
+      accountId: "account-a",
+    });
+    const otherAccountTool = createTool(stateDir, "main", {
+      channel: "discord",
+      accountId: "account-b",
+    });
+
+    service.start();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+    const autoStarted = await storeFor(stateDir).readSession("account-bound-auto-start");
+    if (!autoStarted) {
+      throw new Error("expected the configured capture to start");
+    }
+    await expect(
+      otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await ownerTool.execute(
+      "owner-stop",
+      { action: "stop", sessionId: "account-bound-auto-start" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+    );
+
+    stop.mockClear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(autoStarted.startedAt));
+    await otherAccountTool.execute(
+      "replacement-start",
+      {
+        action: "start",
+        providerId: "discord-voice",
+        sessionId: "account-bound-auto-start",
+      },
+      undefined,
+      vi.fn(),
+    );
+    const selector = `${autoStarted.startedAt.slice(0, 10)}/account-bound-auto-start`;
+    await service.stop();
+    expect(stop).not.toHaveBeenCalled();
+    const replacement = await storeFor(stateDir).readSession(selector);
+    expect(replacement).toMatchObject({ source: { accountId: "account-b" } });
+    expect(replacement?.stoppedAt).toBeUndefined();
+    await otherAccountTool.execute(
+      "replacement-stop",
+      { action: "stop", sessionId: "account-bound-auto-start" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
+    );
   });
 });
