@@ -2,7 +2,9 @@
   "id": "daytona",
   "activation": {
     "onStartup": false,
-    "onConfigPaths": ["plugins.entries.daytona"]
+    "onConfigPaths": [
+      "plugins.entries.daytona"
+    ]
   },
   "name": "Daytona Sandbox",
   "description": "OpenClaw sandbox backend that runs agent exec and file tools inside Daytona cloud sandboxes over the Daytona toolbox API.",
@@ -22,6 +24,29 @@
                   "source": {
                     "type": "string",
                     "const": "env"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "store"
                   },
                   "provider": {
                     "type": "string",
