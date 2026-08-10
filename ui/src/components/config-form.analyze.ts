@@ -1,6 +1,7 @@
 // Control UI view renders config form.analyze screen content.
 import {
   arrayItemSchema,
+  arrayItemSchemaIndexes,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,
@@ -175,28 +176,6 @@ function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boo
   }
   seen.delete(schema);
   return allowsNull;
-}
-
-function effectiveArrayItemIndexes(schema: JsonSchema): number[] {
-  const pending = [schema];
-  const seen = new Set<JsonSchema>();
-  let maxTupleLength = 0;
-  let hasRepeatedItems = false;
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    if (Array.isArray(current.items)) {
-      maxTupleLength = Math.max(maxTupleLength, current.items.length);
-    } else if (current.items) {
-      hasRepeatedItems = true;
-    }
-    pending.push(...(current.allOf ?? []));
-  }
-  const count = Math.max(maxTupleLength, hasRepeatedItems ? 1 : 0);
-  return Array.from({ length: count }, (_, index) => index);
 }
 
 function hasUnrepresentableComposedAdditionalProperties(schema: JsonSchema): boolean {
@@ -452,7 +431,7 @@ function normalizeSchemaNode(
       }
     }
     if (schema.allOf) {
-      for (const index of effectiveArrayItemIndexes(schema)) {
+      for (const index of arrayItemSchemaIndexes(schema)) {
         const effectiveSchema = arrayItemSchema(schema, index);
         if (!effectiveSchema) {
           continue;

@@ -115,6 +115,30 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
+  it.each(["composed secondary", "composed overflow"])(
+    "searches %s array schemas declared through allOf",
+    (query) => {
+      const matched = matchesNodeSearch({
+        schema: {
+          type: "array",
+          items: [{ type: "string", description: "Outer endpoint" }],
+          allOf: [
+            {
+              items: [{}, { type: "string", description: "Composed secondary endpoint" }],
+              additionalItems: { type: "string", description: "Composed overflow endpoint" },
+            },
+          ],
+        },
+        value: [],
+        path: ["endpoints"],
+        hints: {},
+        criteria: parseConfigSearchQuery(query),
+      });
+
+      expect(matched).toBe(true);
+    },
+  );
+
   it("searches additional-property schemas before entries exist", () => {
     const matched = matchesNodeSearch({
       schema: {

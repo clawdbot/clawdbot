@@ -340,6 +340,20 @@ export function arrayItemSchema(schema: JsonSchema, index: number): JsonSchema |
   return combinedSchema(candidates);
 }
 
+export function arrayItemSchemaIndexes(schema: JsonSchema): number[] {
+  let count = 0;
+  for (const entry of collectAllOfSchemas(schema)) {
+    if (Array.isArray(entry.items)) {
+      const hasTypedTail =
+        entry.additionalItems !== null && typeof entry.additionalItems === "object";
+      count = Math.max(count, entry.items.length + (hasTypedTail ? 1 : 0));
+    } else if (entry.items) {
+      count = Math.max(count, 1);
+    }
+  }
+  return Array.from({ length: count }, (_, index) => index);
+}
+
 export function arrayConstraintCandidates(
   schema: JsonSchema,
   seen = new Set<JsonSchema>(),

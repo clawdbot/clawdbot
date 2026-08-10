@@ -1,6 +1,6 @@
 import type { ConfigUiHints } from "../api/types.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import { arrayItemSchema } from "./config-form.constraints.ts";
+import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.constraints.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigSearchCriteria = {
@@ -206,16 +206,8 @@ export function matchesNodeSearch(params: {
   if (type !== "array") {
     return false;
   }
-  if (!schema.items) {
-    return false;
-  }
   const values = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-  const tupleLength = Array.isArray(schema.items) ? schema.items.length : 1;
-  const typedTail =
-    Array.isArray(schema.items) &&
-    schema.additionalItems !== null &&
-    typeof schema.additionalItems === "object";
-  const searchLength = Math.max(values.length, tupleLength + (typedTail ? 1 : 0));
+  const searchLength = Math.max(values.length, arrayItemSchemaIndexes(schema).length);
   for (let index = 0; index < searchLength; index += 1) {
     const itemSchema = arrayItemSchema(schema, index);
     if (
