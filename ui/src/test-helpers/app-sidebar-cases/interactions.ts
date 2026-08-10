@@ -7,7 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
-  storeHiddenSessionCatalogIds,
+  setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
@@ -477,7 +477,7 @@ describe("AppSidebar catalog session rows", () => {
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
     } finally {
       toastHost.remove();
-      storeHiddenSessionCatalogIds(new Set());
+      setStoredSessionCatalogHidden("codex", false);
       vi.useRealTimers();
     }
   });

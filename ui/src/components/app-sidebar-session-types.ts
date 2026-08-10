@@ -305,7 +305,7 @@ export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
   );
 }
 
-export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
+function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
   getSafeLocalStorage()?.setItem(
     SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY,
     JSON.stringify([...ids]),
