@@ -178,6 +178,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated(key) {
       for (const listener of createdListeners) {

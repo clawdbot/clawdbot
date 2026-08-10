@@ -155,6 +155,47 @@ describe("session pin mutations", () => {
     sessions.dispose();
   });
 
+  it("rolls a filtered-only row back to the pin the Gateway kept", async () => {
+    const key = "agent:other:beta";
+    const request = vi.fn(async (method: string, params?: { archived?: unknown }) => {
+      if (method === "sessions.patch") {
+        throw new Error("unpin rejected");
+      }
+      if (method === "sessions.list") {
+        // Only the all-filtered sidebar publishes this row, so the rollback
+        // baseline cannot come from the primary snapshot.
+        return params?.archived === "all"
+          ? sessionsResult([{ key, kind: "direct", updatedAt: 1, pinned: true, pinnedAt: 7 }], 1)
+          : sessionsResult([], 1);
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const sessions = createSessionCapability(gateway);
+    const filtered: SessionListSnapshot[] = [];
+    const stopFiltered = sessions.subscribeList({ archivedFilter: "all" }, (snapshot) => {
+      filtered.push(snapshot);
+    });
+    const filteredRow = () => filtered.at(-1)?.result?.sessions.find((row) => row.key === key);
+
+    await sessions.refresh({ force: true });
+    await sessions.refreshList({ archivedFilter: "all", force: true });
+    expect(sessions.state.result?.sessions).toHaveLength(0);
+    expect(filteredRow()?.pinned).toBe(true);
+
+    const operation = sessions.patch(key, { pinned: false });
+    expect(filteredRow()?.pinned).toBe(false);
+
+    await expect(operation).rejects.toThrow("unpin rejected");
+    expect(filteredRow()?.pinned).toBe(true);
+    expect(filteredRow()?.pinnedAt).toBe(7);
+    stopFiltered();
+    sessions.dispose();
+  });
+
   it("keeps the newest pin intent when an older completion refreshes the list first", async () => {
     const pinCommitted = deferred<unknown>();
     const unpinCommitted = deferred<unknown>();

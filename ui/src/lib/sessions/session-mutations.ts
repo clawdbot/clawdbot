@@ -35,6 +35,7 @@ type SessionMutationsHost = {
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
+  publishedRow: (key: string) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
   notifyCreated: (key: string) => void;
   retirePullRequestSummary: (key: string) => void;
@@ -99,9 +100,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
       host.publish({ ...state, result: { ...state.result, sessions } });
     }
   };
-
-  const sessionRow = (key: string) =>
-    host.readState().result?.sessions.find((row) => row.key === key);
 
   // The Gateway derives `pinned` from `pinnedAt` and both row comparators order
   // by `pinnedAt` inside each pin group, so an optimistic write has to move the
@@ -221,7 +219,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return;
       }
       const pendingPinPatch = pendingPinPatches.get(normalizedKey);
-      const row = sessionRow(normalizedKey);
+      // The baseline comes from wherever the row is published: a sidebar on
+      // `archived`/`all` renders its own snapshot, and inferring `previous`
+      // from the primary state alone would roll such a row back to a guess.
+      const row = host.publishedRow(normalizedKey);
       pinPatchStarted = true;
       const next = pinRowFields(nextPinned, row?.pinnedAt);
       // `previous` chains through an in-flight pin so a rollback lands on the
