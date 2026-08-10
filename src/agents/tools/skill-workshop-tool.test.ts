@@ -825,6 +825,7 @@ describe("skill_workshop tool", () => {
         name: skillName,
         source: "workspace",
         activation: "read",
+        skillFile: path.join(workspaceDir, "skills", skillName, "SKILL.md"),
       });
       const patch = await tool.execute("repair-patch", patchArgs);
       expect(patch.details).toMatchObject({
@@ -842,7 +843,10 @@ describe("skill_workshop tool", () => {
             action: "apply",
             proposal_id: (patch.details as { id: string }).id,
           }),
-        ).rejects.toThrow("leaves captured proposals pending for operator review");
+        ).resolves.toMatchObject({ details: { status: "applied" } });
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
+          "Check weather and alerts before outdoor recommendations.",
+        );
       } else {
         await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
           "Check weather and alerts before outdoor recommendations.",
@@ -851,6 +855,48 @@ describe("skill_workshop tool", () => {
       consumeRunSkillUsage(runId);
     },
   );
+
+  it("matches an aliased used-skill receipt by canonical file", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-alias-");
+    const runId = "repair-alias";
+    const skillName = "canonical-skill-key";
+    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      agentId: "main",
+      origin: { agentId: "main", runId },
+    });
+    const created = await tool.execute("alias-create", {
+      action: "create",
+      name: skillName,
+      description: "Exercise canonical receipt identity",
+      proposal_content: "# Aliased Skill\n\nUse OLD_TOKEN.\n",
+    });
+    await tool.execute("alias-create-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+    });
+    await tool.execute("alias-read", { action: "read", skill_name: skillName });
+    recordRunSkillUsage({
+      runId,
+      name: "frontmatter-skill-name",
+      source: "workspace",
+      activation: "read",
+      skillFile,
+    });
+
+    await expect(
+      tool.execute("alias-patch", {
+        action: "patch",
+        skill_name: skillName,
+        old_string: "Use OLD_TOKEN.",
+        new_string: "Use NEW_TOKEN.",
+      }),
+    ).resolves.toMatchObject({ details: { status: "applied" } });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Use NEW_TOKEN.");
+    consumeRunSkillUsage(runId);
+  });
 
   it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");

@@ -14,7 +14,6 @@ import {
   applySkillProposal,
   composeSkillBodyPatch,
   evaluateSkillProposal,
-  inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -393,24 +392,13 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "apply") {
-        const proposalId = readLifecycleProposalIdParam(params);
-        const proposal = await inspectSkillProposal(proposalId, {
-          workspaceDir: options.workspaceDir,
-          agentId: options.agentId,
-          env: options.env,
-        });
-        if (proposal?.record.autonomousCapture && workshopConfig.autonomous.mode !== "auto") {
-          throw new ToolInputError(
-            `autonomous mode "${workshopConfig.autonomous.mode}" leaves captured proposals pending for operator review`,
-          );
-        }
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
           eventActor: skillWorkshopAgentEventActor(options.agentId),
           config: options.config,
           env: options.env,
-          proposalId,
+          proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
           correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
@@ -500,7 +488,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         if (action === "patch") {
           if (
             foregroundRepair &&
-            !hasRunWorkspaceSkillUsage(options.origin?.runId, target.skillKey)
+            !hasRunWorkspaceSkillUsage({
+              runId: options.origin?.runId,
+              name: target.skillKey,
+              skillFile: target.skillFile,
+            })
           ) {
             throw new ToolInputError(
               `skill "${target.skillKey}" was not used in this run and cannot be repaired autonomously`,

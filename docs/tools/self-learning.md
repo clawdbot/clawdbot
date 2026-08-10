@@ -25,9 +25,9 @@ When the foreground agent discovers that a skill it used is wrong or incomplete,
 it reads the current live skill and drafts a targeted patch through Skill
 Workshop in the same turn. A runtime usage receipt prevents foreground repair of
 skills that the run did not use. Autonomous mode controls the outcome: `off`
-disables the repair, `propose` leaves it pending for operator review, and `auto`
-scans and applies it immediately. The repair still goes through proposal storage,
-hash binding, the security scanner, and rollback capture.
+disables the repair, `propose` leaves it pending for explicit review and apply,
+and `auto` scans and applies it immediately. The repair still goes through
+proposal storage, hash binding, the security scanner, and rollback capture.
 
 Immediate repair changes the live skill for new sessions. It does not rewrite the
 skill snapshot already loaded into the running session. The delayed experience

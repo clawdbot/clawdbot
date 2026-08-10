@@ -552,6 +552,7 @@ export function wrapToolWithBeforeToolCallHook(
             name: skillMatch.skillName,
             source: skillMatch.skillSource,
             activation: skillMatch.activation,
+            ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
           });
         }
         if (hookOptions.emitDiagnostics) {
