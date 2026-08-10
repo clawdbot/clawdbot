@@ -14,6 +14,53 @@ class WhatsAppInboundMediaLimitExceededError extends Error {
   }
 }
 
+const TRANSIENT_WHATSAPP_MEDIA_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EPIPE",
+]);
+
+function boomStatusCode(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) {
+    return undefined;
+  }
+  const boom = err as { isBoom?: unknown; output?: { statusCode?: unknown } };
+  if (boom.isBoom !== true) {
+    return undefined;
+  }
+  return typeof boom.output?.statusCode === "number" ? boom.output.statusCode : undefined;
+}
+
+function errorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null) {
+    return undefined;
+  }
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+// Baileys' own reupload-on-410/404 retry never engages here (it keys off
+// `error.status`, which @hapi/boom never sets), so we rethrow only errors a
+// retry can plausibly fix; everything else, including the size limit, degrades.
+export function isRetryableWhatsAppInboundMediaError(err: unknown): boolean {
+  const statusCode = boomStatusCode(err);
+  if (statusCode !== undefined) {
+    return statusCode === 408 || statusCode === 429 || statusCode >= 500;
+  }
+  if (err instanceof WhatsAppInboundMediaLimitExceededError) {
+    return false;
+  }
+  const code =
+    errorCode(err) ??
+    (err instanceof Error ? errorCode((err as { cause?: unknown }).cause) : undefined);
+  return code !== undefined && TRANSIENT_WHATSAPP_MEDIA_NETWORK_CODES.has(code);
+}
+
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   const normalized = normalizeMessageContent(message);
   return normalized;

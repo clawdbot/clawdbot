@@ -17,7 +17,11 @@ import {
   extractText,
 } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
-import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
+import {
+  downloadInboundMedia,
+  downloadQuotedInboundMedia,
+  isRetryableWhatsAppInboundMediaError,
+} from "./media.js";
 
 const inboundMediaLogger = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
 const MAX_MEDIA_ERROR_MESSAGE_CHARS = 256;
@@ -134,6 +138,11 @@ export async function enrichWhatsAppInboundMessage(params: {
       failureStage: "direct",
       error,
     });
+    if (isRetryableWhatsAppInboundMediaError(error)) {
+      // Pre-adoption: reject so the durable ingress drain retries the event
+      // instead of permanently degrading media with no text fallback.
+      throw error;
+    }
     params.logVerbose(`Inbound media download failed: ${String(error)}`);
     body = formatInboundMediaUnavailableText({
       body,
@@ -155,6 +164,9 @@ export async function enrichWhatsAppInboundMessage(params: {
         failureStage: "quoted",
         error,
       });
+      if (isRetryableWhatsAppInboundMediaError(error)) {
+        throw error;
+      }
       params.logVerbose(`Quoted media download failed: ${String(error)}`);
       body = formatInboundMediaUnavailableText({
         body,
