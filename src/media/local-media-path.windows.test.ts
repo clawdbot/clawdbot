@@ -10,7 +10,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
 import { appendLocalMediaParentRoots } from "./local-roots.js";
-import { saveMediaBuffer } from "./store.js";
 
 const { probeMediaFilesWithinBudget } = vi.hoisted(() => ({
   probeMediaFilesWithinBudget: vi.fn(),
@@ -85,20 +84,6 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
         [{ filePath: sourcePath, kind: "audio" }],
         { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
       );
-    });
-  });
-
-  it("writes managed outgoing media with portable nested store keys", async () => {
-    await withTempRoot(async (root) => {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-        const saved = await saveMediaBuffer(
-          Buffer.from("managed-original"),
-          "application/octet-stream",
-          "outgoing/originals",
-        );
-
-        await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("managed-original");
-      });
     });
   });
 

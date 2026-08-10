@@ -139,6 +139,25 @@ describe("filterMessagingToolMediaDuplicates", () => {
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
+  it("dedupes canonical single-slash file URLs against triple-slash reply media", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
+      sentMediaUrls: ["FILE:/tmp/photo.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "dedupes Windows network file URLs across scheme casing",
+    () => {
+      const result = filterMessagingToolMediaDuplicates({
+        payloads: [{ text: "hello", mediaUrl: "FILE://server/share.png" }],
+        sentMediaUrls: ["file://server/share.png"],
+      });
+      expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+    },
+  );
+
   it("dedupes encoded file:// paths against local paths", () => {
     const result = expectDefined(
       filterMessagingToolMediaDuplicates({

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 const PATH_PARENT_SEGMENT_RE = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
 const FORWARD_NETWORK_PATH_PREFIX_RE = /^\/\//u;
-const FILE_URL_PREFIX_LENGTH = "file://".length;
+const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/iu;
 const FILE_URL_LOCAL_NETWORK_KEY_PREFIX = "\0file-url-local-network:";
 
 function normalizeAbsoluteLocalPath(value: string): string {
@@ -28,7 +28,7 @@ function normalizeFileUrlLocalPath(value: string): string {
 }
 
 function normalizeMalformedLocalFileUrl(value: string): string | undefined {
-  const remainder = value.slice(FILE_URL_PREFIX_LENGTH);
+  const remainder = value.replace(FILE_URL_PREFIX_RE, "");
   let localPath: string;
   if (remainder.startsWith("/")) {
     localPath = remainder;
@@ -49,13 +49,16 @@ export function normalizeMediaReferenceForComparison(value: string): string {
   if (!trimmed) {
     return "";
   }
-  if (!trimmed.toLowerCase().startsWith("file://")) {
+  if (!FILE_URL_PREFIX_RE.test(trimmed)) {
     return normalizeAbsoluteLocalPath(trimmed);
   }
   try {
     const parsed = new URL(trimmed);
     if (parsed.protocol === "file:") {
-      return normalizeFileUrlLocalPath(fileURLToPath(parsed));
+      const windows =
+        process.platform === "win32" &&
+        (parsed.hostname !== "" || /^\/[a-z]:[\\/]/iu.test(parsed.pathname));
+      return normalizeFileUrlLocalPath(fileURLToPath(parsed, { windows }));
     }
   } catch {
     // Preserve the historical fallback for malformed local URLs without conflating remote hosts.
