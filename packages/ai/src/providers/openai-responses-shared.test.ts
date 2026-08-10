@@ -350,6 +350,250 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
   });
 
+  it("uses provider-native reasoning effort values declared by the model map", () => {
+    const providerNativeModel = {
+      ...nativeOpenAIModel,
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      compat: { supportsEncryptedReasoningReplay: false },
+      thinkingLevelMap: {
+        off: "none",
+        low: "default",
+        medium: "default",
+        high: "default",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const enabled = {} as never;
+    applyCommonResponsesParams(
+      enabled,
+      providerNativeModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const summaryOnly = {} as never;
+    applyCommonResponsesParams(
+      summaryOnly,
+      providerNativeModel,
+      { messages: [] },
+      {
+        reasoningSummary: "concise",
+      },
+    );
+
+    const disabled = {} as never;
+    applyCommonResponsesParams(disabled, providerNativeModel, { messages: [] });
+
+    expect(enabled).toMatchObject({ reasoning: { effort: "default" } });
+    expect(summaryOnly).toMatchObject({
+      reasoning: { effort: "default" },
+    });
+    expect(disabled).toMatchObject({ reasoning: { effort: "none" } });
+    expect(enabled).not.toHaveProperty("include");
+    expect(summaryOnly).not.toHaveProperty("include");
+    expect(disabled).not.toHaveProperty("include");
+
+    const nativeOpenAI = {} as never;
+    applyCommonResponsesParams(
+      nativeOpenAI,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+    expect(nativeOpenAI).toMatchObject({
+      reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
+  it("omits reasoning for explicitly unsupported levels declared with null", () => {
+    const nullableModel = {
+      ...nativeOpenAIModel,
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      compat: { supportsEncryptedReasoningReplay: false },
+      thinkingLevelMap: {
+        off: "none",
+        low: "default",
+        medium: null,
+        high: "default",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const explicit = {} as never;
+    applyCommonResponsesParams(
+      explicit,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const summaryOnly = {} as never;
+    applyCommonResponsesParams(
+      summaryOnly,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningSummary: "concise",
+      },
+    );
+
+    const supportedSibling = {} as never;
+    applyCommonResponsesParams(
+      supportedSibling,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningEffort: "high",
+      },
+    );
+
+    expect(explicit).not.toHaveProperty("reasoning");
+    expect(summaryOnly).not.toHaveProperty("reasoning");
+    expect(supportedSibling).toMatchObject({ reasoning: { effort: "default" } });
+  });
+
+  it("uses compat reasoning maps unless the model map marks the level unsupported", () => {
+    const compatMappedModel = {
+      ...nativeOpenAIModel,
+      id: "custom-responses-model",
+      name: "Custom Responses Model",
+      provider: "custom-compatible",
+      baseUrl: "https://compatible.example.com/v1",
+      compat: {
+        supportsEncryptedReasoningReplay: false,
+        reasoningEffortMap: {
+          off: "none",
+          low: "compat-low",
+          medium: "compat-medium",
+          high: "compat-high",
+        },
+      },
+      thinkingLevelMap: {
+        low: "thinking-low",
+        medium: null,
+        high: "thinking-high",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const compatOnly = {} as never;
+    applyCommonResponsesParams(
+      compatOnly,
+      { ...compatMappedModel, thinkingLevelMap: undefined },
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const nullGuarded = {} as never;
+    applyCommonResponsesParams(
+      nullGuarded,
+      compatMappedModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const compatPrecedence = {} as never;
+    applyCommonResponsesParams(
+      compatPrecedence,
+      compatMappedModel,
+      { messages: [] },
+      {
+        reasoningEffort: "high",
+      },
+    );
+
+    expect(compatOnly).toMatchObject({ reasoning: { effort: "compat-medium" } });
+    expect(nullGuarded).not.toHaveProperty("reasoning");
+    expect(compatPrecedence).toMatchObject({ reasoning: { effort: "compat-high" } });
+  });
+
+  it("applies compat reasoning maps after Responses effort clamping", () => {
+    const compatMappedModel = {
+      ...nativeOpenAIModel,
+      id: "custom-clamped-reasoning",
+      name: "Custom Clamped Reasoning",
+      provider: "custom-compatible",
+      baseUrl: "https://compatible.example.com/v1",
+      compat: {
+        supportsEncryptedReasoningReplay: false,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        reasoningEffortMap: {
+          low: "provider-low",
+          xhigh: "provider-xhigh",
+        },
+      },
+    } satisfies Model<"openai-responses">;
+
+    const minimal = {} as never;
+    applyCommonResponsesParams(
+      minimal,
+      compatMappedModel,
+      { messages: [] },
+      {
+        reasoningEffort: "minimal",
+      },
+    );
+
+    const max = {} as never;
+    applyCommonResponsesParams(
+      max,
+      compatMappedModel,
+      { messages: [] },
+      {
+        reasoningEffort: "max",
+      },
+    );
+
+    expect(minimal).toMatchObject({ reasoning: { effort: "provider-low" } });
+    expect(max).toMatchObject({ reasoning: { effort: "provider-xhigh" } });
+  });
+
+  it("preserves encrypted reasoning replay for compatible Responses endpoints by default", () => {
+    const compatibleModel = {
+      ...nativeOpenAIModel,
+      id: "custom-replay-model",
+      name: "Custom Replay Model",
+      provider: "custom-compatible",
+      baseUrl: "https://compatible.example.com/v1",
+      thinkingLevelMap: {
+        low: "provider-low",
+        medium: "provider-medium",
+        high: "provider-high",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      compatibleModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+        reasoningSummary: "concise",
+      },
+    );
+
+    expect(params).toMatchObject({
+      reasoning: { effort: "provider-medium", summary: "concise" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
   it("keeps max clamped to xhigh for earlier models", () => {
     const gpt55WithXHigh = {
       ...nativeOpenAIModel,
@@ -830,6 +1074,60 @@ describe("convertResponsesMessages", () => {
       encrypted_content: "ciphertext",
       summary: [],
     });
+  });
+
+  it("omits encrypted reasoning replay items when disabled", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need continuity.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_omitted",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Visible answer.",
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayReasoningItems: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(input.find((item) => item.type === "reasoning")).toBeUndefined();
+    expect(input).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Visible answer.", annotations: [] }],
+      }),
+    ]);
+    expect(input[0]).not.toHaveProperty("id");
   });
 
   const sameRouteReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(

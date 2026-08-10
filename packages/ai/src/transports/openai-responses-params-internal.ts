@@ -8,6 +8,7 @@ import type {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   normalizeOpenAIReasoningEffort,
+  resolveOpenAIResponsesReasoningEffortForModel,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
@@ -142,6 +143,16 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
   return params.effort;
 }
 
+function supportsOpenAIResponsesEncryptedReasoningReplay(model: Model): boolean {
+  const responsesCompat = model.compat as
+    | { supportsEncryptedReasoningReplay?: boolean }
+    | undefined;
+  return (
+    model.api === "azure-openai-responses" ||
+    responsesCompat?.supportsEncryptedReasoningReplay !== false
+  );
+}
+
 const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
   "metadata",
@@ -242,6 +253,7 @@ function convertOpenAIResponsesMessagesForRequest(
   const isCodexResponses = isOpenAICodexResponsesModel(model);
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
   const compat = getCompat(model as OpenAIModeModel);
+  const supportsEncryptedReasoningReplay = supportsOpenAIResponsesEncryptedReasoningReplay(model);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
@@ -254,7 +266,7 @@ function convertOpenAIResponsesMessagesForRequest(
   return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: !isCodexResponses,
     supportsDeveloperRole,
-    replayReasoningItems: true,
+    replayReasoningItems: supportsEncryptedReasoningReplay,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
@@ -270,6 +282,7 @@ export function buildOpenAIResponsesParams(
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
   const isCodexResponses = isOpenAICodexResponsesModel(model);
+  const supportsEncryptedReasoningReplay = supportsOpenAIResponsesEncryptedReasoningReplay(model);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
@@ -334,7 +347,7 @@ export function buildOpenAIResponsesParams(
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
       const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
-      const resolvedReasoningEffort = resolveOpenAIReasoningEffortForModel({
+      const resolvedReasoningEffort = resolveOpenAIResponsesReasoningEffortForModel({
         model,
         effort: requestedReasoningEffort,
       });
@@ -348,14 +361,16 @@ export function buildOpenAIResponsesParams(
       if (reasoningEffort) {
         params.reasoning = {
           effort: reasoningEffort,
-          ...(reasoningEffort === "none" ? {} : { summary: options?.reasoningSummary || "auto" }),
+          ...(reasoningEffort === "none" || !supportsEncryptedReasoningReplay
+            ? {}
+            : { summary: options?.reasoningSummary || "auto" }),
         };
-        if (reasoningEffort !== "none") {
+        if (reasoningEffort !== "none" && supportsEncryptedReasoningReplay) {
           params.include = ["reasoning.encrypted_content"];
         }
       }
     } else if (model.provider !== "github-copilot") {
-      const reasoningEffort = resolveOpenAIReasoningEffortForModel({
+      const reasoningEffort = resolveOpenAIResponsesReasoningEffortForModel({
         model,
         effort: "none",
       });

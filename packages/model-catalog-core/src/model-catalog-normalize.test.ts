@@ -288,6 +288,7 @@ describe("model catalog normalization", () => {
                 },
                 compat: {
                   supportsPromptCacheKey: true,
+                  supportsEncryptedReasoningReplay: false,
                   toolSchemaProfile: " strict ",
                   toolCallArgumentsEncoding: " json ",
                   visibleReasoningDetailTypes: [" summary ", ""],
@@ -337,6 +338,7 @@ describe("model catalog normalization", () => {
         },
         compat: {
           supportsPromptCacheKey: true,
+          supportsEncryptedReasoningReplay: false,
           toolSchemaProfile: "strict",
           toolCallArgumentsEncoding: "json",
           visibleReasoningDetailTypes: ["summary"],

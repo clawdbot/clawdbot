@@ -122,6 +122,22 @@ describe("OpenAI reasoning effort support", () => {
     ).toBe("ProviderDefault");
   });
 
+  it("treats null fallback map entries as explicitly unsupported", () => {
+    const model = { provider: "openai", id: "gpt-5.5" };
+    const fallbackMap: Record<string, string | null> = {
+      low: "low",
+      medium: null,
+      high: "high",
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({ model, effort: "medium", fallbackMap }),
+    ).toBeUndefined();
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high", fallbackMap })).toBe(
+      "high",
+    );
+  });
+
   it("matches canonical fallback map keys case-insensitively", () => {
     const model = {
       provider: "example",
@@ -182,6 +198,21 @@ describe("OpenAI reasoning effort support", () => {
         fallbackMap: { none: "NONE" },
       }),
     ).toBe("NONE");
+  });
+
+  it("treats explicit model mappings as provider-native values", () => {
+    const model = {
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    };
+
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "medium",
+        fallbackMap: { medium: "default" },
+      }),
+    ).toBe("default");
   });
 
   it("does not fold provider-native compat values", () => {

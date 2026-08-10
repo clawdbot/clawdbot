@@ -362,6 +362,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "zaiToolStream",
     "sendSessionAffinityHeaders",
     "sendSessionIdHeader",
+    "supportsEncryptedReasoningReplay",
     "supportsEagerToolInputStreaming",
     "supportsLongCacheRetention",
     "requiresOpenAiAnthropicToolPayload",

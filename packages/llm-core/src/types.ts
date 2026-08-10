@@ -515,6 +515,10 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Maps OpenClaw reasoning effort labels to provider-specific Responses labels. */
+  reasoningEffortMap?: Record<string, string>;
+  /** Whether to request encrypted reasoning replay material for continuation state. Default: true. */
+  supportsEncryptedReasoningReplay?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

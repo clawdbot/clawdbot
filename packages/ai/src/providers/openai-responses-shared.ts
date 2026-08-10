@@ -34,6 +34,7 @@ import type {
   AssistantMessage,
   Context,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamOptions,
   TextSignatureV1,
@@ -52,6 +53,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
+  resolveOpenAIResponsesReasoningEffortForModel,
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
   supportsOpenAITemperature,
@@ -142,6 +144,7 @@ interface OpenAIResponsesStreamOptions {
 
 interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
+  replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
@@ -215,6 +218,7 @@ export function convertResponsesMessages<TApi extends Api>(
   options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
   const messages: ResponseInput = [];
+  const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildOpenAIResponsesReplayContext(model, {
     sessionId: options?.sessionId,
@@ -329,7 +333,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (block.thinkingSignature) {
+          if (shouldReplayReasoningItems && block.thinkingSignature) {
             const reasoningItem = JSON.parse(
               block.thinkingSignature,
             ) as ReplayableResponseReasoningItem;
@@ -528,6 +532,31 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   return clampedReasoning;
 }
 
+function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
+  model: Model<TApi>,
+  effort: ModelThinkingLevel,
+): string | undefined {
+  return resolveOpenAIResponsesReasoningEffortForModel({
+    model,
+    effort,
+  });
+}
+
+function supportsResponsesEncryptedReasoningReplay<TApi extends Api>(model: Model<TApi>): boolean {
+  if (model.api === "azure-openai-responses") {
+    return true;
+  }
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    const declared = (compat as { supportsEncryptedReasoningReplay?: unknown })
+      .supportsEncryptedReasoningReplay;
+    if (typeof declared === "boolean") {
+      return declared;
+    }
+  }
+  return true;
+}
+
 export function applyCommonResponsesParams<TApi extends Api>(
   params: ResponseCreateParamsStreaming,
   model: Model<TApi>,
@@ -556,19 +585,29 @@ export function applyCommonResponsesParams<TApi extends Api>(
 
   if (options?.reasoningEffort || options?.reasoningSummary) {
     const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-      : "medium";
-    params.reasoning = {
-      effort: effort as NonNullable<typeof params.reasoning>["effort"],
-      summary: options?.reasoningSummary || "auto",
-    };
-    params.include = ["reasoning.encrypted_content"];
+      ? resolveResponsesReasoningEffortForPayload(model, options.reasoningEffort)
+      : resolveResponsesReasoningEffortForPayload(model, "medium");
+    if (!effort) {
+      return;
+    }
+    if (supportsResponsesEncryptedReasoningReplay(model)) {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+        summary: options?.reasoningSummary || "auto",
+      };
+      params.include = ["reasoning.encrypted_content"];
+    } else {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      };
+    }
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
-    params.reasoning = {
-      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
-        typeof params.reasoning
-      >["effort"],
-    };
+    const effort = resolveResponsesReasoningEffortForPayload(model, "off");
+    if (effort) {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      };
+    }
   }
 }
 

@@ -3,6 +3,7 @@
  * expose different accepted effort enums, so callers map requested values here
  * before constructing provider payloads.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -27,6 +28,7 @@ type OpenAIReasoningModel = {
   api?: unknown;
   baseUrl?: unknown;
   compat?: unknown;
+  thinkingLevelMap?: unknown;
 };
 
 const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
@@ -103,6 +105,24 @@ function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
 
+function readFallbackMapValue(map: unknown, requested: string): string | null | undefined {
+  if (!isRecord(map)) {
+    return undefined;
+  }
+  const direct = map[requested];
+  if (typeof direct === "string" || direct === null) {
+    return direct;
+  }
+  if (!CANONICAL_REASONING_EFFORTS.has(requested)) {
+    return undefined;
+  }
+  return Object.entries(map).find(
+    ([effort, value]) =>
+      (typeof value === "string" || value === null) &&
+      normalizeOpenAIReasoningEffort(effort) === requested,
+  )?.[1] as string | null | undefined;
+}
+
 /** Resolve the reasoning efforts accepted by a specific OpenAI-compatible model. */
 export function resolveOpenAISupportedReasoningEfforts(
   model: OpenAIReasoningModel,
@@ -173,19 +193,21 @@ export function supportsOpenAIReasoningEffort(
 export function resolveOpenAIReasoningEffortForModel(params: {
   model: OpenAIReasoningModel;
   effort: string;
-  fallbackMap?: Record<string, string>;
+  fallbackMap?: Partial<Record<string, string | null>>;
 }): OpenAIApiReasoningEffort | undefined {
   const requested = normalizeOpenAIReasoningEffort(params.effort);
   // Config preserves map-key casing, so only canonical keys get a folded lookup.
-  const mapped =
-    params.fallbackMap?.[requested] ??
-    (params.fallbackMap && CANONICAL_REASONING_EFFORTS.has(requested)
-      ? Object.entries(params.fallbackMap).find(
-          ([effort]) => normalizeOpenAIReasoningEffort(effort) === requested,
-        )?.[1]
-      : undefined);
-  // Fallback maps emit provider-native payload labels; keep their case for exact compat lists.
+  const mapped = readFallbackMapValue(params.fallbackMap, requested);
+  // A null map entry marks the level as explicitly unsupported; never fall back
+  // to the generic requested value for it.
+  if (mapped === null) {
+    return undefined;
+  }
+  // Explicit maps are the canonical provider-native contract; preserve their exact casing.
   const normalized = mapped === undefined ? requested : mapped.trim();
+  if (mapped !== undefined) {
+    return normalized ? (normalized as OpenAIApiReasoningEffort) : undefined;
+  }
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
@@ -211,4 +233,51 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   return supported.find(
     (effort) => !isDisabledReasoningEffort(normalizeOpenAIReasoningEffort(effort)),
   );
+}
+
+/** Resolve Responses reasoning through the public compat map while preserving null guards. */
+export function resolveOpenAIResponsesReasoningEffortForModel(params: {
+  model: OpenAIReasoningModel;
+  effort: string;
+}): OpenAIApiReasoningEffort | undefined {
+  const requested = normalizeOpenAIReasoningEffort(params.effort);
+  const thinkingMap = params.model.thinkingLevelMap;
+  const thinkingMapped = readFallbackMapValue(thinkingMap, requested);
+  if (thinkingMapped === null) {
+    return undefined;
+  }
+  const compatMap = isRecord(params.model.compat)
+    ? (params.model.compat.reasoningEffortMap as unknown)
+    : undefined;
+  const compatMapped = readFallbackMapValue(compatMap, requested);
+  if (compatMapped === null) {
+    return undefined;
+  }
+  const effective = resolveOpenAIReasoningEffortForModel({
+    model: params.model,
+    effort: requested,
+  });
+  if (!effective) {
+    const requestedMapped = compatMapped ?? thinkingMapped;
+    if (requestedMapped === undefined) {
+      return undefined;
+    }
+    const normalized = requestedMapped.trim();
+    return normalized ? (normalized as OpenAIApiReasoningEffort) : undefined;
+  }
+  const normalizedEffective = normalizeOpenAIReasoningEffort(effective);
+  const effectiveThinkingMapped = readFallbackMapValue(thinkingMap, normalizedEffective);
+  if (effectiveThinkingMapped === null) {
+    return undefined;
+  }
+  const effectiveCompatMapped = readFallbackMapValue(compatMap, normalizedEffective);
+  if (effectiveCompatMapped === null) {
+    return undefined;
+  }
+  const mapped = effectiveCompatMapped ?? effectiveThinkingMapped ?? compatMapped ?? thinkingMapped;
+  if (mapped === undefined) {
+    return effective;
+  }
+  const normalized = mapped.trim();
+  return normalized ? (normalized as OpenAIApiReasoningEffort) : undefined;
 }

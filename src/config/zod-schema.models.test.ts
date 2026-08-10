@@ -1,5 +1,7 @@
 // Verifies model config schema parsing and validation behavior.
+import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { applyCommonResponsesParams } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
@@ -132,5 +134,68 @@ describe("ModelsConfigSchema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("accepts configured Responses replay opt-out and preserves provider-native payload effort", () => {
+    const parsed = ModelsConfigSchema.parse({
+      providers: {
+        "custom-responses": {
+          baseUrl: "https://compatible.example.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "custom-reasoning",
+              name: "Custom Reasoning",
+              reasoning: true,
+              thinkingLevelMap: {
+                off: "none",
+                low: "default",
+                medium: "default",
+                high: "default",
+              },
+              compat: {
+                supportsEncryptedReasoningReplay: false,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(parsed).toBeDefined();
+    if (!parsed) {
+      return;
+    }
+
+    const configuredModel = parsed.providers?.["custom-responses"]?.models?.[0];
+    expect(configuredModel?.compat?.supportsEncryptedReasoningReplay).toBe(false);
+    const model = {
+      id: configuredModel?.id ?? "",
+      name: configuredModel?.name ?? "",
+      reasoning: true,
+      thinkingLevelMap: configuredModel?.thinkingLevelMap,
+      compat: configuredModel?.compat,
+      provider: "custom-responses",
+      api: "openai-responses",
+      baseUrl: "https://compatible.example.com/v1",
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 1024,
+    } satisfies Model<"openai-responses">;
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      model,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+        reasoningSummary: "concise",
+      },
+    );
+
+    expect(params).toMatchObject({ reasoning: { effort: "default" } });
+    expect(params).not.toHaveProperty("include");
   });
 });

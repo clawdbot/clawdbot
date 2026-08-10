@@ -177,6 +177,7 @@ function buildParams(
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    replayReasoningItems: model.compat?.supportsEncryptedReasoningReplay !== false,
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,

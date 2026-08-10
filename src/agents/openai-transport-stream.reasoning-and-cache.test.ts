@@ -250,6 +250,110 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
   });
 
+  it("applies configured reasoning maps in the active Responses transport", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "custom-reasoning",
+        provider: "custom-responses",
+        baseUrl: "https://compatible.example.com/v1",
+        thinkingLevelMap: { medium: "default" },
+      }),
+      emptyContext(),
+      { reasoningEffort: "medium" } as never,
+    ) as { reasoning?: { effort?: unknown } };
+
+    expect(params.reasoning?.effort).toBe("default");
+  });
+
+  it("uses Responses compat reasoning maps unless the model map marks the level unsupported", () => {
+    const compatOnly = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "custom-reasoning",
+        provider: "custom-responses",
+        baseUrl: "https://compatible.example.com/v1",
+        compat: {
+          reasoningEffortMap: { medium: "compat-medium", high: "compat-high" },
+        },
+      }),
+      emptyContext(),
+      { reasoningEffort: "medium" } as never,
+    ) as { reasoning?: { effort?: unknown } };
+
+    const nullGuarded = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "custom-reasoning",
+        provider: "custom-responses",
+        baseUrl: "https://compatible.example.com/v1",
+        thinkingLevelMap: { medium: null },
+        compat: {
+          reasoningEffortMap: { medium: "compat-medium" },
+        },
+      }),
+      emptyContext(),
+      { reasoningEffort: "medium" } as never,
+    ) as { reasoning?: { effort?: unknown } };
+
+    const compatPrecedence = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "custom-reasoning",
+        provider: "custom-responses",
+        baseUrl: "https://compatible.example.com/v1",
+        thinkingLevelMap: { high: "thinking-high" },
+        compat: {
+          reasoningEffortMap: { high: "compat-high" },
+        },
+      }),
+      emptyContext(),
+      { reasoningEffort: "high" } as never,
+    ) as { reasoning?: { effort?: unknown } };
+
+    expect(compatOnly.reasoning?.effort).toBe("compat-medium");
+    expect(nullGuarded).not.toHaveProperty("reasoning");
+    expect(compatPrecedence.reasoning?.effort).toBe("compat-high");
+  });
+
+  it("applies Responses compat reasoning maps after effort clamping", () => {
+    const model = makeResponsesModel({
+      id: "custom-clamped-reasoning",
+      provider: "custom-responses",
+      baseUrl: "https://compatible.example.com/v1",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        reasoningEffortMap: {
+          low: "provider-low",
+          xhigh: "provider-xhigh",
+        },
+      },
+    });
+
+    const minimal = buildOpenAIResponsesParams(model, emptyContext(), {
+      reasoningEffort: "minimal",
+    } as never) as { reasoning?: { effort?: unknown } };
+    const max = buildOpenAIResponsesParams(model, emptyContext(), {
+      reasoningEffort: "max",
+    } as never) as { reasoning?: { effort?: unknown } };
+
+    expect(minimal.reasoning?.effort).toBe("provider-low");
+    expect(max.reasoning?.effort).toBe("provider-xhigh");
+  });
+
+  it("omits encrypted replay fields when Responses compat disables them", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "custom-reasoning",
+        provider: "custom-responses",
+        baseUrl: "https://compatible.example.com/v1",
+        thinkingLevelMap: { medium: "default" },
+        compat: { supportsEncryptedReasoningReplay: false },
+      }),
+      emptyContext(),
+      { reasoningEffort: "medium", reasoningSummary: "concise" } as never,
+    ) as { include?: unknown; reasoning?: Record<string, unknown> };
+
+    expect(params.reasoning).toEqual({ effort: "default" });
+    expect(params).not.toHaveProperty("include");
+  });
+
   it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({

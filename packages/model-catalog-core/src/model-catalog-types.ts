@@ -57,6 +57,7 @@ export type ModelCatalogCompatConfig = {
   cacheControlFormat?: "anthropic";
   sendSessionAffinityHeaders?: boolean;
   sendSessionIdHeader?: boolean;
+  supportsEncryptedReasoningReplay?: boolean;
   supportsEagerToolInputStreaming?: boolean;
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;

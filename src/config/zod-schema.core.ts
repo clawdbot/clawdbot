@@ -241,6 +241,7 @@ const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsTemperature: z.boolean().optional(),
+    supportsEncryptedReasoningReplay: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     codeMode: z.enum(["preferred", "capable"]).optional(),

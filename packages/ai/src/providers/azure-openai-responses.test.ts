@@ -232,4 +232,33 @@ describe("azure-openai-responses", () => {
       expect.arrayContaining([expect.objectContaining({ type: "compaction" })]),
     );
   });
+
+  it("preserves encrypted reasoning replay material for reasoning requests", async () => {
+    let sentParams:
+      | {
+          reasoning?: unknown;
+          include?: unknown;
+        }
+      | undefined;
+    const hostFetch: typeof fetch = async (input, init) => {
+      sentParams = (await new Request(input, init).json()) as typeof sentParams;
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    };
+
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    try {
+      await streamAzureOpenAIResponses(azureResponsesModel, context, {
+        apiKey: "test-api-key",
+        reasoningEffort: "medium",
+        reasoningSummary: "concise",
+      }).result();
+
+      expect(sentParams).toMatchObject({
+        reasoning: { effort: "medium", summary: "concise" },
+        include: ["reasoning.encrypted_content"],
+      });
+    } finally {
+      configureAiTransportHost({});
+    }
+  });
 });
