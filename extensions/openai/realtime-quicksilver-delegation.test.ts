@@ -309,9 +309,8 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it("handles structured delegated failures with a non-string message", async () => {
-    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
-      throw { code: "UNAVAILABLE", message: 503 };
-    });
+    const structuredFailure = { code: "UNAVAILABLE", message: 503 } as unknown as Error;
+    const runAgentConsult = vi.fn<ConsultRunner>(() => Promise.reject(structuredFailure));
     const { controller, logger, socket } = createDelegationHarness({ runAgentConsult });
 
     delegate(controller, "delegation-structured-failure", "do work");
