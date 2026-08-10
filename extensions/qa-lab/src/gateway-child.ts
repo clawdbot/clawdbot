@@ -7,6 +7,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { finished } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -88,6 +89,8 @@ const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
+const QA_GATEWAY_CHILD_RECENT_LOG_CHARS = 64 * 1_024;
+const QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER = "[qa-lab] older gateway logs truncated\n";
 const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
@@ -670,13 +673,35 @@ async function callQaGatewayWithRetry<T>(params: {
 }
 
 function createQaGatewayChildLogCollector() {
-  const chunks: Buffer[] = [];
+  const decoder = new StringDecoder("utf8");
+  let recent = "";
+  let end = 0;
+  let dropped = false;
+
+  const readFrom = (mark: number) => {
+    const start = end - recent.length;
+    const wasTruncated = mark < start;
+    const text = recent.slice(Math.max(0, mark - start));
+    return `${wasTruncated ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${text}`;
+  };
   return {
     push(chunk: Buffer) {
-      chunks.push(Buffer.from(chunk));
+      const text = decoder.write(chunk);
+      end += text.length;
+      recent += text;
+      if (recent.length > QA_GATEWAY_CHILD_RECENT_LOG_CHARS) {
+        recent = sliceUtf16Safe(recent, -QA_GATEWAY_CHILD_RECENT_LOG_CHARS);
+        dropped = true;
+      }
+    },
+    mark() {
+      return end;
+    },
+    readSince(mark: number) {
+      return readFrom(mark);
     },
     text() {
-      return Buffer.concat(chunks).toString("utf8").trim();
+      return `${dropped ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();
     },
   };
 }
@@ -772,8 +797,8 @@ async function fetchLocalGatewayListening(baseUrl: string): Promise<boolean> {
 }
 
 async function waitForQaGatewayRestartBoundary(params: {
-  logs: () => string;
-  offset: number;
+  readLogsSince: (mark: number) => string;
+  mark: number;
   pollMs?: number;
   timeoutMs?: number;
 }) {
@@ -781,7 +806,7 @@ async function waitForQaGatewayRestartBoundary(params: {
   const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 100, 100, 0);
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (params.logs().slice(params.offset).includes("restart mode:")) {
+    if (params.readLogsSince(params.mark).includes("restart mode:")) {
       return;
     }
     const remainingMs = timeoutMs - (Date.now() - startedAt);
@@ -1346,8 +1371,6 @@ export async function startQaGatewayChild(params: {
       }
       return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
     };
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
     const output = createQaGatewayChildLogCollector();
     const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
     const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
@@ -1405,13 +1428,11 @@ export async function startQaGatewayChild(params: {
       });
       spawnedChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
-        stdout.push(buffer);
         output.push(buffer);
         stdoutLog.write(buffer);
       });
       spawnedChild.stderr.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
-        stderr.push(buffer);
         output.push(buffer);
         stderrLog.write(buffer);
       });
@@ -1576,7 +1597,7 @@ export async function startQaGatewayChild(params: {
       }
       reuseStartupLaunchState = false;
 
-      const attemptLogOffset = logs().length;
+      const attemptLogMark = output.mark();
       const spawnedAttempt = await spawnGatewayProcess(env);
       const attemptChild = spawnedAttempt.child;
       child = attemptChild;
@@ -1661,7 +1682,7 @@ export async function startQaGatewayChild(params: {
         break;
       } catch (error) {
         const details = formatErrorMessage(error);
-        const attemptLogs = logs().slice(attemptLogOffset);
+        const attemptLogs = redactQaGatewayDebugText(output.readSince(attemptLogMark));
         const startupRetry = resolveQaGatewayStartupRetry({
           attempt,
           details: attemptLogs.trim() ? attemptLogs : details,
@@ -1843,12 +1864,12 @@ export async function startQaGatewayChild(params: {
       },
       async restart(signal: NodeJS.Signals = "SIGUSR1") {
         throwActiveChildFailure();
-        const restartLogOffset = logs().length;
+        const restartLogMark = output.mark();
         await signalActiveProcess(signal);
         if (signal === "SIGUSR1") {
           await waitForQaGatewayRestartBoundary({
-            logs,
-            offset: restartLogOffset,
+            readLogsSince: (mark) => redactQaGatewayDebugText(output.readSince(mark)),
+            mark: restartLogMark,
           });
           await waitForGatewayReady({
             baseUrl,

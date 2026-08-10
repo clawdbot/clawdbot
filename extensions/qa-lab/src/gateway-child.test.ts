@@ -992,10 +992,10 @@ describe("buildQaRuntimeEnv", () => {
 
   it("waits for a fresh in-process restart boundary after the current log offset", async () => {
     let logs = "old restart mode: in-process restart\n";
-    const offset = logs.length;
+    const mark = logs.length;
     const wait = testing.waitForQaGatewayRestartBoundary({
-      logs: () => logs,
-      offset,
+      readLogsSince: (since) => logs.slice(since),
+      mark,
       pollMs: 1,
       timeoutMs: 100,
     });
@@ -1009,10 +1009,10 @@ describe("buildQaRuntimeEnv", () => {
     const output = testing.createQaGatewayChildLogCollector();
     output.push(Buffer.from("gateway ready\n"));
     output.push(Buffer.from("stderr warning\n"));
-    const offset = output.text().length;
+    const mark = output.mark();
     const wait = testing.waitForQaGatewayRestartBoundary({
-      logs: () => output.text(),
-      offset,
+      readLogsSince: (since) => output.readSince(since),
+      mark,
       pollMs: 1,
       timeoutMs: 100,
     });
@@ -1022,11 +1022,25 @@ describe("buildQaRuntimeEnv", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
+  it("bounds diagnostics while monotonic marks retain fresh output semantics", () => {
+    const output = testing.createQaGatewayChildLogCollector();
+    output.push(Buffer.from(`old😀${"x".repeat(70_000)}`));
+    const mark = output.mark();
+    output.push(Buffer.from("fresh restart mode: in-process restart\n"));
+
+    expect(output.text()).toContain("[qa-lab] older gateway logs truncated");
+    expect(output.text().length).toBeLessThan(66_000);
+    expect(output.readSince(mark)).toBe("fresh restart mode: in-process restart\n");
+    expect(output.text()).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
     await expect(
       testing.waitForQaGatewayRestartBoundary({
-        logs: () => "signal SIGUSR1 received\n",
-        offset: 0,
+        readLogsSince: () => "signal SIGUSR1 received\n",
+        mark: 0,
         pollMs: 1,
         timeoutMs: 1,
       }),
@@ -1036,8 +1050,8 @@ describe("buildQaRuntimeEnv", () => {
   it("keeps oversized restart-boundary poll intervals within the timeout", async () => {
     await expect(
       testing.waitForQaGatewayRestartBoundary({
-        logs: () => "signal SIGUSR1 received\n",
-        offset: 0,
+        readLogsSince: () => "signal SIGUSR1 received\n",
+        mark: 0,
         pollMs: Number.MAX_SAFE_INTEGER,
         timeoutMs: 5,
       }),
