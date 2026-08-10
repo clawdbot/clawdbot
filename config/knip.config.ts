@@ -417,7 +417,6 @@ const config = {
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // Collection reconcile behavior is asserted by the focused review tests;
     // production wires only the scheduled review loop.
-    "src/skills/workshop/collection-review.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],

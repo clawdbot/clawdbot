@@ -64,7 +64,7 @@ export function startSkillCollectionMaintenance(options: {
   };
 }
 
-export async function runSkillCollectionReview(params: {
+async function runSkillCollectionReview(params: {
   agentId: string;
   agentIds?: readonly string[];
   config: OpenClawConfig;
