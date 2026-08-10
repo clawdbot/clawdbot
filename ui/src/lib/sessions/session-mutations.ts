@@ -254,6 +254,17 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
       }
     };
+    // The Gateway has committed by the time this runs, so a newer intent's
+    // rollback baseline moves here rather than after the list refresh, which
+    // can fail and would leave that intent rolling back to a pre-patch value.
+    // The Gateway stamps `pinnedAt` with its own clock, so the baseline is a
+    // round trip off — accurate enough to order a row it just pinned.
+    const confirmPinPatch = () => {
+      const pendingPinPatch = pendingPinPatches.get(normalizedKey);
+      if (pinPatchStarted && pendingPinPatch && pendingPinPatch.token !== pinPatchToken) {
+        pendingPinPatch.previous = pinRowFields(nextPinned, undefined);
+      }
+    };
     const settlePinPatch = (completed: boolean) => {
       const pendingPinPatch = pendingPinPatches.get(normalizedKey);
       if (!pinPatchStarted || !pendingPinPatch) {
@@ -261,13 +272,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       if (pendingPinPatch.token !== pinPatchToken) {
         // A newer pin intent owns this row; republishing it is the canonical
-        // overlay's job. Hand that intent the baseline this patch just
-        // confirmed. The Gateway stamps `pinnedAt` with its own clock, so this
-        // baseline is a round trip off — accurate enough to order a row the
-        // Gateway pinned moments ago, and the next list replaces it outright.
-        if (completed) {
-          pendingPinPatch.previous = pinRowFields(nextPinned, undefined);
-        }
+        // overlay's job and its baseline moved at confirmation time.
         return;
       }
       if (!completed && host.connection.isCurrent(scope)) {
@@ -296,6 +301,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         settleOptimisticPatch(false);
         return null;
       }
+      confirmPinPatch();
       if (!options.deferListRefresh) {
         await host.refreshReplacement(options.agentId);
         if (!host.connection.isCurrent(scope)) {

@@ -438,7 +438,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     refresh,
     refreshReplacement,
     /** The row as currently published. The archived/all sidebars render their
-     * own snapshot, so a displayed row can be absent from the primary state. */
+     * own snapshot, so a displayed row can be absent from the primary state.
+     * Lists refresh independently, so when both hold the row the primary one
+     * wins rather than guessing which snapshot the caller was looking at. */
     publishedRow(key: string): GatewaySessionRow | undefined {
       const primary = host.readState().result?.sessions.find((row) => row.key === key);
       if (primary) {
