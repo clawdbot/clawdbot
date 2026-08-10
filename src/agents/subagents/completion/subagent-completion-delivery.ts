@@ -1,8 +1,8 @@
 import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntryAnyStatus,
-} from "../infra/delivery-queue-sqlite.js";
-import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
+} from "../../../infra/delivery-queue-sqlite.js";
+import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   prepareClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
@@ -12,23 +12,23 @@ import {
   type SessionDeliverySettledOutcome,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
-} from "../infra/session-delivery-queue-storage.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+} from "../../../infra/session-delivery-queue-storage.js";
+import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import {
   findTaskByRunId,
   getTaskById,
   publishTaskRecordAfterAtomicStore,
-} from "../tasks/runtime-internal.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+} from "../../../tasks/runtime-internal.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
-import { ensureDeliveryState } from "./subagent-delivery-state.js";
-import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { ensureDeliveryState } from "../../subagent-delivery-state.js";
+import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../../subagent-registry-helpers.js";
+import { subagentRuns } from "../../subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 
 const CLAIM_LEASE_MS = 125_000;
 const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -228,7 +228,7 @@ export async function settleCorrelatedSubagentDelivery(
   settleSubagentCompletionDelivery({ subagent, task: projectedTask });
   publishCommittedRecords(subagent, projectedTask);
   if (outcome === "recovered") {
-    const { resumeSubagentRun } = await import("./subagent-registry.js");
+    const { resumeSubagentRun } = await import("../../subagent-registry.js");
     resumeSubagentRun(subagent.runId);
   }
 }
@@ -280,7 +280,7 @@ export async function retrySubagentCompletionDelivery(
     const projectedTask = projectRedrivenTask(task, redrive, "pending", now);
     settleSubagentCompletionDelivery({ subagent: redrive, task: projectedTask, databaseOptions });
     publishCommittedRecords(redrive, projectedTask);
-    const { resumeSubagentRun } = await import("./subagent-registry.js");
+    const { resumeSubagentRun } = await import("../../subagent-registry.js");
     resumeSubagentRun(redrive.runId);
     return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
   }

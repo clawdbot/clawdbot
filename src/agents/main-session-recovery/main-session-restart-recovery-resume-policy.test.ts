@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveMainSessionResumePolicy } from "./main-session-restart-recovery-resume-policy.js";
 
-vi.mock("./code-mode-control-tools.js", () => ({
+vi.mock("../code-mode-control-tools.js", () => ({
   CODE_MODE_EXEC_TOOL_NAME: "exec",
   CODE_MODE_WAIT_TOOL_NAME: "wait",
 }));
 
-vi.mock("./tool-replay-safety.js", () => ({
+vi.mock("../tool-replay-safety.js", () => ({
   isAgentToolReplaySafe: ({ name }: { name?: string }) => name === "read",
 }));
 
-vi.mock("./run-termination.js", () => ({
+vi.mock("../run-termination.js", () => ({
   AGENT_RUN_RESTART_ABORT_ERROR: "agent run aborted for restart",
   AGENT_RUN_RESTART_ABORT_ERROR_CODE: "OPENCLAW_RESTART_ABORT",
 }));

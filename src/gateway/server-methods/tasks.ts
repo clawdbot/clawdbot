@@ -15,7 +15,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   dismissSubagentCompletionDelivery,
   retrySubagentCompletionDelivery,
-} from "../../agents/subagent-completion-delivery.js";
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";

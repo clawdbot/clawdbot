@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 
 function recoveryEntry(params?: {

@@ -4,22 +4,22 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   type InternalSessionEntry as SessionEntry,
   resolveSessionWorkStartError,
-} from "../config/sessions.js";
+} from "../../config/sessions.js";
 import {
   listSessionEntriesByStatus,
   loadExactSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
-import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { resolveDefaultAgentId } from "./agent-scope-config.js";
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "./embedded-agent-runner/run-state.js";
+} from "../embedded-agent-runner/run-state.js";
 import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {

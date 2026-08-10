@@ -1,6 +1,6 @@
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { mergeRestartRecoveryTerminalRunIds } from "../config/sessions/restart-recovery-state.js";
-import { retryAsync } from "../infra/retry.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
+import { retryAsync } from "../../infra/retry.js";
 import {
   buildMainSessionRecoveryClearPatch,
   type MainRecoveryStateFields,

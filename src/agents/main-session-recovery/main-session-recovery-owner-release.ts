@@ -19,5 +19,5 @@ export function scheduleMainSessionRecoveryPendingTarget(
     () => {}, // Startup recovery remains the fallback if this optional module cannot load.
   );
 }
-import { getRuntimeConfig } from "../config/io.js";
-import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";

@@ -1,23 +1,23 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnLifecyclePatch,
   updateSessionEntry,
-} from "../config/sessions/session-accessor.js";
+} from "../../config/sessions/session-accessor.js";
 import {
   hasInterSessionUserProvenance,
   isCompletionReportInputProvenance,
-} from "../sessions/input-provenance.js";
-import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
-import { isAnnounceRunId } from "./announce-idempotency.js";
+} from "../../sessions/input-provenance.js";
+import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
+import { isAnnounceRunId } from "../announce-idempotency.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
   readTerminalSourceReplyDeliveryMirror,
-} from "./embedded-agent-runner/message-visibility.js";
+} from "../embedded-agent-runner/message-visibility.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import { buildRestartRecoveryExpectedState, log } from "./main-session-restart-recovery-shared.js";

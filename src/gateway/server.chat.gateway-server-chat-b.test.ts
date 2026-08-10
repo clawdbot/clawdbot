@@ -67,7 +67,7 @@ import {
 
 const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
-    typeof import("../agents/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
+    typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
   >(async () => ({
     recovered: 0,
     failed: 1,
@@ -75,9 +75,9 @@ const restartRecoveryMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../agents/main-session-restart-recovery.js", async (importOriginal) => {
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../agents/main-session-restart-recovery.js")>();
+    await importOriginal<typeof import("../agents/main-session-recovery/main-session-restart-recovery.js")>();
   return {
     ...actual,
     retryRestartAbortedMainSessionRecovery:

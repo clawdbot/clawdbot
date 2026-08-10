@@ -60,7 +60,7 @@ import {
   formatAgentInternalEventsForPrompt,
   type AgentInternalEvent,
 } from "../../internal-events.js";
-import { admitCorrelatedSubagentSessionDelivery } from "../../subagent-completion-delivery.js";
+import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   callGateway,

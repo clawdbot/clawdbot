@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
-} from "../config/sessions.js";
+} from "../../config/sessions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";

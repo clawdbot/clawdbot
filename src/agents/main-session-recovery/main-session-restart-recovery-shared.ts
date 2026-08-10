@@ -1,18 +1,18 @@
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveStorePath,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
-} from "../config/sessions.js";
+} from "../../config/sessions.js";
 import {
   hasSessionEntriesByStatusReadOnly,
   type SessionTranscriptTurnExpectedState,
-} from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentSessionDirs } from "./session-dirs.js";
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const log = createSubsystemLogger("main-session-restart-recovery");
 export const DEFAULT_RECOVERY_DELAY_MS = 5_000;

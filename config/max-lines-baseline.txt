@@ -409,7 +409,7 @@ src/agents/failover-error.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
-src/agents/main-session-restart-recovery.test.ts
+src/agents/main-session-recovery/main-session-restart-recovery.test.ts
 src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts

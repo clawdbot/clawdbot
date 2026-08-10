@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   retryMainSessionRecoveryMutation,
   scheduleMainSessionRecoveryMutation,

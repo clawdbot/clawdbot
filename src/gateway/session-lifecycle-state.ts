@@ -13,7 +13,7 @@ import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitiz
 import {
   isMainSessionRecoveryLifecycleEvent,
   projectMainSessionRecoveryLifecycle,
-} from "../agents/main-session-recovery-lifecycle.js";
+} from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";

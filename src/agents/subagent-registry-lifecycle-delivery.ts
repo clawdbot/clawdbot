@@ -19,7 +19,7 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import { isSilentAgentReplyText } from "./embedded-agent-runner/message-visibility.js";
-import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
+import { resolveSubagentCompletionResultText } from "./subagents/completion/subagent-completion-result.js";
 import {
   clearDeliveryState,
   ensureCompletionState,

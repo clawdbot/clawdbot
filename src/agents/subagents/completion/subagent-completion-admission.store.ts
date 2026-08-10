@@ -2,23 +2,23 @@ import {
   bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
-} from "../infra/delivery-queue-sqlite-bound.js";
+} from "../../../infra/delivery-queue-sqlite-bound.js";
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
-} from "../infra/session-delivery-queue.js";
+} from "../../../infra/session-delivery-queue.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import { bindTaskRecord, upsertTaskRunRowInDatabase } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+} from "../../../state/openclaw-state-db.js";
+import { bindTaskRecord, upsertTaskRunRowInDatabase } from "../../../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   bindSubagentRunRecord,
   upsertSubagentRunRowInDatabase,
-} from "./subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+} from "../../subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 
 type AdmissionTestHooks = {
   afterBind?: () => unknown;

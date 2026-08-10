@@ -52,8 +52,8 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
 
-vi.mock("../../subagent-completion-delivery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../subagent-completion-delivery.js")>()),
+vi.mock("../completion/subagent-completion-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../completion/subagent-completion-delivery.js")>()),
   admitCorrelatedSubagentSessionDelivery: (params: { payload: Record<string, unknown> }) =>
     sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery(params.payload, 125_000),
 }));

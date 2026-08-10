@@ -3,66 +3,66 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
-import type { CliDeps } from "../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   listSessionEntries,
   loadSessionEntry as loadSessionEntryRaw,
   loadTranscriptEvents,
   replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import { callGateway } from "../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+} from "../../config/sessions/session-accessor.js";
+import { callGateway } from "../../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+} from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
-import { addTestHook } from "../plugins/hooks.test-fixtures.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+} from "../../plugins/hook-runner-global.js";
+import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
-} from "../process/gateway-work-admission.js";
+} from "../../process/gateway-work-admission.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+} from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { deliverAgentCommandResult } from "./command/delivery.js";
-import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { deliverAgentCommandResult } from "../command/delivery.js";
+import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
-} from "./embedded-agent-runner/runs.js";
+} from "../embedded-agent-runner/runs.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-} from "./internal-runtime-context.js";
+} from "../internal-runtime-context.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
@@ -74,7 +74,7 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
-import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "./run-termination.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../run-termination.js";
 import {
   createAssistantToolCallMessage,
   createSessionEntry,
@@ -83,7 +83,7 @@ import {
   expectRecord,
   mockCallArg,
   waitForFast,
-} from "./subagent-test-fixtures.test-helpers.js";
+} from "../subagent-test-fixtures.test-helpers.js";
 
 const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),
@@ -101,7 +101,7 @@ const executionIdentityEnabledConfig = {
   logging: { audit: { executionIdentity: true } },
 } satisfies OpenClawConfig;
 
-vi.mock("../gateway/call.js", () => ({
+vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
 
@@ -144,8 +144,8 @@ function gatewayParams(): Record<string, unknown> {
   return expectRecord(mockCallArg(callGateway).params, "gateway params");
 }
 
-vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/transcript.js")>();
+vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/transcript.js")>();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementation(
     actual.appendAssistantMessageToSessionTranscript,
   );
@@ -156,11 +156,11 @@ vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/restart-recovery-hook-safety.js", () => ({
+vi.mock("../../plugins/restart-recovery-hook-safety.js", () => ({
   findRestartRecoveryUnsafeReplyHook: runtimePluginMocks.findRestartRecoveryUnsafeReplyHook,
 }));
 
-vi.mock("./runtime-plugins.js", () => ({
+vi.mock("../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
 

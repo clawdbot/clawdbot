@@ -1,35 +1,35 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
-import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
-import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
-import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
+import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { sanitizePendingFinalDeliveryText } from "../../auto-reply/reply/pending-final-delivery.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoveryTerminalRun,
   resolveRestartRecoveryChannelAuthority,
-} from "../config/sessions/restart-recovery-state.js";
-import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import type { AgentRunRequest } from "../gateway/server-methods/agent-request-types.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { CommandLane } from "../process/lanes.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../sessions/input-provenance.js";
-import { resolveSendPolicy } from "../sessions/send-policy.js";
+} from "../../config/sessions/restart-recovery-state.js";
+import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
+import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { findRestartRecoveryUnsafeReplyHook } from "../../plugins/restart-recovery-hook-safety.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { CommandLane } from "../../process/lanes.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
   type DeliveryContext,
-} from "../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+} from "../../utils/delivery-context.shared.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
   repairMainSessionRecoveryMutation,
@@ -44,7 +44,7 @@ import {
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
-import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE =

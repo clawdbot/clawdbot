@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
-import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery-store.js";
-import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-restart-recovery-shared.js";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import {
   mergeSessionEntry,
   resolveSessionLifecycleTimestamps,

@@ -8,7 +8,7 @@ import {
 import {
   commitMainSessionRecovery,
   type MainSessionRecoveryPendingTarget,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {

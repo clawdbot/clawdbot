@@ -1,18 +1,18 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareClaimedSessionDelivery } from "../infra/session-delivery-queue-storage.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
+import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { ensureTaskRegistryReady, getTaskById } from "../tasks/runtime-internal.js";
-import { publishTaskRecordAfterAtomicStore } from "../tasks/task-registry.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { withEnvAsync } from "../test-utils/env.js";
+} from "../../../state/openclaw-state-db.js";
+import { ensureTaskRegistryReady, getTaskById } from "../../../tasks/runtime-internal.js";
+import { publishTaskRecordAfterAtomicStore } from "../../../tasks/task-registry.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   admitSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
@@ -22,15 +22,15 @@ import {
   resolveCorrelatedSubagentDelivery,
   retrySubagentCompletionDelivery,
 } from "./subagent-completion-delivery.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../../subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../../subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("./subagent-registry.js", () => ({ resumeSubagentRun }));
+vi.mock("../../subagent-registry.js", () => ({ resumeSubagentRun }));
 
 describe("atomic subagent completion admission store", () => {
   let tempDir: string;

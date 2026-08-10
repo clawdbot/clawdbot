@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   type InternalSessionEntry as SessionEntry,
   type RestartRecoveryRun,
   resolveAllAgentSessionStoreTargetsSync,
-} from "../config/sessions.js";
-import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { listAgentRunsForSession } from "../infra/agent-run-registry.js";
+} from "../../config/sessions.js";
+import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "./embedded-agent-runner/run-state.js";
+} from "../embedded-agent-runner/run-state.js";
 import {
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
@@ -27,7 +27,7 @@ import {
   normalizeStringSet,
   resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
-import { resolveAgentSessionDirs } from "./session-dirs.js";
+import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 async function markRecoveryStore(params: {
   storePath: string;

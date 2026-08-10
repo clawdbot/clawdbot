@@ -813,7 +813,7 @@
     "files": [
       "src/agents/auth-profiles/constants.ts",
       "src/agents/embedded-agent-runner/logger.ts",
-      "src/agents/main-session-restart-recovery-shared.ts",
+      "src/agents/main-session-recovery/main-session-restart-recovery-shared.ts",
       "src/system-agent/setup-inference-core.ts",
       "src/tasks/task-registry-state.ts"
     ]

@@ -10,7 +10,7 @@ import {
   type DetachedTaskTerminalState,
 } from "../tasks/detached-task-runtime-contract.js";
 import { resolveRequiredCompletionTerminalResult } from "../tasks/task-completion-contract.js";
-import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
+import { resolveSubagentCompletionResultText } from "./subagents/completion/subagent-completion-result.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_ENDED_OUTCOME_ERROR,

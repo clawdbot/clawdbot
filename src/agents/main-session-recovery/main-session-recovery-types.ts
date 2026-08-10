@@ -2,7 +2,7 @@ import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
   RestartRecoveryRun,
-} from "../config/sessions.js";
+} from "../../config/sessions.js";
 
 type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]

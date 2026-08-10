@@ -1,4 +1,4 @@
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 
 type MainRecoveryStateFields = Pick<
   SessionEntry,

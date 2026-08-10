@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
-} from "../config/sessions.js";
+} from "../../config/sessions.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
 const executionIdentity = (runId: string) => ({
