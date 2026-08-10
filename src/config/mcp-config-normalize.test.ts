@@ -66,9 +66,10 @@ describe("canonicalizeConfiguredMcpServer", () => {
       expect(result.workingDirectory).toBeUndefined();
     });
 
-    it("drops workingDirectory even when cwd is not filled", () => {
-      const result = canonicalizeConfiguredMcpServer({ workingDirectory: "/tmp/work" });
+    it("drops a non-string workingDirectory without filling cwd", () => {
+      const result = canonicalizeConfiguredMcpServer({ workingDirectory: 12345 });
       expect(result.workingDirectory).toBeUndefined();
+      expect(result.cwd).toBeUndefined();
     });
   });
 
@@ -134,19 +135,19 @@ describe("canonicalizeConfiguredMcpServer", () => {
   describe("nested codex", () => {
     it("fills codex.defaultToolsApprovalMode from default_tools_approval_mode", () => {
       const result = canonicalizeConfiguredMcpServer({
-        codex: { default_tools_approval_mode: "on-request" },
+        codex: { default_tools_approval_mode: "approve" },
       });
-      expect(result.codex).toEqual({ defaultToolsApprovalMode: "on-request" });
+      expect(result.codex).toEqual({ defaultToolsApprovalMode: "approve" });
     });
 
     it("preserves an explicit codex.defaultToolsApprovalMode over the snake_case form", () => {
       const result = canonicalizeConfiguredMcpServer({
         codex: {
-          default_tools_approval_mode: "never",
-          defaultToolsApprovalMode: "on-request",
+          default_tools_approval_mode: "auto",
+          defaultToolsApprovalMode: "prompt",
         },
       });
-      expect(result.codex).toEqual({ defaultToolsApprovalMode: "on-request" });
+      expect(result.codex).toEqual({ defaultToolsApprovalMode: "prompt" });
     });
 
     it("leaves a non-record codex value untouched", () => {
@@ -165,7 +166,7 @@ describe("canonicalizeConfiguredMcpServer", () => {
         ssl_verify: false,
         client_cert: "/cert.pem",
         client_key: "/key.pem",
-        codex: { default_tools_approval_mode: "on-request" },
+        codex: { default_tools_approval_mode: "approve" },
       });
       const rerun = canonicalizeConfiguredMcpServer(canonical);
       expect(rerun).toEqual(canonical);
