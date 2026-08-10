@@ -240,7 +240,9 @@ describe("cron stream trigger composition", () => {
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
         expect.objectContaining({
-          payload: expect.objectContaining({ text: expect.stringContaining("boom") }),
+          payload: expect.objectContaining({
+            text: expect.stringContaining("Check automation history for details."),
+          }),
         }),
       );
     } finally {
