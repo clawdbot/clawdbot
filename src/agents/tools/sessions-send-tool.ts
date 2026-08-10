@@ -644,9 +644,11 @@ export function createSessionsSendTool(opts?: {
         isLiteralLegacyKeyInput && !resolvedKeyAgentId && !isUnscopedSessionKeySentinel(resolvedKey)
           ? tryResolveLegacyCompatibilityAgentId(cfg)
           : undefined;
-      const isLiteralUnscopedSentinel =
-        isLiteralLegacyKeyInput && isUnscopedSessionKeySentinel(sessionKeyParam.trim());
-      const persistedSentinelOwner = isLiteralUnscopedSentinel
+      const isLiteralUnscopedMainTarget =
+        isLiteralLegacyKeyInput &&
+        (isUnscopedSessionKeySentinel(sessionKeyParam.trim()) ||
+          sessionKeyParam.trim().toLowerCase() === mainKey);
+      const persistedSentinelOwner = isLiteralUnscopedMainTarget
         ? resolvePersistedSessionStoreOwnerForKey(cfg, resolvedKey)
         : { kind: "none" as const };
       if (persistedSentinelOwner.kind === "retired") {
@@ -665,10 +667,10 @@ export function createSessionsSendTool(opts?: {
         (persistedSentinelOwner.kind === "configured"
           ? persistedSentinelOwner.agentId
           : undefined) ??
-        (isLiteralUnscopedSentinel ? requesterAgentId : undefined) ??
+        (isLiteralUnscopedMainTarget ? requesterAgentId : undefined) ??
         compatibilityTargetAgentId;
       const mayUseRequesterForLiteralSentinel =
-        isLiteralUnscopedSentinel &&
+        isLiteralUnscopedMainTarget &&
         (!targetAgentId || normalizeAgentId(targetAgentId) === requesterAgentId);
       if (
         !targetAgentId &&

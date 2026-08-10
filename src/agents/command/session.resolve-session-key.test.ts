@@ -290,6 +290,53 @@ describe("resolveSessionKeyForRequest", () => {
     ]);
   });
 
+  it("does not assign an unowned bare key from a session-id scan anchor", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
+    mockSessionStores({ "/stores/ops.json": {}, "/stores/research.json": {} });
+    const cfg = {
+      session: { store: "/stores/{agentId}.json" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveSessionKeyForRequest({ cfg, sessionKey: "global", sessionId: "missing-session" }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
+  it("resolves an unowned bare key's session id to the matching agent store", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
+    const researchStore = {
+      "agent:research:work": { sessionId: "research-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/ops.json": {},
+      "/stores/research.json": researchStore,
+    });
+    const cfg = {
+      session: { store: "/stores/{agentId}.json" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveSessionKeyForRequest({
+        cfg,
+        sessionKey: "global",
+        sessionId: "research-session",
+      }),
+    ).toMatchObject({
+      agentId: "research",
+      sessionKey: "agent:research:work",
+      sessionStore: researchStore,
+      storePath: "/stores/research.json",
+    });
+  });
+
   it("allows an agent-constrained lookup to own an unscoped shared-store row", () => {
     hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
     const sharedStore = {

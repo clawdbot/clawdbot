@@ -31,6 +31,7 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   callGateway,
@@ -589,7 +590,19 @@ async function normalizeSessionKeyOptsForDispatch(
       normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg, remoteGatewayRoster };
     }
     selectionCfg = cfg;
-    const selectedAgentId = resolveImplicitCliAgentId(cfg, remoteGatewayRoster);
+    const persistedKeyOwner = remoteGatewayRoster
+      ? ({ kind: "none" } as const)
+      : resolvePersistedSessionStoreOwnerForKey(cfg, rawSessionKey);
+    if (persistedKeyOwner.kind === "retired") {
+      throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+        surface: `session key "${rawSessionKey}"`,
+        hint: `The shared fixed-store row belongs to retired agent "${persistedKeyOwner.agentId}".`,
+      });
+    }
+    const selectedAgentId =
+      persistedKeyOwner.kind === "configured"
+        ? persistedKeyOwner.agentId
+        : resolveImplicitCliAgentId(cfg, remoteGatewayRoster);
     const implicitSoleAgent = remoteGatewayRoster
       ? remoteGatewayRoster.ownership === "sole" ||
         (!remoteGatewayRoster.ownership && remoteGatewayRoster.agentIds.length === 1)

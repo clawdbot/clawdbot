@@ -377,26 +377,45 @@ export function resolveSessionKeyForRequestCore(opts: {
       hint: `The shared fixed-store row belongs to retired agent "${explicitKeyStoreOwner.agentId}".`,
     });
   }
-  // A session id is already an explicit target: seed its store scan from a live roster owner
-  // instead of inventing a `main` owner that may not exist in an explicit fleet.
-  const sessionIdScanAnchor = requestedSessionId
-    ? (tryResolveLegacyCompatibilityAgentId(opts.cfg) ?? listAgentIds(opts.cfg)[0])
-    : undefined;
-  const defaultAgentId = normalizeAgentId(
+  const knownAgentId =
     requestedAgentId ??
-      scopedSessionAgentId ??
-      (explicitKeyStoreOwner.kind === "configured" ? explicitKeyStoreOwner.agentId : undefined) ??
-      sessionIdScanAnchor ??
-      resolveDefaultAgentId(opts.cfg, {
-        surface: "agent command session routing",
-        hint: "Pass --agent <id> or an agent-prefixed --session-key.",
-      }),
+    scopedSessionAgentId ??
+    (explicitKeyStoreOwner.kind === "configured" ? explicitKeyStoreOwner.agentId : undefined) ??
+    tryResolveLegacyCompatibilityAgentId(opts.cfg);
+  const unownedBareSessionKey = Boolean(
+    requestedSessionId &&
+    explicitSessionKey &&
+    classifySessionKeyShape(explicitSessionKey) === "legacy_or_alias" &&
+    !knownAgentId,
   );
+  // A session id is already an explicit target: seed only its store scan from a live roster owner.
+  // The anchor is not resolved ownership and must never escape through the returned resolution.
+  const sessionIdScanAnchor = requestedSessionId
+    ? (knownAgentId ?? listAgentIds(opts.cfg)[0])
+    : undefined;
+  const defaultAgentId = knownAgentId
+    ? normalizeAgentId(knownAgentId)
+    : requestedSessionId
+      ? undefined
+      : normalizeAgentId(
+          resolveDefaultAgentId(opts.cfg, {
+            surface: "agent command session routing",
+            hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+          }),
+        );
   const storeAgentId = explicitSessionKey
-    ? isUnscopedSessionKeySentinel(explicitSessionKey)
-      ? (requestedAgentId ?? defaultAgentId)
-      : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
-    : (requestedAgentId ?? defaultAgentId);
+    ? unownedBareSessionKey
+      ? sessionIdScanAnchor
+      : isUnscopedSessionKeySentinel(explicitSessionKey)
+        ? (requestedAgentId ?? defaultAgentId)
+        : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
+    : (requestedAgentId ?? defaultAgentId ?? sessionIdScanAnchor);
+  if (!storeAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: "agent command session routing",
+      hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+    });
+  }
   const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: storeAgentId,
   });
@@ -409,13 +428,16 @@ export function resolveSessionKeyForRequestCore(opts: {
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    (explicitSessionKey
+    (!unownedBareSessionKey && explicitSessionKey
       ? canonicalizeMainSessionAlias({
           cfg: opts.cfg,
           agentId: storeAgentId,
           sessionKey: explicitSessionKey,
         })
-      : undefined) ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+      : undefined) ??
+    (!unownedBareSessionKey && ctx
+      ? resolveSessionKey(scope, ctx, mainKey, storeAgentId)
+      : undefined);
 
   // Entrypoint migration owners canonicalize legacy state before runtime reads. A missing target
   // row is not evidence that another agent's main session belongs to the configured default agent.
@@ -426,7 +448,7 @@ export function resolveSessionKeyForRequestCore(opts: {
   // first.
   if (
     requestedSessionId &&
-    !explicitSessionKey &&
+    (!explicitSessionKey || unownedBareSessionKey) &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== requestedSessionId)
   ) {
     const { candidates, ownerConflict } = collectSessionIdMatchesForRequest({

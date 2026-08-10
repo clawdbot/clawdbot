@@ -1205,6 +1205,30 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("dispatches a restart-shaped fixed-store sentinel under its persisted owner", async () => {
+    await withTempStore(
+      async () => {
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+          runtime,
+          undefined,
+        );
+      },
+      {
+        session: { store: "/tmp/restart-shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+      },
+    );
+  });
+
   it("preserves unscoped unknown session keys when no agent is requested", async () => {
     await withTempStore(
       async () => {

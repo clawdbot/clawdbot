@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -180,4 +181,40 @@ describe("transcript turn logical ownership", () => {
       );
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "treats a symlink alias as the configured owned fixed store",
+    async () => {
+      await withTempHome(async (home) => {
+        const fixedStorePath = path.join(home, "shared-store.sqlite");
+        const aliasStorePath = path.join(home, "shared-store-alias.sqlite");
+        await fs.writeFile(fixedStorePath, "");
+        await fs.symlink(fixedStorePath, aliasStorePath);
+        const cfg = {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+          session: { store: fixedStorePath },
+        } satisfies OpenClawConfig;
+
+        await expect(
+          persistSessionTranscriptTurn(
+            {
+              agentId: "research",
+              sessionId: "aliased-store-session",
+              sessionKey: "global",
+              storePath: aliasStorePath,
+            },
+            {
+              config: cfg,
+              messages: [{ message: { role: "user", content: "wrong owner" } }],
+              updateMode: "none",
+            },
+          ),
+        ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+      });
+    },
+  );
 });

@@ -499,6 +499,63 @@ it("authorizes literal sentinels against their persisted fixed-store owner", asy
   expect(allowed.status).toBe("accepted");
 });
 
+it("authorizes a custom main alias against its persisted fixed-store owner", async () => {
+  const config = {
+    session: { mainKey: "work", store: "/tmp/custom-main-shared.sqlite" },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  const createTool = (ownerAgentId: string) =>
+    createSessionsSendTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:work",
+      config: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: { sessionStore: { agentId: ownerAgentId } },
+        },
+      },
+    });
+
+  callGatewayMock.mockImplementation(async (request: { method?: string }) =>
+    request.method === "sessions.resolve" ? { key: "work", agentId: "ops" } : {},
+  );
+  expect(
+    requireDetails(
+      await createTool("ops").execute("foreign-work", {
+        sessionKey: "work",
+        message: "status?",
+        timeoutSeconds: 0,
+      }),
+    ),
+  ).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string }) =>
+      request.method === "sessions.resolve"
+        ? { key: "work", agentId: "research" }
+        : { runId: "self-work", acceptedAt: 1 },
+    );
+  expect(
+    requireDetails(
+      await createTool("research").execute("self-work", {
+        sessionKey: "work",
+        message: "note",
+        timeoutSeconds: 0,
+      }),
+    ).status,
+  ).toBe("accepted");
+});
+
 describe("extractStoredAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {
