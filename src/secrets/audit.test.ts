@@ -517,6 +517,82 @@ describe("secrets audit", () => {
     });
   });
 
+  it.each([
+    { label: "env template string", apiKey: "${FACTCHAT_API_KEY}" },
+    {
+      label: "explicit SecretRef object",
+      apiKey: { source: "env", provider: "default", id: "FACTCHAT_API_KEY" },
+    },
+  ])(
+    "does not flag models.json bare env-name markers backed by a configured env SecretRef ($label)",
+    async ({ apiKey }) => {
+      await writeJsonFile(fixture.configPath, {
+        models: {
+          providers: {
+            factchat: {
+              baseUrl: "https://factchat.example/v1",
+              api: "openai-completions",
+              apiKey,
+              models: [{ id: "factchat-1", name: "factchat-1" }],
+            },
+          },
+        },
+      });
+      await writeJsonFile(fixture.modelsPath, {
+        providers: {
+          factchat: {
+            baseUrl: "https://factchat.example/v1",
+            api: "openai-completions",
+            apiKey: "FACTCHAT_API_KEY",
+            models: [{ id: "factchat-1", name: "factchat-1" }],
+          },
+        },
+      });
+
+      const report = await runSecretsAudit({
+        env: { ...fixture.env, FACTCHAT_API_KEY: "sk-factchat-key" }, // pragma: allowlist secret
+      });
+      expectModelsFinding(report, {
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "providers.factchat.apiKey",
+        present: false,
+      });
+    },
+  );
+
+  it("flags models.json bare env-name apiKey values when the config ref id differs", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          factchat: {
+            baseUrl: "https://factchat.example/v1",
+            api: "openai-completions",
+            apiKey: "${FACTCHAT_OTHER_API_KEY}",
+            models: [{ id: "factchat-1", name: "factchat-1" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        factchat: {
+          baseUrl: "https://factchat.example/v1",
+          api: "openai-completions",
+          apiKey: "FACTCHAT_API_KEY",
+          models: [{ id: "factchat-1", name: "factchat-1" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({
+      env: { ...fixture.env, FACTCHAT_OTHER_API_KEY: "sk-factchat-other" }, // pragma: allowlist secret
+    });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.factchat.apiKey",
+    });
+  });
+
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {

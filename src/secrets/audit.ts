@@ -14,6 +14,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -308,8 +309,32 @@ function collectAuthStoreSecrets(params: {
   }
 }
 
+function resolveConfiguredEnvSecretRefId(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+): string | undefined {
+  const ref = resolveSecretInputRef({ value, defaults }).ref;
+  if (ref?.source !== "env" || !ref.id.trim()) {
+    return undefined;
+  }
+  return ref.id.trim();
+}
+
+function normalizeAuditConfigProviders(
+  config: OpenClawConfig | undefined,
+): Record<string, Record<string, unknown>> {
+  return normalizeProviderMapKeys(
+    Object.fromEntries(
+      Object.entries(config?.models?.providers ?? {}).filter(([, provider]) => isRecord(provider)),
+    ) as Record<string, Record<string, unknown>>,
+  );
+}
+
 function collectModelsJsonSecrets(params: {
   modelsJsonPath: string;
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig | undefined;
+  defaults: SecretDefaults | undefined;
   collector: AuditCollector;
 }): void {
   if (!fs.existsSync(params.modelsJsonPath)) {
@@ -334,10 +359,17 @@ function collectModelsJsonSecrets(params: {
   if (!parsed || !isRecord(parsed.providers)) {
     return;
   }
+  // Config providers normalize to canonical keys the same way the source-managed
+  // writer does, so an alias key cannot masquerade as another provider's SecretRef owner.
+  const configProvidersByKey = normalizeAuditConfigProviders(params.config);
+  // Config load substitutes ${VAR} when the env var is set, erasing the template the
+  // writer anchored its bare env-name marker to, so also consult the raw parsed config.
+  const sourceProvidersByKey = normalizeAuditConfigProviders(params.sourceConfig);
   for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
     if (!isRecord(providerValue)) {
       continue;
     }
+    const providerKey = normalizeProviderId(providerId);
     const apiKey = providerValue.apiKey;
     if (coerceSecretRef(apiKey)) {
       addFinding(params.collector, {
@@ -349,14 +381,25 @@ function collectModelsJsonSecrets(params: {
         provider: providerId,
       });
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
-      addFinding(params.collector, {
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json provider apiKey is stored as plaintext.",
-        provider: providerId,
-      });
+      // The source-managed writer persists an env-backed SecretRef as the bare env var
+      // name; exempt it only when this provider's config apiKey resolves to the exact
+      // same env SecretRef id. Anything else is still plaintext.
+      const configuredEnvRefId =
+        resolveConfiguredEnvSecretRefId(
+          sourceProvidersByKey[providerKey]?.apiKey,
+          params.defaults,
+        ) ??
+        resolveConfiguredEnvSecretRefId(configProvidersByKey[providerKey]?.apiKey, params.defaults);
+      if (configuredEnvRefId !== apiKey.trim()) {
+        addFinding(params.collector, {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: params.modelsJsonPath,
+          jsonPath: `providers.${providerId}.apiKey`,
+          message: "models.json provider apiKey is stored as plaintext.",
+          provider: providerId,
+        });
+      }
     }
 
     const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
@@ -664,6 +707,9 @@ export async function runSecretsAudit(
     for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
       collectModelsJsonSecrets({
         modelsJsonPath,
+        config,
+        sourceConfig: isRecord(snapshot.parsed) ? (snapshot.parsed as OpenClawConfig) : undefined,
+        defaults,
         collector,
       });
     }
