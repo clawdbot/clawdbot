@@ -215,11 +215,13 @@ Daily collection review also uses the configured agent model. It receives the
 names and descriptions of eligible writable workspace skills, then reads each
 complete skill before making one atomic collection change. Disabled and
 agent-filtered skills stay untouched; shared workspaces use the union of each
-agent's allowed skills. It has no message tool or general agent tools. Skill
-bodies are treated as untrusted evidence, not as instructions. A persisted
-per-workspace success time prevents Gateway restarts from repeating the review
-within 24 hours. The foreground agent can restore the one retained collection
-backup when asked to undo the cleanup.
+agent's allowed skills. Shared workspaces with different configured models are
+skipped to keep skill text within its model-provider boundary. It has no message
+tool or general agent tools. Skill bodies are treated as untrusted evidence,
+not as instructions. A persisted per-workspace success time prevents Gateway
+restarts from repeating the review within 24 hours. The foreground agent can
+restore the one retained collection backup when asked to undo the cleanup,
+unless an affected skill changed afterward.
 
 Manual history scan uses a separate bounded path. It reviews up to 20 substantial
 sessions with at least six model turns, redacts recognized secrets, bounds the

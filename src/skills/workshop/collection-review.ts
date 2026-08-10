@@ -153,6 +153,25 @@ export async function runScheduledSkillCollectionReviews(params: {
     if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
       continue;
     }
+    const reviewModels = agentIds.map((id) =>
+      resolveDefaultModelForAgent({
+        cfg: params.config,
+        agentId: id,
+      }),
+    );
+    const reviewModel = reviewModels[0]!;
+    if (
+      reviewModels.some(
+        (candidate) =>
+          candidate.provider !== reviewModel.provider || candidate.model !== reviewModel.model,
+      )
+    ) {
+      reportError(
+        new Error("Shared workspace agents use different collection-review models."),
+        workspaceDir,
+      );
+      continue;
+    }
     try {
       await runWithGatewayIndependentRootWorkAdmission(async () => {
         await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });

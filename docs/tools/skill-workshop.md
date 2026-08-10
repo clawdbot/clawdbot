@@ -60,6 +60,8 @@ second approval; `propose` and `off` do not run collection review.
 Every eligible writable skill must be read and receive exactly one `keep`,
 `write`, or `drop` decision. Disabled and agent-filtered skills stay untouched.
 When agents share a workspace, review uses the union of their allowed skills.
+If those agents use different models, OpenClaw logs and skips that workspace
+instead of sending skill text across model-provider boundaries.
 OpenClaw validates and scans every write before changing the workspace,
 serializes collection edits with a workspace lease, and retains one backup
 under the state directory. The changed collection appears in new agent runs;
@@ -67,7 +69,7 @@ running sessions keep their existing skill snapshot.
 
 To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
-workspace lock.
+workspace lock. Restore refuses if any affected skill changed after cleanup.
 
 The daily boundary is persisted per workspace, so Gateway restarts do not
 repeat a successful review. Review is admitted only for collections of at most

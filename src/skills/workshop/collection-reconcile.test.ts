@@ -9,7 +9,11 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
-import { listWritableSkillCollection, reconcileSkillCollection } from "./collection-reconcile.js";
+import {
+  listWritableSkillCollection,
+  reconcileSkillCollection,
+  restoreLatestSkillCollectionBackup,
+} from "./collection-reconcile.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 
 const dispatchCommittedSkillChangeBestEffort = vi.hoisted(() =>
@@ -195,6 +199,32 @@ describe("skill collection reconciliation", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "safe", "SKILL.md"), "utf8"),
     ).resolves.toContain("# Safe");
+  });
+
+  it("refuses to restore over a skill changed after cleanup", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Original procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      readSkillHashes: await readCollectionHashes(),
+      plan: [
+        {
+          action: "write",
+          name: "procedure",
+          description: "Clean procedure",
+          content: "# Clean\n",
+        },
+      ],
+    });
+    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
+    await fs.appendFile(skillFile, "\nManual improvement.\n");
+
+    await expect(
+      restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+    ).rejects.toThrow("changed after cleanup");
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
   });
 });
 

@@ -24,6 +24,7 @@ import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 import { assertWritableSkillTarget } from "./workspace-skill-read.js";
@@ -74,6 +75,7 @@ type CollectionBackupManifest = {
   workspaceDir: string;
   skillDirs: string[];
   resultSkillDirs: string[];
+  resultSkillHashes: Record<string, string>;
 };
 
 export function listWritableSkillCollection(
@@ -173,6 +175,15 @@ export async function reconcileSkillCollection(params: {
           current.map((skill) => skill.filePath),
           params.env ? { env: params.env } : {},
         );
+        for (const relativeDir of backup.manifest.resultSkillDirs) {
+          backup.manifest.resultSkillHashes[relativeDir] = await readSkillProposalTargetTreeSha256(
+            path.join(workspaceDir, relativeDir),
+          );
+        }
+        await fs.writeFile(
+          path.join(backup.backupDir, "manifest.json"),
+          JSON.stringify(backup.manifest, null, 2),
+        );
       } catch (error) {
         try {
           await restoreCollectionBackup({
@@ -264,6 +275,7 @@ export async function restoreLatestSkillCollectionBackup(params: {
         backupId,
         workspaceDir,
       });
+      await assertCollectionResultUnchanged(workspaceDir, manifest);
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
@@ -485,6 +497,7 @@ async function createCollectionBackup(params: {
           existing?.baseDir ?? path.join(params.workspaceDir, "skills", entry.name),
         );
       }),
+    resultSkillHashes: {},
   };
   await fs.mkdir(path.join(backupDir, "workspace"), { recursive: true });
   for (const relativeDir of skillDirs) {
@@ -543,14 +556,25 @@ async function readCollectionBackupManifest(params: {
     "resultSkillDirs",
     params.workspaceDir,
   );
+  const resultSkillHashes = asNullableRecord(record?.resultSkillHashes);
   if (
     record?.schema !== BACKUP_SCHEMA ||
     record.id !== params.backupId ||
     typeof record.createdAt !== "string" ||
     typeof record.workspaceDir !== "string" ||
-    path.resolve(record.workspaceDir) !== params.workspaceDir
+    path.resolve(record.workspaceDir) !== params.workspaceDir ||
+    !resultSkillHashes ||
+    Object.keys(resultSkillHashes).some((relativeDir) => !resultSkillDirs.includes(relativeDir))
   ) {
     throw new Error(`Invalid skill collection backup: ${params.backupId}`);
+  }
+  const parsedResultSkillHashes: Record<string, string> = {};
+  for (const relativeDir of resultSkillDirs) {
+    const hash = resultSkillHashes[relativeDir];
+    if (typeof hash !== "string") {
+      throw new Error(`Invalid skill collection backup: ${params.backupId}`);
+    }
+    parsedResultSkillHashes[relativeDir] = hash;
   }
   for (const relativeDir of skillDirs) {
     if (!(await pathExists(path.join(params.backupDir, "workspace", relativeDir)))) {
@@ -564,7 +588,28 @@ async function readCollectionBackupManifest(params: {
     workspaceDir: params.workspaceDir,
     skillDirs,
     resultSkillDirs,
+    resultSkillHashes: parsedResultSkillHashes,
   };
+}
+
+async function assertCollectionResultUnchanged(
+  workspaceDir: string,
+  manifest: CollectionBackupManifest,
+): Promise<void> {
+  const resultDirs = new Set(manifest.resultSkillDirs);
+  for (const relativeDir of manifest.skillDirs) {
+    if (!resultDirs.has(relativeDir) && (await pathExists(path.join(workspaceDir, relativeDir)))) {
+      throw new Error(`Skill collection changed after cleanup: ${path.basename(relativeDir)}`);
+    }
+  }
+  for (const relativeDir of manifest.resultSkillDirs) {
+    const currentHash = await readSkillProposalTargetTreeSha256(
+      path.join(workspaceDir, relativeDir),
+    );
+    if (currentHash !== manifest.resultSkillHashes[relativeDir]) {
+      throw new Error(`Skill collection changed after cleanup: ${path.basename(relativeDir)}`);
+    }
+  }
 }
 
 function readBackupSkillDirs(value: unknown, label: string, workspaceDir: string): string[] {

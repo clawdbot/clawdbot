@@ -232,6 +232,44 @@ describe("skill collection review", () => {
     expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(1);
   });
 
+  it("skips a shared workspace whose agents use different review models", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-provider-boundary-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "alpha", description: "Alpha procedure" },
+      { name: "beta", description: "Beta procedure" },
+    ]);
+    const onError = vi.fn();
+
+    await runScheduledSkillCollectionReviews({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "alpha-agent",
+              default: true,
+              workspace: workspaceDir,
+              skills: ["alpha"],
+              model: "openai/gpt-5.5",
+            },
+            {
+              id: "beta-agent",
+              workspace: workspaceDir,
+              skills: ["beta"],
+              model: "anthropic/claude-opus-4-6",
+            },
+          ],
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      },
+      env: testState.env,
+      onError,
+    });
+
+    expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review models");
+    expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("admits and reports each workspace independently", async () => {
     const oversizedWorkspace = await tempDirs.make("openclaw-collection-review-failed-");
     const healthyWorkspace = await tempDirs.make("openclaw-collection-review-healthy-");
