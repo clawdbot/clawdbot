@@ -71,7 +71,7 @@ function ownsTranscriptSession(
       if (channel === ownerChannel) {
         return ctx.agentAccountId?.trim() === ownerAccountId;
       }
-      if (channel && (!provider || accountBindingChannels.includes(channel))) {
+      if (channel) {
         return false;
       }
       return typeof ownerAgentId === "string" || isLocalMainOperator || isUnattributedLocalOperator;

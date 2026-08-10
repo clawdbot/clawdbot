@@ -137,12 +137,24 @@ describe("transcripts tool account ownership", () => {
       channel: "slack",
       accountId: "account-a",
     });
+    const otherRemoteChannelTool = createTool(stateDir, "main", {
+      channel: "webchat",
+      accountId: "operator",
+    });
     await expect(
       otherAccountTool.execute("call-status", { action: "status" }, undefined, vi.fn()),
     ).resolves.toMatchObject({ details: { active: [] } });
     await expect(
       otherBindingChannelTool.execute(
         "call-other-binding-status",
+        { action: "status" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      otherRemoteChannelTool.execute(
+        "call-other-remote-status",
         { action: "status" },
         undefined,
         vi.fn(),
