@@ -78,6 +78,8 @@ describe("sanitizeDiagnosticPayload", () => {
     ["audioDelta", true],
     ["videoData", true],
     ["videoUrl", true],
+    ["videoUri", true],
+    ["videoFileUri", true],
     ["inputImage", true],
     ["outputVideo", true],
     ["video_bytes_base64", true],
@@ -96,6 +98,8 @@ describe("sanitizeDiagnosticPayload", () => {
   it.each([
     ["bytes", MEDIA_BYTES],
     ["buffer", MEDIA_DATA],
+    ["uri", "https://media.invalid/private"],
+    ["fileUri", "https://media.invalid/signed"],
   ])("redacts contextual media payload field %s", (key, value) => {
     expect(JSON.stringify(sanitizeDiagnosticPayload({ audio: { [key]: value } }))).not.toContain(
       JSON.stringify(value),

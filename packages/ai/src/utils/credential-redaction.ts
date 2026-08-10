@@ -11,7 +11,8 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
 ]);
 const CREDENTIAL_FIELD_SUFFIX_RE =
   /(?:apikey|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
-const MEDIA_PAYLOAD_SUFFIXES = "base64|blob|buffer|bytes|data|delta|frames?|url";
+const MEDIA_PAYLOAD_SUFFIXES =
+  "base64|blob|buffer|bytes|data|delta|frames?|(?:file|media|source)?(?:uri|url)";
 const MEDIA_FIELD_NAME_RE = new RegExp(
   `^(?:input|output)?(?:audio|image|video)(?:${MEDIA_PAYLOAD_SUFFIXES})*$`,
   "u",
@@ -105,7 +106,7 @@ export function extractDiagnosticMediaField(
   if (!privateField && !mediaField && !contextualPayload) {
     return parentMedia ? { kind: "context" } : undefined;
   }
-  if (normalized.endsWith("url")) {
+  if (/(?:uri|url)$/u.test(normalized)) {
     return { kind: "redacted" };
   }
   const encoded = diagnosticBytes(value, true) ?? (typeof value === "string" ? value : undefined);
