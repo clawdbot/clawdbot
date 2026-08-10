@@ -117,7 +117,7 @@ Large files are truncated with a marker:
 | Per-file max characters | `agents.defaults.bootstrapMaxChars`      | 20000   |
 | Total across all files  | `agents.defaults.bootstrapTotalMaxChars` | 60000   |
 
-When truncation happens, OpenClaw always injects a concise notice into the system prompt naming the truncated files and sizes; this notice is built in and not configurable. Missing files inject a short missing-file marker. Detailed raw/injected counts stay in diagnostics such as `/context`, `/status`, doctor, and logs.
+When truncation happens, OpenClaw always injects a concise notice into the system prompt saying some bootstrap files were truncated and to read the affected files directly; this notice is built in and not configurable, and it deliberately omits per-file details. Missing files inject a short missing-file marker. File names and raw/injected counts stay in diagnostics such as `/context`, `/status`, doctor, and logs.
 
 For memory files, truncation is not data loss: the file stays intact on disk. On native Codex, `MEMORY.md` is read on demand through memory tools when available, with bounded prompt fallback otherwise. On other harnesses, the model only sees the shortened injected copy until it reads or searches memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a shorter durable summary, move detailed history into `memory/*.md`, or intentionally raise the bootstrap limits.
 

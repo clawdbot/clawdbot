@@ -156,11 +156,11 @@ injection behavior from the shared defaults. Omitted fields inherit from
 ### Bootstrap truncation notice
 
 When bootstrap context is truncated, OpenClaw always injects a concise
-agent-visible notice into the system prompt naming the truncated files, their
-raw vs injected sizes, and which limit applied. This notice is built in and
-not configurable. Detailed raw/injected counts stay in diagnostics such as
-context/status reports and logs; routine WebChat user/runtime context only
-gets the concise recovery notice.
+agent-visible notice into the system prompt saying some bootstrap files were
+truncated and to read the affected files directly. This notice is built in
+and not configurable, and it deliberately omits per-file diagnostics: file
+names, raw vs injected counts, and limit causes stay in diagnostics such as
+context/status reports and logs.
 
 ### Context budget ownership map
 
