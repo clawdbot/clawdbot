@@ -143,6 +143,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       // Reordering is local bookkeeping, so it stays available while offline —
       // exactly when a queue is long enough to need it.
       onQueueMove: props.onQueueMove,
+      onQueueEdit: props.queuedEdit?.onEdit,
+      editingId: props.queuedEdit?.editingId ?? null,
       onQueueRemove: props.onQueueRemove,
     })}
     ${props.runError
@@ -347,6 +349,24 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
                 onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
+              ${props.queuedEdit?.editingId
+                ? html`
+                    <span class="agent-chat__composer-edit" role="status">
+                      <span class="agent-chat__composer-edit-icon" aria-hidden="true"
+                        >${icons.pencil}</span
+                      >
+                      <span class="agent-chat__sr-only">${t("chat.queue.editing")}</span>
+                      <button
+                        class="agent-chat__composer-edit-cancel"
+                        type="button"
+                        aria-label=${t("chat.queue.cancelEdit")}
+                        @click=${() => props.queuedEdit?.onCancel()}
+                      >
+                        ${icons.x}
+                      </button>
+                    </span>
+                  `
+                : nothing}
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}

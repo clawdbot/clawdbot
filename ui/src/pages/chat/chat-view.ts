@@ -42,6 +42,7 @@ import type { BackgroundTasksProps } from "./components/chat-background-tasks.ty
 import type {
   CapabilityMenuProps,
   ChatComposerDisabledBanner,
+  ChatQueuedEditProps,
 } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
@@ -232,6 +233,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onQueueRetry?: (id: string) => void;
     onQueueSteer?: (id: string) => void;
     onQueueMove?: (id: string, toIndex: number) => void;
+    queuedEdit?: ChatQueuedEditProps;
     onGoalCommand?: (command: string) => void;
     onHistoryIntent?: (event: Event) => void;
     onCompanionQuestion?: (question: string) => void;
@@ -518,6 +520,7 @@ export function renderChat(props: ChatProps) {
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onQueueMove: props.onQueueMove,
+    queuedEdit: props.queuedEdit,
     onGoalCommand: props.onGoalCommand,
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,

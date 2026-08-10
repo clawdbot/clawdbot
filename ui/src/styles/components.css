@@ -2801,6 +2801,16 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
+/* The edited row keeps its slot so the operator can see where the corrected
+   message lands; the outline says the composer owns it right now.
+   Editing is an active state, not a failure, so it uses the informational
+   family: --accent is red in every shipped theme and sits on top of --danger
+   (see the --run token note in base.css), which reads as an error at a glance. */
+.chat-queue__item--editing {
+  background: var(--info-subtle);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 34%, transparent);
+}
+
 /* Drop target reads as an insertion edge rather than a selected row, so the
    dragged message clearly lands at this position. */
 .chat-queue__item--drop-target {
@@ -2824,7 +2834,7 @@ td.data-table-key-col {
   cursor: grab;
 }
 
-.chat-queue__item:hover .chat-queue__grip,
+.chat-queue__item:hover .chat-queue__grip:not(:disabled),
 .chat-queue__grip:focus-visible {
   color: var(--muted);
 }
@@ -2832,6 +2842,14 @@ td.data-table-key-col {
 .chat-queue__grip:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
+}
+
+/* Still occupies the handle column so every row's pill and text share one x,
+   and stays visible but dimmer than a live handle: this row is holding its
+   place, not offering a drag. Hover leaves it alone for the same reason. */
+.chat-queue__grip:disabled {
+  color: color-mix(in srgb, var(--muted) 34%, transparent);
+  cursor: default;
 }
 
 .chat-queue__grip svg {
@@ -2905,6 +2923,13 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+/* Last of the state badges on purpose: editing outranks the send state it
+   pauses, so a reconnecting or failed row still reads as informational blue. */
+.chat-queue__item--editing .chat-queue__badge {
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
+}
+
 .chat-queue__text {
   flex: 1 1 0;
   min-width: 0;
@@ -2969,6 +2994,7 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+.chat-queue__edit,
 .chat-queue__remove {
   display: inline-flex;
   align-items: center;
@@ -2983,11 +3009,21 @@ td.data-table-key-col {
   cursor: var(--cursor-action);
 }
 
-.chat-queue__remove:hover {
+/* Inert instead of removed: an open edit keeps every action slot in place so the
+   rows below it never shift while the operator retypes. */
+.chat-queue__edit:disabled,
+.chat-queue__remove:disabled {
+  color: color-mix(in srgb, var(--muted) 34%, transparent);
+  cursor: default;
+}
+
+.chat-queue__edit:hover:not(:disabled),
+.chat-queue__remove:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
+.chat-queue__edit svg,
 .chat-queue__remove svg {
   width: 13px;
   height: 13px;

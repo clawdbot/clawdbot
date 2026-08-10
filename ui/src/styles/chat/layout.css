@@ -2302,6 +2302,10 @@ openclaw-chat-video-player {
 
 .agent-chat__input {
   --chat-box-inset: 8px;
+  /* Height of every control on the composer's input row. The row bottom-aligns
+     so it can follow a growing textarea, which only reads as one axis while all
+     its children share this box. */
+  --chat-composer-control-height: 36px;
 
   position: relative;
   display: flex;
@@ -2399,7 +2403,7 @@ openclaw-chat-video-player {
 
 .agent-chat__composer-combobox > :is(textarea, input) {
   width: 100%;
-  min-height: 36px;
+  min-height: var(--chat-composer-control-height);
   max-height: calc(7em + 24px);
   resize: none;
   padding: var(--chat-box-inset);
@@ -2520,6 +2524,60 @@ openclaw-chat-video-player {
   gap: 4px;
   min-width: 0;
   padding: var(--chat-box-inset);
+}
+
+/* The row aligns on its bottom edge, so a child shorter than the control height
+   would centre below everything else. Owning the box here keeps that a property
+   of the row rather than something each new child has to remember. */
+.agent-chat__composer-input-row > * {
+  min-height: var(--chat-composer-control-height);
+}
+
+/* Edit-mode marker beside the input: the queued row already names the state, so
+   this only says which mode the composer is in and how to leave it. It takes the
+   row's control height like every other child, so it needs no alignment nudge. */
+.agent-chat__composer-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  padding-inline: 7px 3px;
+  border-radius: var(--radius-full);
+  background: var(--info-subtle);
+  color: var(--info);
+}
+
+.agent-chat__composer-edit-icon,
+.agent-chat__composer-edit-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-chat__composer-edit-icon svg,
+.agent-chat__composer-edit-cancel svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.85px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__composer-edit-cancel {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  color: inherit;
+  cursor: var(--cursor-action);
+}
+
+.agent-chat__composer-edit-cancel:hover {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
 }
 
 .agent-chat__disabled-reason {
@@ -3507,6 +3565,7 @@ openclaw-chat-video-player {
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .agent-chat__input {
     --chat-box-inset: 4px;
+    --chat-composer-control-height: 44px;
   }
 
   .agent-chat__composer-input-row {
@@ -3516,7 +3575,7 @@ openclaw-chat-video-player {
   .agent-chat__composer-input-row .agent-chat__input-btn--attach {
     width: 36px;
     min-width: 36px;
-    height: 44px;
+    height: var(--chat-composer-control-height);
   }
 
   .agent-chat__composer-combobox {
@@ -3525,7 +3584,7 @@ openclaw-chat-video-player {
 
   .agent-chat__composer-combobox > :is(textarea, input) {
     flex: 1 1 auto;
-    min-height: 44px;
+    min-height: var(--chat-composer-control-height);
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
     padding-top: 10px;
     padding-bottom: 10px;

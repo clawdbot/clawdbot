@@ -120,6 +120,84 @@ describe("chat composer queue reordering", () => {
     expect(container.querySelector(".chat-queue__item")?.getAttribute("draggable")).toBe("false");
   });
 
+  it("reserves the handle column on every row so the pills never shift", () => {
+    const container = renderQueue({
+      queue: [
+        { id: "steer", text: "steer", createdAt: 1, kind: "steered", pendingRunId: "run-1" },
+        waiting("b", 2),
+        waiting("c", 3),
+      ],
+      onQueueMove: vi.fn(),
+      onQueueRemove: vi.fn(),
+    });
+
+    const grips = [...container.querySelectorAll(".chat-queue__item")].map((row) =>
+      row.querySelector(".chat-queue__grip"),
+    );
+    // Every row keeps the column; only the rows that may move keep it live.
+    expect(grips.every((grip) => grip !== null)).toBe(true);
+    expect(grips.map((grip) => grip!.hasAttribute("disabled"))).toEqual([true, false, false]);
+    expect(grips[0]?.getAttribute("aria-label")).toBe(t("chat.queue.reorderUnavailable"));
+    expect(grips[0]?.hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("holds the column with an inert handle on the row being edited", () => {
+    const onQueueMove = vi.fn();
+    const container = renderQueue({
+      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
+      editingId: "b",
+      onQueueMove,
+      onQueueRemove: vi.fn(),
+    });
+
+    const rows = [...container.querySelectorAll(".chat-queue__item")];
+    const grips = rows.map((row) => row.querySelector(".chat-queue__grip"));
+    expect(grips.every((grip) => grip !== null)).toBe(true);
+    // The edited row holds the drain, so it splits the queue: neither neighbour
+    // has anywhere to go, and every handle waits without leaving the column.
+    expect(grips.map((grip) => grip!.hasAttribute("disabled"))).toEqual([true, true, true]);
+    expect(rows[1]?.classList.contains("chat-queue__item--editing")).toBe(true);
+
+    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+    grips[1]!.dispatchEvent(event);
+
+    expect(onQueueMove).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("holds every action slot inert while one edit is open", () => {
+    const onQueueEdit = vi.fn();
+    const onQueueRemove = vi.fn();
+    const container = renderQueue({
+      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
+      editingId: "b",
+      onQueueEdit,
+      onQueueMove: vi.fn(),
+      onQueueRemove,
+    });
+
+    const rows = [...container.querySelectorAll(".chat-queue__item")];
+    // Every row keeps both buttons, so no column shifts while the edit is open.
+    for (const selector of [".chat-queue__edit", ".chat-queue__remove"]) {
+      const present = rows.map((row) => row.querySelector(selector) !== null);
+      expect(present).toEqual([true, true, true]);
+    }
+    // One edit at a time, so every pencil waits; discarding another row is still
+    // safe, so only the edited row's X goes inert.
+    const disabled = (selector: string) =>
+      rows.map((row) => row.querySelector(selector)!.hasAttribute("disabled"));
+    expect(disabled(".chat-queue__edit")).toEqual([true, true, true]);
+    expect(disabled(".chat-queue__remove")).toEqual([false, true, false]);
+
+    rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__edit")?.click();
+    rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(onQueueEdit).not.toHaveBeenCalled();
+    expect(onQueueRemove).not.toHaveBeenCalled();
+
+    rows[2]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(onQueueRemove).toHaveBeenCalledWith("c");
+  });
+
   it("keeps a row that already joined a run out of the reorder set", () => {
     const container = renderQueue({
       queue: [
@@ -133,7 +211,6 @@ describe("chat composer queue reordering", () => {
 
     const rows = [...container.querySelectorAll(".chat-queue__item")];
     expect(rows.map((row) => row.getAttribute("draggable"))).toEqual(["false", "true", "true"]);
-    expect(rows[0]?.querySelector(".chat-queue__grip")).toBeNull();
   });
 
   it("offers no move to a row alone between locked rows, and refuses a drop from across one", () => {
