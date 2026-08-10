@@ -151,6 +151,43 @@ struct GatewayEnvironmentTests {
         }
     }
 
+    @Test func `named profiles derive stable distinct gateway ports after explicit precedence`() {
+        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        let personal = AppProfile(environment: ["OPENCLAW_PROFILE": "personal"])
+        let workPort = GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 0,
+            profile: work)
+        #expect((20000..<60000).contains(workPort))
+        #expect(workPort == work.defaultGatewayPort)
+        #expect(workPort != personal.defaultGatewayPort)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "21001"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 21001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
+        #expect(GatewayEnvironment.gatewayCommand(
+            prefix: ["/opt/openclaw"],
+            port: workPort,
+            bind: "loopback",
+            profile: work) == [
+            "/opt/openclaw", "--profile", "work", "gateway", "--port", "\(workPort)",
+            "--bind", "loopback",
+        ])
+    }
+
     @Test func `expected gateway version from string uses parser`() {
         #expect(GatewayEnvironment.expectedGatewayVersion(from: "v9.1.2") == Semver(major: 9, minor: 1, patch: 2))
         #expect(GatewayEnvironment.expectedGatewayVersion(from: "2026.1.11-4") == Semver(

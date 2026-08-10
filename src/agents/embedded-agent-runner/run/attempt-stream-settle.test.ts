@@ -26,8 +26,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       messages: [],
     },
     sessionManager,
-    sessionLockController: {},
-    withOwnedSessionWriteLock: async (operation: () => unknown) => await operation(),
+    withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
     subscription: {
       toolMetas: [],
       waitForCompactionRetry: async () => {},

@@ -231,9 +231,9 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
     defaults: {
       sandbox: { mode: "off" },
     },
-    list: [
-      {
-        id: "researcher",
+    entries: {
+      researcher: {
+        default: true,
         sandbox: {
           mode: "all",
           backend: "openshell",
@@ -241,7 +241,7 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
           workspaceAccess: "rw",
         },
       },
-    ],
+    },
   },
   plugins: {
     entries: {

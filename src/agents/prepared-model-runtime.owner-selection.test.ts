@@ -7,6 +7,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   loadPreparedModelRuntimeSnapshot,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
@@ -164,8 +165,9 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[1]?.[0]).toMatchObject({
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
     });
-    expect(configured?.inboundPluginRegistry).toBeDefined();
-    expect(configured?.pluginRegistry).not.toBe(configured?.inboundPluginRegistry);
+    const dispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    expect(dispatchRuntime?.inboundPluginRegistry).toBeDefined();
+    expect(configured?.pluginRegistry).not.toBe(dispatchRuntime?.inboundPluginRegistry);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();

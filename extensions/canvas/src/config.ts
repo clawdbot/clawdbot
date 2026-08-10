@@ -29,7 +29,6 @@ export type CanvasPluginConfig = {
 
 type CanvasPluginConfigSchema = {
   parse: (value: unknown) => CanvasPluginConfig;
-  uiHints: Record<string, { label: string; help?: string; advanced?: boolean }>;
 };
 
 function readPositiveInteger(value: unknown): number | undefined {
@@ -97,31 +96,7 @@ export function isCanvasHostEnabled(config?: OpenClawConfig): boolean {
   return resolveCanvasHostConfig({ config }).enabled !== false;
 }
 
-/** Config schema metadata for Canvas plugin settings. */
+/** Runtime config parser for Canvas plugin settings. */
 export const canvasConfigSchema: CanvasPluginConfigSchema = {
   parse: parseCanvasPluginConfig,
-  uiHints: {
-    host: {
-      label: "Canvas Host",
-      help: "Serves local Canvas and A2UI files for paired nodes.",
-      advanced: true,
-    },
-    "host.enabled": {
-      label: "Canvas Host Enabled",
-      advanced: true,
-    },
-    "host.root": {
-      label: "Canvas Host Root Directory",
-      help: "Directory to serve. Defaults to the OpenClaw state canvas directory.",
-      advanced: true,
-    },
-    "host.port": {
-      label: "Canvas Host Port",
-      advanced: true,
-    },
-    "host.liveReload": {
-      label: "Canvas Host Live Reload",
-      advanced: true,
-    },
-  },
 };

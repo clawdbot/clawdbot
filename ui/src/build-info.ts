@@ -10,9 +10,8 @@ declare global {
   var OPENCLAW_CONTROL_UI_BUILD_INFO: ControlUiBuildInfo | undefined;
 }
 
-const injectedBuildInfo = globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO;
-
-export const CONTROL_UI_BUILD_INFO = normalizeControlUiBuildInfo(injectedBuildInfo);
+export const CONTROL_UI_BUILD_INFO =
+  globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO ?? normalizeControlUiBuildInfo(undefined);
 
 export function reloadControlUiIfStale(identity: {
   version: string | null;

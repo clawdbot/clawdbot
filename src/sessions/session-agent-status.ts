@@ -3,7 +3,7 @@ import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   type SessionAgentAttentionIconId,
   type SessionAgentStatus,
-} from "../../packages/gateway-protocol/src/session-icon.js";
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 
 const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;

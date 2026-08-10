@@ -1,6 +1,7 @@
 import { readPackageVersion } from "./package-json.js";
 // Runs OpenClaw package update checks, package steps, and restart handoff.
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import { buildUpdateCommandRunner, DEFAULT_TIMEOUT_MS } from "./update-runner-command.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { runGitUpdate } from "./update-runner-git.js";
@@ -10,8 +11,6 @@ import {
   findPackageRoot,
   looksLikeGitCheckout,
   normalizeDir,
-  pathsReferToSameLocation,
-  resolveComparablePath,
   resolveGitRoot,
   resolveUpdateInstallSurface,
 } from "./update-runner-install-surface.js";
@@ -38,13 +37,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const cwdRoot = normalizeDir(opts.cwd);
     if (
       cwdRoot &&
-      (await pathsReferToSameLocation(cwdRoot, pkgRoot)) &&
+      updateInstallRootsMatch(cwdRoot, pkgRoot) &&
       (await looksLikeGitCheckout(cwdRoot))
     ) {
-      gitRoot = await resolveComparablePath(cwdRoot);
+      gitRoot = resolveUpdateInstallRoot(cwdRoot);
     }
   }
-  if (gitRoot && pkgRoot && !(await pathsReferToSameLocation(gitRoot, pkgRoot))) {
+  if (gitRoot && pkgRoot && !updateInstallRootsMatch(gitRoot, pkgRoot)) {
     gitRoot = null;
   }
   if (gitRoot && !pkgRoot) {
@@ -57,7 +56,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       durationMs: Date.now() - startedAt,
     };
   }
-  if (gitRoot && pkgRoot && (await pathsReferToSameLocation(gitRoot, pkgRoot))) {
+  if (gitRoot && pkgRoot && updateInstallRootsMatch(gitRoot, pkgRoot)) {
     return await runGitUpdate({
       opts,
       gitRoot,

@@ -221,6 +221,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs mixed-case local media file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media/local-media-path.windows.test.ts",
+    );
+  });
+
   it("runs the native OpenSSH resolver proof in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/ssh-client.windows.test.ts",
@@ -310,6 +316,26 @@ describe("package scripts", () => {
   it("runs Windows-only safe removal coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/fs-safe-remove.test.ts",
+    );
+  });
+
+  it("runs web and Teams file URL coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/media/web-media.file-url.windows.test.ts");
+    expect(script).toContain("extensions/msteams/src/media-helpers.test.ts");
+    expect(script).toContain("extensions/msteams/src/messenger.test.ts");
+  });
+
+  it("runs native usage footer home-path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+    );
+  });
+
+  it("runs native media-understanding file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media-understanding/attachments.file-url.windows.test.ts",
     );
   });
 });

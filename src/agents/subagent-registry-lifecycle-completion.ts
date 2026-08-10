@@ -14,7 +14,10 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
-import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import {
+  persistSubagentSessionTiming,
+  updateSubagentArchiveAtMs,
+} from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleCleanupBase } from "./subagent-registry-lifecycle-cleanup-base.js";
 import type { createSubagentRegistryLifecycleCleanup } from "./subagent-registry-lifecycle-cleanup.js";
 import type { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
@@ -30,8 +33,8 @@ import type {
 import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import { createSubagentRegistryLifecycleTerminalCleanup } from "./subagent-registry-lifecycle-terminal-cleanup.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
-import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
-import { releaseSwarmRun } from "./swarm-scheduler.js";
+import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
+import { releaseSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 import { peekSwarmStructuredOutput } from "./tools/structured-output-tool.js";
 
 export function createSubagentRegistryLifecycleCompletion(
@@ -461,7 +464,11 @@ export function createSubagentRegistryLifecycleCompletion(
           mutated = true;
         }
       }
-      if (updateSwarmCollectorCompletion(entry, params.getRuntimeConfig())) {
+      if (
+        entry.collect
+          ? updateSwarmCollectorCompletion(entry, params.getRuntimeConfig())
+          : updateSubagentArchiveAtMs(entry, params.getRuntimeConfig())
+      ) {
         mutated = true;
       }
       if (provisionalKillSnapshot) {

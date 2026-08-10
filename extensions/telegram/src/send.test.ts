@@ -30,7 +30,12 @@ import {
 } from "./poll-answer-context.js";
 import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+import {
+  countInputRichBlockMedia,
+  countInputRichBlocks,
+  inputRichBlocksToPlainText,
+  type InputRichBlock,
+} from "./rich-block-model.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -105,11 +110,11 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: {
-  blocks?: InputRichBlock[];
-  markdown?: string;
-  html?: string;
-}): string {
+type RichMessageTestPayload = Parameters<
+  NonNullable<NonNullable<RichRawTextTestApi["raw"]>["sendRichMessage"]>
+>[0]["rich_message"];
+
+function richTextForTest(richMessage: RichMessageTestPayload): string {
   if (richMessage.blocks) {
     return inputRichBlocksToPlainText(richMessage.blocks);
   }
@@ -182,7 +187,7 @@ function markdownTable(columns: number): string {
 }
 
 function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
-  return blocks?.length ?? 0;
+  return countInputRichBlocks(blocks ?? []);
 }
 
 beforeEach(() => {
@@ -1415,6 +1420,53 @@ describe("sendMessageTelegram", () => {
       .map((call) => inputRichBlocksToPlainText(call[0]?.rich_message.blocks ?? []))
       .join("\n");
     expect(plain).toContain("paragraph 500");
+  });
+
+  it("keeps recursive list and album payloads within Telegram transport limits", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const list = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
+      "\n",
+    );
+    const photos = Array.from(
+      { length: 51 },
+      (_, index) => `<img src="https://example.com/${index}.jpg"/>`,
+    ).join("");
+
+    await sendMessageTelegram(
+      "123",
+      `${list}\n\n<tg-collage>${photos}<figcaption>Album</figcaption></tg-collage>`,
+      {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      },
+    );
+
+    const requests: Array<RichMessageTestPayload | undefined> =
+      botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    const blocks = requests.flatMap((request) => request?.blocks ?? []);
+    const items = blocks.flatMap((block) => (block.type === "list" ? block.items : []));
+    const albums = blocks.filter((block) => block.type === "collage");
+
+    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.every((request) => countInputRichBlocks(request?.blocks ?? []) <= 500)).toBe(
+      true,
+    );
+    expect(
+      requests.every(
+        (request) =>
+          (request?.blocks ?? []).reduce(
+            (total, block) => total + countInputRichBlockMedia(block),
+            0,
+          ) <= 50,
+      ),
+    ).toBe(true);
+    expect(items.map((item) => item.value)).toEqual(
+      Array.from({ length: 250 }, (_, index) => index + 1),
+    );
+    expect(albums.flatMap((album) => album.blocks)).toHaveLength(51);
+    expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
+      "Album",
+    ]);
   });
 
   it("applies rich entity detection skip to every chunk of the document", async () => {

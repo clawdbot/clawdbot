@@ -22,7 +22,6 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
-import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -83,17 +82,12 @@ import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js"
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
-import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-  resolveSessionWriteLockTargetKey,
-} from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   isSubagentAnnounceCompletionHandoff,
@@ -520,37 +514,7 @@ export async function persistCliTurnTranscript(params: {
     return await persist();
   }
 
-  const sessionTarget = await resolveAgentRunSessionTarget({
-    agentId: params.sessionAgentId,
-    config: params.config,
-    missingSessionKey: "resolve-existing",
-    sessionFile: params.sessionFile,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionTarget: {
-      agentId: params.sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-    },
-  });
-  const sessionLock =
-    (await acquireOwnedSessionTranscriptWriteLock({
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      sessionTarget,
-    })) ??
-    (await acquireSessionWriteLock({
-      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
-      targetKind: "session-key",
-      ...resolveSessionWriteLockOptions(params.config),
-    }));
-  try {
-    return await persist();
-  } finally {
-    await sessionLock.release();
-  }
+  return await persist();
 }
 
 export function runAgentAttempt(params: {

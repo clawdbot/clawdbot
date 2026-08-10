@@ -18,7 +18,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
-} from "../embedded-agent-helpers/failover-matches.js";
+} from "../failover/classify.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import { isLiveAuthDrift } from "../live-test-provider-drift.test-support.js";
 import { createImageTool } from "./image-tool.js";

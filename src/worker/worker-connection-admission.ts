@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { WebSocket, type RawData } from "ws";
 import {
@@ -12,7 +13,6 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
-import { rawDataToString } from "../infra/ws.js";
 import {
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,

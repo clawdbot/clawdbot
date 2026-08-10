@@ -14,6 +14,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
@@ -27,6 +28,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
@@ -59,6 +61,13 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
+  private heroAvatarAuthToken: string | null = null;
+  private heroAvatarAuthReady = false;
+  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
+    if (this.isConnected) {
+      this.requestUpdate();
+    }
+  });
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -78,12 +87,28 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
+    this.heroAvatarLoader.reset();
+    this.heroAvatarAuthToken = null;
+    this.heroAvatarAuthReady = false;
     this.client = null;
     this.connected = false;
     super.disconnectedCallback();
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    const nextHeroAvatarAuthToken = resolveControlUiAuthToken({
+      hello: snapshot.hello,
+      settings: { token: this.context.gateway.connection.token },
+      password: this.context.gateway.connection.password,
+    });
+    if (nextHeroAvatarAuthToken !== this.heroAvatarAuthToken) {
+      this.heroAvatarAuthToken = nextHeroAvatarAuthToken;
+    }
+    this.heroAvatarAuthReady = Boolean(
+      snapshot.hello ||
+      this.context.gateway.connection.token.trim() ||
+      this.context.gateway.connection.password.trim(),
+    );
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
     const connectionChanged = nextConnected !== this.connected;
@@ -332,15 +357,22 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
+    const imageUrl = avatarUrl?.startsWith("/")
+      ? this.heroAvatarAuthReady
+        ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthToken)
+        : null
+      : avatarUrl;
     if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
-      return html`<img
-        class="profile-hero__avatar-image"
-        src=${avatarUrl}
-        alt=${name}
-        @error=${() => {
-          this.failedHeroAvatarUrl = avatarUrl;
-        }}
-      />`;
+      if (imageUrl) {
+        return html`<img
+          class="profile-hero__avatar-image"
+          src=${imageUrl}
+          alt=${name}
+          @error=${() => {
+            this.failedHeroAvatarUrl = avatarUrl;
+          }}
+        />`;
+      }
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
@@ -381,6 +413,10 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   override render() {
+    return this.heroAvatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
     return html`
       <section class="content-header">
         <div>

@@ -1,29 +1,8 @@
 /**
  * Resolves per-attempt runtime decisions from config and channel context.
  */
-import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockOptions,
-} from "../../session-write-lock.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-/** Builds the session write-lock timing for a live embedded attempt. */
-export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
-  config?: OpenClawConfig;
-  compactionTimeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
-  // maxHoldMs is the SQLite lease TTL for dead-process reclamation, not a live-owner watchdog.
-  // A live process renews the lease until teardown releases it.
-  return resolveSessionWriteLockOptions(params.config, {
-    env: params.env,
-    maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-      timeoutMs: params.compactionTimeoutMs,
-    }),
-  });
-}
 
 /**
  * Returns the auth profile id that should be attached to model-stream

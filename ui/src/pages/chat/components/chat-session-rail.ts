@@ -453,6 +453,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       return nothing;
     }
     if (mode === "restore-icon") {
+      // This button sits with the pane header actions, where the
+      // background-tasks toggle owns icons.activity and the split-view controls
+      // own the panel glyphs. Keep a distinct companion glyph or neither action
+      // is readable without hovering for its tooltip.
       return html`
         <button
           class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail chat-session-rail--restore"
@@ -461,7 +465,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           title=${t("chat.rail.show")}
           @click=${() => this.show()}
         >
-          ${icons.activity}
+          ${icons.spark}
         </button>
       `;
     }

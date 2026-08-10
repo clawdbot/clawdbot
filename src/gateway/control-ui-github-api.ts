@@ -5,7 +5,7 @@ export { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
-export const GITHUB_JSON_MAX_BYTES = 256 * 1024;
+const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
@@ -119,16 +119,6 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
   }
 }
 
-export function upstreamErrorStatus(status: number): number {
-  if (status === 404) {
-    return 404;
-  }
-  if (status === 403 || status === 429) {
-    return 429;
-  }
-  return 502;
-}
-
 // GitHub reports quota exhaustion as 429 or as 403 with exhausted-quota
 // headers; a bare 403 is a permission response and must stay distinguishable
 // so callers can degrade optional fetches instead of flagging rate limits.
@@ -142,25 +132,36 @@ function isGitHubRateLimitResponse(response: Response): boolean {
   );
 }
 
-function jsonErrorStatus(response: Response): number {
+function githubResponseErrorStatus(response: Response): number {
   if (isGitHubRateLimitResponse(response)) {
     return 429;
   }
-  if (response.status === 404 || response.status === 403) {
+  if (response.status === 401 || response.status === 403 || response.status === 404) {
     return response.status;
   }
   return 502;
 }
 
-/** Fetch a GitHub API JSON document with bounded size and normalized errors. */
-export async function fetchGitHubJson(
-  rawUrl: string,
-  fetchImpl: typeof fetch,
-  token?: string,
-): Promise<unknown> {
-  const response = await fetchGitHubApi(rawUrl, fetchImpl, token);
+// Optional host auth raises quota and unlocks private-repo reads, but an
+// unusable credential must not disable public GitHub data that works anonymously.
+export async function withOptionalGitHubAuth<T>(
+  token: string | undefined,
+  request: (token: string | undefined) => Promise<T>,
+): Promise<T> {
+  try {
+    return await request(token);
+  } catch (error) {
+    const status = error instanceof ControlUiGitHubError ? error.statusCode : 0;
+    if (token && [401, 403, 429].includes(status)) {
+      return request(undefined);
+    }
+    throw error;
+  }
+}
+
+export async function readGitHubJsonResponse(response: Response): Promise<unknown> {
   if (!response.ok) {
-    const status = jsonErrorStatus(response);
+    const status = githubResponseErrorStatus(response);
     await discardResponse(response);
     throw new ControlUiGitHubError(status, `GitHub request failed (${response.status})`);
   }
@@ -170,4 +171,15 @@ export async function fetchGitHubJson(
   } catch {
     throw new ControlUiGitHubError(502, "GitHub response was not valid JSON");
   }
+}
+
+/** Fetch a GitHub API JSON document with bounded size and normalized errors. */
+export function fetchGitHubJson(
+  rawUrl: string,
+  fetchImpl: typeof fetch,
+  token?: string,
+): Promise<unknown> {
+  return withOptionalGitHubAuth(token, async (requestToken) =>
+    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken)),
+  );
 }

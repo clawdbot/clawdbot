@@ -1,9 +1,8 @@
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { readSqliteTranscriptRawDelta as readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
+import { resolveSqliteSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+import { publishSqliteTranscriptUpdate as publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import {
-  appendSqliteTranscriptEvent as appendTranscriptEvent,
-  appendSqliteTranscriptEventSync,
-  appendSqliteTranscriptMessage as appendTranscriptMessage,
-  appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText as readLatestTranscriptAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync as loadTranscriptEventRowsAfterSeqSync,
@@ -13,20 +12,22 @@ import {
   loadSqliteTranscriptTailEventsSync as loadTranscriptTailEventsSync,
   readSqliteTranscriptStatsSync as readTranscriptStatsSync,
   readSqliteTranscriptEventAtSeqSync as readTranscriptEventAtSeqSync,
-  readSqliteTranscriptRawDelta as readTranscriptRawDelta,
-  publishSqliteTranscriptUpdate as publishTranscriptUpdate,
+} from "./session-accessor.sqlite-read.js";
+import {
+  appendSqliteTranscriptEvent as appendTranscriptEvent,
+  appendSqliteTranscriptEventSync as appendTranscriptEventSync,
+  appendSqliteTranscriptMessage as appendTranscriptMessage,
+  appendSqliteTranscriptMessageSync as appendTranscriptMessageSync,
   replaceSqliteTranscriptEvents as replaceTranscriptEvents,
-  replaceSqliteTranscriptEventsSync,
+  replaceSqliteTranscriptEventsSync as replaceTranscriptEventsSync,
   rewriteSqliteTranscriptEventRowsExact as rewriteTranscriptEventRowsExact,
-  resolveSqliteSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId,
   trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock as withTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction as withTranscriptWriteTransaction,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
-  SessionTranscriptWriteScope,
   TranscriptEvent,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
@@ -35,13 +36,13 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import { assertOwnedSessionTranscriptWrite } from "./transcript-write-context.js";
 
-// Persisted transcripts have one SQLite owner. Async operations keep direct
-// exports; sync runtime writes use the ownership-fenced wrappers below.
+// Persisted transcripts have one SQLite owner. Re-export its canonical operations directly.
 export {
   appendTranscriptEvent,
+  appendTranscriptEventSync,
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -53,43 +54,11 @@ export {
   readTranscriptRawDelta,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
   rewriteTranscriptEventRowsExact,
   resolveTranscriptSessionKeyBySessionId,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
-};
-
-function assertOwnedTranscriptScope(scope: SessionTranscriptWriteScope): void {
-  assertOwnedSessionTranscriptWrite({
-    sessionFile: scope.sessionFile,
-    sessionKey: scope.sessionKey,
-    sessionTarget: scope,
-  });
-}
-
-export const appendTranscriptEventSync: typeof appendSqliteTranscriptEventSync = (
-  scope,
-  event,
-  options,
-) => {
-  assertOwnedTranscriptScope(scope);
-  return appendSqliteTranscriptEventSync(scope, event, options);
-};
-
-export const appendTranscriptMessageSync: typeof appendSqliteTranscriptMessageSync = (
-  scope,
-  options,
-) => {
-  assertOwnedTranscriptScope(scope);
-  return appendSqliteTranscriptMessageSync(scope, options);
-};
-
-export const replaceTranscriptEventsSync: typeof replaceSqliteTranscriptEventsSync = (
-  scope,
-  events,
-) => {
-  assertOwnedTranscriptScope(scope);
-  return replaceSqliteTranscriptEventsSync(scope, events);
 };
 
 /** Keeps transcript event delivery behind the transcript owner boundary. */

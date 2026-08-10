@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -493,15 +494,17 @@ describe("cron task run history", () => {
     ).toBeUndefined();
   });
 
-  it("preserves TLS certificate failures in stored run history", () => {
-    const entry = {
-      ts: 100,
-      jobId: JOB_ID,
-      action: "finished",
-      status: "error",
-      errorReason: "tls_certificate",
-    } as const;
+  it("preserves every canonical failover reason in stored run history", () => {
+    for (const errorReason of FAILOVER_REASONS) {
+      const entry = {
+        ts: 100,
+        jobId: JOB_ID,
+        action: "finished",
+        status: "error",
+        errorReason,
+      } as const;
 
-    expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe("tls_certificate");
+      expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe(errorReason);
+    }
   });
 });
