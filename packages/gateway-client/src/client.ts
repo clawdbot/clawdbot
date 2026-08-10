@@ -1042,7 +1042,9 @@ export class GatewayClient {
     }
     if (this.opts.preferBootstrapToken) {
       // The setup credential is single-use; reconnects must use the stored device token.
+      this.opts.token = undefined;
       this.opts.bootstrapToken = undefined;
+      this.opts.password = undefined;
       this.opts.preferBootstrapToken = false;
     }
     this.tickIntervalMs =
