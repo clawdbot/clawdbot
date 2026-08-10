@@ -933,6 +933,7 @@ export const en: TranslationMap = {
     newGroupTitle: "New group",
     newGroupCreate: "Create group",
     newGroupFailed: "Could not create the group.",
+    newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",

@@ -422,8 +422,9 @@ export class SessionOrganizerController implements ReactiveController {
 
   /**
    * Replays the failure the mutation already recorded so the dialog can keep the
-   * typed name for a retry; a replaced connection resolves to no message because
-   * its outcome belongs to a scope the operator can no longer act on.
+   * typed name for a retry. A replaced connection confirmed neither the group nor
+   * the move, so it reports a retryable message too rather than closing on an
+   * outcome that never landed; resubmitting runs against the new connection.
    */
   private async writeSessionGroup(
     name: string,
@@ -437,10 +438,13 @@ export class SessionOrganizerController implements ReactiveController {
     if (!operations) {
       return this.host.sessionData.isSessionMutationScopeCurrent(scope)
         ? this.sessionGroupFailure()
-        : null;
+        : t("sessionsView.newGroupStale");
     }
     const result = await operations.createSessionGroup(this.host, name, sessions, scope);
-    return result === "failed" ? this.sessionGroupFailure() : null;
+    if (result === "failed") {
+      return this.sessionGroupFailure();
+    }
+    return result === "stale" ? t("sessionsView.newGroupStale") : null;
   }
 
   private sessionGroupFailure(): string {

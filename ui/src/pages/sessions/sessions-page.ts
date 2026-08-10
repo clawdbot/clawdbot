@@ -1050,7 +1050,9 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const remembered = await this.rememberCustomGroup(name, scope);
     if (remembered !== "completed") {
-      return remembered === "failed" ? (this.error ?? t("sessionsView.newGroupFailed")) : null;
+      return remembered === "failed"
+        ? (this.error ?? t("sessionsView.newGroupFailed"))
+        : t("sessionsView.newGroupStale");
     }
     if (!sessionKey) {
       return null;
@@ -1061,10 +1063,11 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!this.result?.sessions.some((row) => row.key === sessionKey)) {
       return null;
     }
-    if ((await this.patchSession(sessionKey, { category: name }, scope)) === "failed") {
+    const assigned = await this.patchSession(sessionKey, { category: name }, scope);
+    if (assigned === "failed") {
       return this.error ?? t("sessionsView.newGroupFailed");
     }
-    return null;
+    return assigned === "stale" ? t("sessionsView.newGroupStale") : null;
   }
 
   private async renameSession(row: GatewaySessionRow) {

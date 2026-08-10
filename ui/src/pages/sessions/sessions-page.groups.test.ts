@@ -40,13 +40,15 @@ async function mountGroupsPage(groupsPut: () => Promise<SessionGroupMutationResu
     count: 1,
     sessions: [{ key: SESSION_KEY, archived: false }],
   } as SessionsListResult);
-  // The dialog itself is covered by input-dialog.test.ts; here it only stands
-  // in for the operator submitting a name.
+  // The dialog itself is covered by input-dialog.test.ts; here it only stands in
+  // for the operator submitting a name. A recorded message is what keeps the real
+  // dialog open, so the outcome of each submit is captured rather than dropped.
+  const submitMessages: Array<string | null | undefined> = [];
   vi.mocked(showInputDialog).mockImplementation(async (options) => {
-    await options.submit?.("Client work");
+    submitMessages.push(await options.submit?.("Client work"));
     return "Client work";
   });
-  return { mutableGateway, page, sessions };
+  return { mutableGateway, page, sessions, submitMessages };
 }
 
 describe("sessions page new group", () => {
@@ -72,7 +74,7 @@ describe("sessions page new group", () => {
     const pending = new Promise<SessionGroupMutationResult>((resolve) => {
       landCatalogWrite = () => resolve("completed");
     });
-    const { mutableGateway, page, sessions } = await mountGroupsPage(() => pending);
+    const { mutableGateway, page, sessions, submitMessages } = await mountGroupsPage(() => pending);
 
     const created = page.requestNewCategory(SESSION_KEY);
     await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
@@ -84,6 +86,48 @@ describe("sessions page new group", () => {
     await created;
 
     expect(sessions.patch).not.toHaveBeenCalled();
+    // Nothing landed, so the attempt has to stay on screen and retryable rather
+    // than closing on an outcome the operator never got.
+    expect(submitMessages).toEqual([
+      "Gateway connection replaced before the group was saved. Try again.",
+    ]);
+  });
+
+  it("lets the operator resubmit the kept name on the replacement connection", async () => {
+    let landCatalogWrite!: () => void;
+    const pending = new Promise<SessionGroupMutationResult>((resolve) => {
+      landCatalogWrite = () => resolve("completed");
+    });
+    let firstWrite = true;
+    const { mutableGateway, page, sessions, submitMessages } = await mountGroupsPage(() => {
+      if (firstWrite) {
+        firstWrite = false;
+        return pending;
+      }
+      return Promise.resolve("completed");
+    });
+
+    const created = page.requestNewCategory(SESSION_KEY);
+    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+    mutableGateway.emit({ client: {} as GatewayBrowserClient });
+    landCatalogWrite();
+    await created;
+    expect(sessions.patch).not.toHaveBeenCalled();
+
+    // The replacement connection reloads the list before the operator retries.
+    page.result = {
+      count: 1,
+      sessions: [{ key: SESSION_KEY, archived: false }],
+    } as SessionsListResult;
+    await page.requestNewCategory(SESSION_KEY);
+
+    expect(submitMessages[1]).toBeNull();
+    expect(sessions.patch).toHaveBeenCalledOnce();
+    expect(sessions.patch).toHaveBeenCalledWith(
+      SESSION_KEY,
+      { category: "Client work" },
+      expect.anything(),
+    );
   });
 
   it("skips the assignment when the row disappeared during the catalog write", async () => {
@@ -91,7 +135,7 @@ describe("sessions page new group", () => {
     const pending = new Promise<SessionGroupMutationResult>((resolve) => {
       landCatalogWrite = () => resolve("completed");
     });
-    const { page, sessions } = await mountGroupsPage(() => pending);
+    const { page, sessions, submitMessages } = await mountGroupsPage(() => pending);
 
     const created = page.requestNewCategory(SESSION_KEY);
     await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
@@ -103,16 +147,21 @@ describe("sessions page new group", () => {
     await created;
 
     expect(sessions.patch).not.toHaveBeenCalled();
+    // The group itself landed, so this closes rather than asking for a retry.
+    expect(submitMessages).toEqual([null]);
   });
 
   it("skips the assignment when the catalog itself reports the write stale", async () => {
     // The capability retires the write on its own connection epoch, which the
     // page's scope predicate cannot observe; the assignment must still stop.
-    const { page, sessions } = await mountGroupsPage(async () => "stale");
+    const { page, sessions, submitMessages } = await mountGroupsPage(async () => "stale");
 
     await page.requestNewCategory(SESSION_KEY);
 
     expect(sessions.groupsPut).toHaveBeenCalledOnce();
     expect(sessions.patch).not.toHaveBeenCalled();
+    expect(submitMessages).toEqual([
+      "Gateway connection replaced before the group was saved. Try again.",
+    ]);
   });
 });
