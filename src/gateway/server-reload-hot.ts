@@ -212,7 +212,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         // retire the prior stores at the commit edge so no request can mix generations.
         preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
           "prepared model runtime owner is stale before config publication",
-          { waitForReplacement: true, ...(modelRuntimeRefreshScope ?? {}) },
+          { waitForReplacement: true, ...modelRuntimeRefreshScope },
         );
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
@@ -610,7 +610,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       await refreshPreparedModelRuntimeSnapshots(nextConfig, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
-        ...(modelRuntimeRefreshScope ?? {}),
+        ...modelRuntimeRefreshScope,
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
