@@ -253,7 +253,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
       // +1: native command spec merger through the native-command-registry facade.
       // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
-      4847,
+      // -7: retire unused and duplicate inbound-dispatch compatibility exports.
+      4840,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -308,7 +309,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: channel streaming config reader functions and session-agent scope resolver.
       // +1: native command spec merger through the native-command-registry facade.
       // -1: remove the unused WhatsApp-specific ack policy helper.
-      2920,
+      // -10: collapse inbound-dispatch callable aliases and wrappers.
+      2910,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
