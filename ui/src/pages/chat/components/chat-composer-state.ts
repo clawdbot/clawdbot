@@ -34,7 +34,7 @@ function createChatComposerState(): ChatComposerState {
     microphonePickerOpen: false,
     microphonePickerLoading: false,
     microphoneDevices: [],
-    microphoneWarning: null,
+    microphoneIssue: null,
     microphoneDiscoveryRequest: 0,
     capabilityMenuOpen: false,
     capabilityMenuView: "root",

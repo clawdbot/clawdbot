@@ -53,6 +53,7 @@ import { loadModels } from "../chat/models.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  realtimeTalkDeviceIssueMessage,
   type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
@@ -455,7 +456,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       const result = await discoverRealtimeTalkInputs(requestPermission);
       this.microphoneDevices = result.devices;
       this.microphonePermissionRequired = result.permissionRequired;
-      this.microphoneError = result.warning;
+      this.microphoneError = result.issue
+        ? realtimeTalkDeviceIssueMessage(result.issue, "audioinput")
+        : null;
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
@@ -484,7 +487,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       const result = await discoverRealtimeTalkCameras(requestPermission);
       this.cameraDevices = result.devices;
       this.cameraPermissionRequired = result.permissionRequired;
-      this.cameraError = result.warning;
+      this.cameraError = result.issue
+        ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
+        : null;
     } catch (error) {
       this.cameraError = error instanceof Error ? error.message : String(error);
     } finally {

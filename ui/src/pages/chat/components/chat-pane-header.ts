@@ -177,7 +177,6 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
         const selected = gateway.id === snapshot.currentId;
         return html`<wa-dropdown-item
           class="chat-pane__gateway-menu-item chat-pane__gateway-item"
-          type="checkbox"
           role="menuitemradio"
           aria-checked=${String(selected)}
           ${ref((element) => syncDropdownItemRadio(element, selected))}

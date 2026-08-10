@@ -511,7 +511,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
     state.microphonePickerOpen = true;
     state.microphonePickerLoading = true;
-    state.microphoneWarning = null;
+    state.microphoneIssue = null;
     const request = ++state.microphoneDiscoveryRequest;
     requestUpdate();
     void discoverRealtimeTalkInputs(true)
@@ -520,15 +520,14 @@ export function renderChatComposer(props: ChatComposerProps) {
           return;
         }
         state.microphoneDevices = result.devices;
-        state.microphoneWarning = result.warning;
+        state.microphoneIssue = result.issue;
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (request !== state.microphoneDiscoveryRequest) {
           return;
         }
         state.microphoneDevices = [];
-        state.microphoneWarning =
-          error instanceof Error ? error.message : t("chat.composer.microphoneAccessFailed");
+        state.microphoneIssue = "failed";
       })
       .finally(() => {
         if (request !== state.microphoneDiscoveryRequest) {
@@ -558,7 +557,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         open: state.microphonePickerOpen,
         selectedDeviceId: selectedMicrophoneId,
         voiceActive: Boolean(props.realtimeTalkActive),
-        warning: state.microphoneWarning,
+        issue: state.microphoneIssue,
         onOpen: openMicrophonePicker,
         onClose: closeMicrophonePicker,
         onSelect: selectMicrophone,
