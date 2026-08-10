@@ -765,6 +765,84 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
 
+    onClawHubDetailOpen.mockClear();
+    onClawHubInstall.mockClear();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "weather",
+          clawhubResults: [
+            {
+              score: 0.95,
+              slug: "weather",
+              ownerHandle: "alice",
+              displayName: "Weather",
+              version: "1.0.0",
+            },
+          ],
+          onClawHubDetailOpen,
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const namespacedDetailButton = container.querySelector<HTMLButtonElement>(
+      ".plugins-item__detail-button",
+    );
+    const namespacedInstallButton = container.querySelector<HTMLButtonElement>(
+      ".plugins-item .btn.btn--sm",
+    );
+    namespacedDetailButton!.click();
+    namespacedInstallButton!.click();
+
+    expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@alice/weather");
+    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
+    expect(onClawHubInstall).toHaveBeenCalledWith("@alice/weather");
+
+    // Verify skills-sh: installRef is used only for install, not detail.
+    onClawHubDetailOpen.mockClear();
+    onClawHubInstall.mockClear();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "weather",
+          clawhubResults: [
+            {
+              score: 0.9,
+              slug: "weather",
+              ownerHandle: "openclaw",
+              installRef: "skills-sh:openclaw/skills/weather",
+              displayName: "Weather",
+              version: "2.0.0",
+            },
+          ],
+          onClawHubDetailOpen,
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const shDetailButton = container.querySelector<HTMLButtonElement>(
+      ".plugins-item__detail-button",
+    );
+    const shInstallButton = container.querySelector<HTMLButtonElement>(
+      ".plugins-item .btn.btn--sm",
+    );
+    shDetailButton!.click();
+    shInstallButton!.click();
+
+    // Detail should use @owner/slug, never skills-sh: refs.
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@openclaw/weather");
+    // Install should use the full skills-sh: installRef.
+    expect(onClawHubInstall).toHaveBeenCalledWith("skills-sh:openclaw/skills/weather");
+
     onClawHubInstall.mockClear();
     showModal.mockClear();
 

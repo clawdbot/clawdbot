@@ -455,13 +455,17 @@ function renderClawHubResults(props: SkillsProps) {
   return html`
     ${results.map((r) => {
       const iconUrl = safeExternalHref(r.icon ?? undefined);
+      // Detail accepts @owner/slug or bare slug; never skills-sh: refs.
+      const detailRef = r.ownerHandle ? `@${r.ownerHandle}/${r.slug}` : r.slug;
+      // Install may use the full installRef (including skills-sh: sources).
+      const installRef = r.installRef ?? detailRef;
       return html`
         <div class="settings-row plugins-item plugins-item--clickable">
           <button
             type="button"
             class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
             aria-label=${t("skillsPage.openDetails", { name: r.displayName })}
-            @click=${() => props.onClawHubDetailOpen(r.slug)}
+            @click=${() => props.onClawHubDetailOpen(detailRef)}
           >
             ${iconUrl
               ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
@@ -469,7 +473,7 @@ function renderClawHubResults(props: SkillsProps) {
             <span class="clawhub-skill-result__copy">
               <span class="settings-row__title">${r.displayName}</span>
               <span class="settings-row__desc">
-                ${r.summary ? clampText(r.summary, 120) : r.slug}
+                ${r.summary ? clampText(r.summary, 120) : detailRef}
               </span>
             </span>
           </button>
@@ -478,9 +482,9 @@ function renderClawHubResults(props: SkillsProps) {
             <button
               class="btn btn--sm"
               ?disabled=${skillInstallLocked(props)}
-              @click=${() => props.onClawHubInstall(r.slug)}
+              @click=${() => props.onClawHubInstall(installRef)}
             >
-              ${activeClawHubMutation(props, r.slug)
+              ${activeClawHubMutation(props, installRef) || activeClawHubMutation(props, r.slug)
                 ? t("skillsPage.installing")
                 : t("skillsPage.install")}
             </button>

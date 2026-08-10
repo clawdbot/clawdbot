@@ -193,6 +193,34 @@ describe("skills.detail handler", () => {
     expect(response).toEqual(detail);
   });
 
+  it("fetches detail for a namespaced slug reference", async () => {
+    const detail = {
+      skill: {
+        slug: "weather",
+        displayName: "Weather",
+        createdAt: 1700000000,
+        updatedAt: 1700000000,
+      },
+      owner: {
+        handle: "alice",
+        displayName: "Alice",
+      },
+    };
+    fetchClawHubSkillDetailMock.mockResolvedValue(detail);
+
+    const { ok, response, error } = await callHandler("skills.detail", {
+      slug: "@alice/weather",
+    });
+
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "alice",
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(response).toEqual(detail);
+  });
+
   it("returns error when slug is not found", async () => {
     fetchClawHubSkillDetailMock.mockRejectedValue(new Error("not found"));
 

@@ -3,6 +3,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 export type ClawHubSearchResult = {
   score: number;
   slug: string;
+  ownerHandle?: string | null;
+  installRef?: string;
   displayName: string;
   summary?: string;
   icon?: string | null;
