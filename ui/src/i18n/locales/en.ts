@@ -697,6 +697,8 @@ export const en: TranslationMap = {
     folderPlaceholder: "Agent workspace",
     places: "Places",
     projects: "Projects",
+    projectsAdminHint: "Admins can register projects from Browse folders",
+    registerProject: "Register as project",
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",

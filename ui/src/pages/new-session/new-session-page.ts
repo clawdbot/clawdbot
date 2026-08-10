@@ -6,13 +6,14 @@ import type {
   FsListDirResult,
   ProjectRecord,
   ProjectsListResult,
+  ProjectsRegisterResult,
   SessionsCatalogStartTerminalResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
@@ -116,6 +117,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
+  @state() private browserProjectPath: string | null = null;
+  @state() private browserRegistering = false;
   @state() private placePopoverOpen = false;
   @state() private placePopoverHiding = false;
   // Live head input; absolute paths stay applicable even without fs.listDir.
@@ -621,6 +624,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     return hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
   }
 
+  private canWrite(): boolean {
+    return hasOperatorWriteAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
+  }
+
   private showStartInTerminal(): boolean {
     const context = this.context;
     return Boolean(
@@ -1051,6 +1058,10 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.preferredWorktreeRestore = false;
       return;
     }
+    if (selectedProject && !selectedProject.repoRoot) {
+      this.preferredWorktreeRestore = false;
+      return;
+    }
     const repoRoot = selectedProject?.repoRoot ?? (this.folder.trim() || this.workspacePath());
     const agent = this.selectedAgent();
     const usesWorkspace = !selectedProject && repoRoot === this.workspacePath();
@@ -1142,7 +1153,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.execNode) {
       return false;
     }
-    if (this.selectedProject()) {
+    if (this.selectedProject()?.repoRoot) {
       return true;
     }
     if (this.repository.kind === "git") {
@@ -1753,6 +1764,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserError = null;
     this.browserListing = null;
     this.browserTarget = null;
+    this.browserProjectPath = null;
+    this.browserRegistering = false;
     this.browserPathDraft = "";
     this.placePopoverOpen = false;
     const popover = this.querySelector<HTMLElement & { open: boolean }>(
@@ -1788,6 +1801,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserError = null;
     this.browserListing = null;
     this.browserTarget = null;
+    this.browserProjectPath = null;
+    this.browserRegistering = false;
     this.browserPathDraft = "";
   }
 
@@ -1826,6 +1841,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const requestId = ++this.browserRequestToken;
     this.browserLoading = true;
     this.browserError = null;
+    this.browserProjectPath = null;
     // Clear the previous directory immediately: keeping it clickable while the
     // request is in flight would let "Use this folder" apply the stale path.
     this.browserListing = null;
@@ -1852,6 +1868,25 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (result?.path && this.browserPathDraft === draftAtRequest) {
           this.browserPathDraft = result.path;
         }
+        if (result?.path && !target.nodeId && this.isAdmin()) {
+          // Browse and worktree selection share the Gateway's Git-checkout verdict;
+          // fs.listDir stays a filesystem-only contract.
+          void client
+            .request<WorktreesBranchesResult>("worktrees.branches", {
+              repoRoot: result.path,
+              includeRepositoryStatus: true,
+            })
+            .then((branches) => {
+              if (
+                requestId === this.browserRequestToken &&
+                this.browserListing?.path === result.path &&
+                branches.repositoryStatus === "git"
+              ) {
+                this.browserProjectPath = result.path;
+              }
+            })
+            .catch(() => undefined);
+        }
       })
       .catch(() => {
         if (requestId !== this.browserRequestToken) {
@@ -1871,6 +1906,45 @@ class NewSessionPage extends OpenClawLightDomElement {
       });
   }
 
+  private async registerBrowserProject(path: string) {
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
+    if (
+      snapshot?.phase !== "connected" ||
+      !client ||
+      !this.isAdmin() ||
+      this.browserTarget?.nodeId ||
+      this.browserProjectPath !== path ||
+      this.browserRegistering
+    ) {
+      return;
+    }
+    const requestId = this.browserRequestToken;
+    const connectionEpoch = this.gatewayConnectionEpoch;
+    this.browserRegistering = true;
+    this.browserError = null;
+    try {
+      const project = await client.request<ProjectsRegisterResult>("projects.register", { path });
+      if (requestId !== this.browserRequestToken || client !== this.gatewayClient) {
+        return;
+      }
+      await this.projectsTask.run([client, true, connectionEpoch]);
+      if (requestId !== this.browserRequestToken || client !== this.gatewayClient) {
+        return;
+      }
+      this.selectProjectId(project.id);
+      this.closeBrowser();
+    } catch (error) {
+      if (requestId === this.browserRequestToken && client === this.gatewayClient) {
+        this.browserError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (requestId === this.browserRequestToken) {
+        this.browserRegistering = false;
+      }
+    }
+  }
+
   private renderAgentSelect(agents: ReturnType<NewSessionPage["agents"]>) {
     return renderAgentSelect({
       agents,
@@ -1888,6 +1962,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return renderPlaceSelect({
       browseAvailable: this.browseAvailable(),
       isAdmin: this.isAdmin(),
+      canWrite: this.canWrite(),
       folder: this.folder,
       workspace: this.workspacePath(),
       workspaceRoots: this.knownWorkspaceRoots(),
@@ -1932,6 +2007,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       browserError: this.browserError,
       browserPathDraft: this.browserPathDraft,
       usableBrowserPath: this.usableBrowserPath(),
+      registerProjectPath: this.browserProjectPath,
+      registeringProject: this.browserRegistering,
       onGuardTransition: (event) => this.guardPopoverTransition(event, this.placePopoverHiding),
       onPopoverShow: () => {
         this.placePopoverOpen = true;
@@ -1957,6 +2034,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       },
       onBrowserNavigate: (path) => this.loadBrowser(path),
       onBrowserBack: () => this.showBrowserRoot(),
+      onRegisterProject: (path) => void this.registerBrowserProject(path),
       onClose: () => this.closeBrowser(),
       onToggleWorktree: () => {
         if (this.cloudProfileId) {
