@@ -146,6 +146,11 @@ type TurnLogEvent = {
   stage?: string;
 };
 
+type DeliveryResult = {
+  messageIds?: string[];
+  visibleReplySent?: boolean;
+};
+
 function expectDispatched<TDispatchResult>(
   result: ChannelTurnResult<TDispatchResult>,
 ): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
