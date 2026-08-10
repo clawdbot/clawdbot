@@ -780,9 +780,6 @@ src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
-src/infra/outbound/message-action-runner.media.test.ts
-src/infra/outbound/message-action-runner.plugin-dispatch.test.ts
-src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts
