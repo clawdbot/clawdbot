@@ -782,12 +782,19 @@ function writeExecutable(filePath: string, lines: string[]): void {
 
 function writeProtocolDescriptor(
   repo: string,
-  additions: Array<{ name: string; since?: string }> = [],
+  additions: Array<{
+    name: string;
+    since?: string;
+    compatibilityRestored?: boolean;
+  }> = [],
 ): void {
-  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(({ name, since }) => {
-    const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
-    return `  { name: ${JSON.stringify(name)}${sinceProperty} },`;
-  });
+  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(
+    ({ name, since, compatibilityRestored }) => {
+      const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
+      const compatibilityProperty = compatibilityRestored ? ", compatibilityRestored: true" : "";
+      return `  { name: ${JSON.stringify(name)}${sinceProperty}${compatibilityProperty} },`;
+    },
+  );
   const descriptor = path.join(repo, "src/gateway/methods/core-descriptors.ts");
   mkdirSync(path.dirname(descriptor), { recursive: true });
   writeFileSync(
@@ -827,6 +834,29 @@ function createQaProtocolTopology() {
   writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
   commitProtocolFixture(origin, "advance main");
 
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/restore", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.preflight",
+      since: "<=2026.7",
+      compatibilityRestored: true,
+    },
+  ]);
+  const compatibilityHead = commitProtocolFixture(origin, "restore compatibility method");
+
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/invalid", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.invalid",
+      since: "2026.8",
+      compatibilityRestored: true,
+    },
+  ]);
+  const invalidCompatibilityHead = commitProtocolFixture(
+    origin,
+    "mislabel new method as compatibility",
+  );
+
   runGit(origin, ["checkout", "-q", "-b", releaseBranch, mainBase]);
   writeProtocolDescriptor(origin, [{ name: "sessions.releaseOnly" }]);
   const releaseHead = commitProtocolFixture(origin, "add release protocol method");
@@ -848,8 +878,10 @@ function createQaProtocolTopology() {
 
   return {
     checkout,
+    compatibilityHead,
     fakeBin,
     featureHead,
+    invalidCompatibilityHead,
     mainBase,
     mainHead,
     mainReleaseTag,
@@ -6067,6 +6099,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const mainCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
       expect(mainCheck.status, `${mainCheck.stdout}${mainCheck.stderr}`).toBe(0);
       expect(mainCheck.stdout).toContain("1 new core method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.compatibilityHead]);
+      const compatibilityCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+      expect(
+        compatibilityCheck.status,
+        `${compatibilityCheck.stdout}${compatibilityCheck.stderr}`,
+      ).toBe(0);
+      expect(compatibilityCheck.stdout).toContain("1 restored compatibility method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.invalidCompatibilityHead]);
+      const invalidCompatibilityCheck = runProtocolSinceFixture(
+        topology.checkout,
+        topology.mainBase,
+      );
+      expect(invalidCompatibilityCheck.status).not.toBe(0);
+      expect(invalidCompatibilityCheck.stderr).toContain(
+        "restored compatibility methods must retain <= vintage metadata",
+      );
 
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.releaseHead]);
       const releaseCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);

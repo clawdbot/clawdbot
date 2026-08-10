@@ -16,12 +16,13 @@ type CoreGatewayMethodSpec = {
   advertise?: false;
   startup?: true;
   controlPlaneWrite?: true;
+  compatibilityRestored?: true;
 };
 
 type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite"
+  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored"
 >;
 type CoreGatewayMethodSpecRow = readonly [
   name: string,
@@ -301,7 +302,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
   // Deprecated read-only compatibility preview; new restart flows request the
   // restart directly, while atomic host suspension uses gateway.suspend.prepare.
-  ["gateway.restart.preflight", "restart", "operator.read", "<=2026.7"],
+  [
+    "gateway.restart.preflight",
+    "restart",
+    "operator.read",
+    "<=2026.7",
+    { compatibilityRestored: true },
+  ],
   ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["system-presence", "system", "operator.read", "<=2026.7"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
@@ -505,6 +512,9 @@ const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
     }
     if (normalizedPolicy?.controlPlaneWrite === true) {
       spec.controlPlaneWrite = true;
+    }
+    if (normalizedPolicy?.compatibilityRestored === true) {
+      spec.compatibilityRestored = true;
     }
     return spec;
   });
