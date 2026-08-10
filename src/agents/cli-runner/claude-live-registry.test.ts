@@ -385,6 +385,64 @@ describe("Claude live registry lifecycle", () => {
     expect(cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
+  it("does not close a replacement spawned while the previous process exits", async () => {
+    let resolveOldExit: ((exit: RunExit) => void) | undefined;
+    const oldExit = new Promise<RunExit>((resolve) => {
+      resolveOldExit = resolve;
+    });
+    const old = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: [
+        { type: "system", subtype: "init", session_id: "old-session" },
+        { type: "result", session_id: "old-session", result: "old" },
+      ],
+    });
+    old.lifecycle.wait.mockImplementation(() => oldExit);
+
+    const context = buildPreparedCliRunContext({
+      prompt: "old",
+      backend: { liveSession: "claude-stdio" },
+    });
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "old" });
+
+    let releaseReplacementSpawn: (() => void) | undefined;
+    const replacementSpawnBlocked = new Promise<void>((resolve) => {
+      releaseReplacementSpawn = resolve;
+    });
+    const replacement = mockClaudeLiveRun(supervisorSpawnMock, {
+      beforeSpawn: () => replacementSpawnBlocked,
+      events: [
+        { type: "system", subtype: "init", session_id: "replacement-session" },
+        { type: "result", session_id: "replacement-session", result: "replacement" },
+      ],
+    });
+
+    const closing = closeClaudeSession(context, "restart");
+    await vi.waitFor(() => expect(old.lifecycle.cancel).toHaveBeenCalledWith("manual-cancel"));
+    const replacementRun = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        prompt: "replacement",
+        backend: { liveSession: "claude-stdio" },
+      }),
+    );
+    await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(2));
+
+    resolveOldExit?.({
+      reason: "manual-cancel",
+      exitCode: null,
+      exitSignal: null,
+      durationMs: 1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    await closing;
+    releaseReplacementSpawn?.();
+
+    await expect(replacementRun).resolves.toMatchObject({ text: "replacement" });
+    expect(replacement.lifecycle.cancel).not.toHaveBeenCalled();
+  });
+
   it("recovers when a required warm Claude process exits during reuse cleanup", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let resolveExit: ((exit: RunExit) => void) | undefined;

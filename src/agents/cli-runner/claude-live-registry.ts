@@ -123,14 +123,16 @@ export async function closeClaudeSession(
 ): Promise<void> {
   const key = buildClaudeLiveKey(context);
   const session = liveSessions.get(key);
+  const pending = liveSessionCreates.get(key);
   if (session) {
     session.close(reason);
-    await session.waitForExit();
   }
-  const pending = liveSessionCreates.get(key);
   if (pending) {
     pending.closeReason = reason;
     liveSessionCreates.delete(key);
+  }
+  if (session) {
+    await session.waitForExit();
   }
 }
 
