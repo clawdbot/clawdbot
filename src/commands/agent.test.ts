@@ -65,7 +65,6 @@ vi.mock("../config/io.js", () => ({
 vi.mock("../agents/auth-profiles/store.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
-    clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
     ensureAuthProfileStore: vi.fn(createEmptyStore),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
     hasAnyAuthProfileStoreSource: vi.fn(() => false),
@@ -73,7 +72,6 @@ vi.mock("../agents/auth-profiles/store.js", () => {
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreWithoutExternalProfiles: vi.fn(createEmptyStore),
-    replaceRuntimeAuthProfileStoreSnapshots: vi.fn(),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
   };
