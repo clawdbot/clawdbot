@@ -5188,7 +5188,7 @@ export const en: TranslationMap = {
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",
       noMicrophones: "No additional microphones found",
-      microphoneNoneFound: "No microphone inputs were found.",
+      microphoneNoneFound: "No microphone found. Plug one in and it appears here.",
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",

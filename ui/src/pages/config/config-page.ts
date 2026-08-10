@@ -53,6 +53,7 @@ import { loadModels } from "../chat/models.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
@@ -243,6 +244,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
   @state() private sessionObserverModelsUnavailable = false;
+  private mediaDeviceWatch: (() => void) | null = null;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
   @state() private microphonePermissionRequired = true;
   @state() private microphoneLoading = false;
@@ -391,6 +393,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.theme.serverSelection,
     );
     this.settings = loadSettings();
+    // Passive refresh only: the media rows already own the permission prompt
+    // behind their own controls, and a hardware change must never turn into an
+    // unasked-for browser dialog on a settings page.
+    this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
+      void this.refreshMicrophones(false);
+      void this.refreshCameras(false);
+    });
     this.syncRouteData();
   }
 
@@ -400,6 +409,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.hiddenSessionCatalogsChanged,
     );
     this.customThemeImportOwner.retireImport();
+    this.mediaDeviceWatch?.();
+    this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
     this.updateCountdownPolling.stop();
     this.invalidateSystemInfoRequest();

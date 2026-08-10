@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  observeRealtimeTalkDevices,
   openRealtimeTalkCamera,
   openRealtimeTalkInput,
 } from "./realtime-talk-input.ts";
@@ -103,6 +104,24 @@ describe("realtime Talk microphone inputs", () => {
       permissionRequired: true,
       issue: "none-found",
     });
+  });
+
+  it("subscribes to devicechange and releases the listener on unsubscribe", () => {
+    const mediaDevices = new EventTarget();
+    let changes = 0;
+    vi.stubGlobal("navigator", { mediaDevices });
+
+    const unsubscribe = observeRealtimeTalkDevices(() => (changes += 1));
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    unsubscribe();
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+
+    expect(changes).toBe(1);
+  });
+
+  it("stays inert where the browser exposes no media devices to watch", () => {
+    vi.stubGlobal("navigator", {});
+    expect(() => observeRealtimeTalkDevices(() => undefined)()).not.toThrow();
   });
 
   it("reports an unsupported enumeration instead of a generic access failure", async () => {

@@ -35,7 +35,7 @@ type RealtimeTalkDeviceDiscovery = {
   issue: RealtimeTalkDeviceIssue | null;
 };
 
-export type RealtimeTalkDeviceKind = "audioinput" | "videoinput";
+type RealtimeTalkDeviceKind = "audioinput" | "videoinput";
 
 function normalizeDevices(
   devices: MediaDeviceInfo[],
@@ -90,6 +90,21 @@ export function realtimeTalkDeviceIssueMessage(
 ): string {
   const [microphoneKey, cameraKey] = deviceIssueMessageKeys[issue];
   return t(kind === "audioinput" ? microphoneKey : cameraKey);
+}
+
+/**
+ * Hardware appears and disappears while a picker is on screen, and the empty
+ * state promises the list keeps up. The caller owns the subscription window:
+ * run the returned unsubscribe when its surface closes, or the listener
+ * outlives the state it refreshes.
+ */
+export function observeRealtimeTalkDevices(onChange: () => void): () => void {
+  const devices = globalThis.navigator?.mediaDevices;
+  if (!devices?.addEventListener) {
+    return () => undefined;
+  }
+  devices.addEventListener("devicechange", onChange);
+  return () => devices.removeEventListener("devicechange", onChange);
 }
 
 export function describeRealtimeTalkInputError(error: unknown): string {

@@ -177,6 +177,8 @@ export type ChatComposerState = {
   microphonePickerLoading: boolean;
   microphoneDevices: RealtimeTalkInputDevice[];
   microphoneIssue: RealtimeTalkDeviceIssue | null;
+  /** Unsubscribe for the devicechange watch; non-null only while the picker is open. */
+  microphoneDeviceWatch: (() => void) | null;
   microphoneDiscoveryRequest: number;
   capabilityMenuOpen: boolean;
   capabilityMenuView: ChatComposerPlusMenuView;

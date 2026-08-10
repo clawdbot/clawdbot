@@ -35,6 +35,7 @@ function createChatComposerState(): ChatComposerState {
     microphonePickerLoading: false,
     microphoneDevices: [],
     microphoneIssue: null,
+    microphoneDeviceWatch: null,
     microphoneDiscoveryRequest: 0,
     capabilityMenuOpen: false,
     capabilityMenuView: "root",
@@ -144,16 +145,27 @@ export function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
+/** Drops the devicechange subscription so a closed picker stops refreshing. */
+export function releaseMicrophoneDeviceWatch(state: ChatComposerState) {
+  state.microphoneDeviceWatch?.();
+  state.microphoneDeviceWatch = null;
+}
+
 export function resetChatComposerState(paneId?: string) {
   if (paneId) {
     // Goal elapsed timers are keyed by element and cleaned up when their
     // element leaves the DOM, so a per-pane reset does not need to touch them.
-    composerStates.get(paneId)?.dictation?.dispose();
+    const paneState = composerStates.get(paneId);
+    paneState?.dictation?.dispose();
+    if (paneState) {
+      releaseMicrophoneDeviceWatch(paneState);
+    }
     composerStates.delete(paneId);
     return;
   }
   for (const state of composerStates.values()) {
     state.dictation?.dispose();
+    releaseMicrophoneDeviceWatch(state);
   }
   composerStates.clear();
   clearGoalElapsedTimers();

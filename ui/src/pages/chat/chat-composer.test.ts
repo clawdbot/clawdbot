@@ -462,6 +462,59 @@ describe("renderChatComposer controls", () => {
     expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false"]);
   });
 
+  it("follows devicechange while open and stops listening once closed", async () => {
+    const mediaDevices = new EventTarget();
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-talk-input-picker__empty")?.textContent?.trim()).toBe(
+        t("chat.composer.microphoneNoneFound"),
+      ),
+    );
+
+    // The empty state promises the list keeps up, so plugging in has to land
+    // without reopening the popover.
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [{ deviceId: "usb", label: "USB Audio Interface" }],
+      issue: null,
+    });
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
+    );
+    expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
+
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0),
+    );
+
+    dropdown?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await dropdown?.updateComplete;
+    const callsWhileClosed = discoverRealtimeTalkInputsMock.mock.calls.length;
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    await Promise.resolve();
+    expect(discoverRealtimeTalkInputsMock.mock.calls.length).toBe(callsWhileClosed);
+  });
+
   it("offers camera only inside a video-capable active talk session", () => {
     const onToggleRealtimeCamera = vi.fn();
     const { container } = renderComposer({
