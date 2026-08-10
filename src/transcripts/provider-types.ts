@@ -124,6 +124,13 @@ export type TranscriptSourceProvider = {
   aliases?: readonly string[];
   /** Ingress channel ids whose trusted account owns this provider's account namespace. */
   accountBindingChannels?: readonly string[];
+  /** Recover a historical owner only from facts this provider persisted before owner metadata. */
+  inferLegacyOwnership?: (source: TranscriptSourceLocator) =>
+    | {
+        ownerChannel: string;
+        ownerAccountId: string;
+      }
+    | undefined;
   /** Resolve and validate the canonical account before persistence. */
   resolveAccountId?: (params: {
     cfg?: OpenClawConfig;

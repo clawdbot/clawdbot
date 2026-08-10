@@ -130,6 +130,10 @@ exactly one binding channel and supply a nonempty source account or resolve one
 with this hook. OpenClaw rejects ambiguous or unresolved ownership before it
 persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
+Providers that can prove ownership for sessions written before owner metadata
+may implement `inferLegacyOwnership`. Doctor passes only the persisted source
+locator; the hook must not use current defaults or account availability to guess
+history. Returning no owner keeps that row on local-agent recovery.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.

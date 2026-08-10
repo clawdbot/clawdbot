@@ -112,14 +112,17 @@ Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
 
-Sessions created before account ownership was recorded retain their stored
-agent ownership. For an account-bound source, a row with no stored account
-cannot be safely claimed from a channel: recover an agent-owned row with a local
-turn for that agent. An account-bound row with no agent attribution requires a
-local main-agent turn. Sources without account binding retain main-agent access
-across their normal surfaces. If a legacy row's provider is unavailable,
-binding provenance cannot be verified; use the same local recovery path until
-the provider is available again.
+For sessions created before account ownership was recorded, `openclaw doctor
+--fix` asks the source provider whether its historical persisted locator proves
+an owner. Doctor records that owner only when the provider explicitly supports
+this migration and the inferred channel still matches its declared account
+binding. It never guesses from the current default or configured accounts.
+
+Rows the provider cannot prove retain their stored agent ownership. Recover an
+agent-owned row with a local turn for that agent; a row with no agent attribution
+requires a local main-agent turn. Sources without account binding retain
+main-agent access across their normal surfaces. Missing providers, partial owner
+metadata, and accountless historical sources remain on this local recovery path.
 
 ```bash
 openclaw agent --agent <owning-agent-or-main> --local --message \

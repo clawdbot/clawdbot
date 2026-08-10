@@ -15,6 +15,20 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     vi.useRealTimers();
   });
 
+  it("attests only explicit historical account locators for Doctor", () => {
+    expect(
+      discordVoiceTranscriptsSourceProvider.inferLegacyOwnership?.({
+        providerId: "discord-voice",
+        accountId: " work ",
+      }),
+    ).toEqual({ ownerChannel: "discord", ownerAccountId: "work" });
+    expect(
+      discordVoiceTranscriptsSourceProvider.inferLegacyOwnership?.({
+        providerId: "discord-voice",
+      }),
+    ).toBeUndefined();
+  });
+
   it("starts Discord voice in transcripts mode", async () => {
     const join = vi.fn(async () => ({ ok: true, message: "joined" }));
     setDiscordTranscriptsVoiceManager({
