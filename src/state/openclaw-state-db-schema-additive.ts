@@ -16,6 +16,22 @@ import {
   repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const SECRET_STORE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS secret_store_entries (";
+
+function secretStoreSchemaSql(): string {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
+  if (start === -1) {
+    throw new Error("OpenClaw secret store schema marker is missing.");
+  }
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start);
+}
+
+/** Lazily install the additive secret store table and index on first write. */
+export function ensureSecretStoreSchema(database: DatabaseSync): void {
+  database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+}
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
   database.exec(`
