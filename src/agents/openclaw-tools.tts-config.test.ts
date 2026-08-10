@@ -287,7 +287,7 @@ describe("createOpenClawTools transcript ownership wiring", () => {
       config: injectedConfig,
       agentChannel: "discord",
       agentAccountId: "delivery",
-      gatewayCallerAccountId: "creator",
+      gatewayCaller: { channel: "telegram", accountId: "creator" },
       disableMessageTool: true,
       disablePluginTools: true,
     });
@@ -295,7 +295,7 @@ describe("createOpenClawTools transcript ownership wiring", () => {
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentId: "main",
-        agentChannel: "discord",
+        agentChannel: "telegram",
         agentAccountId: "creator",
         config: injectedConfig,
       }),

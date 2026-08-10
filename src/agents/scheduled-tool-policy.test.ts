@@ -40,6 +40,21 @@ describe("resolveScheduledToolPolicyContext", () => {
       mode: "account",
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "work",
+      ownerChannel: "discord",
     });
+  });
+
+  it("rejects account provenance without a canonical owner channel", () => {
+    expect(
+      resolveScheduledToolPolicyContext({
+        toolsAllow: [],
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:main",
+          ownerAccountId: "work",
+        },
+      }),
+    ).toBeUndefined();
   });
 });

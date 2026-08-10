@@ -1331,12 +1331,13 @@ describe("createOpenClawCodingTools", () => {
         mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "creator",
+        ownerChannel: "discord",
       },
     });
 
     expect(latestCreateOpenClawToolsOptions()).toMatchObject({
       agentAccountId: "delivery",
-      gatewayCallerAccountId: "creator",
+      gatewayCaller: { channel: "discord", accountId: "creator" },
     });
   });
 

@@ -655,6 +655,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const cronCreatorToolAllowlistCaptureRef = options?.cronCreatorToolAllowlistCaptureRef;
   const gatewayCallerAccountId =
     options?.scheduledToolPolicy?.ownerAccountId ?? options?.agentAccountId;
+  const gatewayCallerChannel =
+    options?.scheduledToolPolicy?.ownerChannel ??
+    resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider);
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
   const pluginToolCallerIdentity =
@@ -662,9 +665,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? {
           agentId,
           sessionKey: options.sessionKey.trim(),
-          turnSourceChannel: resolveGatewayMessageChannel(
-            options.messageChannel ?? options.messageProvider,
-          ),
+          turnSourceChannel: gatewayCallerChannel,
           turnSourceTo:
             options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
           turnSourceAccountId: gatewayCallerAccountId,
@@ -751,7 +752,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               options?.messageChannel ?? options?.messageProvider,
             ),
             agentAccountId: options?.agentAccountId,
-            gatewayCallerAccountId,
+            gatewayCaller: {
+              channel: gatewayCallerChannel,
+              accountId: gatewayCallerAccountId,
+            },
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,

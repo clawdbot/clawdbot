@@ -112,8 +112,7 @@ export function createOpenClawTools(
     agentChannel?: string;
     runId?: string;
     agentAccountId?: string;
-    /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
-    gatewayCallerAccountId?: string;
+    gatewayCaller?: { channel?: string; accountId?: string };
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -264,9 +263,10 @@ export function createOpenClawTools(
     threadId: options?.agentThreadId,
   });
   // Scheduled turns authorize tools as their creator while retaining separate delivery routing.
-  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
-  const transcriptOptions = { ...options, agentAccountId: gatewayCallerAccountId };
-  Object.assign(transcriptOptions, { agentId: sessionAgentId, config: resolvedConfig });
+  const callerOptions = { ...options };
+  callerOptions.agentChannel = options?.gatewayCaller?.channel ?? options?.agentChannel;
+  callerOptions.agentAccountId = options?.gatewayCaller?.accountId ?? options?.agentAccountId;
+  Object.assign(callerOptions, { agentId: sessionAgentId, config: resolvedConfig });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -485,7 +485,7 @@ export function createOpenClawTools(
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
-            agentAccountId: gatewayCallerAccountId,
+            agentAccountId: callerOptions.agentAccountId,
             config: options?.config,
             currentDeliveryContext: {
               channel: options?.agentChannel,
@@ -547,7 +547,7 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool ? [createTranscriptsTool(transcriptOptions)] : []),
+    ...(includeTranscriptsTool ? [createTranscriptsTool(callerOptions)] : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
@@ -646,10 +646,7 @@ export function createOpenClawTools(
             config: resolvedConfig,
             senderIsOwner: options?.senderIsOwner,
           }),
-          // No explicit callGateway: the tool defaults to the same in-process
-          // caller, and an injected override would disable the trusted creation
-          // stamp for materialized agent roots (opts.callGateway === undefined
-          // is the gate in ensureConfiguredAgentMainSession).
+          // Keep the in-process caller so materialized agent roots retain their creation stamp.
           createSessionsSendTool({
             agentId: sessionAgentId,
             agentSessionKey: options?.agentSessionKey,
@@ -742,13 +739,10 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
-    hookAgentId,
-    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
-  );
+  const wrapCaller = createGatewayToolCallerWrapper(hookAgentId, options ? callerOptions : options);
 
   if (options?.wrapBeforeToolCallHook === false) {
-    return allTools.map(wrapGatewayCallerIdentity);
+    return allTools.map(wrapCaller);
   }
   const defaultHookContext: HookContext = {
     ...(hookAgentId ? { agentId: hookAgentId } : {}),
@@ -766,5 +760,5 @@ export function createOpenClawTools(
         ? tool
         : wrapToolWithBeforeToolCallHook(tool, hookContext),
     )
-    .map(wrapGatewayCallerIdentity);
+    .map(wrapCaller);
 }
