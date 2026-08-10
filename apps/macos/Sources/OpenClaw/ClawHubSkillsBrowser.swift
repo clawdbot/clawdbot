@@ -124,10 +124,17 @@ private struct ClawHubSkillResultRow: View {
     let showsDivider: Bool
     let onReview: () -> Void
 
+    // Same-slug rows share a display name and often a summary, so the reference always shows:
+    // it is the only thing that tells them apart and what review and install send back.
+    private var subtitle: String {
+        guard let summary = self.skill.summary else { return self.skill.reference }
+        return "\(summary) · \(self.skill.reference)"
+    }
+
     var body: some View {
         SettingsCardRow(
             title: .verbatim(self.skill.displayName),
-            subtitle: .verbatim(self.skill.summary ?? self.skill.reference),
+            subtitle: .verbatim(self.subtitle),
             showsDivider: self.showsDivider)
         {
             if let version = self.skill.version {

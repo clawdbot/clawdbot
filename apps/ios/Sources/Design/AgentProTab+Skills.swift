@@ -167,7 +167,9 @@ extension AgentProTab {
                 Text(result.displayName)
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(result.summary ?? result.reference)
+                // This surface installs directly, so the publisher reference always shows:
+                // same-slug rows are otherwise identical and the button would look ambiguous.
+                Text(result.summary.map { "\($0) · \(result.reference)" } ?? result.reference)
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

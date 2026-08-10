@@ -119,6 +119,18 @@ describe("ClawHub publisher identity across skills.search, skills.detail, and sk
     expect(String((error as { message?: string }).message)).toContain("AMBIGUOUS_SKILL_SLUG");
   });
 
+  it("refuses external-source detail instead of reading a same-slug registry skill", async () => {
+    // Install keeps the external source, so a bare-slug read here would let an operator review
+    // one skill and install another. ClawHub has no source-qualified read endpoint yet.
+    const { ok, error } = await callSkillsHandler("skills.detail", {
+      slug: `skills-sh:openclaw/skills/${SLUG}`,
+    });
+
+    expect(ok).toBe(false);
+    expect((error as { code?: string }).code).toBe("INVALID_REQUEST");
+    expect(requestedUrls.some((url) => url.includes("/api/v1/skills/"))).toBe(false);
+  });
+
   it("forwards the selected publisher reference to the install lifecycle unchanged", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
       ok: true,

@@ -302,6 +302,20 @@ export const skillsHandlers: GatewayRequestHandlers = {
       // Same reference grammar as skills.install, so a client cannot review one publisher's
       // card and then install another's.
       const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
+      if (requested.requestedReference) {
+        // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
+        // show a same-slug registry skill while install resolves the external artifact.
+        // Refusing keeps review and install on one identity until that contract exists.
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `ClawHub cannot return details for ${requested.requestedReference}; external skill sources are install-only.`,
+          ),
+        );
+        return;
+      }
       const detail = await fetchClawHubSkillDetail({
         slug: requested.slug,
         ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
