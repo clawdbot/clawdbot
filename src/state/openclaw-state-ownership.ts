@@ -122,14 +122,14 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  const hasLiveJournal = ["-journal", "-shm", "-wal"].some((suffix) =>
-    existsSync(`${resolvedPath}${suffix}`),
-  );
-  const location = hasLiveJournal ? resolvedPath : resolveImmutableSqliteFileUri(resolvedPath);
+  // WAL readers need the live sidecars. Rollback-journal recovery stays with the
+  // writable lifecycle after this ownership fence, so it remains immutable here.
+  const hasLiveWal = ["-shm", "-wal"].some((suffix) => existsSync(`${resolvedPath}${suffix}`));
+  const location = hasLiveWal ? resolvedPath : resolveImmutableSqliteFileUri(resolvedPath);
   const database = openNodeSqliteDatabase(location, { readOnly: true });
   try {
     database.exec(
-      `${hasLiveJournal ? `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; ` : ""}PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
+      `${hasLiveWal ? `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; ` : ""}PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
     );
     return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
   } finally {
