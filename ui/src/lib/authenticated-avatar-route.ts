@@ -34,10 +34,7 @@ async function fetchAvatarRoute(
   authToken: string | null,
   entry: AvatarRouteEntry,
 ) {
-  const timeout = setTimeout(
-    () => entry.controller.abort(new DOMException("avatar fetch timed out", "TimeoutError")),
-    AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS,
-  );
+  const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
   let blobUrl: string | null = null;
   try {
     const response = await fetch(url, {
