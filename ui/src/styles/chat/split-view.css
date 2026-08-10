@@ -251,13 +251,18 @@ openclaw-chat-pane {
 }
 
 /* Project icons are arbitrary artwork, so they keep their own pixels: matched to
-   the glyph box, contained rather than stretched, never restyled by icon rules. */
+   the glyph box, contained rather than stretched, never restyled by icon rules.
+   Many favicons are one flat color on transparency and are drawn for a light
+   browser tab, so on a dark chip they would sink into the background. The halo
+   is drawn in the theme's text color, which contrasts with the chip in every
+   theme, and traces the artwork's own alpha instead of boxing it in a plate. */
 .chat-pane__workspace-chip .workspace-icon {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
   border-radius: 2px;
   object-fit: contain;
+  filter: drop-shadow(0 0 1px color-mix(in srgb, var(--text) 45%, transparent));
 }
 
 .chat-pane__workspace-menu {
