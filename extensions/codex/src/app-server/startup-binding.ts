@@ -423,7 +423,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   projectedTurnTokens?: number;
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
-  harnessContextTokens?: number;
+  startupContextTokens?: number;
 }> {
   const binding = params.binding;
   if (!binding?.threadId) {
@@ -498,12 +498,12 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       ? Math.floor(sessionRecord.contextTokens)
       : undefined;
   const reserveTokens = resolveCodexAppServerNativeThreadReserveTokens(params.config);
-  const harnessContextTokens = minFiniteNumber([
+  const rotationContextTokens = minFiniteNumber([
     nativeModelContextWindow,
     sessionModelContextWindow,
   ]);
   const maxTokens = resolveCodexAppServerNativeThreadTokenFuse({
-    modelContextWindow: harnessContextTokens,
+    modelContextWindow: rotationContextTokens,
     reserveTokens,
     projectedTurnTokens: params.projectedTurnTokens,
   });
@@ -536,8 +536,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     });
     return { binding: undefined };
   }
+  // Session metadata has no source provenance and may contain a catalog fallback.
+  // Prefer the native rollout for result seeding; keep the minimum only for rotation safety.
+  const startupContextTokens = nativeModelContextWindow ?? sessionModelContextWindow;
   return {
     binding,
-    ...(harnessContextTokens ? { harnessContextTokens } : {}),
+    ...(startupContextTokens ? { startupContextTokens } : {}),
   };
 }

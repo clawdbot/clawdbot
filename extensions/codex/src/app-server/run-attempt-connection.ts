@@ -399,7 +399,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   });
   const mutable = {
     startupBinding,
-    startupHarnessContextTokens: startupBindingResolution.harnessContextTokens,
+    startupContextTokens: startupBindingResolution.startupContextTokens,
     pluginAppServer: appServer,
   };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {

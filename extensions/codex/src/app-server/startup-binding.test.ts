@@ -859,12 +859,12 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding).toBeUndefined();
   });
 
-  it("keeps native rollouts above the old guard when Codex still has context window headroom", async () => {
+  it("prefers the native rollout window over a stale persisted context fallback", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    await writeSessionRecord(sessionFile, { totalTokens: 12_000, contextTokens: 1_050_000 });
+    await writeSessionRecord(sessionFile, { totalTokens: 12_000, contextTokens: 272_000 });
     const rolloutDir = path.join(agentDir, "codex-home", "sessions");
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(
@@ -898,7 +898,7 @@ describe("Codex app-server startup binding", () => {
     });
 
     expect(resolution.binding?.threadId).toBe("thread-existing");
-    expect(resolution.harnessContextTokens).toBe(1_050_000);
+    expect(resolution.startupContextTokens).toBe(1_050_000);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
