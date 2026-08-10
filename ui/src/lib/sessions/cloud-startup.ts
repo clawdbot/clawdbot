@@ -9,6 +9,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 type CloudStartOutcome =
   | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "cancelled" }
+  | { status: "interrupted" }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
   | { status: "session-missing"; error: string }
@@ -24,6 +25,7 @@ type PlacementReadResult =
 type PlacementResolution =
   | { status: "active"; placement: SessionPlacement }
   | { status: "cancelled" }
+  | { status: "interrupted" }
   | { status: "cleanup-rejected"; error: string }
   | { status: "missing" }
   | { status: "rejected"; placement?: SessionPlacement };
@@ -103,7 +105,12 @@ async function cancelActivePlacement(
 
 async function resolveActivePlacement(
   client: Pick<GatewayBrowserClient, "request">,
-  params: { key: string; agentId: string; initial?: SessionPlacement },
+  params: {
+    key: string;
+    agentId: string;
+    initial?: SessionPlacement;
+    cleanupOnCancellation: boolean;
+  },
   isCurrent: () => boolean,
 ): Promise<PlacementResolution> {
   let next = params.initial ? ({ status: "read", placement: params.initial } as const) : undefined;
@@ -123,6 +130,9 @@ async function resolveActivePlacement(
       lookupFailures += 1;
       const submissionCancelled = !isCurrent();
       if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
+        if (!params.cleanupOnCancellation && submissionCancelled) {
+          return { status: "interrupted" };
+        }
         if (lastKnownEnvironmentId) {
           // The last successful placement read still proves worker ownership.
           // Destroy it before returning, or a lookup outage can orphan paid capacity.
@@ -176,6 +186,9 @@ async function resolveActivePlacement(
         emptyPlacements = 0;
       }
       if (!isCurrent()) {
+        if (!params.cleanupOnCancellation) {
+          return { status: "interrupted" };
+        }
         const cleanupEnvironmentId = placementEnvironmentId(placement) ?? lastKnownEnvironmentId;
         if (cleanupEnvironmentId) {
           const cleanupError = await cancelActivePlacement(client, {
@@ -219,6 +232,9 @@ async function resolveActivePlacement(
     await new Promise<void>((resolve) => {
       globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
     });
+  }
+  if (!params.cleanupOnCancellation && !isCurrent()) {
+    return { status: "interrupted" };
   }
   return {
     status: "cleanup-rejected",
@@ -267,7 +283,7 @@ export async function deleteRecoveredCloudDraftSession(
     // durable session identity is removed, or the worker becomes untrackable.
     const resolution = await resolveActivePlacement(
       client,
-      { key, agentId, initial: existing.placement },
+      { key, agentId, initial: existing.placement, cleanupOnCancellation: true },
       () => false,
     );
     if (resolution.status === "cleanup-rejected") {
@@ -293,10 +309,12 @@ export async function startCloudInitialTurn(
     messageId?: string;
     recovering?: boolean;
     retryTerminalPlacement?: boolean;
+    cleanupOnCancellation?: boolean;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
 ): Promise<CloudStartOutcome> {
+  const cleanupOnCancellation = params.cleanupOnCancellation !== false;
   let resolution: PlacementResolution | undefined;
   let dispatchError = "";
   if (params.recovering) {
@@ -312,6 +330,7 @@ export async function startCloudInitialTurn(
           key: params.key,
           agentId: params.agentId,
           initial: existing.status === "read" ? existing.placement : undefined,
+          cleanupOnCancellation,
         },
         isCurrent,
       );
@@ -331,22 +350,37 @@ export async function startCloudInitialTurn(
       });
       resolution = await resolveActivePlacement(
         client,
-        { key: params.key, agentId: params.agentId, initial: dispatched.placement },
+        {
+          key: params.key,
+          agentId: params.agentId,
+          initial: dispatched.placement,
+          cleanupOnCancellation,
+        },
         isCurrent,
       );
     } catch (error) {
       dispatchError = formatUiError(error);
+      if (!cleanupOnCancellation && !isCurrent()) {
+        return { status: "interrupted" };
+      }
       if (!isAmbiguousDispatchError(error)) {
         return { status: "dispatch-rejected", error: dispatchError };
       }
       resolution = await resolveActivePlacement(
         client,
-        { key: params.key, agentId: params.agentId },
+        { key: params.key, agentId: params.agentId, cleanupOnCancellation },
         isCurrent,
       );
     }
   }
-  if (resolution.status === "cancelled" || resolution.status === "cleanup-rejected") {
+  if (!cleanupOnCancellation && !isCurrent()) {
+    return { status: "interrupted" };
+  }
+  if (
+    resolution.status === "cancelled" ||
+    resolution.status === "interrupted" ||
+    resolution.status === "cleanup-rejected"
+  ) {
     return resolution;
   }
   if (resolution.status === "missing") {
@@ -361,6 +395,9 @@ export async function startCloudInitialTurn(
   }
   const placement = resolution.placement;
   if (!isCurrent()) {
+    if (!cleanupOnCancellation) {
+      return { status: "interrupted" };
+    }
     const cleanupError = await cancelActivePlacement(client, {
       key: params.key,
       agentId: params.agentId,
@@ -393,6 +430,9 @@ export async function startCloudInitialTurn(
       idempotencyKey: messageId,
     });
     if (!isCurrent()) {
+      if (!cleanupOnCancellation) {
+        return { status: "interrupted" };
+      }
       const cleanupError = await cancelActivePlacement(client, {
         key: params.key,
         agentId: params.agentId,
@@ -413,6 +453,9 @@ export async function startCloudInitialTurn(
     };
   } catch (error) {
     if (!isCurrent()) {
+      if (!cleanupOnCancellation) {
+        return { status: "interrupted" };
+      }
       const cleanupError = await cancelActivePlacement(client, {
         key: params.key,
         agentId: params.agentId,

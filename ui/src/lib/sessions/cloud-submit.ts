@@ -10,7 +10,6 @@ import {
   deleteRecoveredCloudDraftSession,
   startCloudInitialTurn,
 } from "./cloud-startup.ts";
-import { areUiSessionKeysEquivalent } from "./session-key.ts";
 
 export type CloudDraftAdvanceResult =
   | { status: "started"; messageId: string; messageSeq?: number }
@@ -27,6 +26,7 @@ export async function advanceCloudDraftSession(params: {
   client: Pick<GatewayBrowserClient, "request">;
   recovery: CloudSessionRecovery;
   persistRecovery?: boolean;
+  cleanupOnCancellation: boolean;
   recovering: boolean;
   isLifecycleCurrent: () => boolean;
   ownsRecovery: () => boolean;
@@ -40,9 +40,12 @@ export async function advanceCloudDraftSession(params: {
   const isCurrentOwner = () => params.isLifecycleCurrent() && params.ownsRecovery();
   const existingRecovery =
     params.recovering && persistRecovery
-      ? readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope)
+      ? readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey)
       : null;
   if (!isCurrentOwner()) {
+    if (!params.cleanupOnCancellation) {
+      return { status: "interrupted" };
+    }
     const recoveryPersisted = persistRecovery
       ? params.recovering
         ? existingRecovery?.sessionKey === recovery.sessionKey
@@ -66,6 +69,9 @@ export async function advanceCloudDraftSession(params: {
       : writeCloudSessionRecovery(recovery)
     : true;
   if (!isCurrentOwner() || !recoveryPersisted) {
+    if (!params.cleanupOnCancellation && !isCurrentOwner()) {
+      return { status: "interrupted" };
+    }
     if (params.recovering && !recoveryPersisted) {
       return {
         status: "cancelled",
@@ -93,6 +99,7 @@ export async function advanceCloudDraftSession(params: {
       messageId: recovery.messageId,
       recovering: params.recovering,
       retryTerminalPlacement: params.recovering && recovery.phase === "sending",
+      cleanupOnCancellation: params.cleanupOnCancellation,
     },
     isCurrentOwner,
     () => {
@@ -103,15 +110,13 @@ export async function advanceCloudDraftSession(params: {
         params.setRecoveryPhase("sending", false);
         return true;
       }
-      const currentRecovery = readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope);
-      if (
-        currentRecovery &&
-        !areUiSessionKeysEquivalent(currentRecovery.sessionKey, recovery.sessionKey)
-      ) {
-        // The scope stores only its newest startup. Keep this older operation in memory so it can
-        // send without replacing the newer durable recovery owner.
-        params.setRecoveryPhase("sending", false);
-        return true;
+      const currentRecovery = readCloudSessionRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      );
+      if (currentRecovery && currentRecovery.messageId !== recovery.messageId) {
+        return false;
       }
       const persisted = writeCloudSessionRecovery({ ...recovery, phase: "sending" });
       if (persisted) {
@@ -120,6 +125,12 @@ export async function advanceCloudDraftSession(params: {
       return persisted;
     },
   );
+  if (!params.cleanupOnCancellation && !isCurrentOwner()) {
+    return { status: "interrupted" };
+  }
+  if (cloudStart.status === "interrupted") {
+    return cloudStart;
+  }
   if (cloudStart.status === "cancelled") {
     const cleanupError = await deleteCloudDraftSession(
       params.client,

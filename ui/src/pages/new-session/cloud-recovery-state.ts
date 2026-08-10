@@ -1,7 +1,8 @@
 import {
   clearCloudSessionRecovery,
+  listCloudSessionRecoveries,
   parseCloudSessionCreateParams,
-  readCloudSessionRecovery,
+  promoteCloudSessionRecovery,
   type CloudSessionCreateParams,
   type CloudSessionRecovery,
   writeCloudSessionRecovery,
@@ -92,7 +93,9 @@ export class PendingCloudRecoveryState {
   }
 
   restore(gatewayUrl: string, recoveryScope: string): CloudSessionRecovery | null {
-    const recovery = readCloudSessionRecovery(gatewayUrl, recoveryScope);
+    const recovery = listCloudSessionRecoveries(gatewayUrl, recoveryScope).find(
+      (candidate) => candidate.phase === "creating",
+    );
     if (!recovery) {
       return null;
     }
@@ -147,8 +150,12 @@ export class PendingCloudRecoveryState {
   }
 
   promoteToDispatching(sessionKey: string): boolean {
+    const previousSessionKey = this.sessionKey;
     const recovery = this.snapshot(sessionKey, "dispatching");
-    if (!recovery || (this.persistent && !writeCloudSessionRecovery(recovery))) {
+    if (
+      !recovery ||
+      (this.persistent && !promoteCloudSessionRecovery(previousSessionKey, recovery))
+    ) {
       return false;
     }
     this.sessionKey = sessionKey;

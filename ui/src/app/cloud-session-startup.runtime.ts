@@ -6,6 +6,7 @@ import {
 import { hasVideoMediaFileExtension } from "../lib/media-file-extension.ts";
 import {
   clearCloudSessionRecovery,
+  listCloudSessionRecoveries,
   readCloudSessionRecovery,
   type CloudSessionRecovery,
 } from "../lib/sessions/cloud-recovery.ts";
@@ -132,7 +133,7 @@ export default function createApplicationCloudStartupRuntime(
   const entries = new Map<string, CloudStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
   let lastRecoveryClient: object | null = null;
-  let lastRecoveryKey = "";
+  const recoveredFingerprints = new Set<string>();
   let disposed = false;
 
   const publish = () => {
@@ -168,6 +169,9 @@ export default function createApplicationCloudStartupRuntime(
     state: CloudStartupEntry["state"],
     details: { error?: string; retryable?: boolean } = {},
   ) => {
+    if (!ownsEntry(entry)) {
+      return;
+    }
     if (
       entry.state === state &&
       entry.error === details.error &&
@@ -218,6 +222,7 @@ export default function createApplicationCloudStartupRuntime(
       client: entry.scope.client,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
+      cleanupOnCancellation: !entry.persistRecovery,
       recovering,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsEntry(entry),
@@ -292,7 +297,10 @@ export default function createApplicationCloudStartupRuntime(
       return;
     }
     const existing = findEntry(input.recovery.sessionKey)?.entry;
-    if (existing?.state === "pending" || existing?.state === "sending") {
+    if (
+      (existing?.state === "pending" || existing?.state === "sending") &&
+      lifecycleCurrent(existing)
+    ) {
       return;
     }
     if (existing) {
@@ -327,26 +335,35 @@ export default function createApplicationCloudStartupRuntime(
     connection.transition(snapshot);
     if (snapshot.phase !== "connected") {
       lastRecoveryClient = null;
-      lastRecoveryKey = "";
+      recoveredFingerprints.clear();
       return;
     }
     if (!snapshot.client?.recoveryScopeReady || !snapshot.client.recoveryScope) {
       return;
     }
-    const recovery = readCloudSessionRecovery(
+    const recoveries = listCloudSessionRecoveries(
       params.gateway.connection.gatewayUrl,
       snapshot.client.recoveryScope,
-    );
-    if (!recovery || recovery.phase === "creating") {
-      return;
+    ).filter((recovery) => recovery.phase !== "creating");
+    if (lastRecoveryClient !== snapshot.client) {
+      lastRecoveryClient = snapshot.client;
+      recoveredFingerprints.clear();
     }
-    const recoveryKey = `${recovery.sessionKey}\0${recovery.messageId}\0${recovery.phase}`;
-    if (lastRecoveryClient === snapshot.client && lastRecoveryKey === recoveryKey) {
-      return;
+    const currentFingerprints = new Set<string>();
+    for (const recovery of recoveries) {
+      const fingerprint = `${recovery.sessionKey}\0${recovery.messageId}\0${recovery.phase}`;
+      currentFingerprints.add(fingerprint);
+      if (recoveredFingerprints.has(fingerprint)) {
+        continue;
+      }
+      recoveredFingerprints.add(fingerprint);
+      start({ recovery, persistRecovery: true, recovering: true, createdAt: Date.now() });
     }
-    lastRecoveryClient = snapshot.client;
-    lastRecoveryKey = recoveryKey;
-    start({ recovery, persistRecovery: true, recovering: true, createdAt: Date.now() });
+    for (const fingerprint of recoveredFingerprints) {
+      if (!currentFingerprints.has(fingerprint)) {
+        recoveredFingerprints.delete(fingerprint);
+      }
+    }
   };
   const stopGateway = params.gateway.subscribe(handleGatewaySnapshot);
   // Let the facade drain queued fresh Starts before durable recovery claims the same session.
@@ -387,7 +404,11 @@ export default function createApplicationCloudStartupRuntime(
         return;
       }
       const recovery = entry.persistRecovery
-        ? readCloudSessionRecovery(entry.owner.gatewayUrl, entry.owner.recoveryScope)
+        ? readCloudSessionRecovery(
+            entry.owner.gatewayUrl,
+            entry.owner.recoveryScope,
+            entry.owner.sessionKey,
+          )
         : entry.recovery;
       if (
         !recovery ||

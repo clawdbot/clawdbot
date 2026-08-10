@@ -552,7 +552,7 @@ suite.define(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
           if (
-            key.startsWith("openclaw.new-session.cloud-recovery.v1:") ||
+            key.startsWith("openclaw.new-session.cloud-recovery.v2:") ||
             key.startsWith("openclaw.control-ui-e2e.")
           ) {
             originalSetItem(key, value);
@@ -617,7 +617,7 @@ suite.define(() => {
     }
   });
 
-  it("restores cloud recovery added while the Gateway is disconnected", async () => {
+  it("resumes runtime recovery added while disconnected without locking the new-session page", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -645,6 +645,12 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+        },
+        "sessions.describe": {
+          session: {
+            key: "agent:cloud:offline-recovery",
+            placement: { state: "active", environmentId: "environment-offline-recovery" },
+          },
         },
       },
     });
@@ -690,15 +696,6 @@ suite.define(() => {
             sessionKey: "agent:cloud:offline-recovery",
             messageId: "message-offline-recovery",
             message: "restore after reconnect",
-            attachments: [
-              {
-                type: "image",
-                mimeType: "image/png",
-                fileName: "pixel.png",
-                content:
-                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-              },
-            ],
             profileId: "aws",
             agentId: "cloud",
             gatewayUrl,
@@ -709,10 +706,19 @@ suite.define(() => {
       }, recoveryIdentity);
 
       await gateway.setOnline(true);
-      await expect
-        .poll(() => page.locator(".new-session-page__message").inputValue())
-        .toBe("restore after reconnect");
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      const resumedSend = await gateway.waitForRequest("sessions.send");
+      expect(resumedSend.params).toMatchObject({
+        idempotencyKey: "message-offline-recovery",
+        key: "agent:cloud:offline-recovery",
+        message: "restore after reconnect",
+      });
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await page.locator("#new-session-place-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__place-popover")
+        .getByRole("button", { name: "Cloud · aws" })
+        .click();
+      await page.locator(".new-session-page__message").fill("start another cloud task");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
@@ -863,7 +869,7 @@ suite.define(() => {
     const readRecovery = () =>
       page.evaluate(() => {
         const key = Object.keys(sessionStorage).find((candidate) =>
-          candidate.startsWith("openclaw.new-session.cloud-recovery.v1:"),
+          candidate.startsWith("openclaw.new-session.cloud-recovery.v2:"),
         );
         return key ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown) : null;
       });
@@ -990,7 +996,7 @@ suite.define(() => {
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
-          if (key.startsWith("openclaw.new-session.cloud-recovery.v1:")) {
+          if (key.startsWith("openclaw.new-session.cloud-recovery.v2:")) {
             originalSetItem(key, value);
             return;
           }

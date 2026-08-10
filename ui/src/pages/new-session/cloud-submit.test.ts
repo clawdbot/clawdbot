@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { cloudSessionRecoveryExactStorageKey } from "../../lib/sessions/cloud-recovery-storage-key.ts";
 import {
   clearCloudSessionRecovery,
   readCloudSessionRecovery,
@@ -8,8 +9,12 @@ import {
 } from "../../lib/sessions/cloud-recovery.ts";
 import { advanceCloudDraftSession as advanceCloudDraftSessionWithRecovery } from "../../lib/sessions/cloud-submit.ts";
 
-type AdvanceParams = Omit<Parameters<typeof advanceCloudDraftSessionWithRecovery>[0], "recovery"> &
+type AdvanceParams = Omit<
+  Parameters<typeof advanceCloudDraftSessionWithRecovery>[0],
+  "cleanupOnCancellation" | "recovery"
+> &
   Omit<CloudSessionRecovery, "sessionKey" | "phase"> & {
+    cleanupOnCancellation?: boolean;
     key: string;
     recoveryPhase: CloudSessionRecovery["phase"];
   };
@@ -29,6 +34,7 @@ function advanceCloudDraftSession(params: AdvanceParams) {
   } = params;
   return advanceCloudDraftSessionWithRecovery({
     ...options,
+    cleanupOnCancellation: options.cleanupOnCancellation ?? true,
     recovery: {
       sessionKey: key,
       messageId,
@@ -47,6 +53,9 @@ function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClien
   return { request: request as GatewayBrowserClient["request"] };
 }
 
+const recoveryStorageKey = (sessionKey: string) =>
+  cloudSessionRecoveryExactStorageKey("ws://gateway.example", "principal-a", sessionKey);
+
 describe("cloud draft advancement", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => {
@@ -56,7 +65,7 @@ describe("cloud draft advancement", () => {
 
   it("preserves a recovered session when recovery storage becomes unavailable", async () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      recoveryStorageKey("agent:cloud:recovered"),
       JSON.stringify({
         sessionKey: "agent:cloud:recovered",
         messageId: "message-recovered",
@@ -151,8 +160,10 @@ describe("cloud draft advancement", () => {
         setRecoveryPhase,
       }),
     ).resolves.toMatchObject({ status: "started", messageId: "message-older" });
-    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", false);
-    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope)).toEqual(newerRecovery);
+    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true);
+    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey)).toEqual(
+      newerRecovery,
+    );
     expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
     expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
     expect(clearRecovery).toHaveBeenCalledWith("resolved");
@@ -210,7 +221,7 @@ describe("cloud draft advancement", () => {
 
   it("does not overwrite recovery after submission ownership is lost", async () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      recoveryStorageKey("agent:cloud:newer"),
       JSON.stringify({
         sessionKey: "agent:cloud:newer",
         messageId: "message-newer",
@@ -244,11 +255,7 @@ describe("cloud draft advancement", () => {
       }),
     ).resolves.toEqual({ status: "cancelled", recoveryPersisted: false });
     expect(
-      JSON.parse(
-        sessionStorage.getItem(
-          "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
-        ) ?? "null",
-      ),
+      JSON.parse(sessionStorage.getItem(recoveryStorageKey("agent:cloud:newer")) ?? "null"),
     ).toMatchObject({ sessionKey: "agent:cloud:newer" });
     expect(clearRecovery).toHaveBeenCalledOnce();
   });
@@ -325,7 +332,7 @@ describe("cloud draft advancement", () => {
       }),
     ).resolves.toEqual({ status });
     expect(clearRecovery).toHaveBeenCalledWith(retirement);
-    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope)).toEqual(
+    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey)).toEqual(
       recoveryOwned ? null : newerRecovery,
     );
   });
@@ -382,18 +389,14 @@ describe("cloud draft advancement", () => {
       recoveryPersisted: true,
     });
     expect(
-      JSON.parse(
-        sessionStorage.getItem(
-          "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
-        ) ?? "null",
-      ),
+      JSON.parse(sessionStorage.getItem(recoveryStorageKey("agent:cloud:cancelled")) ?? "null"),
     ).toMatchObject({ sessionKey: "agent:cloud:cancelled" });
     expect(clearRecovery).not.toHaveBeenCalled();
   });
 
   it("redispatches a recovered transcript after terminal placement", async () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      recoveryStorageKey("agent:cloud:recovered"),
       JSON.stringify({
         sessionKey: "agent:cloud:recovered",
         messageId: "message-recovered",
@@ -450,7 +453,7 @@ describe("cloud draft advancement", () => {
 
   it("keeps the visible session after a definitive redispatch rejection", async () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      recoveryStorageKey("agent:cloud:recovered"),
       JSON.stringify({
         sessionKey: "agent:cloud:recovered",
         messageId: "message-recovered",
@@ -498,7 +501,7 @@ describe("cloud draft advancement", () => {
 
   it("clears recovery when its draft session no longer exists", async () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      recoveryStorageKey("agent:cloud:missing"),
       JSON.stringify({
         sessionKey: "agent:cloud:missing",
         messageId: "message-missing",
@@ -540,7 +543,7 @@ describe("cloud draft advancement", () => {
 
   it("keeps a terminal recovery session visible before first-turn sending", async () => {
     sessionStorage.setItem(
-      "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
+      recoveryStorageKey("agent:cloud:pre-send"),
       JSON.stringify({
         sessionKey: "agent:cloud:pre-send",
         messageId: "message-pre-send",
