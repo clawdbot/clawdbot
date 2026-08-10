@@ -58,10 +58,25 @@ export async function replaceTerminalControllerForReplay(params: {
   previousHost.before(replacementHost);
 
   let replacement: GhosttyTerminalController | undefined;
+  const disposeUnpublishedReplacement = () => {
+    const focused = getActiveElementForHost(replacementHost);
+    if (
+      (focused === replacementHost || replacementHost.contains(focused)) &&
+      previouslyFocused instanceof HTMLElement &&
+      previouslyFocused.isConnected
+    ) {
+      previouslyFocused.focus();
+    }
+    if (replacement) {
+      disposeTerminalController(replacement, replacementHost);
+    } else {
+      replacementHost.remove();
+    }
+  };
   try {
     replacement = await params.createController(replacementHost);
     if (!params.isCurrent()) {
-      disposeTerminalController(replacement, replacementHost);
+      disposeUnpublishedReplacement();
       return false;
     }
     if (params.replay.length > 0) {
@@ -72,15 +87,11 @@ export async function replaceTerminalControllerForReplay(params: {
       setTimeout(resolve, 0);
     });
     if (!params.isCurrent()) {
-      disposeTerminalController(replacement, replacementHost);
+      disposeUnpublishedReplacement();
       return false;
     }
   } catch (error) {
-    if (replacement) {
-      disposeTerminalController(replacement, replacementHost);
-    } else {
-      replacementHost.remove();
-    }
+    disposeUnpublishedReplacement();
     throw error;
   }
 
