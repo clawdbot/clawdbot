@@ -940,6 +940,25 @@ describe("Crabbox worker provider", () => {
     expect(calls.filter((argv) => argv[1] === "run")).toHaveLength(1);
   });
 
+  it("allows Crabbox's browser bootstrap window for desktop warmups", async () => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      return argv[1] === "inspect"
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID),
+    ).resolves.toMatchObject({ leaseId: LEASE_ID });
+    expect(calls.find((call) => call.argv[1] === "warmup")?.options).toEqual({
+      timeoutMs: 50 * 60_000,
+      maxOutputBytes: 65_536,
+      killProcessTree: true,
+    });
+  });
+
   it("runs one fixed warmup, ignores its output, and inspects only the canonical id", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const provider = providerWithRunner(async (argv, options) => {

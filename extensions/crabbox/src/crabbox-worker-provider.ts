@@ -29,6 +29,11 @@ const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 const WARMUP_TIMEOUT_MS = 240_000;
 const LIFECYCLE_TIMEOUT_MS = 60_000;
 const PROVISION_TIMEOUT_MS = 290_000;
+// Crabbox starts its 45-minute desktop/browser bootstrap clock after acquisition.
+// Preserve OpenClaw's existing five-minute acquisition envelope, then leave one
+// lifecycle allowance for post-warmup inspection and cleanup.
+const DESKTOP_WARMUP_TIMEOUT_MS = 50 * 60_000;
+const DESKTOP_PROVISION_TIMEOUT_MS = DESKTOP_WARMUP_TIMEOUT_MS + LIFECYCLE_TIMEOUT_MS;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 const SETUP_TIMEOUT_MS = 300_000;
 const READY_POLL_INTERVAL_MS = 2_000;
@@ -606,7 +611,11 @@ export function createCrabboxWorkerProvider(
     id: CRABBOX_WORKER_PROVIDER_ID,
     async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
       const parsed = parseCrabboxProfile(profile);
-      const deadline = Date.now() + PROVISION_TIMEOUT_MS;
+      const provisionTimeoutMs = parsed.desktop
+        ? DESKTOP_PROVISION_TIMEOUT_MS
+        : PROVISION_TIMEOUT_MS;
+      const warmupTimeoutMs = parsed.desktop ? DESKTOP_WARMUP_TIMEOUT_MS : WARMUP_TIMEOUT_MS;
+      const deadline = Date.now() + provisionTimeoutMs;
       const setupCount = Number(Boolean(parsed.desktop)) + Number(Boolean(parsed.setup));
       const setupDeadline = deadline + setupCount * SETUP_TIMEOUT_MS;
       if (!operationId.trim()) {
@@ -641,7 +650,7 @@ export function createCrabboxWorkerProvider(
         args: buildCrabboxWarmupArgs(parsed, leaseId, slug),
         binary,
         runCommand,
-        timeoutMs: remainingProvisionTimeout(deadline, WARMUP_TIMEOUT_MS),
+        timeoutMs: remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
       if (warmup.termination !== "exit" || warmup.code !== 0) {
         const profileError = provisionProfileError(warmup);
