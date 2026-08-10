@@ -1,31 +1,27 @@
 // Doctor health contribution: Node.js runtime diagnostics.
 //
 // Surfaces the Node version, install channel (version manager vs system), and
-// proactive lifecycle guidance (below-minimum, past-EOL, maintenance phase)
-// during `openclaw doctor`. Reuses runtime-guard's semver helpers and the
-// shared shortenHomePath redaction (which handles POSIX and Windows home
-// boundaries case-insensitively, see #121455) rather than local variants.
+// proactive lifecycle guidance during `openclaw doctor`. Version support is
+// delegated entirely to runtime-guard's isSupportedNodeVersion (the canonical
+// engines contract) rather than a local copy, so this note can never disagree
+// with what installs actually enforce. Path redaction reuses the shared
+// shortenHomePath helper (POSIX + Windows home boundaries, case-insensitive,
+// see #121455) rather than local variants.
 //
 // The default summary omits the executable path entirely so ordinary copied
 // Doctor output does not disclose local filesystem layout. Path inclusion is
 // parameterized (includeExecPath) for the verbose gate; the verbose flag
 // itself and its wiring are owned by the maintainer per the #59414 split.
 import { shortenHomePath } from "../utils.js";
-import { parseSemver } from "../infra/runtime-guard.js";
+import { isSupportedNodeVersion, parseSemver } from "../infra/runtime-guard.js";
 import { createDoctorHealthContribution } from "../flows/doctor-health-contribution.js";
 
-/** Minimum supported Node version; keep in sync with runtime-guard. */
-const MINIMUM_NODE_RANGE = ">=22.19.0";
-const MINIMUM_NODE_VERSION = "22.19.0";
-
-/** Recommended (current Active LTS) major used in upgrade guidance. */
-const RECOMMENDED_NODE_MAJOR = 24;
-
 /**
- * Node.js release lifecycle schedule (maintenance entry and end-of-life),
- * sourced from the official Node.js release working group data. Only majors
- * that can plausibly appear in the wild are listed; unknown majors degrade
- * gracefully (no lifecycle warning).
+ * Node.js release lifecycle dates (maintenance entry and end-of-life),
+ * sourced from the official Node.js release working group schedule. Used
+ * only for advisory lifecycle notes about releases the engines contract
+ * already accepts; support decisions themselves come from
+ * isSupportedNodeVersion. Unknown majors degrade gracefully (no note).
  */
 interface NodeReleaseInfo {
   major: number;
@@ -35,10 +31,9 @@ interface NodeReleaseInfo {
 }
 
 const NODE_RELEASE_SCHEDULE: NodeReleaseInfo[] = [
-  { major: 20, maintenanceStart: "2023-10-24", endOfLife: "2026-04-30", isLts: true },
   { major: 22, maintenanceStart: "2025-10-21", endOfLife: "2027-04-30", isLts: true },
   { major: 24, maintenanceStart: "2026-10-20", endOfLife: "2028-04-30", isLts: true },
-  { major: 25, maintenanceStart: "2026-04-01", endOfLife: "2026-06-01", isLts: false },
+  { major: 25, maintenanceStart: "2026-10-01", endOfLife: "2027-06-01", isLts: false },
   { major: 26, maintenanceStart: "2027-10-19", endOfLife: "2029-04-30", isLts: true },
 ];
 
@@ -47,12 +42,10 @@ interface VersionManagerMarker {
   name: string;
   /** Lower-cased path fragments; any match identifies the manager. */
   fragments: string[];
-  /** Optional environment variable that also identifies the manager. */
-  envVar?: string;
 }
 
 const VERSION_MANAGER_MARKERS: VersionManagerMarker[] = [
-  { name: "nvm", fragments: ["/.nvm/", "\\.nvm\\", "/nvm/versions/", "\\nvm\\"], envVar: "NVM_DIR" },
+  { name: "nvm", fragments: ["/.nvm/", "\\.nvm\\", "/nvm/versions/", "\\nvm\\"] },
   { name: "fnm", fragments: ["/.fnm/", "\\.fnm\\", "/fnm/node-versions/", "\\fnm\\node-versions\\"] },
   { name: "volta", fragments: ["/.volta/", "\\.volta\\"] },
   { name: "asdf", fragments: ["/.asdf/", "\\.asdf\\"] },
@@ -128,31 +121,25 @@ function monthsFromDays(days: number): number {
 }
 
 /**
- * Build proactive lifecycle warnings for the detected Node major:
- * below-minimum, past end-of-life, in maintenance, or older-than-recommended.
- * Returns an empty list when the runtime is current and healthy.
+ * Build proactive lifecycle warnings for the detected Node runtime.
+ *
+ * Support decisions delegate to the canonical engines contract
+ * (isSupportedNodeVersion). For unsupported versions the warning points at
+ * the engines requirement. For supported versions, advisory notes surface
+ * upstream lifecycle facts (past EOL / in maintenance) without inventing an
+ * upgrade target the engines contract does not express.
  */
 export function buildNodeRuntimeWarnings(diag: NodeRuntimeDiagnostics): string[] {
   const warnings: string[] = [];
   if (!diag.version || diag.major === null) {
     return warnings;
   }
-  const parsed = parseSemver(diag.version);
-  const minimum = parseSemver(MINIMUM_NODE_VERSION);
-  if (parsed && minimum) {
-    const belowMinimum =
-      parsed.major < minimum.major ||
-      (parsed.major === minimum.major && parsed.minor < minimum.minor) ||
-      (parsed.major === minimum.major &&
-        parsed.minor === minimum.minor &&
-        parsed.patch < minimum.patch);
-    if (belowMinimum) {
-      warnings.push(
-        `Node ${diag.version} does not meet the minimum requirement (${MINIMUM_NODE_RANGE}).\n` +
-          `Upgrade Node: https://nodejs.org/en/download`,
-      );
-      return warnings;
-    }
+  if (!isSupportedNodeVersion(diag.version)) {
+    warnings.push(
+      `Node ${diag.version} is outside OpenClaw's supported engine range (see package.json engines).\n` +
+        `Upgrade Node: https://nodejs.org/en/download`,
+    );
+    return warnings;
   }
   const release = NODE_RELEASE_SCHEDULE.find((entry) => entry.major === diag.major);
   if (!release) {
@@ -163,17 +150,12 @@ export function buildNodeRuntimeWarnings(diag: NodeRuntimeDiagnostics): string[]
   const label = release.isLts ? `Node ${release.major} LTS` : `Node ${release.major}`;
   if (eolDays <= 0) {
     warnings.push(
-      `${label} reached end-of-life on ${release.endOfLife}.\n` +
-        `Upgrade to a current Active LTS release (Node ${RECOMMENDED_NODE_MAJOR}): https://nodejs.org/en/download`,
+      `${label} reached upstream end-of-life on ${release.endOfLife}; it no longer receives security updates.\n` +
+        `Consider a currently maintained release: https://nodejs.org/en/download`,
     );
   } else if (maintenanceDays <= 0) {
     warnings.push(
-      `${label} is in maintenance mode (EOL ${release.endOfLife}, ~${monthsFromDays(eolDays)} months remaining).\n` +
-        `Consider upgrading to Node ${RECOMMENDED_NODE_MAJOR} for the latest features and longer support.`,
-    );
-  } else if (release.isLts && release.major < RECOMMENDED_NODE_MAJOR) {
-    warnings.push(
-      `${label} is supported but older than the recommended LTS (Node ${RECOMMENDED_NODE_MAJOR}).`,
+      `${label} is in upstream maintenance mode (EOL ${release.endOfLife}, ~${monthsFromDays(eolDays)} months remaining).`,
     );
   }
   return warnings;
