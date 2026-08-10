@@ -139,25 +139,33 @@ function resolveModalSessionRouting(params: {
       channelType: metadata.channelType,
     };
   }
-  if (metadata.channelId) {
-    return {
-      sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+  const routing = metadata.channelId
+    ? {
+        sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+          channelId: metadata.channelId,
+          channelType: metadata.channelType,
+          senderId: params.userId,
+          eventScope: params.eventScope,
+        }),
         channelId: metadata.channelId,
         channelType: metadata.channelType,
-        senderId: params.userId,
-        eventScope: params.eventScope,
-      }),
-      channelId: metadata.channelId,
-      channelType: metadata.channelType,
-    };
+      }
+    : {
+        sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+          channelType: "im",
+          senderId: params.userId,
+          eventScope: params.eventScope,
+        }),
+      };
+  if (
+    metadata.sessionKey &&
+    (metadata.sessionKey === routing.sessionKey ||
+      metadata.sessionKey.startsWith(`${routing.sessionKey}:thread:`))
+  ) {
+    // Preserve an exact thread only after its base is bound to this Enterprise workspace.
+    return { ...routing, sessionKey: metadata.sessionKey };
   }
-  return {
-    sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
-      channelType: "im",
-      senderId: params.userId,
-      eventScope: params.eventScope,
-    }),
-  };
+  return routing;
 }
 
 function summarizeSlackViewLifecycleContext(view: {
