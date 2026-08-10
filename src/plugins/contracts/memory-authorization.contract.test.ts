@@ -892,6 +892,36 @@ describe("memory authorization conformance suite", () => {
     );
   });
 
+  it("rejects allowed handles with own, inherited, non-enumerable, or symbolic metadata", async () => {
+    const privateMetadata = Symbol("private-metadata");
+    const decorateHandle: Array<(handle: AuthorizedResourceHandle) => unknown> = [
+      (handle) => ({ ...handle, path: "/virtual/user/principal-owner.md" }),
+      (handle) =>
+        Object.assign(
+          Object.create({ privateMetadata: "hidden" }),
+          handle,
+        ) as AuthorizedResourceHandle,
+      (handle) => {
+        const decorated = { ...handle };
+        Object.defineProperty(decorated, "privateMetadata", {
+          enumerable: false,
+          value: "hidden",
+        });
+        return decorated;
+      },
+      (handle) => ({ ...handle, [privateMetadata]: "hidden" }),
+    ];
+
+    for (const decorate of decorateHandle) {
+      const report = await runMemoryAuthorizationConformanceSuite(
+        createAllowedHandleAdapter(decorate),
+      );
+      expect(report.failures).toContainEqual(
+        expect.objectContaining({ invariant: "authorized-handle" }),
+      );
+    }
+  });
+
   it("rejects denial metadata that reveals counts, scores, paths, or citations", async () => {
     const adapter: MemoryAuthorizationConformanceAdapter = {
       evaluate: (params) => {
