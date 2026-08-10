@@ -189,6 +189,42 @@ describe("AppSidebar group mutation collapsed state", () => {
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
   });
 
+  it("keeps a reconnected group delete retryable after its confirm opened", async () => {
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({});
+    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    await toast.updateComplete;
+    const menu = await openGroupMenu(sidebar);
+    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
+    items[items.length - 1]?.click();
+    const confirm = await waitForFast(() => {
+      const button = document.body.querySelector<HTMLButtonElement>(
+        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
+      );
+      if (!button) {
+        throw new Error("expected the group delete confirm");
+      }
+      return button;
+    });
+
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
+    confirm.click();
+    await waitForFast(() =>
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+    );
+
+    expect(harness.groupsDelete).not.toHaveBeenCalled();
+    expect(harness.sessions.state.groups).toEqual(["Alpha"]);
+    expect(harness.sessions.state.result?.sessions[1]?.category).toBe("Alpha");
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
+        "Group “Alpha” was not deleted. Open its menu and try again.",
+      ),
+    );
+    toast.remove();
+  });
+
   it("leaves the catalog alone when the delete confirm is cancelled", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({});
     const menu = await openGroupMenu(sidebar);

@@ -488,7 +488,11 @@ export async function deleteSessionGroup(
     confirmLabel: t("common.delete"),
     danger: true,
   });
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!confirmed) {
+    return false;
+  }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
     return false;
   }
   try {
