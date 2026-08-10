@@ -249,10 +249,21 @@ describe("projectProviderError", () => {
     expect(projectProviderError({ status: 500, body }).errorBody).toBe(expected);
   });
 
-  it("preserves plain bracketed diagnostic text", () => {
-    const body = "[ERROR] provider unavailable";
-
+  it.each([
+    "[ERROR] provider unavailable",
+    "[GoogleGenerativeAI Error]: provider unavailable",
+    "[429] rate limited: retry later",
+  ])("preserves plain bracketed diagnostic text", (body) => {
     expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+  });
+
+  it.each([
+    '[ERROR] payload {"type":"video","data":"QUJDRA=="}',
+    '[ERROR] payload "type":"video","data":"QUJDRA=="',
+  ])("fails closed when bracketed diagnostic text contains structured payload", (body) => {
+    expect(projectProviderError({ status: 500, body }).errorBody).toBe(
+      "[Malformed diagnostic JSON redacted]",
+    );
   });
 
   it.each(['{"type":"video","data":"QUJDRA=="', '[undefined,{"b64_json":"QUJDRA=="}]'])(

@@ -209,6 +209,13 @@ describe("sanitizeDiagnosticPayload", () => {
     expect(sanitizeDiagnosticPayload(value)).toBe(value);
   });
 
+  it.each(["[GoogleGenerativeAI Error]: provider unavailable", "[429] rate limited: retry later"])(
+    "preserves plain bracketed diagnostic text",
+    (value) => {
+      expect(sanitizeDiagnosticPayload(value)).toBe(value);
+    },
+  );
+
   it("fails closed for malformed JSON diagnostic strings", () => {
     const sanitized = sanitizeDiagnosticPayload('{"type":"video","data":"QUJDRA=="');
 

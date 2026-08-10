@@ -35,7 +35,7 @@ const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
 const MAX_DIAGNOSTIC_DEPTH = 8;
-const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z][A-Za-z0-9 _-]*\](?:\s+[^{}[\]":,]*)?\s*$/u;
+const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z0-9][A-Za-z0-9 _.-]*\][^{}[\]",]*$/u;
 
 function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
