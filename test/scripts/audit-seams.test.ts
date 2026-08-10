@@ -77,7 +77,7 @@ describe("audit-seams subagent seam classification", () => {
   it("detects subagent lifecycle registry and announce delivery seams", () => {
     const source = `
       import { resolveContextEngine } from "../context-engine/registry.js";
-      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "./subagent-announce.js";
+      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
       import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
       import { persistSubagentRunsToDisk } from "./subagent-registry-state.js";
 

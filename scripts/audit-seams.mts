@@ -718,6 +718,8 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
   const importsAnnounceDelivery = hasAnyImportSource(source, [
     "./subagent-announce.js",
     "./subagent-announce-dispatch.js",
+    "../announce/subagent-announce.js",
+    "../announce/subagent-announce-dispatch.js",
     "./subagent-announce-queue.js",
     "../infra/outbound/bound-delivery-router.js",
     "../utils/delivery-context.shared.js",
