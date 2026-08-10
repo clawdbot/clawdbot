@@ -5,7 +5,7 @@ export { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
-export const GITHUB_JSON_MAX_BYTES = 256 * 1024;
+const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
@@ -132,7 +132,7 @@ function isGitHubRateLimitResponse(response: Response): boolean {
   );
 }
 
-export function githubResponseErrorStatus(response: Response): number {
+function githubResponseErrorStatus(response: Response): number {
   if (isGitHubRateLimitResponse(response)) {
     return 429;
   }
