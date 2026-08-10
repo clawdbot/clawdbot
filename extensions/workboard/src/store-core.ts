@@ -12,6 +12,7 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardRegistrationExpectation,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -317,17 +318,16 @@ export class WorkboardCoreStore {
   private async registerCard(
     card: WorkboardCard,
     knownCards?: readonly WorkboardCard[],
+    expected?: WorkboardCardRegistrationExpectation,
   ): Promise<void> {
     const value = { version: 1 as const, card };
-    if (!cardSessionKey(card) || !canHoldPrimarySessionBinding(card)) {
-      await this.store.register(card.id, value);
-      return;
-    }
     if (this.store.registerWithPrimarySessionReservation) {
-      await this.store.registerWithPrimarySessionReservation(card.id, value);
+      await this.store.registerWithPrimarySessionReservation(card.id, value, expected);
       return;
     }
-    this.assertPrimarySessionAvailable(knownCards ?? (await this.list()), card);
+    if (cardSessionKey(card) && canHoldPrimarySessionBinding(card)) {
+      this.assertPrimarySessionAvailable(knownCards ?? (await this.list()), card);
+    }
     await this.store.register(card.id, value);
   }
 
@@ -661,7 +661,10 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    await this.registerCard(next);
+    await this.registerCard(next, undefined, {
+      updatedAt: existing.updatedAt,
+      claimToken: existing.metadata?.claim?.token,
+    });
     await this.deleteDetachedAttachments(existing, next);
     return next;
   }

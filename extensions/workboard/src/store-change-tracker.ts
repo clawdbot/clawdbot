@@ -21,8 +21,8 @@ export class WorkboardChangeTracker {
       },
       ...(store.registerWithPrimarySessionReservation
         ? {
-            registerWithPrimarySessionReservation: async (key: string, value: T) => {
-              await store.registerWithPrimarySessionReservation?.(key, value);
+            registerWithPrimarySessionReservation: async (key, value, expected) => {
+              await store.registerWithPrimarySessionReservation?.(key, value, expected);
               this.mutationRevision += 1;
             },
           }

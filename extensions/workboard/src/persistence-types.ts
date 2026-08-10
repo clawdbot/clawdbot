@@ -27,9 +27,18 @@ export type PersistedWorkboardAttachment = {
   contentBase64: string;
 };
 
+export type WorkboardCardRegistrationExpectation = {
+  updatedAt: number;
+  claimToken?: string;
+};
+
 export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   register(key: string, value: T): Promise<void>;
-  registerWithPrimarySessionReservation?: (key: string, value: T) => Promise<void>;
+  registerWithPrimarySessionReservation?: (
+    key: string,
+    value: T,
+    expected?: WorkboardCardRegistrationExpectation,
+  ) => Promise<void>;
   lookup(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;

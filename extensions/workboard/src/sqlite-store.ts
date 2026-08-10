@@ -27,6 +27,7 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardRegistrationExpectation,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { cardSessionKey, canHoldPrimarySessionBinding } from "./store-card-helpers.js";
@@ -1209,11 +1210,32 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
   async registerWithPrimarySessionReservation(
     key: string,
     value: PersistedWorkboardCard,
+    expected?: WorkboardCardRegistrationExpectation,
   ): Promise<void> {
     if (value.version !== 1 || value.card.id !== key) {
       throw new Error("invalid workboard card payload");
     }
     runTransaction(this.db, () => {
+      if (expected) {
+        const current = this.db
+          .prepare("SELECT updated_at, claim_json FROM workboard_cards WHERE id = ?")
+          .get(key) as Row | undefined;
+        if (!current) {
+          throw new Error(`card ${key} changed before persistence; retry.`);
+        }
+        const currentClaim = parseJson(current.claim_json) as
+          | WorkboardMetadata["claim"]
+          | undefined;
+        if (currentClaim?.token !== expected.claimToken) {
+          if (currentClaim) {
+            throw new Error(`card already claimed by ${currentClaim.ownerId}.`);
+          }
+          throw new Error(`card ${key} changed before persistence; retry.`);
+        }
+        if (requiredNumber(current, "updated_at") !== expected.updatedAt) {
+          throw new Error(`card ${key} changed before persistence; retry.`);
+        }
+      }
       const sessionKey = cardSessionKey(value.card);
       if (sessionKey && canHoldPrimarySessionBinding(value.card)) {
         const conflict = this.db

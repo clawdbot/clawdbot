@@ -503,7 +503,6 @@ async function runWorkboardDispatch(
       acceptedStarts += 1;
       startedOwners.add(ownerId);
       const updated = await params.store.update(card.id, {
-        sessionKey,
         runId: run.runId,
         execution: buildExecution({
           card: claimed.card,

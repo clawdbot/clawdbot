@@ -996,6 +996,43 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("serializes competing same-card claims across independent SQLite stores", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-claim-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const firstStore = new WorkboardStore(firstStores.cards);
+      const secondStore = new WorkboardStore(secondStores.cards);
+      const card = await firstStore.create({ title: "Claim candidate", status: "ready" });
+
+      const results = await Promise.allSettled([
+        firstStore.claim(card.id, { ownerId: "first", token: "first-token" }),
+        secondStore.claim(card.id, { ownerId: "second", token: "second-token" }),
+      ]);
+
+      const fulfilled = results.filter((result) => result.status === "fulfilled");
+      const rejected = results.filter((result) => result.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toEqual(
+        expect.objectContaining({
+          reason: expect.objectContaining({
+            message: expect.stringMatching(/already claimed|changed before persistence/),
+          }),
+        }),
+      );
+      const persisted = await firstStore.get(card.id);
+      expect(persisted?.metadata?.claim?.token).toBe(
+        fulfilled[0]?.value.card.metadata?.claim?.token,
+      );
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:execution-only";
