@@ -287,6 +287,91 @@ describe("openclaw attach (action)", () => {
     expect(process.listenerCount("SIGTERM")).toBe(baseTerm);
   });
 
+  it("forwards SIGINT to the launched child", async () => {
+    await runAttach("--session", "agent:main:spawn");
+    const sigintListeners = process.listeners("SIGINT");
+    const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+    handler();
+    expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+    // Cleanup: a healthy child would exit on SIGINT
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+  });
+
+  it("forwards SIGTERM to the launched child", async () => {
+    await runAttach("--session", "agent:main:spawn");
+    const sigtermListeners = process.listeners("SIGTERM");
+    const handler = sigtermListeners[sigtermListeners.length - 1] as () => void;
+    handler();
+    expect(spawnedChild.kill).toHaveBeenCalledWith("SIGTERM");
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+  });
+
+  it("force-kills the child after a grace period when it ignores SIGINT", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+      // Child survives SIGINT — timer should escalate to SIGKILL
+      vi.advanceTimersByTime(5_000);
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGKILL");
+      // The SIGKILL triggers child exit → revoke + finish
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+      expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
+      expect(exitCode).toBe(128 + 9); // SIGKILL
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guards against repeated Ctrl+C by clearing the previous escalation timer", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      // First Ctrl+C
+      handler();
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+      // Second Ctrl+C before escalation fires: must clear the first timer
+      handler();
+      // Advance well past the first timer's deadline; only the second
+      // timer should still be alive.
+      vi.advanceTimersByTime(5_000);
+      expect(spawnedChild.kill).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disarms escalation and exits immediately when the child exits on its own", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+      // Child exits before the SIGKILL escalation fires.
+      spawnedChild.emit("exit", 0, null);
+      await vi.runAllTimersAsync();
+      expect(spawnedChild.kill).not.toHaveBeenCalledWith("SIGKILL");
+      expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
+      expect(exitCode).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("errors on a grant with a non-numeric expiresAtMs instead of crashing on toISOString", async () => {
     vi.mocked(callGateway).mockResolvedValueOnce({
       sessionKey: "agent:main:x",

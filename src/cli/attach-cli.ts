@@ -178,33 +178,82 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         defaultRuntime.log(
           `Attaching Claude Code to session ${grant.sessionKey} (grant expires ${expiresAt})…`,
         );
+        // Keep the interactive child in its terminal group: stdio is "inherit"
+        // so the operator terminal owns foreground I/O. Detaching would break
+        // TTY job control and the child's own Ctrl+C routing.
         const child = spawn(opts.bin, claudeArgs, {
           stdio: "inherit",
           env: { ...process.env, ...grant.env },
         });
 
-        const onSigint = () => {};
-        const onSigterm = () => child.kill("SIGTERM");
-        const finish = (code: number) => {
+        let forceKillTimer: NodeJS.Timeout | undefined;
+        let childExitCode: number | null = null;
+        let childExitSignal: NodeJS.Signals | null = null;
+        let isFinished = false;
+        const disarm = () => {
+          if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+            forceKillTimer = undefined;
+          }
+        };
+        const finish = () => {
+          if (isFinished) {
+            return;
+          }
+          isFinished = true;
+          disarm();
           process.off("SIGINT", onSigint);
           process.off("SIGTERM", onSigterm);
-          defaultRuntime.exit(code);
+          const signalCode = childExitSignal
+            ? 128 + ((osConstants.signals as Record<string, number>)[childExitSignal] ?? 0)
+            : null;
+          defaultRuntime.exit(signalCode ?? childExitCode ?? 0);
         };
+        const onSigint = () => {
+          // Guard against repeated Ctrl+C: clear any previous escalation
+          // timer so stale timers do not fire on an exited or reused PID.
+          disarm();
+          // Forward SIGINT to the launched child. The child shares the
+          // operator's terminal, so the console also delivers Ctrl+C to it;
+          // this explicit signal covers non-interactive or slow paths.
+          child.kill("SIGINT");
+          // Escalate to SIGKILL after a grace period so a stuck child cannot
+          // keep the parent alive indefinitely by ignoring SIGINT.
+          forceKillTimer = setTimeout(() => {
+            forceKillTimer = undefined;
+            child.kill("SIGKILL");
+            // Forced cleanup was attempted; revoke and finish even if the
+            // child has not reported exit yet.
+            void (async () => {
+              await revokeOnce();
+              finish();
+            })();
+          }, 5_000);
+        };
+        const onSigterm = () => child.kill("SIGTERM");
 
         child.on("error", (error) => {
+          // The child failed to launch; no descendants exist. Disarm any
+          // pending escalation before cleanup so a timer cannot signal a
+          // reused PID after this CLI exits.
+          disarm();
           void (async () => {
             defaultRuntime.error(`Failed to launch '${opts.bin}': ${String(error)}`);
             await revokeOnce();
-            finish(1);
+            defaultRuntime.exit(1);
           })();
         });
         child.on("exit", (code, signal) => {
+          // The child is not detached and its stdio is inherited from the
+          // operator terminal. Once the direct child exits there is no stable
+          // process-group identity for escalation, so disarm immediately and
+          // finish instead of targeting a potentially reused PID.
+          disarm();
+          childExitCode = code;
+          childExitSignal = signal;
           void (async () => {
             await revokeOnce();
-            const signalCode = signal
-              ? 128 + ((osConstants.signals as Record<string, number>)[signal] ?? 0)
-              : null;
-            finish(signalCode ?? code ?? 0);
+            finish();
           })();
         });
         process.on("SIGINT", onSigint);
