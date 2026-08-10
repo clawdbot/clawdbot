@@ -288,9 +288,9 @@ describe("AppSidebar session ownership", () => {
         updatedAt,
       });
     }
-    result.creators = [{ id: "profile-ada", label: "Ada" }];
+    result.creators = [{ id: "profile-bob", label: "Bob" }];
     const createdOrder = keys.slice(1);
-    const updatedOrder = [keys[2]!, keys[1]!, keys[3]!, keys[4]!];
+    const updatedOrder = [keys[1]!, keys[2]!, keys[3]!, keys[4]!];
     const peopleOrder = [keys[2]!, keys[4]!, keys[1]!, keys[3]!];
 
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
