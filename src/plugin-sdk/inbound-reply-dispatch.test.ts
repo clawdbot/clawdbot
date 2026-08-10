@@ -13,9 +13,65 @@ import {
   dispatchChannelInboundTurn,
   runPreparedInboundReply,
 } from "./channel-inbound.js";
-import { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  dispatchChannelInboundReply as dispatchChannelInboundReplyFromLegacySubpath,
+  dispatchInboundReplyWithBase,
+  hasFinalInboundReplyDispatch,
+  hasVisibleInboundReplyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression,
+  recordDroppedChannelInboundHistory,
+  recordDroppedChannelTurnHistory,
+  resolveInboundReplyDispatchCounts,
+  runChannelInboundEvent,
+  runPreparedInboundReply as runPreparedInboundReplyFromLegacySubpath,
+  type AssembledInboundReply,
+  type ChannelBotLoopProtectionFacts,
+  type ChannelInboundDroppedHistoryOptions,
+  type ChannelInboundEventRunnerParams,
+  type ChannelTurnDroppedHistoryOptions,
+  type ChannelTurnRecordOptions,
+  type DurableInboundReplyDeliveryParams,
+  type InboundReplyDispatchResult,
+  type InboundReplyRecordOptions,
+  type PreparedInboundReply,
+} from "./inbound-reply-dispatch.js";
 
 describe("inbound reply dispatch compatibility", () => {
+  it("keeps the deprecated package subpath compatibility exports", () => {
+    const callableExports = [
+      ["hasFinalInboundReplyDispatch", hasFinalInboundReplyDispatch],
+      ["hasVisibleInboundReplyDispatch", hasVisibleInboundReplyDispatch],
+      ["resolveInboundReplyDispatchCounts", resolveInboundReplyDispatchCounts],
+      ["recordDroppedChannelTurnHistory", recordDroppedChannelTurnHistory],
+      ["recordDroppedChannelInboundHistory", recordDroppedChannelInboundHistory],
+      ["recordChannelBotPairLoopAndCheckSuppression", recordChannelBotPairLoopAndCheckSuppression],
+      ["deliverInboundReplyWithMessageSendContext", deliverInboundReplyWithMessageSendContext],
+      ["dispatchInboundReplyWithBase", dispatchInboundReplyWithBase],
+      ["runPreparedInboundReply", runPreparedInboundReplyFromLegacySubpath],
+      ["runChannelInboundEvent", runChannelInboundEvent],
+      ["dispatchChannelInboundReply", dispatchChannelInboundReplyFromLegacySubpath],
+    ] as const;
+
+    for (const [exportName, exportedValue] of callableExports) {
+      expect(exportedValue, exportName).toBeTypeOf("function");
+    }
+
+    type LegacyTypeExports = [
+      AssembledInboundReply,
+      ChannelBotLoopProtectionFacts,
+      ChannelInboundDroppedHistoryOptions,
+      ChannelInboundEventRunnerParams<unknown>,
+      ChannelTurnDroppedHistoryOptions,
+      ChannelTurnRecordOptions,
+      DurableInboundReplyDeliveryParams,
+      InboundReplyDispatchResult<unknown>,
+      InboundReplyRecordOptions,
+      PreparedInboundReply<unknown>,
+    ];
+    expectTypeOf<LegacyTypeExports>().not.toBeNever();
+  });
+
   it("keeps public channel-inbound entry points drop-capable", () => {
     type DispatchResult = { queuedFinal: true };
     const prepared = {} as PreparedChannelTurn<DispatchResult>;

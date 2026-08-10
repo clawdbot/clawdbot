@@ -254,7 +254,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: native command spec merger through the native-command-registry facade.
       // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
       // -7: retire unused and duplicate inbound-dispatch compatibility exports.
-      4840,
+      // +8: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      4848,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -310,7 +311,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: native command spec merger through the native-command-registry facade.
       // -1: remove the unused WhatsApp-specific ack policy helper.
       // -10: collapse inbound-dispatch callable aliases and wrappers.
-      2910,
+      // +8: restore still-existing deprecated inbound-dispatch callable re-exports.
+      2918,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -324,7 +326,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared ingress retention defaults projected through channel-message.
       // +1: shipped channel setup state-migration declaration during its migration window.
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
-      1708,
+      // +8: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      1716,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

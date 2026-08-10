@@ -135,9 +135,16 @@ export async function dispatchInboundReplyWithBase(
 
 export {
   dispatchChannelInboundReply,
+  hasFinalInboundReplyDispatch,
+  hasVisibleInboundReplyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression,
+  recordDroppedChannelInboundHistory,
+  recordDroppedChannelTurnHistory,
+  resolveInboundReplyDispatchCounts,
   runChannelInboundEvent,
   runPreparedInboundReply,
 } from "./channel-inbound.js";
+export { deliverInboundReplyWithMessageSendContext } from "./channel-outbound.js";
 export type {
   AssembledInboundReply,
   ChannelBotLoopProtectionFacts,
