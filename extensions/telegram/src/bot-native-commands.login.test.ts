@@ -41,6 +41,12 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
     }),
   ),
 }));
+vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
+  formatSqliteSessionFileMarker: vi.fn(() => "sqlite:test"),
+  getSessionEntry: vi.fn(() => undefined),
+  resolveStorePath: vi.fn(() => "/tmp/openclaw-login-test.sqlite"),
+  updateSessionStoreEntry: vi.fn(async () => undefined),
+}));
 
 type LoginFlowMock = ReturnType<typeof vi.fn>;
 
