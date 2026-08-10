@@ -26,7 +26,7 @@ import type {
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
 import type { MediaFact } from "../../media/media-facts.js";
-import type { PluginCommandReplyOptionCarrier } from "../../plugins/plugin-command-dispatch-contract.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
@@ -294,8 +294,7 @@ export type ChannelTurnDroppedHistoryOptions = {
 type ChannelTurnDispatcherOptions = Omit<ReplyDispatcherWithTypingOptions, "deliver" | "onError">;
 
 /** Reply options plus the opaque native command ownership decision carried by channel turns. */
-type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply"> &
-  PluginCommandReplyOptionCarrier;
+type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply"> & PluginCommandReplyOptions;
 
 /** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
 type ChannelTurnReplyPipelineOptions = Omit<

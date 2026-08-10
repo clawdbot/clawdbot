@@ -2,7 +2,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
-import { PLUGIN_COMMAND_DISPATCH } from "./plugin-command-dispatch-contract.js";
+import {
+  PLUGIN_COMMAND_DISPATCH,
+  type PluginCommandReplyOptions,
+} from "./plugin-command-dispatch-contract.js";
 import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
 import {
   pluginCommandSupportsChannel,
@@ -17,6 +20,7 @@ import type { PluginRegistry } from "./registry-types.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 export { PLUGIN_COMMAND_DISPATCH };
+export type { PluginCommandReplyOptions };
 
 declare const pluginCommandDispatchBrand: unique symbol;
 
@@ -56,8 +60,8 @@ export type PluginCommandDispatch = Readonly<{
 
 export type PluginCommandCatalogDecision = PluginCommandDispatch | Readonly<{ kind: "non-plugin" }>;
 
-/** Reply-pipeline field carrying the terminal native catalog ownership decision. */
-export type PluginCommandReplyOptions = Readonly<{
+/** Internal reply-pipeline view after the opaque catalog decision has been validated. */
+export type PluginCommandExecutionReplyOptions = Readonly<{
   [PLUGIN_COMMAND_DISPATCH]?: PluginCommandCatalogDecision;
 }>;
 

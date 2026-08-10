@@ -6,7 +6,7 @@ import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlit
 import { registerPluginCommandInRegistry } from "../../plugins/command-registration.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
-  type PluginCommandReplyOptions,
+  type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -250,7 +250,8 @@ describe("handlePluginCommand", () => {
 
   it("carries one binding selection into dispatch without rematching a replacement registry", async () => {
     const originalHandler = registerTestCommand();
-    const replyOptions: NonNullable<HandleCommandsParams["opts"]> & PluginCommandReplyOptions = {};
+    const replyOptions: NonNullable<HandleCommandsParams["opts"]> &
+      PluginCommandExecutionReplyOptions = {};
     const cfg = { commands: { text: true } } as OpenClawConfig;
     expect(
       shouldBypassPluginOwnedBindingForCommand(
@@ -292,7 +293,7 @@ describe("handlePluginCommand", () => {
     const params = buildPluginParams("/card", { commands: { text: true } } as OpenClawConfig);
     params.opts = {
       [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
-    } as NonNullable<HandleCommandsParams["opts"]> & PluginCommandReplyOptions;
+    } as NonNullable<HandleCommandsParams["opts"]> & PluginCommandExecutionReplyOptions;
 
     await expect(handlePluginCommand(params, true)).resolves.toBeNull();
     expect(handler).not.toHaveBeenCalled();

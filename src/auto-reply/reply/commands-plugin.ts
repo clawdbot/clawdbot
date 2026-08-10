@@ -15,7 +15,7 @@ import {
   executePluginCommandDispatch,
   matchPluginCommandInvocation,
   PLUGIN_COMMAND_DISPATCH,
-  type PluginCommandReplyOptions,
+  type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
@@ -55,7 +55,9 @@ export const handlePluginCommand: CommandHandler = async (
     return null;
   }
 
-  const planned = (params.opts as PluginCommandReplyOptions | undefined)?.[PLUGIN_COMMAND_DISPATCH];
+  const planned = (params.opts as PluginCommandExecutionReplyOptions | undefined)?.[
+    PLUGIN_COMMAND_DISPATCH
+  ];
   if (planned?.kind === "non-plugin") {
     return null;
   }
