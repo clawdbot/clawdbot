@@ -68,13 +68,10 @@ command handling is enabled for the surface.
     debug: false,
     restart: true,
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw",
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -139,19 +136,16 @@ command handling is enabled for the surface.
   scope. A wildcard `allowFrom` entry is **not** sufficient.
 </ParamField>
 
-<ParamField path="commands.ownerDisplay" type='"raw" | "hash"'>
-  Controls how owner ids appear in the system prompt.
-</ParamField>
-
-<ParamField path="commands.ownerDisplaySecret" type="string">
-  HMAC secret used when `commands.ownerDisplay: "hash"`.
-</ParamField>
-
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
   **only** authorization source for commands and directives. Use `"*"` for a
   global default; provider-specific keys override it.
 </ParamField>
+
+When `commands.allowFrom` is not configured, command authorization follows
+the channel's allowlists and pairing state. Access-group entries referenced by
+channel allowlists are resolved automatically; there is no command-level
+access-group toggle.
 
 ## Command list
 

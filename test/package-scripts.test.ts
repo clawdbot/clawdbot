@@ -332,4 +332,21 @@ describe("package scripts", () => {
       "src/auto-reply/usage-bar/template.windows.test.ts",
     );
   });
+
+  it("runs native media-understanding file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+    );
+  });
+
+  it("runs shared home display and visible command coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/utils.test.ts");
+    expect(script).toContain("src/commands/agents.commands.list.test.ts");
+    expect(script).toContain("src/cli/daemon-cli/status.print.test.ts");
+    expect(script).toContain("packages/terminal-core/src/display-string.test.ts");
+    expect(script).toContain("src/agents/sandbox/fs-paths.test.ts");
+    expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
+  });
 });

@@ -1,4 +1,5 @@
 // Setup migration snapshots bind retries to unchanged source and target state.
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -10,11 +11,12 @@ import type { MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 import { canonicalizeSetupMigrationValue } from "./setup.migration-canonical.js";
 
-const SETUP_MIGRATION_LOCK_OPTIONS = {
-  retries: { retries: 60, factor: 1, minTimeout: 500, maxTimeout: 500 },
+const ONBOARDING_TARGET_LOCK_OPTIONS = {
+  retries: { retries: 1_200, factor: 1, minTimeout: 500, maxTimeout: 500 },
   stale: 30 * 60 * 1000,
   staleRecovery: "remove-if-unchanged" as const,
 };
+const activeSetupMigrationTargetLock = new AsyncLocalStorage<string>();
 const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
 const MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS = new Set(["securityAcknowledgedAt"]);
 const MEANINGFUL_WORKSPACE_ENTRIES = [
@@ -301,17 +303,25 @@ export async function prepareSetupMigrationAttemptBoundary(params: {
   };
 }
 
-/** Serializes all onboarding migration writes that share one OpenClaw state target. */
+/** Serializes onboarding writes that share one OpenClaw state target. */
 export async function withSetupMigrationTargetLock<T>(
   stateDir: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const migrationDir = path.join(stateDir, "migration");
+  const resolvedStateDir = path.resolve(stateDir);
+  const activeStateDir = activeSetupMigrationTargetLock.getStore();
+  if (activeStateDir) {
+    if (activeStateDir !== resolvedStateDir) {
+      throw new Error("nested onboarding target lock cannot switch the OpenClaw state directory");
+    }
+    return await fn();
+  }
+  const migrationDir = path.join(resolvedStateDir, "migration");
   await fs.mkdir(migrationDir, { recursive: true, mode: 0o700 });
   return await withFileLock(
     path.join(migrationDir, "onboarding.lock-target"),
-    SETUP_MIGRATION_LOCK_OPTIONS,
-    fn,
+    ONBOARDING_TARGET_LOCK_OPTIONS,
+    async () => await activeSetupMigrationTargetLock.run(resolvedStateDir, fn),
   );
 }
 

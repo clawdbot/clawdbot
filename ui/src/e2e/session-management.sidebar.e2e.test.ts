@@ -350,26 +350,11 @@ suite.define(() => {
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
 
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Change icon" })
-        .click();
-      const iconPicker = page.getByRole("dialog", { name: "Change icon" });
-      await iconPicker.waitFor({ state: "visible" });
-      await expect
-        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
-      await page.keyboard.press("Tab");
-      await expect
-        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
-      await iconPicker.getByRole("button", { name: "Back" }).click();
-      await menu.waitFor({ state: "visible" });
       await expect
         .poll(() =>
           page
             .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Change icon" })
+            .getByRole("menuitem", { name: "Pin session" })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
@@ -391,7 +376,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Open chat" })
+            .getByRole("menuitem", { name: "Pin session" })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);

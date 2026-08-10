@@ -138,7 +138,7 @@ final class GatewayProcessManager {
     }
 
     func setActive(_ active: Bool) {
-        // Remote mode should never spawn a local gateway; treat as stopped.
+        // Remote mode should never manage a local Gateway; treat as stopped.
         if CommandResolver.connectionModeIsRemote() {
             self.desiredActive = false
             self.stop()
@@ -363,7 +363,7 @@ final class GatewayProcessManager {
 
     func startIfNeeded() {
         guard self.desiredActive else { return }
-        // Do not spawn in remote mode (the gateway should run on the remote host).
+        // Do not start a local Gateway in remote mode; the remote host owns it.
         guard !CommandResolver.connectionModeIsRemote() else {
             self.status = .stopped
             return
@@ -378,7 +378,7 @@ final class GatewayProcessManager {
             return
         }
         // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
-        // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
+        // Avoid concurrent startup tasks that can thrash launchd and flap the port.
         switch self.status {
         case .starting, .running, .attachedExisting:
             return
@@ -390,7 +390,7 @@ final class GatewayProcessManager {
         let startGeneration = self.gatewayStartGeneration
         self.logger.debug("gateway start requested")
 
-        // First try to latch onto an already-running gateway to avoid spawning a duplicate.
+        // First try to attach to an already-running Gateway before enabling launchd.
         self.beginGatewayStartTask(generation: startGeneration) { [weak self] in
             guard let self else { return }
             if await self.attachExistingGatewayAfterPendingDisable(startGeneration: startGeneration) {
@@ -524,7 +524,7 @@ final class GatewayProcessManager {
     }
 
     /// Attempt to connect to an already-running gateway on the configured port.
-    /// If successful, mark status as attached and skip spawning a new process.
+    /// If successful, mark status as attached and skip launchd startup.
     private func attachExistingGatewayIfAvailable(
         port requestedPort: Int? = nil,
         startGeneration: UInt64? = nil) async -> Bool
@@ -591,7 +591,7 @@ final class GatewayProcessManager {
                     return true
                 }
 
-                // No reachable gateway (and no listener) — fall through to spawn.
+                // No reachable Gateway (and no listener) — fall through to launchd startup.
                 self.existingGatewayDetails = nil
                 return false
             }
@@ -703,17 +703,6 @@ extension GatewayProcessManager {
     private func prepareLaunchdGatewayStart(startGeneration: UInt64) async -> LaunchAgentStartupContext? {
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         self.existingGatewayDetails = nil
-        let resolution = await GatewayEnvironment.resolveGatewayCommand()
-        guard self.isCurrentGatewayStart(startGeneration) else { return nil }
-        await MainActor.run { self.environmentStatus = resolution.status }
-        guard resolution.command != nil else {
-            await MainActor.run {
-                self.status = .failed(resolution.status.message)
-            }
-            self.logger.error("gateway command resolve failed: \(resolution.status.message)")
-            return nil
-        }
-
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             let message = "Launchd disabled; start the Gateway manually or disable attach-only."
             self.status = .failed(message)
@@ -767,25 +756,20 @@ extension GatewayProcessManager {
         var latestRetryDisposition: GatewayProbeFailureDisposition?
         var readinessPID = context.readinessPID
         var freshInstallGraceAuthorized = false
+        var responsiveStartupProgressObserved = false
         readinessLoop: while true {
             guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
             while Date() >= deadline {
                 guard deadline < finalProbeDeadline else { break readinessLoop }
-                if freshInstallGraceAuthorized {
-                    // Repeating launchd status at every boundary would expand the wall-clock budget.
-                    // Generation/revision guard intermediate windows; success and final repair re-check ownership.
-                    guard self.isCurrentFreshInstallReadiness(
-                        context: context,
-                        startGeneration: startGeneration)
-                    else { return }
-                } else {
-                    guard let reusablePID = await self.currentInstallReusableLaunchdPID(
-                        context: context,
-                        startGeneration: startGeneration)
-                    else { break readinessLoop }
-                    readinessPID = reusablePID
-                    freshInstallGraceAuthorized = true
-                }
+                let extensionAuthorization = await self.authorizeReadinessExtension(
+                    context: context,
+                    startGeneration: startGeneration,
+                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
+                    freshInstallGraceAuthorized: freshInstallGraceAuthorized,
+                    readinessPID: readinessPID)
+                guard extensionAuthorization.allowed else { break readinessLoop }
+                readinessPID = extensionAuthorization.readinessPID
+                freshInstallGraceAuthorized = true
                 deadline = min(
                     deadline.addingTimeInterval(readinessWindow),
                     finalProbeDeadline)
@@ -821,6 +805,9 @@ extension GatewayProcessManager {
                 case .retryWithoutRepair:
                     // A responsive transient invalidates older connection-failure evidence.
                     latestRetryDisposition = .retryWithoutRepair
+                    if self.probeFailureShowsStartupProgress(error) {
+                        responsiveStartupProgressObserved = true
+                    }
                 }
                 let retryDelay = min(0.4, max(0, deadline.timeIntervalSinceNow))
                 if retryDelay > 0 {
@@ -841,6 +828,27 @@ extension GatewayProcessManager {
                 startGeneration: startGeneration,
                 expectedReadinessRevision: context.readinessRevision)
         }
+    }
+
+    private func authorizeReadinessExtension(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64,
+        responsiveStartupProgressObserved: Bool,
+        freshInstallGraceAuthorized: Bool,
+        readinessPID: Int32?) async -> (allowed: Bool, readinessPID: Int32?)
+    {
+        if responsiveStartupProgressObserved || freshInstallGraceAuthorized {
+            // One live response or verified launchd owner authorizes the bounded migration window;
+            // repeating launchd status at every boundary would expand the wall-clock budget.
+            let isCurrent = !Task.isCancelled &&
+                self.isCurrentGatewayStart(startGeneration) &&
+                self.launchAgentReadinessRevision == context.readinessRevision
+            return (isCurrent, readinessPID)
+        }
+        let reusablePID = await self.currentInstallReusableLaunchdPID(
+            context: context,
+            startGeneration: startGeneration)
+        return (reusablePID != nil, reusablePID)
     }
 
     private func currentInstallReusableLaunchdPID(
@@ -996,6 +1004,11 @@ extension GatewayProcessManager {
         default:
             return .fail
         }
+    }
+
+    private func probeFailureShowsStartupProgress(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.code.uppercased() == "UNAVAILABLE"
     }
 
     private func probeFailureIsCancellation(_ error: Error) -> Bool {

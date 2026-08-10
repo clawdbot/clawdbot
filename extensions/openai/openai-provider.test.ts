@@ -988,24 +988,32 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("caps base and forward-compatible GPT-5.6 Codex catalog rows", async () => {
+  it("rejects Platform-only aliases while preserving GPT-5.6 ChatGPT capabilities", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         models: [
           {
             slug: "gpt-5.6",
-            display_name: "GPT-5.6",
             visibility: "list",
-            context_window: 372_000,
-            max_context_window: 1_050_000,
+          },
+          {
+            slug: "chat-latest",
+            visibility: "list",
           },
           {
             slug: "gpt-5.6-preview-2026-07-22",
-            display_name: "GPT-5.6 Preview",
             visibility: "list",
             context_window: 400_000,
             max_context_window: 1_050_000,
           },
+          ...["sol", "terra", "luna"].map((tier) => ({
+            slug: `gpt-5.6-${tier}`,
+            visibility: "list",
+            supported_reasoning_levels: [
+              { effort: "low", description: "low" },
+              { effort: "high", description: "high" },
+            ],
+          })),
         ],
       }),
       finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
@@ -1017,20 +1025,18 @@ describe("buildOpenAIProvider", () => {
       fetchGuard,
     });
 
-    expect(provider.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "gpt-5.6",
-          contextWindow: 1_050_000,
-          contextTokens: 272_000,
-        }),
-        expect.objectContaining({
-          id: "gpt-5.6-preview-2026-07-22",
-          contextWindow: 1_050_000,
-          contextTokens: 272_000,
-        }),
-      ]),
-    );
+    expectNoCatalogEntry(provider.models, "gpt-5.6");
+    expectNoCatalogEntry(provider.models, "chat-latest");
+    expectCatalogEntry(provider.models, "gpt-5.6-preview-2026-07-22", {
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+    for (const tier of ["sol", "terra", "luna"]) {
+      expect(provider.models.find((model) => model.id === `gpt-5.6-${tier}`)).toMatchObject({
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "high"] },
+      });
+    }
   });
 
   it("keeps an explicit empty Codex reasoning catalog authoritative", async () => {

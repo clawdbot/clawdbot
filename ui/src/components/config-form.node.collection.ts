@@ -16,9 +16,9 @@ import {
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.ts";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
   arrayInputConstraints,
-  arrayItemSchema,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
   configValuesEqual,

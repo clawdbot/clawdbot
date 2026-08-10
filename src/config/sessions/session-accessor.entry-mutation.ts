@@ -13,14 +13,16 @@ import {
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
-  appendSqliteTranscriptEvent,
-  forkSqliteSessionEntryFromParentTarget,
-  forkSqliteSessionTranscriptFromParent,
+  patchSqliteSessionEntry,
   recordSqliteInboundSessionMeta,
   updateSqliteSessionLastRoute,
-  patchSqliteSessionEntry,
+} from "./session-accessor.sqlite-entry.js";
+import {
+  forkSqliteSessionEntryFromParentTarget,
+  forkSqliteSessionTranscriptFromParent,
   resolveSqliteSessionParentForkDecision,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-parent-session.js";
+import { appendSqliteTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,

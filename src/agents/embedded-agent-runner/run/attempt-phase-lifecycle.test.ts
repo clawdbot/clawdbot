@@ -17,7 +17,7 @@ vi.mock("./attempt.async-tasks.js", () => ({
   waitForCompletionRequiredAsyncTasks: hoisted.waitForCompletionRequiredAsyncTasks,
 }));
 
-import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
+import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
 describe("embedded attempt phase lifecycle state", () => {

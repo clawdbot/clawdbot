@@ -48,14 +48,18 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
-    const key = requireSessionKey(params.key, respond);
+    // Beta v4 clients may still send the retired icon field. Drop it at the
+    // Gateway boundary so it cannot re-enter session state or patch hooks.
+    const canonicalParams = { ...params } as typeof params & { icon?: unknown };
+    delete canonicalParams.icon;
+    const key = requireSessionKey(canonicalParams.key, respond);
     if (!key) {
       return;
     }
     const executed = await executeSessionPatch({
       client,
       context,
-      patch: { ...params, key },
+      patch: { ...canonicalParams, key },
       sessionMutationAuthorization,
     });
     if (!executed.ok) {

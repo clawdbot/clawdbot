@@ -68,8 +68,10 @@ Local image and video references are supported via data URIs.
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "runway/gen4.5",
+      mediaModels: {
+        video: {
+          primary: "runway/gen4.5",
+        },
       },
     },
   },

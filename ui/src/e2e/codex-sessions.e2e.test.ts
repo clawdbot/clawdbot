@@ -430,11 +430,24 @@ suite.define(() => {
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
       expect(await section.getByText("Offline Workstation", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Offline Laptop", { exact: true }).count()).toBe(0);
+      const localHost = section.locator('[data-session-catalog-host="gateway:local"]');
+      const localHostList = localHost.locator(":scope > .sidebar-session-catalog-host__sessions");
+      expect(await localHostList.getAttribute("role")).toBe("list");
+      expect(await localHostList.getAttribute("aria-label")).toBe("Local Codex");
       const projectHeads = section.locator("[data-session-catalog-project]");
       await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await localHostList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem"]);
       const openclawProject = section.locator(
         '[data-session-catalog-project="/Users/dev/openclaw"]',
       );
+      const openclawProjectItem = openclawProject.locator("..");
+      const openclawProjectList = openclawProjectItem.locator(":scope > [role=list]");
+      expect(await openclawProjectItem.getAttribute("role")).toBe("listitem");
+      expect(await openclawProjectList.getAttribute("aria-label")).toBe("Local Codex: openclaw");
       expect(
         await openclawProject.locator(".sidebar-session-catalog-project__label").textContent(),
       ).toBe("openclaw");
@@ -443,6 +456,16 @@ suite.define(() => {
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
       await expect.poll(() => projectRows.count()).toBe(3);
+      expect(
+        await openclawProjectList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem"]);
+      const buildHostList = section.locator(
+        '[data-session-catalog-host="node:build"] > .sidebar-session-catalog-host__sessions',
+      );
+      expect(await buildHostList.getAttribute("aria-label")).toBe("Build Node");
+      expect(await buildHostList.locator(":scope > [role=listitem]").count()).toBe(1);
       const threadRows = page.locator(
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
@@ -546,6 +569,11 @@ suite.define(() => {
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       expect(
+        await localHostList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem", "listitem"]);
+      expect(
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
       ).toBe("none");
       if (captureUiProofEnabled) {
@@ -564,6 +592,11 @@ suite.define(() => {
         .getByRole("menuitemradio", { name: "Person" })
         .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await localHostList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem", "listitem"]);
       expect(
         await section
           .locator('[data-session-catalog-project="person:profile-ada"]')

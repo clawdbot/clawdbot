@@ -328,27 +328,42 @@ function renderCatalogHostGroup(
               const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
               const collapsed = params.collapsedSections.has(sectionId);
               return html`
-                <button
-                  type="button"
-                  class="sidebar-session-catalog-project__head"
-                  data-session-catalog-project=${group.key}
-                  aria-expanded=${String(!collapsed)}
-                  title=${group.title}
-                  @click=${() => params.onToggleSection(sectionId)}
-                >
-                  <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
-                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                <div class="sidebar-session-catalog-project" role="listitem">
+                  <button
+                    type="button"
+                    class="sidebar-session-catalog-project__head"
+                    data-session-catalog-project=${group.key}
+                    aria-expanded=${String(!collapsed)}
+                    title=${group.title}
+                    @click=${() => params.onToggleSection(sectionId)}
                   >
-                  <span class="sidebar-session-catalog-project__label">${group.label}</span>
-                  <span class="sidebar-session-catalog-project__count" aria-hidden="true"
-                    >${group.sessions.length}</span
-                  >
-                </button>
-                ${collapsed
-                  ? nothing
-                  : group.sessions.map((session) =>
-                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, true),
-                    )}
+                    <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                      >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                    >
+                    <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                    <span class="sidebar-session-catalog-project__count" aria-hidden="true"
+                      >${group.sessions.length}</span
+                    >
+                  </button>
+                  ${collapsed
+                    ? nothing
+                    : html`<div
+                        class="sidebar-session-catalog-project__sessions"
+                        role="list"
+                        aria-label=${`${host.label}: ${group.label}`}
+                      >
+                        ${group.sessions.map((session) =>
+                          renderCatalogSessionRow(
+                            catalog,
+                            host,
+                            session,
+                            liveRowsByKey,
+                            params,
+                            true,
+                          ),
+                        )}
+                      </div>`}
+                </div>
               `;
             })}
             ${projectGroups.ungrouped.map((session) =>
@@ -464,7 +479,11 @@ function renderCatalogSessionRow(
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
         ${running
-          ? html`<span class="session-row-state" id=${stateId} aria-label=${stateDescription}
+          ? html`<span
+              class="session-row-state"
+              id=${stateId}
+              role="img"
+              aria-label=${stateDescription}
               >${renderSessionRunSpinner(false)}</span
             >`
           : nothing}

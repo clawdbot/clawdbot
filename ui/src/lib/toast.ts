@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -6,7 +6,9 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 export type ToastOptions = {
-  message: string;
+  /** A template lets a message name a destination the operator can actually open,
+   * instead of spelling out a settings path the toast then makes them find. */
+  message: string | TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;

@@ -76,17 +76,19 @@ import {
   readSqliteSessionEntryCount,
   readSqliteSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
-import { applySqliteSessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
-  applySqliteSessionEntryLifecycleMutation,
-  appendSqliteTranscriptEventSync,
-  deleteSqliteSessionEntryLifecycle,
-  importSqliteSessionRows,
   loadExactSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
+import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
+import { deleteSqliteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
+import { applySqliteSessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
+import { applySqliteSessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import {
+  appendSqliteTranscriptEventSync,
   replaceSqliteTranscriptEvents,
   trimSqliteTranscriptForManualCompact,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   SessionTranscriptWriterClaimReboundError,

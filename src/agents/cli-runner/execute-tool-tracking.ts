@@ -7,7 +7,7 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
-import type { CliOutput, CliToolUseStartDelta } from "../cli-output.js";
+import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,

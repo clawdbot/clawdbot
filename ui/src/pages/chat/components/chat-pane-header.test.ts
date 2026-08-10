@@ -91,6 +91,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
+    sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -236,6 +237,19 @@ describe("chat pane header", () => {
     const { container } = mount();
     expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
+  });
+
+  it("places the session menu last in the header action row", () => {
+    const { container } = mount({
+      mergedChrome: true,
+      onClosePane: vi.fn(),
+      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+    });
+    const actions = container.querySelector(".chat-pane__actions");
+
+    expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
+    expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
+    expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });
 
   it("renders an editable title and workspace chip", () => {

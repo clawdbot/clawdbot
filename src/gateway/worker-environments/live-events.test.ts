@@ -8,7 +8,7 @@ import {
   type WorkerLiveEventParams as Params,
   WorkerLiveEventParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {

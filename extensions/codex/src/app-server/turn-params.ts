@@ -135,7 +135,7 @@ function buildTurnScopedCollaborationInstructions(
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (params.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only") {
+  if (params.trigger === "heartbeat") {
     return joinPresentSections(buildHeartbeatCollaborationInstructions(), contextInstructions);
   }
   if (contextInstructions?.trim()) {

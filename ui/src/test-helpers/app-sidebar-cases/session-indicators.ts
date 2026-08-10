@@ -32,7 +32,6 @@ describe("AppSidebar session indicators", () => {
           label: "Pinned child",
           updatedAt: 2,
           pinned: true,
-          icon: "🦞",
           hasActiveRun: true,
           status: "running",
           unread: true,

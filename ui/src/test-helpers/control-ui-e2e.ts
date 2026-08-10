@@ -11,6 +11,7 @@ import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import type { ModelCatalogEntry } from "../api/types.ts";
+import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
 export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
@@ -379,7 +380,9 @@ export async function startControlUiE2eServer(
       close: async () => {},
     };
   }
-  const resolvedBuildInfo = buildInfo ?? DEFAULT_CONTROL_UI_E2E_BUILD_INFO;
+  const resolvedBuildInfo = normalizeControlUiBuildInfo(
+    buildInfo ?? DEFAULT_CONTROL_UI_E2E_BUILD_INFO,
+  );
   // Shared browser fixtures import this helper; load filesystem-bound Vite
   // configuration only when its Node-owned development server actually starts.
   const [

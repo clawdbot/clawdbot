@@ -657,6 +657,33 @@ describe("worker environment service", () => {
     });
   });
 
+  it("uses worker finishing as the durable workspace-result fence", async () => {
+    const { liveEvents } = sequencedLiveEvents();
+    const { identity, placementStore, workerService } = placementHarness(
+      "worker-placement-finishing",
+      "session-placement-finishing",
+      { liveEvents },
+    );
+    const terminal = terminalEvent(identity);
+    const finishing = {
+      ...terminal,
+      event: {
+        kind: "lifecycle" as const,
+        payload: { phase: "finishing" as const, startedAt: 1, endedAt: 2 },
+      },
+    };
+
+    await expect(workerService.pushLiveEvent(identity, finishing)).resolves.toEqual({
+      ok: true,
+      result: { ackedSeq: 1 },
+    });
+    expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
+      ...placementBinding(identity),
+      liveSeq: 1,
+      workspaceResultPending: true,
+    });
+  });
+
   it("does not ACK a transcript commit after its worker claim is fenced", async () => {
     let finishCommit: (() => void) | undefined;
     const commitBlocked = new Promise<void>((resolve) => {
@@ -2178,7 +2205,7 @@ describe("worker environment service", () => {
     });
   });
 
-  it("adopts provider-proven teardown through legal terminal transitions", async () => {
+  it("records provider-proven teardown without local intent as a failure", async () => {
     seedReady("worker-destroyed-ready");
     seedReady("worker-destroyed-attached");
     store.transition({
@@ -2200,7 +2227,8 @@ describe("worker environment service", () => {
       },
     });
 
-    await createService(provider).reconcileOnce();
+    const workerService = createService(provider);
+    await workerService.reconcileOnce();
 
     for (const environmentId of [
       "worker-destroyed-ready",
@@ -2208,8 +2236,9 @@ describe("worker environment service", () => {
       "worker-destroyed-draining",
     ]) {
       expect(store.get(environmentId)).toMatchObject({
-        state: "destroyed",
+        state: "failed",
         attachedSessionIds: [],
+        lastError: "Worker environment disappeared before teardown was requested",
       });
     }
   });

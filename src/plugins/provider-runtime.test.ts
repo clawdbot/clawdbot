@@ -60,8 +60,7 @@ let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider
 let applyProviderConfigDefaultsWithPlugin: typeof import("./provider-runtime.js").applyProviderConfigDefaultsWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
 let loginProviderOAuthWithPlugin: typeof import("./provider-runtime.js").loginProviderOAuthWithPlugin;
-let classifyProviderFailoverReasonWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverReasonWithPlugin;
-let matchesProviderContextOverflowWithPlugin: typeof import("./provider-runtime.js").matchesProviderContextOverflowWithPlugin;
+let classifyProviderFailoverSignalWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverSignalWithPlugin;
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
@@ -315,10 +314,9 @@ describe("provider-runtime", () => {
       applyProviderNativeStreamingUsageCompatWithPlugin,
       applyProviderConfigDefaultsWithPlugin,
       applyProviderResolvedTransportWithPlugin,
-      classifyProviderFailoverReasonWithPlugin,
+      classifyProviderFailoverSignalWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
       loginProviderOAuthWithPlugin,
-      matchesProviderContextOverflowWithPlugin,
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
@@ -1731,16 +1729,16 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      matchesProviderContextOverflowWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "azure-openai-responses",
         context: {
           provider: "azure-openai-responses",
           errorMessage: "content_filter prompt too long",
         },
       }),
-    ).toBe(true);
+    ).toBe("context_overflow");
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "azure-openai-responses",
         context: {
           provider: "azure-openai-responses",
@@ -1749,7 +1747,7 @@ describe("provider-runtime", () => {
       }),
     ).toBe("rate_limit");
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "azure-openai-responses",
         context: {
           provider: "azure-openai-responses",
@@ -1775,7 +1773,7 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "my-together",
         context: {
           provider: "my-together",
@@ -1801,7 +1799,7 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "my-openai-compatible",
         context: {
           provider: "my-openai-compatible",

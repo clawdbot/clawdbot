@@ -91,7 +91,7 @@ describe("experience review auto apply", () => {
     );
   });
 
-  it("leaves reviewer update proposals pending instead of auto-applying them", async () => {
+  it("auto-applies reviewer full-body updates after an authoritative read", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-update-");
     const seedTool = createSkillWorkshopTool({
       workspaceDir,
@@ -120,6 +120,10 @@ describe("experience review auto apply", () => {
         updateProposals: params.skillWorkshopUpdateProposals,
         autonomousCapture: params.skillWorkshopAutonomousCapture,
         proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-read", {
+        action: "read",
+        skill_name: "deployment-preflight",
       });
       await tool.execute("review-update", {
         action: "update",
@@ -150,11 +154,11 @@ describe("experience review auto apply", () => {
     const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
     expect(updateEntry).toMatchObject({
       skillKey: "deployment-preflight",
-      status: "pending",
+      status: "applied",
     });
     await expect(
       fs.readFile(`${workspaceDir}/skills/deployment-preflight/SKILL.md`, "utf8"),
-    ).resolves.toContain("Operator-authored preflight steps.");
+    ).resolves.toContain("Reviewer-rewritten steps.");
   });
 
   it("auto-applies reviewer patch proposals composed from the live body", async () => {

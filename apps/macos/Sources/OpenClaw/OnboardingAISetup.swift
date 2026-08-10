@@ -65,9 +65,6 @@ final class OnboardingAISetupModel {
     private(set) var providerCatalogError: String?
     private(set) var statuses: [String: CandidateStatus] = [:]
     private(set) var selectedKind: String?
-    private(set) var connectedModelRef: String?
-    private(set) var connectedLatencyMs: Int?
-    private(set) var connectedSetupLines: [String] = []
     private(set) var detectError: Failure?
     private(set) var pendingActivationVerification = false
     private(set) var waitingForPendingActivationDeadline = false
@@ -93,10 +90,6 @@ final class OnboardingAISetupModel {
     private let connectionModeProvider: @MainActor () -> AppState.ConnectionMode
     private var started = false
     private var attemptToken = UUID()
-    /// One-shot: the next detection pass lists choices without auto-activating,
-    /// so the connected-state "choose a different AI" path ends at a picker
-    /// instead of re-connecting the same auto candidate.
-    @ObservationIgnored private var suppressNextAutoActivation = false
     @ObservationIgnored private var pendingVerification: PendingVerification?
     @ObservationIgnored private var pendingActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     @ObservationIgnored private var completedHandoff: CompletedHandoff?
@@ -148,25 +141,6 @@ final class OnboardingAISetupModel {
         self.started = true
         self.phase = .detecting
         scheduleDetection()
-    }
-
-    /// Escape hatch from a successful auto-connect: re-detect and present every
-    /// candidate, provider, and API-key route without auto-activating, so the
-    /// user can replace the auto-chosen AI with one they pick themselves.
-    func chooseDifferentAI() {
-        guard self.beginChooseDifferentAI() else { return }
-        self.scheduleDetection()
-    }
-
-    /// Split from `chooseDifferentAI` so tests can drive the detection await.
-    @discardableResult
-    func beginChooseDifferentAI() -> Bool {
-        guard self.connected else { return false }
-        self.resetForGatewayChange()
-        self.suppressNextAutoActivation = true
-        self.started = true
-        self.phase = .detecting
-        return true
     }
 
     func waitForPendingActivationDeadline() {
@@ -373,7 +347,6 @@ final class OnboardingAISetupModel {
                     }
                     finishConnected(
                         kind: "existing-model",
-                        result: result,
                         activationOwner: self.pendingActivationOwner,
                         requireExistingReceipt: true)
                     if self.connected {
@@ -384,9 +357,7 @@ final class OnboardingAISetupModel {
                     self.retainCompletedReceiptForRetry(context: context)
                     return .notConnected
                 }
-                self.acceptVerifiedPendingInference(
-                    modelRef: modelRef,
-                    latencyMs: result.latencyMs)
+                self.acceptVerifiedPendingInference(modelRef: modelRef)
                 return self.connected ? .connected : .superseded
             }
             self.phase = .ready
@@ -521,19 +492,12 @@ final class OnboardingAISetupModel {
     }
 
     /// Complete a receipt-backed restored handoff after route-bound live inference.
-    func acceptVerifiedPendingInference(modelRef: String, latencyMs: Double? = nil) {
+    func acceptVerifiedPendingInference(modelRef: String) {
         let model = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.pendingActivationVerification, !model.isEmpty else { return }
         guard self.pendingActivationOwner == nil else { return }
         finishConnected(
             kind: "existing-model",
-            result: ActivateResult(
-                ok: true,
-                modelRef: model,
-                latencyMs: latencyMs,
-                lines: nil,
-                status: nil,
-                error: nil),
             activationOwner: self.pendingActivationOwner)
     }
 
@@ -588,9 +552,6 @@ final class OnboardingAISetupModel {
         self.providerCatalogError = nil
         self.statuses = [:]
         self.selectedKind = nil
-        self.connectedModelRef = nil
-        self.connectedLatencyMs = nil
-        self.connectedSetupLines = []
         self.detectError = nil
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
@@ -602,7 +563,6 @@ final class OnboardingAISetupModel {
         self.manualError = nil
         self.manualTesting = false
         self.showManualEntry = false
-        self.suppressNextAutoActivation = false
         if let authSessionToCancel, let authServerLease {
             Task {
                 await self.gateway.cancelWizardSession(authSessionToCancel, on: authServerLease)
@@ -690,18 +650,9 @@ extension OnboardingAISetupModel {
             if Self.canAcceptProviderAuthReconciliation(
                 pending: providerAuthReconciliationPending,
                 setupComplete: result.setupComplete == true,
-                configuredModel: result.configuredModel),
-                let configuredModel = result.configuredModel
+                configuredModel: result.configuredModel)
             {
-                finishConnected(
-                    kind: "provider-auth",
-                    result: ActivateResult(
-                        ok: true,
-                        modelRef: configuredModel,
-                        latencyMs: nil,
-                        lines: nil,
-                        status: nil,
-                        error: nil))
+                finishConnected(kind: "provider-auth")
                 return
             }
             self.candidates = result.candidates.map { detected in
@@ -725,13 +676,6 @@ extension OnboardingAISetupModel {
                 self.statuses[candidate.kind] = .untried
             }
             self.phase = .ready
-            if self.suppressNextAutoActivation {
-                // "Choose a different AI" pass: list every route and let the
-                // user pick; auto-activating here would redo the undone choice.
-                self.suppressNextAutoActivation = false
-                self.showManualEntry = !self.manualProviders.isEmpty
-                return
-            }
             if let preparedChoiceID {
                 // Detection kinds encode the provider-auth choice ID, while
                 // PrepareOption.brandId owns the model-ref namespace.
@@ -751,15 +695,12 @@ extension OnboardingAISetupModel {
                 return
             }
             if let first = autoCandidateAfter(kind: nil) {
-                // Candidate found: connect without asking. The connected banner
-                // keeps "Choose a different AI" so this choice stays reversible.
                 await self.activate(kind: first.kind, context: context)
             } else {
                 self.showManualEntry = !self.manualProviders.isEmpty
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
-            self.suppressNextAutoActivation = false
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
                 self.enterGatewayAuthBlocker(authIssue)
                 return
@@ -818,8 +759,7 @@ extension OnboardingAISetupModel {
     }
 
     func userSelect(kind: String) {
-        guard !self.isBusy else { return }
-        guard self.statuses[kind] != .connected else { return }
+        guard !self.isBusy, !self.connected else { return }
         guard let context = beginAttemptContext() else { return }
         Task { await self.activate(kind: kind, context: context) }
     }
@@ -948,7 +888,7 @@ extension OnboardingAISetupModel {
             }
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             if result.ok {
-                finishConnected(kind: kind, result: result, activationOwner: activationOwner)
+                finishConnected(kind: kind, activationOwner: activationOwner)
             } else {
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
@@ -1113,7 +1053,6 @@ extension OnboardingAISetupModel {
         else { return false }
         finishConnected(
             kind: kind,
-            result: result,
             activationOwner: activationOwner)
         return self.connected
     }
@@ -1431,15 +1370,7 @@ extension OnboardingAISetupModel {
         else { return false }
         self.serverLease = lease
         self.clearProviderAuth()
-        finishConnected(
-            kind: "provider-auth",
-            result: ActivateResult(
-                ok: true,
-                modelRef: configuredModel,
-                latencyMs: nil,
-                lines: nil,
-                status: nil,
-                error: nil))
+        finishConnected(kind: "provider-auth")
         return true
     }
 
@@ -1579,7 +1510,6 @@ extension OnboardingAISetupModel {
                 self.manualKey = ""
                 self.finishConnected(
                     kind: "api-key",
-                    result: result,
                     activationOwner: activationOwner)
             } else {
                 self.pendingActivationVerification = false
@@ -1621,7 +1551,6 @@ extension OnboardingAISetupModel {
 
     private func finishConnected(
         kind: String,
-        result: ActivateResult,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
         requireExistingReceipt: Bool = false)
     {
@@ -1641,11 +1570,7 @@ extension OnboardingAISetupModel {
         }
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
-        self.statuses[kind] = .connected
         self.selectedKind = kind
-        self.connectedModelRef = result.modelRef
-        self.connectedLatencyMs = result.latencyMs.map { Int($0.rounded()) }
-        self.connectedSetupLines = Self.normalizedSetupLines(result.lines)
         self.phase = .connected
         self.pendingActivationOwner = activationOwner
         self.completedHandoff = completedReceipt ? routeIdentity.flatMap { routeIdentity in
@@ -1667,10 +1592,4 @@ extension OnboardingAISetupModel {
         self.exhaustedAutoCandidates = true
         self.showManualEntry = true
     }
-
-    #if DEBUG
-    func _test_setConnectedSetupLines(_ lines: [String]?) {
-        self.connectedSetupLines = Self.normalizedSetupLines(lines)
-    }
-    #endif
 }

@@ -53,19 +53,21 @@ A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
 The reviewer is isolated and biased toward small, well-evidenced captures. It
-sees a bounded workspace skill list, can list or inspect proposals, and can read
-a bounded excerpt of a writable skill for context. It drafts at most one pending
-proposal: preferring to revise a matching pending proposal, then to patch the
-existing skill governing the work, and creating a new skill only when nothing
-covers the class. A patch proposal quotes the exact live text to change (or
-appends a new section) and the tool composes the full body inside the same read
-that hash-binds the proposal, so untouched content survives by construction and
-patches auto-apply in `auto` mode. A patch requires a full-skill read receipt:
-skills beyond the bounded read budget cannot be patched autonomously. A full-body update rewrite always stays
-pending for operator review. Its one-mutation budget is shared across retries. Every
-mutation is a pending proposal — it never writes a live skill directly and
-cannot apply, reject, quarantine, message, or use general agent tools. The
-reviewed trajectory is evidence, not instructions.
+receives an authoritative receipt of the skills the foreground run actually
+read or command-invoked, plus a bounded workspace skill list. It prefers a used
+writable skill when that skill governs the learning, then another existing
+skill, and creates a new skill only when nothing covers the class.
+
+Before changing an existing skill, the reviewer must read its complete current
+body. Both targeted patches and full-body rewrites bind the proposal to that
+read's content hash. Skills beyond the bounded read budget cannot be updated
+autonomously. A patch quotes the exact live text to change, while a rewrite must
+preserve everything still useful. In `auto` mode, either form goes through the
+same scanner-gated apply path without operator review. The one-mutation budget
+is shared across retries. The reviewer cannot apply, reject, quarantine,
+message, or use general agent tools itself; the orchestrating pipeline applies
+the finished capture only after the isolated review ends. The reviewed
+trajectory is evidence, not instructions.
 
 Good candidates include:
 
@@ -88,11 +90,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                                                                                                 |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`     | Does not create experience-review captures.                                                                                                                                      |
-| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                             |
-| `auto`    | Creates or revises proposals, then applies new-skill and patch proposals through the normal Workshop apply path. Full-body updates stay pending for review. This is the default. |
+| Mode      | Capture behavior                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`     | Does not create experience-review captures.                                                                                                                              |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                     |
+| `auto`    | Creates or revises proposals, then applies every autonomous capture through the normal scanner-gated Workshop path. No operator review is required. This is the default. |
 
 Set the mode with the CLI:
 
@@ -135,6 +137,8 @@ Every learned skill receives these controls:
   and extra-root skills remain outside the write boundary.
 - **Hash binding:** update proposals bind to the current live skill and go stale
   if that target changes before apply.
+- **Read before update:** the reviewer must read the complete current skill
+  before either a targeted patch or a full-body rewrite.
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
 - **Curator lifecycle:** learned skills unused for 30 days become stale and after

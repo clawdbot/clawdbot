@@ -79,6 +79,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
   }
+  if (options.includeLastMessage === true) {
+    params.includeLastMessage = true;
+  }
   if (options.archivedFilter === "archived") {
     params.archived = true;
   } else if (options.archivedFilter === "all") {

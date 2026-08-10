@@ -56,6 +56,13 @@ function projectDraftOwnership(
 }
 
 describe("sidebar session live-run projection", () => {
+  it("projects the durable last-message preview", () => {
+    expect(
+      projectSidebarSession({ lastMessagePreview: "The final reply is durable." })
+        .lastMessagePreview,
+    ).toBe("The final reply is durable.");
+  });
+
   it.each([
     ["legacy running status", { status: "running" }, true],
     ["confirmed active run", { status: "running", hasActiveRun: true }, true],

@@ -38,6 +38,11 @@ export function updateChatRunProgressSnapshot(
     return next;
   }
   next.lastSeq = event.seq;
+  const matchesPreamble = (candidate: AgentEventPayload) =>
+    candidate.stream === "item" &&
+    candidate.data?.kind === "preamble" &&
+    (candidate.data.itemId ?? "") === preambleItemId;
+  const previousPreamble = preambleItemId ? next.events.find(matchesPreamble) : undefined;
 
   const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
     next.events = next.events.filter((candidate) => {
@@ -61,18 +66,10 @@ export function updateChatRunProgressSnapshot(
     }
   } else {
     const progressText = typeof data.progressText === "string" ? data.progressText.trim() : "";
+    removeWhere(matchesPreamble);
     if (!progressText) {
-      if (preambleItemId) {
-        removeWhere((candidate) => {
-          if (candidate.stream !== "item" || candidate.data?.kind !== "preamble") {
-            return false;
-          }
-          return candidate.data.itemId === preambleItemId;
-        });
-      }
       return next;
     }
-    removeWhere((candidate) => candidate.stream === "item" && candidate.data?.kind === "preamble");
   }
 
   const storedData: Record<string, unknown> = isTool
@@ -94,7 +91,8 @@ export function updateChatRunProgressSnapshot(
     runId: event.runId,
     seq: event.seq,
     stream: event.stream,
-    ts: event.ts,
+    // Keep first-seen time so reload cannot move updated commentary across a later steer.
+    ts: previousPreamble?.ts ?? event.ts,
     data: storedData,
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),

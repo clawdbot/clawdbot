@@ -14,6 +14,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -545,6 +546,14 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           ctx,
         });
+        if (skillMatch) {
+          recordRunSkillUsage({
+            runId: ctx?.runId,
+            name: skillMatch.skillName,
+            source: skillMatch.skillSource,
+            activation: skillMatch.activation,
+          });
+        }
         if (hookOptions.emitDiagnostics) {
           if (skillMatch) {
             emitSkillUsedDiagnostic({
