@@ -3,8 +3,8 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { isFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import { sameModelCandidate } from "./model-fallback-attempt.js";
@@ -32,7 +32,7 @@ type ModelCircuitGateContext = {
   authStore: AuthProfileStore | null;
 };
 
-export type ModelCircuitGateResult =
+type ModelCircuitGateResult =
   | { type: "attempt"; attempt: ModelCircuitAttempt }
   | { type: "skip"; error: string; reason: FailoverReason };
 
@@ -78,7 +78,7 @@ export function gateModelCircuitForCandidate(
  * candidate as blocked only errs toward attempting the open route — an
  * extra probe, never a lost turn.
  */
-export function laterFallbackCandidateCanReachTransport(
+function laterFallbackCandidateCanReachTransport(
   params: ModelCircuitGateContext & { now: number },
 ): boolean {
   for (let index = params.currentIndex + 1; index < params.candidates.length; index += 1) {

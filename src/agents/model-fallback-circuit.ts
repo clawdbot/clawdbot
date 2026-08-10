@@ -3,8 +3,8 @@ import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { describeFailoverError } from "./failover-error.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { modelKey } from "./model-ref-shared.js";
 
 const FAILURE_THRESHOLD = 5;
