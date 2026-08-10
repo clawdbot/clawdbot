@@ -31,6 +31,7 @@ data class GatewayClawHubSkillSummary(
   val displayName: String,
   val summary: String?,
   val version: String?,
+  val ownerHandle: String?,
 )
 
 data class GatewayClawHubInstallReview(
@@ -63,6 +64,7 @@ internal fun parseClawHubSearchResults(
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),
+        ownerHandle = value.string("ownerHandle"),
       )
     }.orEmpty()
 }

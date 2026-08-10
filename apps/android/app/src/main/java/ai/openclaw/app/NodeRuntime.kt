@@ -6368,7 +6368,8 @@ class NodeRuntime private constructor(
         )
     }
     try {
-      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.slug))
+      val targetSlug = if (skill.ownerHandle != null) "@${skill.ownerHandle}/${skill.slug}" else skill.slug
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(targetSlug))
       val review = parseClawHubInstallReview(response, skill, json)
       publishGatewayData(gatewayScope) {
         if (clawHubSkillReviewSeq.get() == reviewSeq) {
