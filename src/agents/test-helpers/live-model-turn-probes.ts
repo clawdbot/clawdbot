@@ -4,7 +4,7 @@
  * Live profile tests use these fixtures to verify text, file-label, and image
  * turn behavior without coupling probe construction to the large live suite.
  */
-import type { Context, Model } from "../llm/types.js";
+import type { Context, Model } from "../../llm/types.js";
 
 /** Stable token embedded in file-style live probe prompts. */
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";

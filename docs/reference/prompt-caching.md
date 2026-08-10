@@ -181,7 +181,7 @@ agents:
 OpenClaw runs one combined live cache regression gate covering repeated prefixes, tool turns, image turns, MCP-style tool transcripts, and an Anthropic no-cache control.
 
 - `src/agents/live-cache-regression.live.test.ts`
-- `src/agents/live-cache-regression-runner.ts`
+- `src/agents/test-helpers/live-cache-regression-runner.ts`
 - `src/agents/live-cache-regression-baseline.ts`
 
 Run it with:

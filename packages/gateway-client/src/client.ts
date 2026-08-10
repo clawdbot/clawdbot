@@ -269,13 +269,6 @@ export class GatewayClientRequestTimeoutError extends Error {
   }
 }
 
-class GatewayClientTransientPreHelloCloseError extends Error {
-  constructor() {
-    super("gateway transient pre-hello clean close");
-    this.name = "GatewayClientTransientPreHelloCloseError";
-  }
-}
-
 class GatewayClientSocketFactoryConfigurationError extends Error {}
 
 class GatewayClientTransportPolicyError extends GatewayClientSocketFactoryConfigurationError {}
@@ -1140,7 +1133,7 @@ export class GatewayClient {
       return {
         retry: true,
         notify: true,
-        pendingError: new GatewayClientTransientPreHelloCloseError(),
+        pendingError: new Error("gateway transient pre-hello clean close"),
       };
     }
     if (
