@@ -483,7 +483,7 @@ export async function deleteSessionGroup(
   // clears the category on every member, so the confirm names that outcome. It
   // follows the access check so nobody is asked about a delete that cannot run.
   const confirmed = await showConfirmDialog({
-    title: t("sessionsView.deleteGroupTitle"),
+    title: t("sessionsView.deleteGroupTitle", { group }),
     message: t("sessionsView.deleteGroupConfirm", { group }),
     confirmLabel: t("common.delete"),
     danger: true,

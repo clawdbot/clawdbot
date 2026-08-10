@@ -609,11 +609,13 @@ suite.define(() => {
       await activateMenuItem(page.getByRole("menuitem", { name: "Delete group…" }));
       // The confirm names the group and what happens to its sessions, and only
       // the operator's answer sends sessions.groups.delete.
-      await page.getByRole("dialog", { name: "Delete group" }).waitFor({ state: "visible" });
+      await page
+        .getByRole("dialog", { name: 'Delete group "Projects"' })
+        .waitFor({ state: "visible" });
       const deleteConfirm = page.locator("openclaw-modal-dialog");
       await expect
         .poll(() => deleteConfirm.textContent())
-        .toContain('Delete group "Projects"? Its sessions move back to the session list.');
+        .toContain("The group is removed. Its sessions move back to the session list.");
       await captureUiProof(page, "sidebar-group-delete-confirm.png");
       await deleteConfirm.getByRole("button", { name: "Delete", exact: true }).click();
       const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
