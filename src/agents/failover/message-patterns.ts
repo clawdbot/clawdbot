@@ -65,7 +65,7 @@ const BILLING_ERROR_HARD_402_RE =
 // Numeric ids and token counts are not HTTP throttling signals. Require a
 // standalone status token, HTTP/status context, or a structured status/code shape.
 const RATE_LIMIT_429_RE =
-  /^(?:\s*429\s*)$|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
+  /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
 // Catches provider "model X not found" wording; the legacy provider table
 // only covers Groq's deactivated-model forms.
 export const GENERIC_MODEL_NOT_FOUND_RE = /\bmodel\b.{0,60}?\bnot (?:found|available)\b/i;

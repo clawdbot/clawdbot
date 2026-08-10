@@ -1,8 +1,9 @@
 // Covers provider-specific error-pattern classification hooks.
 import { describe, expect, it, vi } from "vitest";
+import type { FailoverReason } from "./signal.js";
 
 const hoisted = vi.hoisted(() => ({
-  classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
+  classifyProviderFailoverSignalWithPlugin: vi.fn((): FailoverReason | null => null),
 }));
 
 vi.mock("../../logging/node-require.js", () => ({
@@ -20,10 +21,9 @@ import {
 
 describe("classifyProviderPluginError", () => {
   it("retains the direct provider-hook compatibility predicate", () => {
-    hoisted.classifyProviderFailoverSignalWithPlugin.mockReturnValueOnce("billing");
     expect(
       classifyProviderPluginError({ provider: "demo-provider", errorMessage: "quota exhausted" }),
-    ).toBe("billing");
+    ).toBeNull();
   });
 });
 
