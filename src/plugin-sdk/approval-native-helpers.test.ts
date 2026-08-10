@@ -154,7 +154,7 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
 });
 
 describe("createNativeApprovalChannelRouteGates", () => {
-  it("rejects an unbound session route when multiple accounts are eligible", () => {
+  it("reports each locally eligible account for coordinator arbitration", () => {
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
     } satisfies OpenClawConfig;
@@ -169,7 +169,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
           accountIds: ["default", "ops"],
           enabledAccounts: ["default", "ops"],
         }).shouldHandleApprovalRequest({ cfg, accountId, request }),
-      ).toBe(false);
+      ).toBe(true);
     }
     expect(
       createMatrixRouteGates({
@@ -274,7 +274,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
     ).toBe(false);
   });
 
-  it("uses default and single-enabled account fallback for unscoped targets", () => {
+  it("uses the default account for unscoped targets", () => {
     const cfg = {
       approvals: {
         exec: {
@@ -310,7 +310,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
         request: matrixExecRequest,
         target,
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       createMatrixRouteGates({
