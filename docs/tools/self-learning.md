@@ -179,14 +179,14 @@ Experience review adds one bounded model run on the configured provider only
 after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-A deep direct-session review receives the complete conversation trajectory. A
-group review receives only the current sender's turn. A review triggered by
-accumulated shallow turns receives the bounded message window of those
-same-sender turns (at most 40 messages); accumulation restarts whenever the
-sender, provider, model, or auth profile changes, so no turn is disclosed to a
-provider identity other than its own. In every case the rendered trajectory is
-limited to 60,000 characters; when the bundle is too large, OpenClaw keeps the
-first message and newest evidence and marks the omitted middle.
+A deep-turn review receives only the current turn beginning with its most
+recent user message. A review triggered by accumulated shallow turns instead
+receives the bounded message window of those same-sender turns (at most 40
+messages); accumulation restarts whenever the sender, provider, model, or auth
+profile changes, so no turn is disclosed to a provider identity other than its
+own. Either way the rendered trajectory is limited to 60,000 characters; when
+the bundle is too large, OpenClaw keeps the first message and newest evidence
+and marks the omitted middle.
 
 The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to

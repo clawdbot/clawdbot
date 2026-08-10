@@ -351,11 +351,6 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
 
       const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
-      // Direct sessions keep the complete trajectory so the reviewer can connect
-      // repeated skill use and corrections across turns. Group reviews stay on the
-      // current sender's turn to avoid mixing participants into one review identity.
-      const trajectoryMessages =
-        params.ctx.chatType === "group" ? turnMessages : params.event.messages;
       // Native harnesses can report exact provider iterations even when their
       // transcript projection has a different assistant-message cardinality.
       const reportedModelIterations = params.ctx.modelIterations;
@@ -366,11 +361,10 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             ? reportedModelIterations
             : 0;
       let reviewIterations = modelIterations;
-      let reviewMessages = trajectoryMessages;
+      let reviewMessages = turnMessages;
       let reviewAborted = !params.event.success;
       let reviewUsedSkills = mergeRunSkillUsage(
-        existing &&
-          (params.ctx.chatType !== "group" || existing.candidate.ctx.runId === params.ctx.runId)
+        existing && existing.candidate.ctx.runId === params.ctx.runId
           ? existing.candidate.usedSkills
           : undefined,
         params.usedSkills,

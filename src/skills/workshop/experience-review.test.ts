@@ -25,6 +25,8 @@ function completedRun(
     senderId?: string;
     senderName?: string;
     chatType?: "direct" | "group";
+    modelProviderId?: string;
+    authProfileId?: string;
     usedSkills?: SkillExperienceReviewParams["usedSkills"];
   } = {},
 ): SkillExperienceReviewParams {
@@ -56,9 +58,9 @@ function completedRun(
       ...(options.modelMetadata === false
         ? {}
         : {
-            modelProviderId: "openai",
+            modelProviderId: options.modelProviderId ?? "openai",
             modelId: "gpt-test",
-            authProfileId: "openai:work",
+            authProfileId: options.authProfileId ?? "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
       ...(options.modelIterations === undefined
@@ -114,7 +116,7 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("reviews complete direct trajectories without mixing earlier group senders", async () => {
+  it("scopes deep direct and group reviews to the current user turn", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -128,7 +130,7 @@ describe("skill experience review scheduler", () => {
     );
     scheduler.schedule(direct);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview.mock.calls[0]?.[0].transcript).toContain(
+    expect(runReview.mock.calls[0]?.[0].transcript).not.toContain(
       "Earlier correction from this direct session.",
     );
 
@@ -215,7 +217,7 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("carries skills used by replaced direct-session review candidates", async () => {
+  it("does not carry direct transcript or skill receipts across provider identities", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -225,26 +227,41 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(
       completedRun({
+        sessionKey: "agent:main:provider-switch",
         runId: "run-a",
+        modelProviderId: "provider-a",
+        authProfileId: "provider-a:work",
+        userText: "Private work handled by provider A.",
         usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
       }),
     );
-    scheduler.schedule(
-      completedRun({
-        runId: "run-b",
-        usedSkills: [{ name: "deploy-check", source: "workspace", activation: "command" }],
-      }),
+    const nextProviderRun = completedRun({
+      sessionKey: "agent:main:provider-switch",
+      runId: "run-b",
+      modelProviderId: "provider-b",
+      authProfileId: "provider-b:work",
+      userText: "Current work handled by provider B.",
+      usedSkills: [{ name: "deploy-check", source: "workspace", activation: "command" }],
+    });
+    nextProviderRun.event.messages.unshift(
+      { role: "user", content: "Private work handled by provider A." },
+      { role: "assistant", content: "Private provider A response." },
     );
+    scheduler.schedule(nextProviderRun);
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(runReview).toHaveBeenCalledWith(
       expect.objectContaining({
-        usedSkills: [
-          { name: "release-runbook", source: "workspace", activation: "read" },
-          { name: "deploy-check", source: "workspace", activation: "command" },
-        ],
+        ctx: expect.objectContaining({
+          modelProviderId: "provider-b",
+          authProfileId: "provider-b:work",
+        }),
+        usedSkills: [{ name: "deploy-check", source: "workspace", activation: "command" }],
       }),
     );
+    const candidate = runReview.mock.calls[0]?.[0];
+    expect(candidate.transcript).toContain("Current work handled by provider B.");
+    expect(candidate.transcript).not.toContain("Private work handled by provider A.");
     scheduler.clear();
   });
 
