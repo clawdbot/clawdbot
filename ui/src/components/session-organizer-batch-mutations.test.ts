@@ -7,6 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { patchSettings } from "../app/settings.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   answerConfirmDialog,
@@ -360,7 +361,7 @@ type OperationsHarness = ReturnType<typeof createHarness>;
 const destructiveHarness = {
   methods: ["sessions.delete", "sessions.reclaim"],
   scopes: ["operator.write", "operator.admin"],
-} as const;
+};
 
 function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
   return {
@@ -398,6 +399,7 @@ describe("session organizer destructive confirmations", () => {
   });
 
   afterEach(() => {
+    patchSettings({ sessionDeleteConfirm: true });
     document.body.replaceChildren();
     restoreDialogPolyfill();
   });
@@ -466,6 +468,59 @@ describe("session organizer destructive confirmations", () => {
 
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.replaceCurrentSession).not.toHaveBeenCalled();
+  });
+
+  it("skips the delete confirm entirely once the operator opted out", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    const harness = createHarness(destructiveHarness);
+
+    await deleteSession(harness.host, sessionRow(0), harness.scope);
+
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(harness.deleteOne).toHaveBeenCalledOnce();
+  });
+
+  it("asks again after the preference is reset", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    patchSettings({ sessionDeleteConfirm: true });
+    const harness = createHarness(destructiveHarness);
+
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await pending;
+
+    expect(harness.deleteOne).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "cloud worker stop",
+      run: (harness: OperationsHarness) =>
+        stopCloudWorker(harness.host, cloudWorkerRow(false), harness.scope),
+    },
+    {
+      name: "preserved worktree removal",
+      run: (harness: OperationsHarness) => {
+        harness.deleteOne.mockResolvedValueOnce({
+          deleted: true,
+          worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+        } as never);
+        return deleteSession(harness.host, sessionRow(0), harness.scope);
+      },
+    },
+  ])("never offers an opt-out on the $name confirm", async (operation) => {
+    // Opting out of session deletes must not leak into the serious confirms.
+    patchSettings({ sessionDeleteConfirm: false });
+    const harness = createHarness({
+      ...destructiveHarness,
+      methods: [...destructiveHarness.methods, "worktrees.remove"],
+    });
+
+    const pending = operation.run(harness);
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    answerConfirmDialog(actions, "cancel");
+    await pending;
   });
 
   it("never opens the stop confirm for a reclaim target with an active run", async () => {

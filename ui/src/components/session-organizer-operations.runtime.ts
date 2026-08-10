@@ -1,3 +1,4 @@
+import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { moveSessionSection, normalizeSessionSectionOrder } from "../lib/sessions/grouping.ts";
@@ -15,7 +16,7 @@ import type {
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
-import { showConfirmDialog } from "./confirm-dialog.ts";
+import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
@@ -237,6 +238,19 @@ async function restoreArchivedSessions(
   await refreshSessionsAfterBatch(host, scope, rows);
 }
 
+/**
+ * Session deletes are the repeatable, per-row destructive action here, so they
+ * carry an opt-out. Stopping a cloud worker and removing a preserved worktree
+ * deliberately get none: the first is a rare shared-resource action and the
+ * second destroys the only copy of uncommitted work.
+ */
+function sessionDeleteSkipPreference(): ConfirmDialogSkipPreference {
+  return {
+    skipped: loadSettings().sessionDeleteConfirm === false,
+    remember: () => void patchSettings({ sessionDeleteConfirm: false }),
+  };
+}
+
 /** One confirm and one preserved-worktrees alert for the whole selection. */
 export async function deleteSessionsBatch(
   host: SessionOrganizerControllerHost,
@@ -250,6 +264,7 @@ export async function deleteSessionsBatch(
     message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
     confirmLabel: t("common.delete"),
     danger: true,
+    skipPreference: sessionDeleteSkipPreference(),
   });
   // A reconnect or a replaced sessions capability can land while the modal is
   // open, so the captured scope is revalidated before any delete leaves here.
@@ -660,6 +675,7 @@ export async function deleteSession(
     message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
     confirmLabel: t("common.delete"),
     danger: true,
+    skipPreference: sessionDeleteSkipPreference(),
   });
   if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
