@@ -960,9 +960,7 @@ describe("connected identity health", () => {
       client,
     });
 
-    expect(setStatus).not.toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycle: "ready" }),
-    );
+    expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
     await stopSlackMonitor(monitor);
