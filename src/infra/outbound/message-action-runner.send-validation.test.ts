@@ -1,19 +1,17 @@
 // Covers send validation for target/channel mismatches, configured channel
 // availability, and explicit target requirements.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
   forumTestPlugin,
-  runDrySend,
   workspaceConfig,
   workspaceTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
 const emptyConfig = {} as OpenClawConfig;
-const portableLocation = { latitude: 48.858844, longitude: 2.294351 };
 describe("runMessageAction send validation", () => {
   beforeEach(() => {
     setActivePluginRegistry(

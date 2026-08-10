@@ -1,6 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
-import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -17,23 +17,18 @@ import {
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
+const requireLabeledRecord = createRequireRecord("record", "expected-label");
 
 function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   const [mockCall] = mock.mock.calls;
   const call = mockCall?.[0];
-  if (!isRecord(call)) {
-    throw new Error("expected plugin action call");
-  }
-  return call;
+  return requireRecord(call);
 }
 
 function readPluginCall(
@@ -42,43 +37,16 @@ function readPluginCall(
 ): Record<string, unknown> {
   const mockCall = mock.mock.calls[callIndex];
   const call = mockCall?.[0];
-  if (!isRecord(call)) {
-    throw new Error(`expected plugin action call ${callIndex}`);
-  }
-  return call;
+  return requireRecord(call);
 }
 
 function readLastPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return readPluginCall(mock, mock.mock.calls.length - 1);
 }
 
-function readMockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const mockCall = mock.mock.calls[callIndex];
-  const value = mockCall?.[argIndex];
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
-function readMediaAccess(call: Record<string, unknown>): Record<string, unknown> {
-  if (!isRecord(call.mediaAccess)) {
-    throw new Error("expected plugin mediaAccess");
-  }
-  return call.mediaAccess;
-}
-
 function readRecordField(record: Record<string, unknown>, key: string, label: string) {
   const value = record[key];
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+  return requireLabeledRecord(value, label);
 }
 
 function expectRecordFields(
@@ -187,36 +155,6 @@ function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = {
     listAccountIds: () => ["default"],
     resolveAccount: () => account,
     isConfigured: () => true,
-  };
-}
-
-function createPollForwardingPlugin(params: {
-  pluginId: string;
-  label: string;
-  blurb: string;
-  handleAction: ChannelActionHandler;
-}): ChannelPlugin {
-  return {
-    id: params.pluginId,
-    meta: {
-      id: params.pluginId,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: `/channels/${params.pluginId}`,
-      blurb: params.blurb,
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: createAlwaysConfiguredPluginConfig(),
-    messaging: {
-      targetResolver: {
-        looksLikeId: () => true,
-      },
-    },
-    actions: {
-      describeMessageTool: () => ({ actions: ["poll"] }),
-      supportsAction: ({ action }) => action === "poll",
-      handleAction: params.handleAction,
-    },
   };
 }
 
@@ -932,173 +870,6 @@ describe("runMessageAction plugin dispatch", () => {
       expect(looksLikeId).toHaveBeenCalledOnce();
       expect(handleDryRunAction).not.toHaveBeenCalled();
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
-    });
-  });
-  describe("accountId defaults", () => {
-    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
-    const listGroupsLive = vi.fn(async () => [
-      { id: "channel:resolved", name: "resolved", kind: "group" as const },
-    ]);
-    const accountPlugin: ChannelPlugin = {
-      id: "accountchat",
-      meta: {
-        id: "accountchat",
-        label: "Account Chat",
-        selectionLabel: "Account Chat",
-        docsPath: "/channels/accountchat",
-        blurb: "Account chat test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => ["default", "ops", "disabled"],
-        resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
-      },
-      directory: { listGroupsLive },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        handleAction,
-      },
-    };
-
-    beforeEach(() => {
-      setTestPlugin(accountPlugin, "accountchat");
-      handleAction.mockClear();
-      listGroupsLive.mockClear();
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-    });
-    it.each([
-      {
-        name: "uses defaultAccountId override",
-        args: {
-          cfg: {} as OpenClawConfig,
-          defaultAccountId: "ops",
-        },
-        expectedAccountId: "ops",
-      },
-      {
-        name: "falls back to agent binding account",
-        args: {
-          cfg: {
-            bindings: [
-              { agentId: "agent-b", match: { channel: "accountchat", accountId: "account-b" } },
-            ],
-          } as OpenClawConfig,
-          agentId: "agent-b",
-        },
-        expectedAccountId: "account-b",
-      },
-      {
-        name: "prefers the account bound to the target peer",
-        args: {
-          cfg: {
-            bindings: [
-              {
-                agentId: "agent-b",
-                match: {
-                  channel: "accountchat",
-                  accountId: "wrong-peer",
-                  peer: { kind: "channel", id: "C_OTHER" },
-                },
-              },
-              {
-                agentId: "agent-b",
-                match: {
-                  channel: "accountchat",
-                  accountId: "account-peer",
-                  peer: { kind: "channel", id: "C_TARGET" },
-                },
-              },
-              {
-                agentId: "agent-b",
-                match: { channel: "accountchat", accountId: "agent-fallback" },
-              },
-            ],
-          } as OpenClawConfig,
-          agentId: "agent-b",
-          target: "channel:C_TARGET",
-        },
-        expectedAccountId: "account-peer",
-      },
-    ])("$name", async ({ args, expectedAccountId }) => {
-      await runMessageAction({
-        ...args,
-        action: "send",
-        params: {
-          channel: "accountchat",
-          target: "target" in args ? args.target : "channel:123",
-          message: "hi",
-        },
-      });
-
-      expect(handleAction).toHaveBeenCalled();
-      const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
-        | {
-            accountId?: string | null;
-            params: Record<string, unknown>;
-          }
-        | undefined;
-      if (!ctx) {
-        throw new Error("expected action context");
-      }
-      expect(ctx.accountId).toBe(expectedAccountId);
-      expect(ctx.params.accountId).toBe(expectedAccountId);
-    });
-
-    it("allows an explicitly selected configured account", async () => {
-      await runMessageAction({
-        cfg: {} as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "accountchat",
-          target: "channel:123",
-          accountId: "Ops",
-          message: "hi",
-        },
-      });
-
-      expect(handleAction).toHaveBeenCalledOnce();
-      expect(readFirstPluginCall(handleAction).accountId).toBe("ops");
-    });
-
-    it.each([
-      { name: "malformed", accountId: "!!!", error: "Invalid account ID" },
-      { name: "unknown", accountId: "missing", error: "Unknown account" },
-      { name: "disabled", accountId: "disabled", error: "disabled" },
-    ])("rejects an explicitly selected $name account before plugin code", async (testCase) => {
-      await expect(
-        runMessageAction({
-          cfg: {} as OpenClawConfig,
-          action: "send",
-          params: {
-            channel: "accountchat",
-            target: "channel:123",
-            accountId: testCase.accountId,
-            message: "hi",
-          },
-        }),
-      ).rejects.toThrow(testCase.error);
-
-      expect(handleAction).not.toHaveBeenCalled();
-    });
-
-    it("preserves an unlisted host-derived binding account", async () => {
-      await runMessageAction({
-        cfg: {} as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "accountchat",
-          target: "channel:123",
-          message: "hi",
-        },
-        defaultAccountId: "binding-alias",
-      });
-
-      expect(handleAction).toHaveBeenCalledOnce();
-      expect(readFirstPluginCall(handleAction).accountId).toBe("binding-alias");
     });
   });
 });

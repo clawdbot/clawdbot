@@ -29,46 +29,6 @@ function firstMockArg(
   return arg as Record<string, unknown>;
 }
 
-const slackConfig = {
-  channels: {
-    slack: {
-      enabled: true,
-    },
-  },
-} as OpenClawConfig;
-
-function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
-  const sendText = vi.fn().mockResolvedValue({
-    channel: "slack",
-    messageId: "m1",
-    chatId: "C123",
-  });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({
-            id: "slack",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-          config: {
-            listAccountIds: () => accountIds,
-            resolveAccount: () => ({ enabled: true }),
-            isConfigured: () => true,
-          },
-          threading: { threadAddressing: "message" },
-        },
-      },
-    ]),
-  );
-  return sendText;
-}
-
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));

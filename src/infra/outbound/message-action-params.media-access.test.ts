@@ -9,14 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
@@ -77,18 +75,6 @@ function setTestPlugin(plugin: ChannelPlugin, pluginId: string) {
   setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
 }
 
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return requireRecord(arg);
-}
-
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {
@@ -96,13 +82,6 @@ async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   } finally {
     await fs.rm(sandboxDir, { recursive: true, force: true });
   }
-}
-
-async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  return await withOpenClawTestState(
-    { layout: "state-only", prefix: "msg-runner-state-" },
-    (state) => test(state.stateDir),
-  );
 }
 
 const runDrySend = (params: {
@@ -128,19 +107,6 @@ function requireActionPayload(
     throw new Error("expected action result");
   }
   return requireRecord(result.payload);
-}
-
-function requireLoadWebMediaOptions(): Record<string, unknown> {
-  const call = requireLoadWebMediaCall();
-  return requireRecord(call[1]);
-}
-
-function requireLoadWebMediaCall(): readonly unknown[] {
-  const call = vi.mocked(loadWebMedia).mock.calls[0];
-  if (!call) {
-    throw new Error("Expected loadWebMedia to be called");
-  }
-  return call;
 }
 
 async function expectSandboxMediaRewrite(params: {
@@ -172,31 +138,6 @@ async function expectSandboxMediaRewrite(params: {
   expect(result.sendResult?.mediaUrl).toBe(
     path.join(params.sandboxDir, params.expectedRelativePath),
   );
-}
-
-async function runAttachmentRemoteMediaAction(params: {
-  cfg: OpenClawConfig;
-  action: "sendAttachment" | "upload-file";
-}) {
-  return runMessageAction({
-    cfg: params.cfg,
-    action: params.action,
-    params: {
-      channel: "attachmentchat",
-      target: "+15551234567",
-      media: "https://example.com/pic.png",
-      message: "caption",
-    },
-  });
-}
-
-function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  const payload = requireActionPayload(result);
-  expect(payload.ok).toBe(true);
-  expect(payload.filename).toBe("pic.png");
-  expect(payload.caption).toBe("caption");
-  expect(payload.contentType).toBe("image/png");
-  expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
 }
 
 let actualLoadWebMedia: typeof loadWebMedia;

@@ -4,20 +4,13 @@ import path from "node:path";
 // Covers message-action media hydration, sandbox path normalization,
 // attachments, and channel/plugin media source aliases.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const onePixelPng = Buffer.from(
@@ -64,15 +57,6 @@ vi.mock("../../media/web-media.js", async () => {
   };
 });
 
-const workspaceConfig = {
-  channels: {
-    workspace: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-    },
-  },
-} as OpenClawConfig;
-
 function setTestPlugin(plugin: ChannelPlugin, pluginId: string) {
   setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
 }
@@ -98,26 +82,6 @@ async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   }
 }
 
-async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  return await withOpenClawTestState(
-    { layout: "state-only", prefix: "msg-runner-state-" },
-    (state) => test(state.stateDir),
-  );
-}
-
-const runDrySend = (params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-  sandboxRoot?: string;
-}) =>
-  runMessageAction({
-    cfg: params.cfg,
-    action: "send",
-    params: params.actionParams as never,
-    dryRun: true,
-    sandboxRoot: params.sandboxRoot,
-  });
-
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireActionPayload(
@@ -141,37 +105,6 @@ function requireLoadWebMediaCall(): readonly unknown[] {
     throw new Error("Expected loadWebMedia to be called");
   }
   return call;
-}
-
-async function expectSandboxMediaRewrite(params: {
-  sandboxDir: string;
-  media?: string;
-  mediaField?: "media" | "mediaUrl" | "fileUrl";
-  message?: string;
-  expectedRelativePath: string;
-}) {
-  const result = await runDrySend({
-    cfg: workspaceConfig,
-    actionParams: {
-      channel: "workspace",
-      target: "12345678",
-      ...(params.media
-        ? {
-            [params.mediaField ?? "media"]: params.media,
-          }
-        : {}),
-      ...(params.message ? { message: params.message } : {}),
-    },
-    sandboxRoot: params.sandboxDir,
-  });
-
-  expect(result.kind).toBe("send");
-  if (result.kind !== "send") {
-    throw new Error("expected send result");
-  }
-  expect(result.sendResult?.mediaUrl).toBe(
-    path.join(params.sandboxDir, params.expectedRelativePath),
-  );
 }
 
 async function runAttachmentRemoteMediaAction(params: {
@@ -200,37 +133,6 @@ function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof ru
 }
 
 let actualLoadWebMedia: typeof loadWebMedia;
-
-const workspacePlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "workspace",
-    label: "Workspace",
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
-      isConfigured: async (account) =>
-        typeof (account as { botToken?: unknown }).botToken === "string" &&
-        (account as { botToken?: string }).botToken!.trim() !== "" &&
-        typeof (account as { appToken?: unknown }).appToken === "string" &&
-        (account as { appToken?: string }).appToken!.trim() !== "",
-    },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim() ?? "";
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("missing target for workspace"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
-    sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
-  },
-};
 
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {

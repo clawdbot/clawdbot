@@ -1,12 +1,11 @@
 // Covers message-action cross-context policy, markers, and presentation
 // decoration behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type {
   ChannelMessageActionContext,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -14,7 +13,6 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
-  directChatConfig,
   directChatTestPlugin,
   directOutbound,
   forumTestPlugin,

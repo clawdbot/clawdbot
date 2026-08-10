@@ -1,6 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
-import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -17,40 +17,12 @@ import {
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const [mockCall] = mock.mock.calls;
-  const call = mockCall?.[0];
-  if (!isRecord(call)) {
-    throw new Error("expected plugin action call");
-  }
-  return call;
-}
-
-function readPluginCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-): Record<string, unknown> {
-  const mockCall = mock.mock.calls[callIndex];
-  const call = mockCall?.[0];
-  if (!isRecord(call)) {
-    throw new Error(`expected plugin action call ${callIndex}`);
-  }
-  return call;
-}
-
-function readLastPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  return readPluginCall(mock, mock.mock.calls.length - 1);
-}
+const requireLabeledRecord = createRequireRecord("record", "expected-label");
 
 function readMockCallArg(
   mock: { mock: { calls: unknown[][] } },
@@ -60,25 +32,12 @@ function readMockCallArg(
 ): Record<string, unknown> {
   const mockCall = mock.mock.calls[callIndex];
   const value = mockCall?.[argIndex];
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
-function readMediaAccess(call: Record<string, unknown>): Record<string, unknown> {
-  if (!isRecord(call.mediaAccess)) {
-    throw new Error("expected plugin mediaAccess");
-  }
-  return call.mediaAccess;
+  return requireLabeledRecord(value, label);
 }
 
 function readRecordField(record: Record<string, unknown>, key: string, label: string) {
   const value = record[key];
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+  return requireLabeledRecord(value, label);
 }
 
 function expectRecordFields(

@@ -23,11 +23,11 @@ import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { throwIfAborted } from "./abort.js";
-import {
-  type MessageActionInput,
-  type MessageActionNormalization,
-  type MessageActionResult,
-  type ResolvedActionContext,
+import type {
+  MessageActionInput,
+  MessageActionNormalization,
+  MessageActionResult,
+  ResolvedActionContext,
 } from "./message-action-contracts.js";
 import {
   annotateSourceDelivery,
@@ -36,6 +36,7 @@ import {
 } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
+  collectAttachmentSources,
   normalizeSandboxMediaList,
   readBooleanParam,
 } from "./message-action-params.js";
@@ -111,35 +112,6 @@ function applySendPayloadPartsToActionParams(
   applySendLocationToActionParams(actionParams, parts.payload.location);
 }
 
-function collectMessageAttachmentMediaHints(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  const pushMedia = (entry: unknown) => {
-    const normalized = normalizeOptionalString(entry);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    mediaUrls.push(normalized);
-  };
-  for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      continue;
-    }
-    const record = attachment as Record<string, unknown>;
-    pushMedia(record.media);
-    pushMedia(record.mediaUrl);
-    pushMedia(record.path);
-    pushMedia(record.filePath);
-    pushMedia(record.fileUrl);
-    pushMedia(record.url);
-  }
-  return mediaUrls;
-}
-
 function withSendNormalization(
   result: MessageActionResult,
   normalization?: MessageActionNormalization,
@@ -179,7 +151,7 @@ export async function buildMessagePayload(params: {
     readStringParam(actionParams, "fileUrl", { trim: false }) ??
     readStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
-  const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
+  const attachmentMediaHints = collectAttachmentSources(actionParams).map((source) => source.value);
   const hasBuffer = Boolean(readStringParam(actionParams, "buffer", { trim: false }));
   const hasMediaHint =
     hasBuffer || Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;

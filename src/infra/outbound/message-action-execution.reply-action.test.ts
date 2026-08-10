@@ -17,8 +17,6 @@ const testchatConfig = {
   },
 } as OpenClawConfig;
 
-const CITATION_MARKED_MESSAGE = "Ayutthaya Thai is my pick. citeturn2search9turn2search6";
-
 function createReplyActionPlugin(handleAction: ChannelActionHandler): ChannelPlugin {
   return {
     id: "testchat",
@@ -64,21 +62,6 @@ function registerReplyPlugin() {
     ]),
   );
   return handleAction;
-}
-
-function readHandledParams(handleAction: {
-  mock: { calls: readonly unknown[][] };
-}): Record<string, unknown> {
-  const [call] = handleAction.mock.calls;
-  const arg = call?.[0];
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error("expected plugin handleAction call");
-  }
-  const params = (arg as Record<string, unknown>).params;
-  if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("expected plugin handleAction params");
-  }
-  return params as Record<string, unknown>;
 }
 
 async function runReplyAction(params: {

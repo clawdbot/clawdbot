@@ -106,33 +106,6 @@ async function runReplyAction(params: {
   });
 }
 
-async function runPollAction(params: { to: string }) {
-  const toolContext = {
-    currentChannelProvider: "testchat" as const,
-    currentChannelId: "direct:user-1",
-    currentMessageId: "1783",
-  };
-  return await runMessageAction({
-    cfg: testchatConfig,
-    action: "poll",
-    params: {
-      channel: "testchat",
-      to: params.to,
-      pollQuestion: "Preferred default?",
-      pollOption: ["Tell me right away", "Only important"],
-    },
-    toolContext,
-    messageActionAuthorization: {
-      requesterAccountId: "default",
-      toolContext,
-    },
-    sessionKey: "agent:main:testchat:direct:user-1",
-    defaultAccountId: "default",
-    sourceReplyDeliveryMode: "message_tool_only",
-    dryRun: false,
-  });
-}
-
 describe("runMessageAction reply-type plugin actions", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));

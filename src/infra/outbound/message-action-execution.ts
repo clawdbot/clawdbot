@@ -120,10 +120,6 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
   } as T;
 }
 
-function resolveGatewayActionOptions(gateway?: MessageActionGateway) {
-  return resolveOutboundMessageGatewayOptions(gateway);
-}
-
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
@@ -137,7 +133,7 @@ async function callGatewayMessageAction<T>(params: {
 }): Promise<T> {
   const { callGatewayLeastPrivilege, isGatewayTransportError } =
     await loadMessageActionGatewayRuntime();
-  const gateway = resolveGatewayActionOptions(params.gateway);
+  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // A timed-out send is reattached with the same idempotency key. Cap only the
   // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
   const timeoutMs =
