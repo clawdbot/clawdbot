@@ -73,9 +73,9 @@ One Slack account can receive messages and interactions from every workspace
 covered by an Enterprise Grid org-wide installation. Choose direct Socket Mode
 or HTTP Request URLs; relay mode is not supported for enterprise accounts. Both
 least-privilege manifests below enable the Enterprise message, mention,
-membership, reaction, and pin event paths, immediate replies, listener-owned
-status reactions, Slack interactivity for Block Kit actions and modal
-submissions, and the single `/openclaw` slash command.
+reaction, pin, channel-created, and channel-renamed event paths, immediate
+replies, listener-owned status reactions, Slack interactivity for Block Kit
+actions and modal submissions, and the single `/openclaw` slash command.
 
 #### Socket Mode
 
@@ -125,6 +125,8 @@ submissions, and the single `/openclaw` slash command.
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "channel_created",
+        "channel_rename",
         "message.channels",
         "message.groups",
         "message.im",
@@ -225,6 +227,8 @@ Socket Mode connection. Replace the example URL with the Gateway's public
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
         "app_mention",
+        "channel_created",
+        "channel_rename",
         "message.channels",
         "message.groups",
         "message.im",
@@ -283,20 +287,22 @@ bot-authored `message` and `app_mention` events before dispatch, regardless of
 bot identity for loop prevention.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
-membership, reaction, pin, Block Kit action, modal, and configured shortcut
-and slash-command payloads plus workspace-qualified outbound messages. Add any
-shortcuts to the app manifest's `features.shortcuts` list; OpenClaw accepts
-their callback IDs through the same interaction path. The manifest examples
-register the single `/openclaw` command; native command mode still requires the
-administrator-managed command entries described below. Relay mode, channel
-lifecycle events, App Home, Agent and Assistant lifecycle events, Slack-native
-approvals, and bindings remain unavailable for an enterprise account. Slack
-action tools are supported for enterprise accounts across every group listed in
+membership, reaction, pin, channel-created, channel-renamed, Block Kit action,
+modal, and configured shortcut and slash-command payloads plus
+workspace-qualified outbound messages. Add any shortcuts to the app manifest's
+`features.shortcuts` list; OpenClaw accepts their callback IDs through the same
+interaction path. The manifest examples register the single `/openclaw`
+command; native command mode still requires the administrator-managed command
+entries described below. Relay mode, channel-ID-change events, App Home, Agent
+and Assistant lifecycle events, Slack-native approvals, and bindings remain
+unavailable for an enterprise account. Slack action tools are supported for
+enterprise accounts across every group listed in
 [Actions and gates](#actions-and-gates); the configured
 `channels.slack.actions.*` gates and OAuth scopes still apply. Inbound
-membership, reaction, and pin notifications use the listener-owned,
-workspace-scoped Slack client. Outbound acknowledgment, typing, and status
-reactions are also supported through that client and require `reactions:write`.
+membership, reaction, pin, channel-created, and channel-renamed notifications
+use validated listener-owned, workspace-scoped event routing. Outbound
+acknowledgment, typing, and status reactions are also supported through that
+client and require `reactions:write`.
 
 OpenClaw records Enterprise Grid destinations as
 `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
