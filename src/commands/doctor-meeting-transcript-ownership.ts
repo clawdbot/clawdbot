@@ -111,6 +111,73 @@ export function inspectMeetingTranscriptOwnership(params: {
           if (typeof value === "string") {
             sourceLocator[key] = value;
           }
+<<<<<<< HEAD
+=======
+          const storedMetadata = metadata ?? {};
+          const providerId = readOptionalString(source, "providerId");
+          if (!providerId) {
+            unresolved += 1;
+            continue;
+          }
+          const storedOwnerChannel = readOptionalString(storedMetadata, "ownerChannel");
+          const storedOwnerAccountId = readOptionalString(storedMetadata, "ownerAccountId");
+          const hasOwner = Boolean(storedOwnerChannel || storedOwnerAccountId);
+          if (hasOwner) {
+            if (!storedOwnerChannel || !storedOwnerAccountId) {
+              unresolved += 1;
+            }
+            continue;
+          }
+          let provider;
+          try {
+            provider = getTranscriptSourceProvider(providerId, params.cfg);
+          } catch {
+            provider = undefined;
+          }
+          let inferredOwner: { ownerChannel: string; ownerAccountId: string } | undefined;
+          try {
+            const sourceLocator: TranscriptSourceLocator = { providerId };
+            for (const [key, value] of Object.entries(source)) {
+              if (typeof value === "string") {
+                sourceLocator[key] = value;
+              }
+            }
+            sourceLocator.providerId = providerId;
+            inferredOwner = provider?.inferLegacyOwnership?.(sourceLocator);
+          } catch {
+            inferredOwner = undefined;
+          }
+          const inferredOwnerRecord = asOptionalRecord(inferredOwner);
+          const ownerChannel = inferredOwnerRecord
+            ? readOptionalString(inferredOwnerRecord, "ownerChannel")?.toLowerCase()
+            : undefined;
+          const ownerAccountId = inferredOwnerRecord
+            ? readOptionalString(inferredOwnerRecord, "ownerAccountId")
+            : undefined;
+          if (!ownerChannel || !ownerAccountId) {
+            if ((provider?.accountBindingChannels?.length ?? 0) > 0) {
+              unresolved += 1;
+            }
+            continue;
+          }
+          const bindingChannels = new Set(
+            (provider?.accountBindingChannels ?? [])
+              .map((value) => value.trim().toLowerCase())
+              .filter(Boolean),
+          );
+          if (!bindingChannels.has(ownerChannel)) {
+            unresolved += 1;
+            continue;
+          }
+          repairs.push({
+            sessionId: row.session_id,
+            startedAt: row.started_at,
+            expectedMetadataJson: row.metadata_json,
+            expectedSourceJson: row.source_json,
+            expectedUpdatedAtMs: row.updated_at_ms,
+            metadataJson: JSON.stringify({ ...storedMetadata, ownerChannel, ownerAccountId }),
+          });
+>>>>>>> 4fdd840246b (fix(doctor): validate transcript owner inference)
         }
         sourceLocator.providerId = providerId;
         inferredOwner = provider?.inferLegacyOwnership?.(sourceLocator);

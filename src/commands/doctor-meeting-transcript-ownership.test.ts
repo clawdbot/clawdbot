@@ -126,6 +126,14 @@ describe("Doctor meeting transcript ownership normalization", () => {
       ],
       ["unavailable", undefined],
       ["partial", provider({ infer: () => ({ ownerChannel: "discord", ownerAccountId: "work" }) })],
+      [
+        "malformed-inference",
+        provider({
+          infer: (() => ({
+            ownerAccountId: "work",
+          })) as TranscriptSourceProvider["inferLegacyOwnership"],
+        }),
+      ],
     ]);
     getTranscriptSourceProviderMock.mockImplementation((providerId: string) =>
       providers.get(providerId),
@@ -148,6 +156,11 @@ describe("Doctor meeting transcript ownership normalization", () => {
         source: { accountId: "work" },
         metadata: { agentId: "main", ownerChannel: "discord" },
       },
+      {
+        providerId: "malformed-inference",
+        source: { accountId: "work" },
+        metadata: { agentId: "main" },
+      },
     ];
     for (const [index, entry] of cases.entries()) {
       await fixture.store.writeSession({
@@ -158,9 +171,27 @@ describe("Doctor meeting transcript ownership normalization", () => {
       });
     }
 
+<<<<<<< HEAD
     const inspection = inspectMeetingTranscriptOwnership({ cfg: {}, env: fixture.env });
     expect(inspection.repairs).toEqual([]);
     expect(inspection.unresolved).toBe(4);
+=======
+    const warnings: string[] = [];
+    const changes: string[] = [];
+    const confirmRuntimeRepair = vi.fn().mockResolvedValue(true);
+    await noteMeetingTranscriptOwnership({
+      cfg: {},
+      env: fixture.env,
+      prompter: { confirmRuntimeRepair },
+      warnings,
+      changes,
+    });
+    expect(warnings).toEqual([
+      "- Kept 5 legacy transcript ownership rows local-only because account ownership cannot be proven.",
+    ]);
+    expect(changes).toEqual([]);
+    expect(confirmRuntimeRepair).not.toHaveBeenCalled();
+>>>>>>> 4fdd840246b (fix(doctor): validate transcript owner inference)
     for (const [index, entry] of cases.entries()) {
       await expect(fixture.store.readSession(`unproven-${index}`)).resolves.toMatchObject({
         metadata: entry.metadata,
