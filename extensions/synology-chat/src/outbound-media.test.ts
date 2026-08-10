@@ -377,6 +377,7 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("bounds repeated authenticated downloads without charging HEAD requests", async () => {
+    const { openedStores } = installRuntime();
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.alloc(32 * 1024 * 1024, 0x61),
       kind: undefined,
@@ -389,6 +390,11 @@ describe("Synology Chat hosted outbound media", () => {
       mediaUrl: "https://files.example.com/report.pdf",
     });
     const requestUrl = internalCapabilityUrl(prepared.url);
+    const chunkStore = openedStores[1];
+    if (!chunkStore) {
+      throw new Error("expected hosted media chunk store");
+    }
+    const chunkReadSpy = vi.spyOn(chunkStore, "lookup");
 
     for (let index = 0; index < 4; index += 1) {
       const response = makeRes();
@@ -400,6 +406,7 @@ describe("Synology Chat hosted outbound media", () => {
       expect(response.statusCode).toBe(200);
       await Promise.resolve();
     }
+    const chunkReadsAtLimit = chunkReadSpy.mock.calls.length;
 
     const head = makeRes();
     await tryHandleSynologyHostedMediaRequest(
@@ -417,6 +424,7 @@ describe("Synology Chat hosted outbound media", () => {
     );
     expect(limited.statusCode).toBe(429);
     expect(limited.headers["retry-after"]).toBe("60");
+    expect(chunkReadSpy).toHaveBeenCalledTimes(chunkReadsAtLimit);
   });
 
   it("persists frozen capabilities across plugin-state reopen and runtime replacement", async () => {

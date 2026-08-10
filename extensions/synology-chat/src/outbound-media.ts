@@ -75,14 +75,18 @@ const hostedMediaStores = new Map<string, HostedOutboundMediaStore>();
 const servedByteWindows = new Map<string, { startedAt: number; bytes: number }>();
 let hostedMediaRuntime: ReturnType<typeof getSynologyRuntime> | undefined;
 
-function reserveServedBytes(accountId: string, byteLength: number, now = Date.now()): boolean {
+function reserveServedBytes(
+  accountId: string,
+  byteLength: number,
+  now = Date.now(),
+): (() => void) | undefined {
   const existing = servedByteWindows.get(accountId);
   const active =
     existing && now - existing.startedAt < SYNOLOGY_OUTBOUND_MEDIA_SERVED_BYTES_WINDOW_MS
       ? existing
       : { startedAt: now, bytes: 0 };
   if (active.bytes + byteLength > SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVED_BYTES_PER_WINDOW) {
-    return false;
+    return undefined;
   }
   servedByteWindows.delete(accountId);
   servedByteWindows.set(accountId, {
@@ -96,7 +100,16 @@ function reserveServedBytes(accountId: string, byteLength: number, now = Date.no
     }
     servedByteWindows.delete(oldest);
   }
-  return true;
+  return () => {
+    const current = servedByteWindows.get(accountId);
+    if (!current || current.startedAt !== active.startedAt) {
+      return;
+    }
+    current.bytes = Math.max(0, current.bytes - byteLength);
+    if (current.bytes === 0) {
+      servedByteWindows.delete(accountId);
+    }
+  };
 }
 
 function holdServingLeaseUntilResponseDone(res: ServerResponse, accountId: string): void {
@@ -384,6 +397,7 @@ export async function tryHandleSynologyHostedMediaRequest(
     return true;
   }
   let responseOwnsServingLease = false;
+  let rollbackServedBytes: (() => void) | undefined;
   try {
     const store = getHostedMediaStore(account.accountId);
     const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
@@ -401,6 +415,15 @@ export async function tryHandleSynologyHostedMediaRequest(
     let servedMetadata = metadata;
     let body: Buffer | undefined;
     if (method === "GET") {
+      // Authenticate and reserve from metadata before reconstructing chunk bytes.
+      // Rejected over-budget requests must not force large SQLite reads or allocations.
+      rollbackServedBytes = reserveServedBytes(account.accountId, metadata.byteLength);
+      if (!rollbackServedBytes) {
+        res.statusCode = 429;
+        res.setHeader("Retry-After", "60");
+        res.end("Attachment download limit exceeded");
+        return true;
+      }
       const entry = await store.read(candidate.id);
       if (
         !entry ||
@@ -414,12 +437,6 @@ export async function tryHandleSynologyHostedMediaRequest(
       servedMetadata = entry.metadata;
       body = entry.buffer;
     }
-    if (method === "GET" && !reserveServedBytes(account.accountId, servedMetadata.byteLength)) {
-      res.statusCode = 429;
-      res.setHeader("Retry-After", "60");
-      res.end("Attachment download limit exceeded");
-      return true;
-    }
     for (const [name, value] of Object.entries(
       buildHostedOutboundMediaResponseHeaders(servedMetadata, {
         fallbackFileName: `attachment-${candidate.id.slice(0, 10)}.bin`,
@@ -432,8 +449,10 @@ export async function tryHandleSynologyHostedMediaRequest(
     responseOwnsServingLease = true;
     holdServingLeaseUntilResponseDone(res, account.accountId);
     res.end(body);
+    rollbackServedBytes = undefined;
     return true;
   } finally {
+    rollbackServedBytes?.();
     if (!responseOwnsServingLease) {
       servingLimiter.release(account.accountId);
     }
