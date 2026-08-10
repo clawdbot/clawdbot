@@ -111,9 +111,11 @@ Update trip-planning to also check seat maps before booking.
 ```
 
 If a skill used in the current turn proves wrong or incomplete, the agent reads
-the live skill, creates a targeted patch proposal, and applies it immediately.
-The default approval policy does not interrupt the turn. The repaired skill is
-loaded by new sessions; the running session keeps its original skill snapshot.
+the live skill and creates a targeted patch proposal. A runtime receipt limits
+this flow to skills used in that run. Autonomous mode `off` disables repair,
+`propose` leaves the patch pending, and `auto` scans and applies it immediately.
+The repaired skill is loaded by new sessions; the running session keeps its
+original skill snapshot.
 
 Iterate on a pending proposal:
 

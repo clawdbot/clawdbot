@@ -7,11 +7,14 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
+import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import {
   applySkillProposal,
   composeSkillBodyPatch,
   evaluateSkillProposal,
+  inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -235,9 +238,16 @@ function buildSkillWorkshopToolDescription(
   proposalOnly: boolean,
   supportsCompletion: boolean,
   updateProposals: boolean,
+  autonomousMode: "off" | "propose" | "auto",
 ): string {
   if (!proposalOnly) {
-    return `Read, patch, create, update, revise, inspect, evaluate, and apply reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+    const repairPolicy =
+      autonomousMode === "off"
+        ? "Foreground repair is disabled."
+        : autonomousMode === "propose"
+          ? "A foreground patch to a skill used in this run stays pending for review."
+          : "A foreground patch to a skill used in this run is scanned and applied immediately.";
+    return `Read, patch, create, update, revise, inspect, evaluate, and apply reusable-procedure skill proposals. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
   const draftKinds = updateProposals ? "create, update, or revise" : "create or revise";
@@ -246,6 +256,7 @@ function buildSkillWorkshopToolDescription(
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
+  const workshopConfig = resolveSkillWorkshopConfig(options.config);
   const readSkillHashes =
     options.proposalMutationBudget?.readSkillHashes ?? new Map<string, string>();
   if (options.proposalMutationBudget) {
@@ -259,6 +270,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
       options.updateProposals === true,
+      workshopConfig.autonomous.mode,
     ),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
@@ -381,13 +393,24 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "apply") {
+        const proposalId = readLifecycleProposalIdParam(params);
+        const proposal = await inspectSkillProposal(proposalId, {
+          workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          env: options.env,
+        });
+        if (proposal?.record.autonomousCapture && workshopConfig.autonomous.mode !== "auto") {
+          throw new ToolInputError(
+            `autonomous mode "${workshopConfig.autonomous.mode}" leaves captured proposals pending for operator review`,
+          );
+        }
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
           eventActor: skillWorkshopAgentEventActor(options.agentId),
           config: options.config,
           env: options.env,
-          proposalId: readLifecycleProposalIdParam(params),
+          proposalId,
           expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
           correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
@@ -445,6 +468,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "patch" && options.proposalOnly === true && options.updateProposals !== true) {
         throw new ToolInputError("this Skill Workshop session cannot patch live skills");
       }
+      const foregroundRepair = action === "patch" && options.proposalOnly !== true;
+      if (foregroundRepair && workshopConfig.autonomous.mode === "off") {
+        throw new ToolInputError("foreground skill repair is disabled by autonomous mode off");
+      }
       let expectedCurrentContentHash: string | undefined;
       const requiresRead = action === "patch" || (action === "update" && options.updateProposals);
       if (requiresRead) {
@@ -471,6 +498,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         expectedCurrentContentHash = readHash;
         if (action === "patch") {
+          if (
+            foregroundRepair &&
+            !hasRunWorkspaceSkillUsage(options.origin?.runId, target.skillKey)
+          ) {
+            throw new ToolInputError(
+              `skill "${target.skillKey}" was not used in this run and cannot be repaired autonomously`,
+            );
+          }
           try {
             composeSkillBodyPatch(stripProposalFrontmatterForSkill(target.content), {
               oldString:
@@ -571,12 +606,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               }),
             },
             createdBy: "skill-workshop",
-            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
+            ...(options.autonomousCapture || foregroundRepair ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
           });
-          contentText = proposalMutationText("Created skill patch proposal", proposal.record);
+          contentText = foregroundRepair
+            ? workshopConfig.autonomous.mode === "propose"
+              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillKey}; autonomous mode propose requires operator review.`
+              : proposalMutationText("Created skill patch proposal", proposal.record)
+            : proposalMutationText("Created skill patch proposal", proposal.record);
         } else if (action === "revise") {
           const pendingProposal = await resolvePendingSkillProposal({
             proposalId: readStringParam(params, "proposal_id", {
@@ -624,6 +663,22 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           });
         }
 
+        if (foregroundRepair && workshopConfig.autonomous.mode === "auto") {
+          const applied = await applySkillProposal({
+            workspaceDir: options.workspaceDir,
+            agentId: options.agentId,
+            eventActor: skillWorkshopAgentEventActor(options.agentId),
+            config: options.config,
+            env: options.env,
+            proposalId: proposal.record.id,
+            expectedRevisionHash: proposal.revisionHash,
+            reason: "Foreground repair of a used skill",
+          });
+          return actionResult(applied.record, {
+            contentText: `Repaired used skill ${applied.record.target.skillKey} through proposal ${applied.record.id}.`,
+            targetSkillFile: applied.targetSkillFile,
+          });
+        }
         return proposalResult(proposal, { contentText });
       } catch (error) {
         if (reservesMutation && options.proposalMutationBudget) {

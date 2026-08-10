@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
@@ -142,7 +143,7 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(true);
   });
 
-  it("does not nudge the foreground model when autonomy is enabled", () => {
+  it("describes the configured foreground repair outcome", () => {
     const disabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
       config: { skills: { workshop: { autonomous: { mode: "off" } } } },
@@ -152,7 +153,8 @@ describe("skill_workshop tool", () => {
       config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
-    expect(enabled.description).toBe(disabled.description);
+    expect(disabled.description).toContain("Foreground repair is disabled.");
+    expect(enabled.description).toContain("stays pending for review");
     expect(enabled.description).not.toContain("Experience capture");
   });
 
@@ -777,46 +779,78 @@ describe("skill_workshop tool", () => {
     ).rejects.toThrow();
   });
 
-  it("repairs an existing live skill through read, patch, and apply", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-");
-    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
-    const created = await tool.execute("repair-create", {
-      action: "create",
-      name: "Weather Planner",
-      description: "Plan around current weather",
-      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
-    });
-    await tool.execute("repair-create-apply", {
-      action: "apply",
-      proposal_id: (created.details as { id: string }).id,
-    });
+  it.each(["off", "propose", "auto"] as const)(
+    "enforces foreground repair receipts in autonomous mode %s",
+    async (mode) => {
+      const workspaceDir = await tempDirs.make(`openclaw-skill-workshop-repair-${mode}-`);
+      const runId = `repair-${mode}`;
+      const skillName = `weather-planner-${mode}`;
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { workshop: { autonomous: { mode } } } },
+        agentId: "main",
+        origin: { agentId: "main", runId },
+      });
+      const created = await tool.execute("repair-create", {
+        action: "create",
+        name: skillName,
+        description: "Plan around current weather",
+        proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+      });
+      await tool.execute("repair-create-apply", {
+        action: "apply",
+        proposal_id: (created.details as { id: string }).id,
+      });
 
-    await expect(
-      tool.execute("repair-without-read", {
+      await tool.execute("repair-read", { action: "read", skill_name: skillName });
+
+      const patchArgs = {
         action: "patch",
-        skill_name: "weather-planner",
+        skill_name: skillName,
         old_string: "Check weather before outdoor recommendations.",
         new_string: "Check weather and alerts before outdoor recommendations.",
-      }),
-    ).rejects.toThrow("read the live skill first");
+      };
+      if (mode === "off") {
+        await expect(tool.execute("repair-disabled", patchArgs)).rejects.toThrow(
+          "disabled by autonomous mode off",
+        );
+        return;
+      }
 
-    await tool.execute("repair-read", { action: "read", skill_name: "weather-planner" });
-    const patch = await tool.execute("repair-patch", {
-      action: "patch",
-      skill_name: "weather-planner",
-      old_string: "Check weather before outdoor recommendations.",
-      new_string: "Check weather and alerts before outdoor recommendations.",
-    });
-    expect(patch.details).toMatchObject({ status: "pending", kind: "update" });
-    await tool.execute("repair-apply", {
-      action: "apply",
-      proposal_id: (patch.details as { id: string }).id,
-    });
+      await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(
+        "was not used in this run",
+      );
+      recordRunSkillUsage({
+        runId,
+        name: skillName,
+        source: "workspace",
+        activation: "read",
+      });
+      const patch = await tool.execute("repair-patch", patchArgs);
+      expect(patch.details).toMatchObject({
+        status: mode === "auto" ? "applied" : "pending",
+        kind: "update",
+      });
 
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
-    ).resolves.toContain("Check weather and alerts before outdoor recommendations.");
-  });
+      const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+      if (mode === "propose") {
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
+          "Check weather before outdoor recommendations.",
+        );
+        await expect(
+          tool.execute("repair-apply", {
+            action: "apply",
+            proposal_id: (patch.details as { id: string }).id,
+          }),
+        ).rejects.toThrow("leaves captured proposals pending for operator review");
+      } else {
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
+          "Check weather and alerts before outdoor recommendations.",
+        );
+      }
+      consumeRunSkillUsage(runId);
+    },
+  );
 
   it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");
