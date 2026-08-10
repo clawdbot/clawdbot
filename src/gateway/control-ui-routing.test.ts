@@ -232,6 +232,12 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps condition status probes outside the SPA catch-all",
+        pathname: "/statusz",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
         name: "keeps plugin routes outside the SPA catch-all",
         pathname: "/plugins/webhook",
         method: "GET",

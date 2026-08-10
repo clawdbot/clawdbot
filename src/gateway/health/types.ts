@@ -90,6 +90,7 @@ export type HealthSummary = {
   ts: number;
   durationMs: number;
   readiness?: import("../../readiness/conditions.js").CanonicalReadinessResult;
+  conditionHealth?: import("../../readiness/health.js").ConditionHealthSummary;
   eventLoop?: import("../server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;

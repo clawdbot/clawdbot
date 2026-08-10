@@ -54,6 +54,7 @@ export type HeartbeatStatus = {
 export type StatusSummary = {
   runtimeVersion?: string | null;
   readiness?: import("../readiness/conditions.js").CanonicalReadinessResult;
+  conditionHealth?: import("../readiness/health.js").ConditionHealthSummary;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   linkChannel?: {
     id: ChannelId;

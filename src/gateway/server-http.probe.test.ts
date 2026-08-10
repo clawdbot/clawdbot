@@ -352,7 +352,13 @@ describe("gateway probe endpoints", () => {
           expect(exact.res.statusCode).toBe(503);
           expect(JSON.parse(exact.getBody())).toMatchObject({ ready: false });
 
-          for (const routePath of ["/health/", "/healthz/details", "/ready/", "/readyz/details"]) {
+          for (const routePath of [
+            "/health/",
+            "/healthz/details",
+            "/ready/",
+            "/readyz/details",
+            "/statusz/details",
+          ]) {
             const { res, getBody } = await sendGatewayRequest(server, { path: routePath });
             expect(res.statusCode, routePath).toBe(404);
             expect(getBody(), routePath).toBe("Not Found");
@@ -762,6 +768,163 @@ describe("gateway probe endpoints", () => {
             expect(JSON.parse(getBody())).toEqual({ ready: false });
           },
         });
+      },
+    });
+  });
+
+  it("derives detailed /statusz diagnostics from canonical readiness conditions", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      contractVersion: 1,
+      evaluatedAtMs: 123,
+      ready: false,
+      failing: ["discord"],
+      uptimeMs: 8_000,
+      conditions: [
+        {
+          type: "GatewayStartupComplete",
+          status: "True",
+          requirement: "required",
+          reason: "GatewayStartupComplete",
+          message: "Gateway startup is complete.",
+        },
+        {
+          type: "ChannelRuntimeReady",
+          status: "False",
+          requirement: "required",
+          reason: "ChannelRuntimeUnavailable",
+          message: "Selected channel runtime is unavailable: discord.",
+        },
+      ],
+      failures: ["ChannelRuntimeUnavailable"],
+      advisories: [],
+    });
+
+    await withGatewayServer({
+      prefix: "probe-statusz-details",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/statusz",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({
+          contractVersion: 1,
+          evaluatedAtMs: 123,
+          scope: "selected-readiness-conditions",
+          status: "failing",
+          ready: false,
+          conditions: [
+            {
+              type: "ChannelRuntimeReady",
+              status: "False",
+              requirement: "required",
+              reason: "ChannelRuntimeUnavailable",
+              message: "Selected channel runtime is unavailable: discord.",
+            },
+          ],
+        });
+      },
+    });
+  });
+
+  it("returns only aggregate /statusz state to unauthenticated remote callers", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      contractVersion: 1,
+      evaluatedAtMs: 123,
+      ready: true,
+      failing: [],
+      uptimeMs: 8_000,
+      conditions: [
+        {
+          type: "EventLoopHealthy",
+          status: "False",
+          requirement: "advisory",
+          reason: "EventLoopDegraded",
+          message: "Gateway event loop is degraded.",
+        },
+      ],
+      failures: [],
+      advisories: ["EventLoopDegraded"],
+    });
+
+    await withGatewayServer({
+      prefix: "probe-statusz-aggregate",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/statusz",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ status: "degraded", ready: true });
+      },
+    });
+  });
+
+  it("reports unknown /statusz when canonical readiness evaluation fails", async () => {
+    const getReadiness: ReadinessChecker = () => {
+      throw new Error("boom");
+    };
+
+    await withGatewayServer({
+      prefix: "probe-statusz-unknown",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, { path: "/statusz" });
+
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(getBody())).toEqual({ status: "unknown", ready: false });
+      },
+    });
+  });
+
+  it("returns status on HEAD /statusz without a response body", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      contractVersion: 1,
+      evaluatedAtMs: 123,
+      ready: false,
+      failing: ["discord"],
+      uptimeMs: 8_000,
+      conditions: [
+        {
+          type: "ChannelRuntimeReady",
+          status: "False",
+          requirement: "required",
+          reason: "ChannelRuntimeUnavailable",
+          message: "Selected channel runtime is unavailable: discord.",
+        },
+      ],
+      failures: ["ChannelRuntimeUnavailable"],
+      advisories: [],
+    });
+
+    await withGatewayServer({
+      prefix: "probe-statusz-head",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const get = await sendGatewayRequest(server, { path: "/statusz" });
+        const head = await sendGatewayRequest(server, {
+          path: "/statusz",
+          method: "HEAD",
+        });
+
+        expect(get.res.statusCode).toBe(200);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.getBody()).toBe("");
+        expect(head.res.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength(get.getBody())),
+        );
       },
     });
   });

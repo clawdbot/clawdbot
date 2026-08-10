@@ -19,6 +19,8 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
+import type { CanonicalReadinessResult } from "../readiness/conditions.js";
+import { deriveConditionHealth, listNonPassingReadinessConditions } from "../readiness/health.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -176,7 +178,21 @@ function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathConte
   );
 }
 
-/** Handles live/ready probe endpoints before normal gateway routing. */
+type ReadinessProbeResult = Awaited<ReturnType<ReadinessChecker>>;
+
+function isCanonicalReadinessResult(
+  result: ReadinessProbeResult,
+): result is ReadinessProbeResult & CanonicalReadinessResult {
+  return (
+    "contractVersion" in result &&
+    result.contractVersion === 1 &&
+    "evaluatedAtMs" in result &&
+    typeof result.evaluatedAtMs === "number" &&
+    Array.isArray(result.conditions)
+  );
+}
+
+/** Handles live, readiness, and condition-status probes before normal gateway routing. */
 async function handleGatewayProbeRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -203,39 +219,68 @@ async function handleGatewayProbeRequest(
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
 
-  let statusCode: number;
+  if (status === "live") {
+    const body = JSON.stringify({ ok: true, status });
+    res.statusCode = 200;
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
+    res.end(method === "HEAD" ? undefined : body);
+    return true;
+  }
+
+  // Readiness details expose subsystem names, so only local direct or authenticated
+  // callers receive them; unauthenticated remote probes get aggregate state only.
+  let includeDetails = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
+  if (!includeDetails && resolvedAuth.mode !== "none") {
+    const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
+    const bearerToken = getBearerToken(req);
+    includeDetails = (
+      await authorizeHttpGatewayConnect({
+        auth: resolvedAuth,
+        connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+        browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+      })
+    ).ok;
+  }
+
+  let statusCode = 503;
   let body: string;
-  if (status === "ready" && getReadiness) {
-    // Readiness details expose subsystem names, so only local direct or authenticated
-    // callers receive them; unauthenticated remote probes get the aggregate boolean.
-    let includeDetails = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
-    if (!includeDetails && resolvedAuth.mode !== "none") {
-      const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
-      const bearerToken = getBearerToken(req);
-      includeDetails = (
-        await authorizeHttpGatewayConnect({
-          auth: resolvedAuth,
-          connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
-          req,
-          trustedProxies,
-          allowRealIpFallback,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
-        })
-      ).ok;
-    }
+  if (!getReadiness) {
+    body =
+      status === "status"
+        ? JSON.stringify({ status: "unknown", ready: false })
+        : JSON.stringify({ ready: false });
+  } else {
     try {
       const result = await getReadiness();
-      statusCode = result.ready ? 200 : 503;
-      body = JSON.stringify(includeDetails ? result : { ready: result.ready });
+      if (status === "ready") {
+        statusCode = result.ready ? 200 : 503;
+        body = JSON.stringify(includeDetails ? result : { ready: result.ready });
+      } else if (isCanonicalReadinessResult(result)) {
+        const conditionHealth = deriveConditionHealth(result);
+        statusCode = 200;
+        body = JSON.stringify(
+          includeDetails
+            ? {
+                ...conditionHealth,
+                conditions: listNonPassingReadinessConditions(result),
+              }
+            : { status: conditionHealth.status, ready: conditionHealth.ready },
+        );
+      } else {
+        body = JSON.stringify({ status: "unknown", ready: false });
+      }
     } catch {
-      statusCode = 503;
-      body = JSON.stringify(
-        includeDetails ? { ready: false, failing: ["internal"], uptimeMs: 0 } : { ready: false },
-      );
+      if (status === "ready") {
+        body = JSON.stringify(
+          includeDetails ? { ready: false, failing: ["internal"], uptimeMs: 0 } : { ready: false },
+        );
+      } else {
+        body = JSON.stringify({ status: "unknown", ready: false });
+      }
     }
-  } else {
-    statusCode = 200;
-    body = JSON.stringify({ ok: true, status });
   }
   res.statusCode = statusCode;
   // Node suppresses the HEAD body but never synthesizes Content-Length; set it

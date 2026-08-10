@@ -17,6 +17,7 @@ Short guide to verify channel connectivity without guessing.
 - `openclaw health` - asks the running gateway for its health snapshot (WS-only; no direct channel sockets from the CLI).
 - `openclaw health --verbose` (alias `--debug`) - forces a live health probe and prints gateway connection details.
 - `openclaw health --json` - machine-readable health snapshot output.
+- `openclaw ready` - prints the canonical readiness conditions and exits non-zero when required conditions are not passing.
 - Send `/status` as a standalone chat command in any channel to get a status reply without invoking the agent.
 - Logs: run `openclaw logs --follow` (or `openclaw --profile <profile> logs --follow`) and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
 
@@ -57,6 +58,34 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 External uptime monitoring services should use the dedicated `/health` endpoint, not `/v1/chat/completions`.
 
 ## Selected readiness criteria
+
+Use each HTTP probe for one purpose:
+
+| Endpoint              | Purpose             | Success response                                                                  |
+| --------------------- | ------------------- | --------------------------------------------------------------------------------- |
+| `/health`, `/healthz` | Process liveness    | Always `200` after the HTTP server starts; does not load config or run providers. |
+| `/ready`, `/readyz`   | Traffic admission   | `200` when required conditions pass; otherwise `503`.                             |
+| `/statusz`            | Condition diagnosis | `200` for passing, degraded, failing, or unknown evaluated state.                 |
+
+`/statusz` derives its state from the same selected canonical conditions as
+`/readyz`; it does not run another provider or an active channel probe. Required
+`False` conditions produce `failing`, required `Unknown` conditions produce
+`unknown`, advisory non-passing conditions produce `degraded`, and an otherwise
+passing result produces `passing`.
+
+Local and authenticated `/statusz` callers receive the non-passing canonical
+conditions, including their bounded `reason`, `message`, and subject references.
+Unauthenticated remote callers receive only `status` and `ready`. A successful
+evaluation returns HTTP `200` even when the derived state is failing; use
+`/readyz` when the HTTP status code must control admission.
+
+`openclaw health` consumes the same derived condition health attached to the
+Gateway health response. It exits non-zero for `failing` and `unknown`, exits
+zero for `passing` and `degraded`, and prints the canonical messages for
+non-passing conditions. Legacy Gateways that do not return condition health keep
+the previous reachability-only exit behavior. `--verbose` may perform slower
+provider probes for diagnostics, but `/readyz` and `/statusz` read owner-published
+runtime state instead of invoking those probes.
 
 Without a `gateway.readiness` section, `/ready` and `/readyz` use the existing
 Gateway lifecycle and channel checks projected into a versioned canonical
@@ -199,8 +228,9 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
 gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
 The command reports linked creds/auth age when available, per-channel probe summaries,
-session-store summary, and probe duration. It exits non-zero if the gateway is
-unreachable or the probe fails/times out.
+session-store summary, canonical condition health, and probe duration. It exits
+non-zero if the gateway is unreachable, the probe fails or times out, or canonical
+condition health is `failing` or `unknown`.
 
 Options:
 
@@ -209,7 +239,7 @@ Options:
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), `conditionHealth`, canonical `readiness`, per-channel status, agent availability, and session-store summary.
 
 ## Related
 

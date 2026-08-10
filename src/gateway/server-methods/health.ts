@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import type { CanonicalReadinessResult } from "../../readiness/conditions.js";
+import { deriveConditionHealth } from "../../readiness/health.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
@@ -16,14 +17,21 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 
-async function withLiveReadiness<T extends { readiness?: CanonicalReadinessResult }>(
-  summary: T,
-  context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
-): Promise<T> {
+async function withLiveReadiness<
+  T extends {
+    readiness?: CanonicalReadinessResult;
+    conditionHealth?: ReturnType<typeof deriveConditionHealth>;
+  },
+>(summary: T, context: Parameters<GatewayRequestHandlers[string]>[0]["context"]): Promise<T> {
   if (!context.getReadiness) {
     return summary;
   }
-  return { ...summary, readiness: await context.getReadiness() };
+  const readiness = await context.getReadiness();
+  return {
+    ...summary,
+    readiness,
+    conditionHealth: deriveConditionHealth(readiness),
+  };
 }
 
 const requestRefreshStartedAt = new WeakMap<

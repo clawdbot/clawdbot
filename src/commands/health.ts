@@ -214,6 +214,25 @@ export function formatConfigReloadHealthLine(summary: HealthSummary): string | n
   return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
 
+export function formatConditionHealthLines(summary: HealthSummary): string[] {
+  const conditionHealth = summary.conditionHealth;
+  if (!conditionHealth) {
+    return [];
+  }
+  const lines = [
+    `Condition health: ${conditionHealth.status}${conditionHealth.ready ? "" : " (not ready)"}`,
+  ];
+  for (const condition of summary.readiness?.conditions ?? []) {
+    if (condition.status === "True") {
+      continue;
+    }
+    lines.push(
+      `- ${condition.type} [${condition.requirement}]: ${condition.message} (${condition.reason})`,
+    );
+  }
+  return lines;
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -279,8 +298,8 @@ export async function healthCommand(
     }
     throw error;
   }
-  // Gateway reachability defines success; channel issues are reported but not fatal here.
-  const fatal = false;
+  const fatal =
+    summary.conditionHealth?.status === "failing" || summary.conditionHealth?.status === "unknown";
 
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
@@ -411,6 +430,9 @@ export async function healthCommand(
       }
       return byChannel;
     })();
+    for (const line of formatConditionHealthLines(summary)) {
+      runtime.log(line);
+    }
     const channelLines =
       Object.keys(accountIdsByChannel).length > 0
         ? formatHealthChannelLines(summary, {

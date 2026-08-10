@@ -1,8 +1,9 @@
-const GATEWAY_PROBE_ROUTES = new Map<string, "live" | "ready">([
+const GATEWAY_PROBE_ROUTES = new Map<string, "live" | "ready" | "status">([
   ["/health", "live"],
   ["/healthz", "live"],
   ["/ready", "ready"],
   ["/readyz", "ready"],
+  ["/statusz", "status"],
 ]);
 
 export const MCP_APP_STANDALONE_PATH = "/__openclaw__/mcp-app";
@@ -10,7 +11,7 @@ export const MCP_APP_STANDALONE_VIEW_PATH = `${MCP_APP_STANDALONE_PATH}/view`;
 
 export function classifyGatewayProbePath(
   pathname: string,
-): "live" | "ready" | "namespace" | "outside" {
+): "live" | "ready" | "status" | "namespace" | "outside" {
   for (const [root, status] of GATEWAY_PROBE_ROUTES) {
     if (pathname === root) {
       return status;

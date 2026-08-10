@@ -56,6 +56,7 @@ describe("healthHandlers.ready", () => {
 
   it("overlays the live result on Gateway health responses", async () => {
     const readiness = {
+      evaluatedAtMs: 123,
       ready: true,
       conditions: [],
       failures: [],
@@ -94,11 +95,26 @@ describe("healthHandlers.ready", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(true, { ...health, readiness }, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ...health,
+        readiness,
+        conditionHealth: {
+          contractVersion: 1,
+          evaluatedAtMs: 123,
+          scope: "selected-readiness-conditions",
+          status: "passing",
+          ready: true,
+        },
+      },
+      undefined,
+    );
   });
 
   it("overlays the live result on Gateway status responses", async () => {
     const fallbackReadiness = {
+      evaluatedAtMs: 122,
       ready: false,
       conditions: [],
       failures: [],
@@ -122,6 +138,19 @@ describe("healthHandlers.ready", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ readiness }), undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        readiness,
+        conditionHealth: {
+          contractVersion: 1,
+          evaluatedAtMs: 122,
+          scope: "selected-readiness-conditions",
+          status: "passing",
+          ready: true,
+        },
+      }),
+      undefined,
+    );
   });
 });

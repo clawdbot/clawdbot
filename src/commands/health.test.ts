@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { buildRuntimeReadiness } from "../readiness/conditions.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -12,6 +13,7 @@ import {
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
+  formatConditionHealthLines,
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
@@ -198,6 +200,88 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+  });
+
+  it.each([
+    { status: "passing" as const, ready: true, expectedExit: false },
+    { status: "degraded" as const, ready: true, expectedExit: false },
+    { status: "failing" as const, ready: false, expectedExit: true },
+    { status: "unknown" as const, ready: false, expectedExit: true },
+  ])(
+    "uses canonical $status condition health for the exit code",
+    async ({ status, ready, expectedExit }) => {
+      const snapshot = createHealthSummary({
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+      });
+      snapshot.conditionHealth = {
+        contractVersion: 1,
+        evaluatedAtMs: 123,
+        scope: "selected-readiness-conditions",
+        status,
+        ready,
+      };
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+
+      await healthCommand({ json: true, timeoutMs: 1000, config: {} }, runtime as never);
+
+      if (expectedExit) {
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(runtime.exit).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("preserves zero-exit compatibility for legacy health snapshots", async () => {
+    const snapshot = createHealthSummary({
+      channels: {
+        discord: { accountId: "default", configured: true, probe: { ok: false } },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: true, timeoutMs: 1000, config: {} }, runtime as never);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("prints canonical non-passing condition messages", () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+      coreConditions: [
+        {
+          type: "ChannelRuntimeReady",
+          subjectRef: "openclaw/gateway/current",
+          status: "False",
+          requirement: "required",
+          reason: "ChannelRuntimeUnavailable",
+          message: "Selected channel runtime is unavailable: discord.",
+        },
+      ],
+    });
+    snapshot.conditionHealth = {
+      contractVersion: 1,
+      evaluatedAtMs: snapshot.readiness.evaluatedAtMs,
+      scope: "selected-readiness-conditions",
+      status: "failing",
+      ready: false,
+    };
+
+    expect(formatConditionHealthLines(snapshot)).toEqual([
+      "Condition health: failing (not ready)",
+      "- ChannelRuntimeReady [required]: Selected channel runtime is unavailable: discord. (ChannelRuntimeUnavailable)",
+    ]);
   });
 
   it("prints the gateway probe duration in text output", async () => {
