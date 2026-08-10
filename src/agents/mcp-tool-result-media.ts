@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { mediaKindFromMime, maxBytesForKind } from "@openclaw/media-core/constants";
-import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { logWarn } from "../logger.js";
 import { resolveOutboundAttachmentFromBuffer } from "../media/outbound-attachment.js";
 import { markHostOwnedMcpRelayMedia } from "./mcp-tool-result-media-provenance.js";
@@ -141,6 +141,25 @@ async function stageMcpBinaryAttachment(params: {
     ) {
       return undefined;
     }
+
+    const byteDetectedMimeType = normalizeMimeType(await detectMime({ buffer }));
+    if (!byteDetectedMimeType) {
+      throw new Error("MCP content MIME type could not be determined from bytes");
+    }
+    let verifiedMimeType = byteDetectedMimeType;
+    // file-type identifies MP4/WebM containers as video without inspecting their tracks.
+    // Reuse detectMime's constrained audio-container hint only after bytes identify a video.
+    if (params.type === "audio" && mediaKindFromMime(byteDetectedMimeType) === "video") {
+      verifiedMimeType =
+        normalizeMimeType(await detectMime({ buffer, headerMime: mimeType })) ??
+        byteDetectedMimeType;
+    }
+    if (mediaKindFromMime(verifiedMimeType) !== params.type) {
+      throw new Error(
+        `byte-detected MIME type ${byteDetectedMimeType} does not match MCP ${params.type} content`,
+      );
+    }
+
     reserveMcpRelayMediaBudget(params.budget, decodedBytes);
     budgetReserved = true;
 
@@ -148,10 +167,10 @@ async function stageMcpBinaryAttachment(params: {
       serverName: params.serverName,
       toolName: params.toolName,
       index: params.index,
-      mimeType,
+      mimeType: verifiedMimeType,
     });
     const staged = await resolveOutboundAttachmentFromBuffer(buffer, maxBytes, {
-      contentType: mimeType,
+      contentType: verifiedMimeType,
       filename: name,
     });
     const stagedMimeType = normalizeMimeType(staged.contentType);

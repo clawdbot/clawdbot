@@ -28,6 +28,17 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-subscribe.tools.js";
 
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+  "base64",
+);
+const MP3_BYTES = Buffer.from(
+  "fffbd00000000000000000000000000000000000000000000000000000000000",
+  "hex",
+);
+const PNG_BASE64 = PNG_BYTES.toString("base64").replace(/=+$/u, "");
+const MP3_BASE64 = MP3_BYTES.toString("base64").replace(/=+$/u, "");
+
 const resolveOutboundAttachmentFromBufferMock =
   outboundAttachmentMockState.resolveOutboundAttachmentFromBuffer;
 
@@ -92,8 +103,8 @@ describe("bundle MCP relay media materialization", () => {
           type: "resource",
           resource: { uri: "blob://report", blob: "SGVsbG8", mimeType: "application/pdf" },
         },
-        { type: "audio", data: "TWE", mimeType: "audio/mpeg" },
-        { type: "image", data: "TQ", mimeType: "image/png" },
+        { type: "audio", data: MP3_BASE64, mimeType: "audio/mpeg" },
+        { type: "image", data: PNG_BASE64, mimeType: "image/png" },
       ],
       isError: false,
     });
@@ -102,11 +113,12 @@ describe("bundle MCP relay media materialization", () => {
       { type: "text", text: "intro" },
       { type: "text", text: "blob://report" },
       { type: "text", text: "[audio audio/mpeg]" },
-      { type: "image", data: "TQ", mimeType: "image/png" },
+      { type: "image", data: PNG_BASE64, mimeType: "image/png" },
     ]);
-    expect(
-      resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0].toString("utf8")),
-    ).toEqual(["Ma", "M"]);
+    expect(resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0])).toEqual([
+      MP3_BYTES,
+      PNG_BYTES,
+    ]);
     expect(execution.result.details).toMatchObject({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
@@ -117,13 +129,13 @@ describe("bundle MCP relay media materialization", () => {
             type: "audio",
             mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-2.mp3",
             mimeType: "audio/mpeg",
-            sizeBytes: 2,
+            sizeBytes: MP3_BYTES.byteLength,
           },
           {
             type: "image",
             mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-3.png",
             mimeType: "image/png",
-            sizeBytes: 1,
+            sizeBytes: PNG_BYTES.byteLength,
           },
         ],
       },
@@ -142,7 +154,7 @@ describe("bundle MCP relay media materialization", () => {
           mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-2.mp3",
           mimeType: "audio/mpeg",
           name: "bundleProbe-bundle_probe-2.mp3",
-          sizeBytes: 2,
+          sizeBytes: MP3_BYTES.byteLength,
           trustedLocalMedia: true,
         },
         {
@@ -150,7 +162,7 @@ describe("bundle MCP relay media materialization", () => {
           mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-3.png",
           mimeType: "image/png",
           name: "bundleProbe-bundle_probe-3.png",
-          sizeBytes: 1,
+          sizeBytes: PNG_BYTES.byteLength,
           trustedLocalMedia: true,
         },
       ],
@@ -207,16 +219,17 @@ describe("bundle MCP relay media materialization", () => {
           data: "AA!A",
           mimeType: "image/png",
         })),
-        { type: "image", data: "TQ", mimeType: "image/png" },
-        { type: "audio", data: "TWE", mimeType: "audio/mpeg" },
+        { type: "image", data: PNG_BASE64, mimeType: "image/png" },
+        { type: "audio", data: MP3_BASE64, mimeType: "audio/mpeg" },
       ],
       isError: false,
     });
 
     expect(resolveOutboundAttachmentFromBufferMock).toHaveBeenCalledTimes(2);
-    expect(
-      resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0].toString("utf8")),
-    ).toEqual(["M", "Ma"]);
+    expect(resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0])).toEqual([
+      PNG_BYTES,
+      MP3_BYTES,
+    ]);
     expect(extractToolResultMediaArtifact(execution.result)?.mediaUrls).toEqual([
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-8.png",
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-9.mp3",
@@ -227,7 +240,7 @@ describe("bundle MCP relay media materialization", () => {
     const execution = await executeMcpResult({
       content: Array.from({ length: 10 }, () => ({
         type: "image" as const,
-        data: "AAAA",
+        data: PNG_BASE64,
         mimeType: "image/png",
       })),
       isError: false,
@@ -238,7 +251,9 @@ describe("bundle MCP relay media materialization", () => {
   });
 
   it("preflights the aggregate byte cap before decoding an excess block", async () => {
-    const fiveMiBImageBase64 = Buffer.alloc(5 * 1024 * 1024).toString("base64");
+    const fiveMiBImage = Buffer.alloc(5 * 1024 * 1024);
+    PNG_BYTES.copy(fiveMiBImage);
+    const fiveMiBImageBase64 = fiveMiBImage.toString("base64");
     const bufferFromSpy = vi.spyOn(Buffer, "from");
     try {
       const execution = await executeMcpResult({
