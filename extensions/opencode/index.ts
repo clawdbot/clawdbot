@@ -6,8 +6,8 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createOpenAICompatibleCompletionsThinkingOffWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./api.js";
 import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeZenLiveProviderConfig,
@@ -23,24 +23,17 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-type OpencodeZenCatalogAuth = {
-  apiKey?: string;
-  discoveryApiKey?: string;
-};
-
-function hasCatalogAuth(auth: OpencodeZenCatalogAuth): boolean {
-  return Boolean(auth.apiKey || auth.discoveryApiKey);
-}
+type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
 
 function resolveOpencodeZenCatalogAuth(
   resolveProviderApiKey: (providerId: string) => OpencodeZenCatalogAuth,
 ): OpencodeZenCatalogAuth | undefined {
-  const opencodeAuth = resolveProviderApiKey(PROVIDER_ID);
-  if (hasCatalogAuth(opencodeAuth)) {
-    return opencodeAuth;
+  const own = resolveProviderApiKey(PROVIDER_ID);
+  if (own.apiKey || own.discoveryApiKey) {
+    return own;
   }
-  const sharedOpencodeGoAuth = resolveProviderApiKey("opencode-go");
-  return hasCatalogAuth(sharedOpencodeGoAuth) ? sharedOpencodeGoAuth : undefined;
+  const shared = resolveProviderApiKey("opencode-go");
+  return shared.apiKey || shared.discoveryApiKey ? shared : undefined;
 }
 
 function isModernOpencodeModel(modelId: string): boolean {

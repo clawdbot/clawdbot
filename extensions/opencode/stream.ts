@@ -8,116 +8,101 @@ import {
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const WEB_SEARCH_TOOL_NAME = "web_search";
-// OpenCode reserves this name for the native Responses web-search tool and
-// rejects custom functions that use it, so keep the alias inside the wire boundary.
-const WEB_SEARCH_WIRE_ALIAS_PREFIX = "openclaw_web_search";
+const WEB_SEARCH = "web_search";
+const WEB_SEARCH_ALIAS = "openclaw_web_search";
 
 type ProviderStream = Awaited<ReturnType<StreamFn>>;
-type DynamicRecordField = {
-  name: string;
-  jsonValues: boolean;
-};
-type DynamicRecordFieldsByTool = Map<string, DynamicRecordField[]>;
+type DynamicFields = Map<string, Array<readonly [name: string, jsonValues: boolean]>>;
+type TransformState = { fields: DynamicFields; alias?: string };
 
-function buildDynamicRecordWireSchema(
-  schema: Record<string, unknown>,
-  valueSchema: unknown,
-  jsonValues: boolean,
-): Record<string, unknown> {
-  const description = typeof schema.description === "string" ? `${schema.description} ` : "";
-  return {
-    ...schema,
-    type: "array",
-    description: `${description}Provide as key/value entries.${jsonValues ? " JSON-encode every value, including strings." : ""}`,
-    items: {
-      type: "object",
-      properties: {
-        key: { type: "string" },
-        value: jsonValues
-          ? {
-              type: "string",
-              description: "JSON-encoded value, including JSON encoding for string values.",
-            }
-          : valueSchema,
-      },
-      required: ["key", "value"],
-      additionalProperties: false,
-    },
-    properties: undefined,
-    patternProperties: undefined,
-    additionalProperties: undefined,
-    required: undefined,
-  };
+function payloadFunctions(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const choice = isRecord(payload.tool_choice) ? payload.tool_choice : undefined;
+  const candidates = [
+    ...(Array.isArray(payload.tools) ? payload.tools : []),
+    ...(Array.isArray(payload.input) ? payload.input : []),
+    ...(Array.isArray(choice?.tools) ? choice.tools : []),
+    choice,
+  ];
+  return candidates.filter(
+    (item): item is Record<string, unknown> =>
+      isRecord(item) &&
+      (item.type === "function" || item.type === "function_call") &&
+      typeof item.name === "string",
+  );
 }
 
-function rewriteDynamicRecordToolSchemas(payload: Record<string, unknown>) {
-  const fieldsByTool: DynamicRecordFieldsByTool = new Map();
-  if (!Array.isArray(payload.tools)) {
-    return fieldsByTool;
-  }
-  for (const tool of payload.tools) {
-    if (
-      !isRecord(tool) ||
-      tool.type !== "function" ||
-      typeof tool.name !== "string" ||
-      !isRecord(tool.parameters)
-    ) {
+function rewriteDynamicRecordSchemas(payload: Record<string, unknown>): DynamicFields {
+  const fieldsByTool: DynamicFields = new Map();
+  for (const tool of payloadFunctions(payload)) {
+    if (tool.type !== "function" || !isRecord(tool.parameters)) {
       continue;
     }
     const properties = tool.parameters.properties;
     if (!isRecord(properties)) {
       continue;
     }
-    const fields: DynamicRecordField[] = [];
-    for (const [name, fieldSchema] of Object.entries(properties)) {
-      if (!isRecord(fieldSchema)) {
+    const fields: Array<readonly [string, boolean]> = [];
+    for (const [name, schema] of Object.entries(properties)) {
+      if (!isRecord(schema)) {
         continue;
       }
-      const namedProperties = isRecord(fieldSchema.properties)
-        ? Object.keys(fieldSchema.properties)
-        : [];
-      const patternProperties = fieldSchema.patternProperties;
+      const patterns = schema.patternProperties;
       if (
-        namedProperties.length > 0 ||
-        !isRecord(patternProperties) ||
-        Object.keys(patternProperties).length !== 1 ||
-        !Object.hasOwn(patternProperties, "^.*$")
+        (isRecord(schema.properties) && Object.keys(schema.properties).length > 0) ||
+        !isRecord(patterns) ||
+        Object.keys(patterns).length !== 1 ||
+        !Object.hasOwn(patterns, "^.*$")
       ) {
         continue;
       }
-      const valueSchema = patternProperties["^.*$"];
+      const valueSchema = patterns["^.*$"];
       const jsonValues = !isRecord(valueSchema) || valueSchema.type !== "string";
-      properties[name] = buildDynamicRecordWireSchema(fieldSchema, valueSchema, jsonValues);
-      fields.push({ name, jsonValues });
+      const description = typeof schema.description === "string" ? `${schema.description} ` : "";
+      properties[name] = {
+        ...schema,
+        type: "array",
+        description: `${description}Provide as key/value entries.${jsonValues ? " JSON-encode every value, including strings." : ""}`,
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string" },
+            value: jsonValues
+              ? {
+                  type: "string",
+                  description: "JSON-encoded value, including JSON encoding for string values.",
+                }
+              : valueSchema,
+          },
+          required: ["key", "value"],
+          additionalProperties: false,
+        },
+        properties: undefined,
+        patternProperties: undefined,
+        additionalProperties: undefined,
+        required: undefined,
+      };
+      fields.push([name, jsonValues]);
     }
-    if (fields.length > 0) {
-      fieldsByTool.set(tool.name, fields);
-    }
+    fieldsByTool.set(tool.name as string, fields);
   }
   return fieldsByTool;
 }
 
-function transformDynamicRecordArguments(
+function transformArguments(
   toolName: string,
   args: Record<string, unknown>,
-  fieldsByTool: DynamicRecordFieldsByTool,
-  direction: "to-wire" | "from-wire",
+  fields: DynamicFields,
+  toWire: boolean,
 ): void {
-  for (const field of fieldsByTool.get(toolName) ?? []) {
-    const value = args[field.name];
-    if (direction === "to-wire") {
-      if (!isRecord(value)) {
-        continue;
+  for (const [name, jsonValues] of fields.get(toolName) ?? []) {
+    const value = args[name];
+    if (toWire) {
+      if (isRecord(value)) {
+        args[name] = Object.entries(value).map(([key, item]) => ({
+          key,
+          value: jsonValues || typeof item !== "string" ? (JSON.stringify(item) ?? "null") : item,
+        }));
       }
-      args[field.name] = Object.entries(value).map(([key, entryValue]) => ({
-        key,
-        value: field.jsonValues
-          ? (JSON.stringify(entryValue) ?? "null")
-          : typeof entryValue === "string"
-            ? entryValue
-            : (JSON.stringify(entryValue) ?? "null"),
-      }));
       continue;
     }
     if (!Array.isArray(value)) {
@@ -137,183 +122,106 @@ function transformDynamicRecordArguments(
         break;
       }
       keys.add(entry.key);
-      let entryValue: unknown = entry.value;
-      if (field.jsonValues) {
+      let item: unknown = entry.value;
+      if (jsonValues) {
         try {
-          entryValue = JSON.parse(entry.value) as unknown;
+          item = JSON.parse(entry.value) as unknown;
         } catch {
           valid = false;
           break;
         }
       }
-      entries.push([entry.key, entryValue]);
+      entries.push([entry.key, item]);
     }
     if (valid) {
-      args[field.name] = Object.fromEntries(entries);
+      args[name] = Object.fromEntries(entries);
     }
   }
 }
 
-function transformFunctionCallArguments(
+function transformCall(
   call: Record<string, unknown>,
-  fieldsByTool: DynamicRecordFieldsByTool,
-  direction: "to-wire" | "from-wire",
+  state: TransformState,
+  toWire: boolean,
 ): void {
   if (typeof call.name !== "string") {
     return;
   }
-  if (typeof call.arguments === "string") {
-    try {
-      const args = JSON.parse(call.arguments) as unknown;
-      if (isRecord(args)) {
-        transformDynamicRecordArguments(call.name, args, fieldsByTool, direction);
-        call.arguments = JSON.stringify(args);
-      }
-    } catch {
-      // Leave partial or malformed arguments unchanged for normal validation.
+  let toolName = call.name;
+  if (!toWire && state.alias && toolName === state.alias) {
+    call.name = toolName = WEB_SEARCH;
+  }
+  const serialized = typeof call.arguments === "string";
+  try {
+    const args = serialized
+      ? (JSON.parse(call.arguments as string) as unknown)
+      : !toWire && isRecord(call.arguments)
+        ? { ...call.arguments }
+        : call.arguments;
+    if (isRecord(args)) {
+      transformArguments(toolName, args, state.fields, toWire);
+      call.arguments = serialized ? JSON.stringify(args) : args;
     }
-  } else if (isRecord(call.arguments)) {
-    transformDynamicRecordArguments(call.name, call.arguments, fieldsByTool, direction);
+  } catch {
+    // Leave partial or malformed arguments unchanged for normal validation.
   }
 }
 
-function encodeDynamicRecordReplayArguments(
-  payload: Record<string, unknown>,
-  fieldsByTool: DynamicRecordFieldsByTool,
-): void {
-  if (!Array.isArray(payload.input)) {
-    return;
-  }
-  for (const item of payload.input) {
-    if (isRecord(item) && item.type === "function_call") {
-      transformFunctionCallArguments(item, fieldsByTool, "to-wire");
-    }
-  }
-}
-
-function selectWebSearchWireAlias(payload: Record<string, unknown>): string | undefined {
-  const functionNames = new Set<string>();
-  let needsAlias = false;
-  const collectNames = (value: unknown, expectedType: "function" | "function_call") => {
-    if (!Array.isArray(value)) {
-      return;
-    }
-    for (const item of value) {
-      if (isRecord(item) && item.type === expectedType && typeof item.name === "string") {
-        functionNames.add(item.name);
-        needsAlias ||= item.name === WEB_SEARCH_TOOL_NAME;
-      }
-    }
-  };
-  collectNames(payload.tools, "function");
-  collectNames(payload.input, "function_call");
-  if (
-    isRecord(payload.tool_choice) &&
-    payload.tool_choice.type === "function" &&
-    typeof payload.tool_choice.name === "string"
-  ) {
-    functionNames.add(payload.tool_choice.name);
-    needsAlias ||= payload.tool_choice.name === WEB_SEARCH_TOOL_NAME;
-  }
-  if (!needsAlias) {
+function aliasWebSearch(payload: Record<string, unknown>): string | undefined {
+  const functions = payloadFunctions(payload);
+  const names = new Set(functions.map((item) => item.name as string));
+  if (!names.has(WEB_SEARCH)) {
     return undefined;
   }
-  let suffix = 1;
-  let alias = WEB_SEARCH_WIRE_ALIAS_PREFIX;
-  while (functionNames.has(alias)) {
-    suffix += 1;
-    alias = `${WEB_SEARCH_WIRE_ALIAS_PREFIX}_${suffix}`;
+  let alias = WEB_SEARCH_ALIAS;
+  for (let suffix = 2; names.has(alias); suffix += 1) {
+    alias = `${WEB_SEARCH_ALIAS}_${suffix}`;
+  }
+  for (const item of functions) {
+    if (item.name === WEB_SEARCH) {
+      item.name = alias;
+    }
   }
   return alias;
 }
 
-function aliasWebSearchInPayload(
-  payload: Record<string, unknown>,
-  wireAlias: string | undefined,
-): void {
-  if (!wireAlias) {
-    return;
-  }
-  const aliasNames = (value: unknown, expectedType: "function" | "function_call") => {
-    if (!Array.isArray(value)) {
-      return;
+function restoreMessage(message: AssistantMessage, state: TransformState): AssistantMessage {
+  const restored = { ...message, content: message.content.map((block) => ({ ...block })) };
+  for (const block of restored.content) {
+    if (block.type === "toolCall") {
+      transformCall(block as unknown as Record<string, unknown>, state, false);
     }
-    for (const item of value) {
-      if (isRecord(item) && item.type === expectedType && item.name === WEB_SEARCH_TOOL_NAME) {
-        item.name = wireAlias;
-      }
-    }
-  };
-  aliasNames(payload.tools, "function");
-  aliasNames(payload.input, "function_call");
-  if (
-    isRecord(payload.tool_choice) &&
-    payload.tool_choice.type === "function" &&
-    payload.tool_choice.name === WEB_SEARCH_TOOL_NAME
-  ) {
-    payload.tool_choice.name = wireAlias;
   }
+  return restored;
 }
 
-function restoreToolCallsInMessage(
-  message: AssistantMessage,
-  fieldsByTool: DynamicRecordFieldsByTool,
-  webSearchWireAlias: string | undefined,
-): void {
-  for (const block of message.content) {
-    if (block.type !== "toolCall") {
-      continue;
-    }
-    if (webSearchWireAlias && block.name === webSearchWireAlias) {
-      block.name = WEB_SEARCH_TOOL_NAME;
-    }
-    transformDynamicRecordArguments(block.name, block.arguments, fieldsByTool, "from-wire");
+function restoreEvent(event: AssistantMessageEvent, state: TransformState): AssistantMessageEvent {
+  const restored = { ...event };
+  if ("partial" in restored && restored.partial) {
+    restored.partial = restoreMessage(restored.partial, state);
   }
+  if (restored.type === "toolcall_end") {
+    restored.toolCall = { ...restored.toolCall };
+    transformCall(restored.toolCall as unknown as Record<string, unknown>, state, false);
+  } else if (restored.type === "done") {
+    restored.message = restoreMessage(restored.message, state);
+  } else if (restored.type === "error") {
+    restored.error = restoreMessage(restored.error, state);
+  }
+  return restored;
 }
 
-function restoreToolCallsInEvent(
-  event: AssistantMessageEvent,
-  fieldsByTool: DynamicRecordFieldsByTool,
-  webSearchWireAlias: string | undefined,
-): void {
-  if ("partial" in event && event.partial) {
-    restoreToolCallsInMessage(event.partial, fieldsByTool, webSearchWireAlias);
-  }
-  if (event.type === "toolcall_end") {
-    if (webSearchWireAlias && event.toolCall.name === webSearchWireAlias) {
-      event.toolCall.name = WEB_SEARCH_TOOL_NAME;
-    }
-    transformDynamicRecordArguments(
-      event.toolCall.name,
-      event.toolCall.arguments,
-      fieldsByTool,
-      "from-wire",
-    );
-  } else if (event.type === "done") {
-    restoreToolCallsInMessage(event.message, fieldsByTool, webSearchWireAlias);
-  } else if (event.type === "error") {
-    restoreToolCallsInMessage(event.error, fieldsByTool, webSearchWireAlias);
-  }
-}
-
-function wrapOpencodeResponseStream(
-  stream: ProviderStream,
-  fieldsByTool: DynamicRecordFieldsByTool,
-  resolveWebSearchWireAlias: () => string | undefined,
-) {
+function wrapResponseStream(stream: ProviderStream, state: TransformState): ProviderStream {
   return {
     async *[Symbol.asyncIterator]() {
       for await (const event of stream) {
-        restoreToolCallsInEvent(event, fieldsByTool, resolveWebSearchWireAlias());
-        yield event;
+        yield restoreEvent(event, state);
       }
     },
     async result() {
-      const message = await stream.result();
-      restoreToolCallsInMessage(message, fieldsByTool, resolveWebSearchWireAlias());
-      return message;
+      return restoreMessage(await stream.result(), state);
     },
-  } satisfies ProviderStream;
+  };
 }
 
 export function wrapOpencodeProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
@@ -322,33 +230,29 @@ export function wrapOpencodeProviderStream(ctx: ProviderWrapStreamFnContext): St
     if (model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
-
     const originalOnPayload = options?.onPayload;
-    const fieldsByTool: DynamicRecordFieldsByTool = new Map();
-    let webSearchWireAlias: string | undefined;
+    const state: TransformState = { fields: new Map() };
     const maybeStream = underlying(model, context, {
       ...options,
       async onPayload(payload, payloadModel) {
-        const replacement = await originalOnPayload?.(payload, payloadModel);
-        const finalPayload = replacement ?? payload;
-        fieldsByTool.clear();
-        webSearchWireAlias = undefined;
+        const finalPayload = (await originalOnPayload?.(payload, payloadModel)) ?? payload;
+        state.fields = new Map();
+        state.alias = undefined;
         if (isRecord(finalPayload)) {
-          for (const [toolName, fields] of rewriteDynamicRecordToolSchemas(finalPayload)) {
-            fieldsByTool.set(toolName, fields);
+          state.fields = rewriteDynamicRecordSchemas(finalPayload);
+          for (const call of payloadFunctions(finalPayload)) {
+            if (call.type === "function_call") {
+              transformCall(call, state, true);
+            }
           }
-          encodeDynamicRecordReplayArguments(finalPayload, fieldsByTool);
-          webSearchWireAlias = selectWebSearchWireAlias(finalPayload);
-          aliasWebSearchInPayload(finalPayload, webSearchWireAlias);
+          state.alias = aliasWebSearch(finalPayload);
         }
         return finalPayload;
       },
     });
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapOpencodeResponseStream(stream, fieldsByTool, () => webSearchWireAlias),
-      );
-    }
-    return wrapOpencodeResponseStream(maybeStream, fieldsByTool, () => webSearchWireAlias);
+    const wrap = (stream: ProviderStream) => wrapResponseStream(stream, state);
+    return maybeStream && typeof maybeStream === "object" && "then" in maybeStream
+      ? Promise.resolve(maybeStream).then(wrap)
+      : wrap(maybeStream);
   };
 }
