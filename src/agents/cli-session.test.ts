@@ -388,6 +388,30 @@ describe("cli-session helpers", () => {
     ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
+  it.each([
+    {
+      name: "heartbeat follows a chat turn",
+      bindingHash: "message-policy-a",
+      currentHash: undefined,
+    },
+    {
+      name: "chat turn follows a heartbeat",
+      bindingHash: undefined,
+      currentHash: "message-policy-a",
+    },
+  ])("reuses when only one side has a message-policy fingerprint: $name", (testCase) => {
+    expect(
+      resolveCliSessionReuse({
+        binding: {
+          sessionId: "cli-session-1",
+          messageToolPolicyHash: testCase.bindingHash,
+        },
+        authEpochVersion: 2,
+        messageToolPolicyHash: testCase.currentHash,
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
+  });
+
   it("invalidates reuse when the task cwd changes", () => {
     const binding = {
       sessionId: "cli-session-1",

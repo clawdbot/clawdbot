@@ -2490,6 +2490,50 @@ describe("prepareCliRunContext", () => {
     },
   );
 
+  it("reuses CLI sessions across chat-heartbeat-chat policy fingerprints", async () => {
+    const { dir } = fixture.session;
+    const staticPrompt = "direct:telegram:automatic";
+    const chat = await fixture.prepare({
+      extraSystemPrompt: staticPrompt,
+      sourceReplyDeliveryMode: "automatic",
+      cliSessionBindingFacts: {
+        extraSystemPromptStatic: staticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+      },
+    });
+    const heartbeat = await fixture.prepare({
+      extraSystemPrompt: staticPrompt,
+      cliSessionBindingFacts: { extraSystemPromptStatic: staticPrompt },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: chat.extraSystemPromptHash,
+        messageToolPolicyHash: chat.messageToolPolicyHash,
+        promptToolNamesHash: chat.promptToolNamesHash,
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
+    const nextChat = await fixture.prepare({
+      extraSystemPrompt: staticPrompt,
+      sourceReplyDeliveryMode: "automatic",
+      cliSessionBindingFacts: {
+        extraSystemPromptStatic: staticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: heartbeat.extraSystemPromptHash,
+        messageToolPolicyHash: heartbeat.messageToolPolicyHash,
+        promptToolNamesHash: heartbeat.promptToolNamesHash,
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
+
+    expect(chat.messageToolPolicyHash).toBeDefined();
+    expect(heartbeat.messageToolPolicyHash).toBeUndefined();
+    expect(heartbeat.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+    expect(nextChat.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+  });
+
   it("reuses CLI session bindings across explicit mention toggles with stable group prompt facts", async () => {
     const { dir } = fixture.session;
     const baseGroupCtx = {

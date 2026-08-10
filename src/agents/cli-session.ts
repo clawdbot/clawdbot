@@ -207,7 +207,11 @@ export function resolveCliSessionReuse(params: {
     return { mode: "invalidate", invalidatedReason: "auth-epoch" };
   }
   const storedMessageToolPolicyHash = normalizeOptionalString(binding?.messageToolPolicyHash);
-  if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {
+  if (
+    storedMessageToolPolicyHash &&
+    currentMessageToolPolicyHash &&
+    storedMessageToolPolicyHash !== currentMessageToolPolicyHash
+  ) {
     return { mode: "invalidate", invalidatedReason: "message-policy" };
   }
   const storedCwdHash = normalizeOptionalString(binding?.cwdHash);
