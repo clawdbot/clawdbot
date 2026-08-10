@@ -105,8 +105,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
     const placement = selectedSession?.placement;
-    const terminalReason =
-      placement && "terminalReason" in placement ? placement.terminalReason : undefined;
+    const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
     const placementRunError = terminalReason
       ? { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) }
       : null;
