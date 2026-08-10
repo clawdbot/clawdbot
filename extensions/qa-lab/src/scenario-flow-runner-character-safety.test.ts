@@ -117,11 +117,11 @@ describe("character scenario transcript safety", () => {
 
   it.each(
     characterScenarioIds.flatMap((scenarioId) =>
-      classifiedFailureReplies.map(({ failureName, failureText, ...failureMarker }) => ({
+      classifiedFailureReplies.map(({ failureName, failureText, isError }) => ({
         scenarioId,
         failureName,
         failureText,
-        ...failureMarker,
+        isError,
       })),
     ),
   )(
