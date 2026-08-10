@@ -13,9 +13,19 @@ import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/pr
 import {
   classifyFailoverReason,
   isContextOverflowError,
+  classifyProviderPluginError,
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
 } from "./classify.js";
+
+describe("classifyProviderPluginError", () => {
+  it("retains the direct provider-hook compatibility predicate", () => {
+    hoisted.classifyProviderFailoverSignalWithPlugin.mockReturnValueOnce("billing");
+    expect(
+      classifyProviderPluginError({ provider: "demo-provider", errorMessage: "quota exhausted" }),
+    ).toBe("billing");
+  });
+});
 
 describe("matchesProviderContextOverflow", () => {
   it("skips provider hook dispatch for unrelated errors", () => {

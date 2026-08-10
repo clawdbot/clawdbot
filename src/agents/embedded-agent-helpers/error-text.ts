@@ -31,7 +31,6 @@ import {
   isRawApiErrorPayload,
   isStreamingJsonParseError,
 } from "./sanitize-user-facing-text.js";
-
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
@@ -43,18 +42,15 @@ const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
   "The selected model was not found by the provider. Check the model id or choose a different model.";
-
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
   /messages\.\d+\.content\.\d+\.tool_(?:use|call)\.(?:input|arguments)/i;
-
 function isMissingToolCallInputError(raw: string): boolean {
   return (
     Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
   );
 }
-
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: {
@@ -75,12 +71,10 @@ export function formatAssistantErrorText(
   if (!raw) {
     return "LLM request failed with an unknown error.";
   }
-
   const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
     ...buildAssistantFailoverSignal(msg, { provider: opts?.provider }),
     message: raw,
   });
-
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);

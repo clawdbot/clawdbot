@@ -18,7 +18,6 @@ export {
 } from "./embedded-agent-helpers/context-overflow-observation.js";
 export type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 export {
-  AUTH_INVALID_TOKEN_USER_TEXT,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
