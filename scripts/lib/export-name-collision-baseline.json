@@ -895,14 +895,6 @@
     ]
   },
   {
-    "name": "normalizeAccountId",
-    "files": [
-      "src/routing/account-id.ts",
-      "src/utils/account-id.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "normalizeChannelId",
     "files": [
       "src/channels/plugins/registry.ts",
@@ -1260,20 +1252,6 @@
     "files": [
       "src/acp/translator.bridge-test-helpers.ts",
       "src/gateway/test-helpers.assertions.ts"
-    ]
-  },
-  {
-    "name": "requireValidConfig",
-    "files": [
-      "src/commands/agents.command-shared.ts",
-      "src/commands/channels/shared.ts"
-    ]
-  },
-  {
-    "name": "requireValidConfigFileSnapshot",
-    "files": [
-      "src/commands/agents.command-shared.ts",
-      "src/commands/config-validation.ts"
     ]
   },
   {
@@ -1656,7 +1634,6 @@
   {
     "name": "sleep",
     "files": [
-      "src/agents/utils/sleep.ts",
       "src/tui/tui-pty-test-support.ts",
       "src/utils/sleep.ts"
     ],
