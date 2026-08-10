@@ -62,14 +62,14 @@ function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOpe
   if (!isRecord(params)) {
     return "operator.write";
   }
-  // Incognito creation and inheritance expose process-only session state; cwd and
-  // execNode target privileged host resources. All require operator.admin.
+  // Incognito creation and inheritance expose process-only session state, while
+  // execNode targets privileged host resources. Gateway cwd containment needs
+  // runtime config and filesystem facts, so the create handler owns that check.
   if (
     params.incognito === true ||
     (typeof params.key === "string" && isIncognitoSessionKey(params.key)) ||
     (typeof params.parentSessionKey === "string" &&
       isIncognitoSessionKey(params.parentSessionKey)) ||
-    Object.hasOwn(params, "cwd") ||
     Object.hasOwn(params, "execNode")
   ) {
     return "operator.admin";

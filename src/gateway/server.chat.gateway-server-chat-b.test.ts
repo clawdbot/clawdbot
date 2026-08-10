@@ -725,6 +725,17 @@ describe("gateway server chat", () => {
           ts: 1_006,
           data: { phase: "result", name: "read", toolCallId: "tool-active", result: "stale" },
         });
+        handler({
+          runId: "provider-run",
+          seq: 6,
+          stream: "item",
+          ts: 1_006,
+          data: {
+            kind: "preamble",
+            itemId: "preamble-2",
+            progressText: "Autoreview is running",
+          },
+        });
 
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         await callDirectChat(method, {
@@ -779,6 +790,18 @@ describe("gateway server chat", () => {
                 name: "read",
                 toolCallId: "tool-active",
                 partialResult: "halfway",
+              },
+            },
+            {
+              runId: "run-active",
+              seq: 6,
+              stream: "item",
+              ts: 1_006,
+              sessionKey: "main",
+              data: {
+                kind: "preamble",
+                itemId: "preamble-2",
+                progressText: "Autoreview is running",
               },
             },
           ],

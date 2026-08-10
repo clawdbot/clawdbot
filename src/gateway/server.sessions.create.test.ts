@@ -1223,12 +1223,61 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
 });
 
 test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
-  const created = await directSessionReq("sessions.create", { cwd: "/tmp/repo" });
+  const created = await directSessionReq(
+    "sessions.create",
+    { cwd: "/tmp/repo" },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
 
   expect(created.ok).toBe(true);
   expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
     "/tmp/repo",
   );
+});
+
+test("sessions.create allows a write-scoped cwd inside the configured workspace", async () => {
+  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
+  const cwd = path.join(workspace, "packages", "app");
+  await fs.mkdir(cwd, { recursive: true });
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  const { ws } = await openClient({
+    scopes: ["operator.write"],
+    deviceIdentityPath: path.join(workspace, "write-cwd-device.json"),
+  });
+  try {
+    const created = await rpcReq<{ entry?: { spawnedCwd?: string } }>(ws, "sessions.create", {
+      cwd,
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry?.spawnedCwd).toBe(cwd);
+  } finally {
+    ws.close();
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create rejects a write-scoped cwd outside configured workspaces", async () => {
+  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
+  const outside = tempDirs.make("openclaw-session-cwd-outside-");
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  const { ws } = await openClient({
+    scopes: ["operator.write"],
+    deviceIdentityPath: path.join(workspace, "outside-cwd-device.json"),
+  });
+  try {
+    const created = await rpcReq(ws, "sessions.create", { cwd: outside });
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+  } finally {
+    ws.close();
+    testState.agentConfig = undefined;
+  }
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
@@ -1259,7 +1308,11 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
 test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
   testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
   try {
-    const created = await directSessionReq("sessions.create", { cwd: "/tmp/outside" });
+    const created = await directSessionReq(
+      "sessions.create",
+      { cwd: "/tmp/outside" },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
 
     expect(created.ok).toBe(false);
     expect(created.error).toMatchObject({
@@ -1275,7 +1328,11 @@ test("sessions.create allows cwd within a sandboxed agent workspace", async () =
   testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
   try {
     const cwd = "/tmp/safe-workspace/packages/app";
-    const created = await directSessionReq("sessions.create", { cwd });
+    const created = await directSessionReq(
+      "sessions.create",
+      { cwd },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
 
     expect(created.ok).toBe(true);
     expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);

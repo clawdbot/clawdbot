@@ -128,13 +128,15 @@ describe("worktrees gateway methods", () => {
     expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
   });
 
-  it("allows write-scoped branch listing for a configured agent workspace", async () => {
+  it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
     const os = await import("node:os");
     const path = await import("node:path");
     const fs = await import("node:fs/promises");
     const workspace = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
     );
+    const repoRoot = path.join(workspace, "packages", "app");
+    await fs.mkdir(repoRoot, { recursive: true });
     try {
       const service = {
         listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
@@ -143,7 +145,7 @@ describe("worktrees gateway methods", () => {
       const response = await call(
         handlers,
         "worktrees.branches",
-        { repoRoot: workspace },
+        { repoRoot },
         {
           client: writeClient,
           context: {
@@ -154,7 +156,7 @@ describe("worktrees gateway methods", () => {
         },
       );
       expect(response?.[0]).toBe(true);
-      expect(service.listRepositoryBranches).toHaveBeenCalledWith(workspace);
+      expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }

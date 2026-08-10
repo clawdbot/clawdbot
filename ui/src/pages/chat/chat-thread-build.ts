@@ -130,19 +130,18 @@ function resolveRunInsertionBounds(
   if (typeof runId !== "string" || !runId.trim()) {
     return currentRunId != null ? currentTurnBounds : null;
   }
-  if (currentRunId == null) {
-    return findRunTurnBounds(items, runId);
-  }
+  const runBounds = findRunTurnBounds(items, runId);
   if (runId === currentRunId) {
-    return currentTurnBounds;
+    // Active runs can span steers: the original prompt is a floor, not a ceiling.
+    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
+  }
+  if (runBounds || currentRunId == null) {
+    return runBounds;
   }
   // Legacy rows may lack the user-run identity needed for exact bounds. Keep
   // their timestamp ordering across historical turns, but never cross the
   // current prompt and become current-run output.
-  return (
-    findRunTurnBounds(items, runId) ??
-    (currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null)
-  );
+  return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
 }
 
 function liveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {

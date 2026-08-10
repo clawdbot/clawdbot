@@ -420,7 +420,7 @@ export {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
-export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/types.js";
+export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,

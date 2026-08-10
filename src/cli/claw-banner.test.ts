@@ -32,12 +32,26 @@ async function runStatic() {
     .filter((row) => row.length > 0);
 }
 
+const EXPECTED_MASCOT = [
+  " •●●:.        .:●●•",
+  ":●●●●:        :●●●●:",
+  ".●●●●:.:•●●•:.:●●●●.",
+  " .●●●: •●●●●• :●●●.",
+  " ..:••●●●●●●●●••:..",
+  ".::••••●●●●●●••••::.",
+  " . .:  •●●●●•  :. .",
+  "    .  :●●●●:  .",
+  "      .●●●●●●.",
+  "       :••••:",
+] as const;
+
 describe("printClawBanner", () => {
   it("prints the static banner when not animatable", async () => {
     const { runtime, log } = runtimeStub();
     await printClawBanner(runtime, { columns: 120, isTty: false, env: {} });
     const output = stripAnsi(String(log.mock.calls[0]?.[0]));
-    expect(output.split("\n")[0]).toBe("▄███▄     ▄███▄");
+    const rows = output.split("\n").filter((row) => row.length > 0);
+    expect(rows.map((row) => row.slice(0, 20).trimEnd())).toEqual(EXPECTED_MASCOT);
     expect(output).toContain("█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █");
   });
 
@@ -62,6 +76,15 @@ describe("printClawBanner", () => {
     expect(chunks).toContain("\x1b[?25h");
     const frames = chunks.filter((chunk) => chunk.includes("\x1b[K"));
     expect(frames.length).toBeGreaterThan(10);
+    expect(
+      frames.some((frame) => {
+        const [first = "", second = ""] = stripAnsi(frame).split("\n");
+        return (
+          first.slice(0, 20).trimEnd() === "•●•.:.        .:.•●•" &&
+          second.slice(0, 20).trimEnd() === ":●●●•:        :•●●●:"
+        );
+      }),
+    ).toBe(true);
     const finalRows = stripAnsi(frames[frames.length - 1] ?? "")
       .split("\n")
       .filter((row) => row.length > 0);

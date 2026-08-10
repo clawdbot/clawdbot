@@ -469,6 +469,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .available=${terminalAvailable}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
+        .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}

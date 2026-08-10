@@ -1,4 +1,5 @@
 import {
+  type FailoverClassificationCorpusRow,
   billingSource,
   errorsSource,
   httpSource,
@@ -8,7 +9,6 @@ import {
   reason,
   retrySource,
   structuredSource,
-  type FailoverClassificationCorpusRow,
 } from "./failover-classification.corpus.test-support.js";
 export const structuredMiscCases = [
   // Explicitly unclassified current behavior.
@@ -93,7 +93,8 @@ export const structuredMiscCases = [
       provider: "openai",
       message: "OpenAI API error (400): 400 Model Id [gpt-5.4-nano] not found",
     },
-    expected: null,
+    // FIXED(refactor-02): was null, now model_not_found
+    expected: reason("model_not_found"),
   },
   {
     id: "ollama-malformed-tool-arguments",

@@ -1,7 +1,8 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason } from "./errors.js";
+import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
+  classifyFailoverReason,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
@@ -9,8 +10,14 @@ import {
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "./failover-matches.js";
-import { formatRateLimitOrOverloadedErrorCopy } from "./sanitize-user-facing-text.js";
+  matchesFormatErrorPattern,
+} from "./classify.js";
+
+describe("matchesFormatErrorPattern", () => {
+  it("retains the direct format compatibility predicate", () => {
+    expect(matchesFormatErrorPattern("invalid request format")).toBe(true);
+  });
+});
 
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {

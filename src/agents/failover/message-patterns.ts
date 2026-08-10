@@ -1,10 +1,5 @@
-/**
- * Shared text-pattern matchers for failover, auth, billing, and rate-limit errors.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 type ErrorPattern = RegExp | string;
-
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -16,12 +11,10 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   "account has been deactivated",
   "not allowed for this organization",
 ] as const satisfies readonly ErrorPattern[];
-
 // Providers use both "invalid API key" and "API key is/not valid" word order.
 // Keep them in one matcher so every result/exception classifier agrees on auth failover.
 const INVALID_API_KEY_RE =
   /(?:invalid[_ ]?api[_ ]?key(?![a-z0-9])|api[_ ]?key(?:[_ ]?(?:is[_ ]?)?(?:invalid(?![a-z0-9])|not[_ ]?valid(?![a-z0-9]))))/i;
-
 const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
   INVALID_API_KEY_RE,
   /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
@@ -66,7 +59,16 @@ const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
   /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
 const HTTP_5XX_STATUS_RE = /\bHTTP\s+5\d\d\b/i;
+const BILLING_ERROR_HARD_402_RE =
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment/i;
 
+// Numeric ids and token counts are not HTTP throttling signals. Require a
+// standalone status token, HTTP/status context, or a structured status/code shape.
+const RATE_LIMIT_429_RE =
+  /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
+// Catches provider "model X not found" wording; the legacy provider table
+// only covers Groq's deactivated-model forms.
+export const GENERIC_MODEL_NOT_FOUND_RE = /\bmodel\b.{0,60}?\bnot (?:found|available)\b/i;
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
   ZAI_AUTH_CODE_1113_RE,
@@ -74,18 +76,18 @@ const ZAI_AUTH_ERROR_PATTERNS = [
 
 const ERROR_PATTERNS = {
   rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
+    /rate[_ ]limit|too many requests/i,
+    RATE_LIMIT_429_RE,
     /too many (?:concurrent )?requests/i,
-    /throttling(?:exception)?/i,
+    // Accepted tradeoff: unrealistic provider text such as "throttling disabled"
+    // still matches this intentionally broad provider-error signal.
+    /\bthrottl(?:ing[_]?exception|ing|ed)\b/i,
+    /\bconcurrency limit\b.*\b(?:breached|reached)\b/i,
     "model_cooldown",
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
     "resource_exhausted",
-    "throttlingexception",
-    "throttling_exception",
-    "throttled",
-    "throttling",
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
@@ -103,10 +105,7 @@ const ERROR_PATTERNS = {
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
     /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i,
-    // Match "service unavailable" only when combined with an explicit overload
-    // indicator — a generic 503 from a proxy/CDN should not be classified as
-    // provider-overload (#32828).
-    /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
+    /\bservice(?:[_ ]temporarily)?[_ ]unavailable\b/i,
     "high demand",
     "high load",
     // Chinese provider overloaded messages
@@ -119,8 +118,6 @@ const ERROR_PATTERNS = {
     "internal server error",
     "internal_error",
     "server_error",
-    "service temporarily unavailable",
-    "service_unavailable",
     "bad gateway",
     "gateway timeout",
     "upstream error",
@@ -137,7 +134,6 @@ const ERROR_PATTERNS = {
   timeout: [
     "timeout",
     "timed out",
-    "service unavailable",
     "deadline exceeded",
     "context deadline exceeded",
     /^(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
@@ -210,7 +206,8 @@ const ERROR_PATTERNS = {
     /^llm request failed\.$/i,
   ],
   billing: [
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
+    BILLING_ERROR_HARD_402_RE,
+    /\b(?:got|returned|received)\s+(?:a\s+)?402\b(?!\s+records\b)/i,
     "payment required",
     "insufficient credits",
     /used\s+all\s+available\s+credits/i,
@@ -272,10 +269,6 @@ const ERROR_PATTERNS = {
 
 const BILLING_ERROR_HEAD_RE =
   /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
-const BILLING_ERROR_HARD_402_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment/i;
-const BILLING_ERROR_MAX_LENGTH = 512;
-
 function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
   if (!raw) {
     return false;
@@ -292,15 +285,12 @@ function matchesErrorPatternGroups(
 ): boolean {
   return groups.some((patterns) => matchesErrorPatterns(raw, patterns));
 }
-
 export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
-
 export function isRateLimitErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
 }
-
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
 }
@@ -318,27 +308,21 @@ const PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS = [
   // only so `reason: network_error` stays in the timeout lane.
   /\breason:\s*error\b/i,
 ] as const satisfies readonly ErrorPattern[];
-
 export function isProviderCompletedErrorFinishReasonMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, PROVIDER_COMPLETED_ERROR_FINISH_REASON_PATTERNS);
 }
-
 export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
   return PERIODIC_USAGE_LIMIT_RE.test(raw);
 }
-
 export function isBillingErrorMessage(raw: string): boolean {
   const value = normalizeLowercaseStringOrEmpty(raw);
   if (!value) {
     return false;
   }
-
-  if (raw.length > BILLING_ERROR_MAX_LENGTH) {
-    return (
-      BILLING_ERROR_HARD_402_RE.test(value) ||
-      ZAI_BILLING_CODE_1311_RE.test(value) ||
-      VOLCENGINE_INVALID_SUBSCRIPTION_RE.test(value)
-    );
+  // Multi-section Markdown is explanatory content, not a provider error body.
+  // Without the former length cliff, examples discussing billing would otherwise match soft hints.
+  if ([...raw.matchAll(/(?:^|\n)##\s+\S/g)].length > 1) {
+    return false;
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
     return true;
@@ -355,11 +339,9 @@ export function isBillingErrorMessage(raw: string): boolean {
     value.includes("plan")
   );
 }
-
 export function isAuthPermanentErrorMessage(raw: string): boolean {
   return matchesErrorPatternGroups(raw, [HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS]);
 }
-
 export function isAuthErrorMessage(raw: string): boolean {
   return matchesErrorPatternGroups(raw, [
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
@@ -368,11 +350,9 @@ export function isAuthErrorMessage(raw: string): boolean {
     CJK_AUTH_ERROR_PATTERNS,
   ]);
 }
-
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }
-
 export function isServerErrorMessage(raw: string): boolean {
   const value = normalizeLowercaseStringOrEmpty(raw);
   if (!value) {

@@ -1,9 +1,12 @@
 import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isBillingErrorMessage, isRateLimitErrorMessage } from "./failover-matches.js";
-import { matchesProviderContextOverflow } from "./provider-error-patterns.js";
+import { isBillingErrorMessage, isRateLimitErrorMessage } from "./message-patterns.js";
+import {
+  classifyProviderPluginError,
+  looksLikeProviderContextOverflowCandidate,
+  matchesLegacyProviderContextOverflow,
+} from "./provider-patterns.js";
 
-/** Detect provider errors that require reasoning to stay enabled. */
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -23,7 +26,7 @@ function hasRateLimitTpmHint(raw: string): boolean {
 }
 
 /** Detect explicit context-window overflow without confusing TPM rate limits. */
-export function isContextOverflowError(errorMessage?: string): boolean {
+export function isContextOverflowErrorFromTables(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
@@ -76,7 +79,18 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     errorMessage.includes("超出最大上下文") ||
     errorMessage.includes("请压缩上下文") ||
     // Provider-specific patterns (Bedrock, Azure, Ollama, Mistral, Cohere, etc.)
-    matchesProviderContextOverflow(errorMessage)
+    matchesLegacyProviderContextOverflow(errorMessage)
+  );
+}
+
+export function isContextOverflowError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  return (
+    (looksLikeProviderContextOverflowCandidate(errorMessage) &&
+      classifyProviderPluginError({ errorMessage }) === "context_overflow") ||
+    isContextOverflowErrorFromTables(errorMessage)
   );
 }
 

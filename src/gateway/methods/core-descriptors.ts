@@ -167,9 +167,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
   ["worktrees.branches", "worktrees", "operator.write", "2026.7"],
-  // Arbitrary host-path directory listing backs the new-session folder picker;
-  // same trust bar as sessions.create with an explicit cwd.
-  ["fs.listDir", "fs", "operator.admin", "<=2026.7"],
+  // Params-aware: Gateway paths start at write scope and are containment-checked
+  // by the handler; node browsing remains admin-only.
+  ["fs.listDir", "fs", "dynamic", "<=2026.7"],
   ["worktrees.create", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.remove", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.restore", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
@@ -239,7 +239,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
-  // Params-aware: explicit cwd can point at any host checkout and requires admin.
+  // Params-aware plus state-aware: the handler permits write-scoped cwd only
+  // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],

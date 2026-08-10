@@ -1,4 +1,5 @@
 import {
+  type FailoverClassificationCorpusRow,
   billingSource,
   matchesSource,
   messageRows,
@@ -7,7 +8,6 @@ import {
   reason,
   retrySource,
   structuredSource,
-  type FailoverClassificationCorpusRow,
 } from "./failover-classification.corpus.test-support.js";
 export const rateLimitOverloadCases = [
   // Rate limits and temporary quotas.
@@ -140,6 +140,20 @@ export const rateLimitOverloadCases = [
     id: "patterns-concurrency-limit",
     source: patternsSource,
     signal: { message: "concurrency limit has been reached" },
+    expected: reason("rate_limit"),
+  },
+  {
+    id: "patterns-concurrency-limit-breached",
+    source: patternsSource,
+    signal: { message: "concurrency limit breached" },
+    // FIXED(refactor-02): was null, now rate_limit
+    expected: reason("rate_limit"),
+  },
+  {
+    id: "patterns-concurrency-limit-was-reached",
+    source: patternsSource,
+    signal: { message: "concurrency limit was reached" },
+    // FIXED(refactor-02): was null, now rate_limit
     expected: reason("rate_limit"),
   },
   {

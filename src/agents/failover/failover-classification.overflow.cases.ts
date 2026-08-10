@@ -1,11 +1,11 @@
 import {
+  type FailoverClassificationCorpusRow,
   billingSource,
   contextOverflow,
   errorsSource,
   messageRows,
   patternsSource,
   structuredSource,
-  type FailoverClassificationCorpusRow,
 } from "./failover-classification.corpus.test-support.js";
 export const overflowCases = [
   // Context overflow.

@@ -4550,13 +4550,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(preflightGuards).toContain('has_package_script "check:doctor-deprecation-registry"');
     expect(preflightGuards).toContain("pnpm check:doctor-deprecation-registry");
     expect(preflightGuards).toContain(
-      "[skip] historical target skips the wall-clock doctor deprecation registry guard",
+      "[skip] frozen target predates the wall-clock doctor deprecation registry guard",
     );
     expect(preflightGuards).toContain(
       "Current CI targets must provide the check:doctor-deprecation-registry package script.",
     );
-    expect(preflightGuards.indexOf('if [[ "$HISTORICAL_TARGET" == "true" ]]')).toBeLessThan(
+    expect(preflightGuards.indexOf('elif [[ "$FROZEN_TARGET" == "true" ]]')).toBeGreaterThan(
       preflightGuards.indexOf("pnpm check:doctor-deprecation-registry"),
+    );
+    const checkShard = parsedWorkflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    );
+    expect(checkShard.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(parsedWorkflow.jobs.preflight.outputs.frozen_target).toBe(
+      "${{ steps.manifest.outputs.frozen_target }}",
     );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
@@ -5017,6 +5024,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       0,
     );
     expect(frozenMissingCurrentCapabilities.outputs.historical_target).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.frozen_target).toBe("true");
     expect(frozenMissingCurrentCapabilities.outputs.run_ios_build).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_macos_swift).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_native_i18n).toBe("false");
@@ -5195,9 +5203,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.jobs["checks-ui"].env.COMPATIBILITY_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
-    expect(uiInstall.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
+    expect(uiInstall.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(uiInstall.run).toContain('if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]');
     expect(uiInstall.run).toContain("pnpm --dir ui exec playwright install chromium");
     expect(uiInstall.run).toContain("node --import tsx scripts/ensure-playwright-chromium.mts");
+    expect(uiInstall.run).toContain(
+      'elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]',
+    );
+    expect(uiInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
+    expect(uiInstall.run).toContain(
+      "Target does not provide a supported Playwright Chromium installer.",
+    );
     expect(uiInstall.run).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
     expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
@@ -5346,7 +5362,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
       "Control UI E2E Chromium installation",
     );
-    expect(chromiumInstall.run).toBe("node --import tsx scripts/ensure-playwright-chromium.mts");
+    expect(chromiumInstall.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(chromiumInstall.run).toContain(
+      "node --import tsx scripts/ensure-playwright-chromium.mts",
+    );
+    expect(chromiumInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
     const realGatewayChromiumInstall = expectDefined(
       uiE2eRealGateway.steps.find(
         (step: WorkflowStep) => step.name === "Install Playwright Chromium",

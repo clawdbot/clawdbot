@@ -1,42 +1,42 @@
 // Covers provider-specific error-pattern classification hooks.
 import { describe, expect, it, vi } from "vitest";
+import type { FailoverReason } from "./signal.js";
 
 const hoisted = vi.hoisted(() => ({
-  classifyProviderFailoverReasonWithPlugin: vi.fn(() => null),
-  matchesProviderContextOverflowWithPlugin: vi.fn(() => false),
+  classifyProviderFailoverSignalWithPlugin: vi.fn((): FailoverReason | null => null),
 }));
 
-vi.mock("../../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
-    "../../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    classifyProviderFailoverReasonWithPlugin: hoisted.classifyProviderFailoverReasonWithPlugin,
-    matchesProviderContextOverflowWithPlugin: hoisted.matchesProviderContextOverflowWithPlugin,
-  };
-});
+vi.mock("../../logging/node-require.js", () => ({
+  resolveNodeRequireFromMeta: () => () => hoisted,
+}));
 
+import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import {
   classifyFailoverReason,
-  classifyProviderRuntimeFailureKind,
   isContextOverflowError,
-} from "./errors.js";
-import {
+  classifyProviderPluginError,
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
-} from "./provider-error-patterns.js";
+} from "./classify.js";
+
+describe("classifyProviderPluginError", () => {
+  it("retains the direct provider-hook compatibility predicate", () => {
+    expect(
+      classifyProviderPluginError({ provider: "demo-provider", errorMessage: "quota exhausted" }),
+    ).toBeNull();
+  });
+});
 
 describe("matchesProviderContextOverflow", () => {
   it("skips provider hook dispatch for unrelated errors", () => {
     // Avoid calling plugin hooks for obviously unrelated text so classifier hot
     // paths stay cheap and side-effect free.
-    hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
+    hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
 
     expect(
       matchesProviderContextOverflow("Permission denied for /root/oc-acp-write-should-fail.txt."),
     ).toBe(false);
-    expect(hoisted.matchesProviderContextOverflowWithPlugin).not.toHaveBeenCalled();
+    expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -69,19 +69,18 @@ describe("matchesProviderContextOverflow", () => {
   });
 
   it("does not match unrelated errors", () => {
-    hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
+    hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
     expect(matchesProviderContextOverflow("rate limit exceeded")).toBe(false);
     expect(matchesProviderContextOverflow("invalid api key")).toBe(false);
     expect(matchesProviderContextOverflow("internal server error")).toBe(false);
-    expect(hoisted.matchesProviderContextOverflowWithPlugin).not.toHaveBeenCalled();
+    expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 });
 
 describe("classifyProviderSpecificError", () => {
-  it("classifies Bedrock ThrottlingException as rate_limit", () => {
-    expect(classifyProviderSpecificError("ThrottlingException: Too many requests")).toBe(
-      "rate_limit",
-    );
+  it("leaves Bedrock ThrottlingException to the generic rate-limit table", () => {
+    // FIXED(refactor-02): duplicate provider-specific throttling spellings were removed.
+    expect(classifyProviderSpecificError("ThrottlingException: Too many requests")).toBeNull();
   });
 
   it("classifies Bedrock ModelNotReadyException as overloaded", () => {
@@ -94,9 +93,9 @@ describe("classifyProviderSpecificError", () => {
     expect(classifyProviderSpecificError("model_is_deactivated")).toBe("model_not_found");
   });
 
-  it("classifies concurrency limit as rate_limit", () => {
-    expect(classifyProviderSpecificError("concurrency limit has been reached")).toBe("rate_limit");
-    expect(classifyProviderSpecificError("concurrency limit reached")).toBe("rate_limit");
+  it("leaves concurrency limits to the generic rate-limit table", () => {
+    expect(classifyProviderSpecificError("concurrency limit has been reached")).toBeNull();
+    expect(classifyProviderSpecificError("concurrency limit reached")).toBeNull();
   });
 
   it("classifies Cloudflare Workers AI quota errors as rate_limit", () => {

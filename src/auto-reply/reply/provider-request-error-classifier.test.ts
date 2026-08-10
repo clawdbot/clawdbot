@@ -1,6 +1,6 @@
 /** Tests provider request error classification for retry/fallback decisions. */
 import { describe, expect, it } from "vitest";
-import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/error-text.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   classifyProviderRequestError,

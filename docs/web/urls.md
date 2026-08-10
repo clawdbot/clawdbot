@@ -198,9 +198,11 @@ the agent path while keeping other query parameters and the fragment.
 These Gateway-served documents sit outside the application route table:
 
 - `/?onboarding=1` opens the first-run onboarding presentation.
-- `/?view=terminal` opens the full-screen terminal-only document used by the
-  mobile apps. Availability still requires `gateway.terminal.enabled` and
-  `operator.admin`.
+- `/terminal` opens the user-facing full-screen terminal. With a base path, use
+  `<basePath>/terminal`.
+- `/?view=terminal` opens the same terminal-only document in the WebView/embed
+  form used by the mobile apps. Terminal availability in either form still
+  requires `gateway.terminal.enabled` and `operator.admin`.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.
