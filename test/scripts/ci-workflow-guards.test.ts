@@ -3510,6 +3510,11 @@ NODE
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-sqlite-session-schema-baseline",
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
@@ -3795,6 +3800,25 @@ NODE
     expect(runStep.run).toContain("session-accessor-boundary)");
     expect(runStep.run).toContain(
       'run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary',
+    );
+  });
+
+  it("runs the export name collision ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("export-name-collisions)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions',
     );
   });
 

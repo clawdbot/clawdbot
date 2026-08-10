@@ -2450,6 +2450,9 @@ jobs:
           - check_name: check-prompt-snapshots
             group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
+          - check_name: check-export-name-collisions
+            group: export-name-collisions
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -2647,6 +2650,15 @@ jobs:
                 echo "[skip] changed scope cannot affect generated prompt snapshots"
               else
                 run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              fi
+              ;;
+            export-name-collisions)
+              if [ ! -f scripts/check-export-name-collisions.mts ]; then
+                echo "[skip] export name collision check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:export-name-collisions"] ? 0 : 1);'; then
+                echo "[skip] export name collision script is not present in package.json"
+              else
+                run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions
               fi
               ;;
             session-accessor-boundary)

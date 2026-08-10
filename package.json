@@ -1672,6 +1672,8 @@
     "lint:swift": "./scripts/lint-swift.sh",
     "lint:tmp:channel-agnostic-boundaries": "node --import tsx scripts/check-channel-agnostic-boundaries.mts",
     "lint:tmp:dynamic-import-warts": "node --import tsx scripts/check-dynamic-import-warts.mts",
+    "lint:tmp:export-name-collisions": "node --import tsx scripts/check-export-name-collisions.mts",
+    "lint:tmp:export-name-collisions:gen": "node --import tsx scripts/check-export-name-collisions.mts --update-debt-baseline",
     "lint:tmp:no-random-messaging": "node --import tsx scripts/check-no-random-messaging-tmp.mts",
     "lint:tmp:no-raw-channel-fetch": "node --import tsx scripts/check-no-raw-channel-fetch.mts",
     "lint:tmp:no-raw-http2-imports": "node --import tsx scripts/check-no-raw-http2-imports.mts",
