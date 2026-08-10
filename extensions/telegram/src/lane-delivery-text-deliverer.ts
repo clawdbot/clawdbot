@@ -11,8 +11,8 @@ import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -55,6 +55,8 @@ type CreateLaneTextDelivererParams = {
       durable?: boolean;
       promptContextSequence?: TelegramPromptContextProjectionSequence;
       textMode?: "html";
+      onPlatformSendDispatch?: () => Promise<void>;
+      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
     },
   ) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -86,6 +88,8 @@ type DeliverLaneTextParams = {
   durable?: boolean;
   allowStream?: boolean;
   promptContextSequence?: TelegramPromptContextProjectionSequence;
+  onPlatformSendDispatch?: () => Promise<void>;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
 function result(
@@ -276,6 +280,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     promptContextSequence: TelegramPromptContextProjectionSequence,
     followedByDurablePayload = false,
     allowErrorPayload = false,
+    onPlatformSendDispatch?: () => Promise<void>,
   ): Promise<LaneDeliveryResult | undefined> => {
     const stream = lane.stream;
     if (!stream || text.length === 0 || (payload.isError && !allowErrorPayload)) {
@@ -301,8 +306,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     lane.lastPartialText = previewText;
     lane.hasStreamedMessage = true;
     lane.finalized = false;
-    if (stream.lastDeliveredText?.() !== previewText) {
-      stream.update(previewText);
+    const previewAlreadyVisible = stream.lastDeliveredText?.() === previewText;
+    if (!previewAlreadyVisible) {
+      if (finalizePreview && onPlatformSendDispatch) {
+        stream.update(previewText, { onPlatformSendDispatch });
+      } else {
+        stream.update(previewText);
+      }
+    } else if (finalizePreview) {
+      await onPlatformSendDispatch?.();
     }
     if (finalizePreview) {
       await params.stopDraftLane(lane);
@@ -341,6 +353,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     let buttonsAttached = false;
     if (buttons && activeSnapshot) {
       try {
+        await onPlatformSendDispatch?.();
         await params.editStreamMessage({
           laneName,
           messageId,
@@ -383,6 +396,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     durable: requestedDurable,
     allowStream = true,
     promptContextSequence: suppliedPromptContextSequence,
+    onPlatformSendDispatch,
+    bindPendingFinalDelivery,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const promptContextSequence =
@@ -425,6 +440,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             promptContextSequence,
             false,
             streamedErrorDraftText !== undefined,
+            onPlatformSendDispatch,
           )
         : undefined;
     if (streamed) {
@@ -449,6 +465,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         buttons,
         promptContextSequence,
         true,
+        false,
+        onPlatformSendDispatch,
       );
       if (finalizedPreview) {
         const stripButtons =
@@ -465,6 +483,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             afterAcceptedDraft: true,
             durable,
             promptContextSequence,
+            onPlatformSendDispatch,
+            bindPendingFinalDelivery,
           },
         );
         return finalizedPreview;
@@ -491,6 +511,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         afterAcceptedDraft,
         durable,
         promptContextSequence,
+        onPlatformSendDispatch,
+        bindPendingFinalDelivery,
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },
     );

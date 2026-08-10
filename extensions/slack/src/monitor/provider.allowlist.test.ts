@@ -109,7 +109,6 @@ describe("slack startup user allowlist resolution", () => {
           enabled: true,
           botToken: "xoxb-test",
           appToken: "xapp-1-A123-test",
-          enterpriseOrgInstall: true,
           dmPolicy: "disabled",
           groupPolicy: "open",
           execApprovals: {

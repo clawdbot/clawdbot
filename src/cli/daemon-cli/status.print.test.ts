@@ -1,5 +1,9 @@
 // Daemon status print tests cover user-facing service status formatting.
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
 
@@ -130,6 +134,41 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
     expectMockLineContains(runtime.log, "8192 MiB constrained memory");
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "shortens real Windows home casing aliases in human status",
+    async () => {
+      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+        const logFile = path.join(home, "logs", "gateway.log");
+        await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
+        await fs.promises.writeFile(logFile, "ready", "utf8");
+        const logFileAlias = logFile.toUpperCase();
+        expect(fs.statSync(logFileAlias).isFile()).toBe(true);
+
+        await withEnv({ OPENCLAW_HOME: home }, async () => {
+          printDaemonStatus(
+            {
+              service: {
+                label: "Scheduled Task",
+                loaded: true,
+                loadedText: "registered",
+                notLoadedText: "not registered",
+              },
+              logFile: logFileAlias,
+              extraServices: [],
+            },
+            { json: false },
+          );
+        });
+
+        expectMockLineContains(
+          runtime.log,
+          `File logs: $OPENCLAW_HOME${path.sep}LOGS${path.sep}GATEWAY.LOG`,
+        );
+        expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(home.toUpperCase());
+      });
+    },
+  );
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
     printDaemonStatus(

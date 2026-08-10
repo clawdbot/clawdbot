@@ -70,6 +70,14 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Verify the premise before fixing: restrictions and missing links are sometimes intentional design, and removed code often had a reason. Check history (`git log -p -S <symbol>`) and name the exact line where the reported bug manifests before treating a gap as unfinished work.
 - Won't-implement and out-of-scope closes are maintainer product judgment. Automated review may recommend with evidence but never executes that close on its own; when design intent is plausible, escalate instead of closing.
 - Doctrine-class findings are first-class: an action path that can end with no visible outcome and no recorded reason; a default-path regression; prompt/tool-description text that contradicts shipped behavior; multi-signal inference where a recorded fact belongs; a new default-off capability with no named enablement path.
+- `maturity:stable` is an issue-only attention signal for broken existing
+  behavior whose primary owner is an M4/M5 scorecard surface. Do not apply it
+  to feature requests, new configuration or policy choices, docs/support work,
+  or lower-maturity owners that merely pass through Gateway, CLI, hosting,
+  diagnostics, or another stable implementation surface. The review must name
+  the primary scorecard surface and matching category. The label raises triage
+  and release-audit visibility; it is not proof that a fix exists, approval to
+  backport, or a release blocker by itself.
 - Before landing any PR: read the latest ClawSweeper comment and its `Rank-up moves:` list. Apply each move, or state in the PR why it is skipped; never merge past them silently. A ClawSweeper review from the last 12 hours covers the PR even when the head moved afterward, provided every actionable finding from that review is addressed (or its skip stated in the PR) and exact-head CI is green. Request `@clawsweeper re-review` only when the latest review is older than 12 hours, still has unaddressed actionable findings, or the post-review pushes changed behavior beyond addressing findings and mechanical refreshes (rebase, format, merge-ref). A queued or late-publishing re-review refreshes the rating; never block landing on the review publisher.
 - Changelog findings: see Docs / Changelog.
 - Public ClawSweeper comments prefer `https://docs.openclaw.ai/...` when a public docs page exists; structured evidence still cites repo files, lines, SHAs.

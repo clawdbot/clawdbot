@@ -846,6 +846,7 @@ describe("isRecoverableAgentWaitError", () => {
     undefined,
     "",
     "gateway timeout",
+    "gateway request timeout for agent.wait",
     "ENOENT: no such file",
     "getaddrinfo ENOTFOUND gateway.example.com",
   ])("does not recover from %s", (error) => {

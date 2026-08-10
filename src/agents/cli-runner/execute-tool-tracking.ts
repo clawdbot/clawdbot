@@ -11,6 +11,7 @@ import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  resolveMessageToolSourceReplyFinal,
 } from "../embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -226,6 +227,18 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const toolArgs = params.args ?? {};
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
+    const deliveredCurrentSourceReply =
+      isMessagingSend &&
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+        toolName: params.toolName,
+        args: params.args,
+        result: params.result,
+        isError: params.isError,
+      });
+    const sourceReplyFinal = deliveredCurrentSourceReply
+      ? resolveMessageToolSourceReplyFinal(toolArgs)
+      : undefined;
     if (isMessagingSend) {
       appendUniqueCliMessagingEvidence(
         messagingToolSentTexts,
@@ -237,15 +250,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         messagingToolSentMediaUrlKeys,
         content.mediaUrls ?? [],
       );
-      if (
-        isDeliveredMessageToolOnlySourceReplyResult({
-          sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-          toolName: params.toolName,
-          args: params.args,
-          result: params.result,
-          isError: params.isError,
-        })
-      ) {
+      if (deliveredCurrentSourceReply) {
         didDeliverSourceReplyViaMessageTool = true;
         const payload = extractMessagingToolSourceReplyPayload(params.result);
         if (payload) {
@@ -254,7 +259,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           }
           // Each internal source-reply send is a distinct delivery, even when
           // two intentional sends have identical text or media.
-          messagingToolSourceReplyPayloads.push(payload);
+          messagingToolSourceReplyPayloads.push({
+            ...payload,
+            ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+          });
         }
       }
     }
@@ -264,6 +272,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const targetWithContent = {
       ...extractMessagingToolSendResult(params.target, params.result),
       ...content,
+      ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
     const evidenceKey = buildMessagingToolSendEvidenceKey(targetWithContent);
     if (messagingToolSentTargetKeys.has(evidenceKey)) {

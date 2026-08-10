@@ -84,6 +84,16 @@ export type EmbeddedAgentSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
+  liveEditDiffStateById: Map<
+    string,
+    {
+      added: number;
+      removed: number;
+      emittedAdded: number;
+      emittedRemoved: number;
+      lastCheckedAtMs: number;
+    }
+  >;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -353,7 +363,9 @@ type ToolHandlerState = Pick<
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
   | "assistantMessageIndex"
->;
+> & {
+  liveEditDiffStateById?: EmbeddedAgentSubscribeState["liveEditDiffStateById"];
+};
 
 export type ToolHandlerContext = {
   params: ToolHandlerParams;

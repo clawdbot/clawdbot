@@ -17,6 +17,8 @@ const RECORD_BASE = {
   lastTranscriptAckCursor: null,
   lastLiveEventAckCursor: null,
   recoveryError: null,
+  terminalReason: null,
+  terminalAtMs: null,
   turnClaim: null,
   createdAtMs: 100,
   updatedAtMs: 200,
@@ -41,6 +43,7 @@ describe("worker placement projection", () => {
       {
         ...RECORD_BASE,
         state: "reclaimed",
+        terminalAtMs: 250,
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         workspaceBaseManifestRef: "manifest-1",
@@ -57,6 +60,8 @@ describe("worker placement projection", () => {
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         recoveryError: "worker unavailable",
+        terminalReason: "worker unavailable",
+        terminalAtMs: 260,
       },
     ] satisfies WorkerSessionPlacementRecord[];
 
@@ -93,6 +98,7 @@ describe("worker placement projection", () => {
           paths: ["src/local.ts"],
           stagedResultRef: "refs/openclaw/worker-results/claim-1",
         },
+        terminalAtMs: 250,
       },
       {
         state: "failed",
@@ -103,6 +109,8 @@ describe("worker placement projection", () => {
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         recoveryError: "worker unavailable",
+        terminalReason: "worker unavailable",
+        terminalAtMs: 260,
       },
     ]);
     for (const placement of projected) {

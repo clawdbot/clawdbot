@@ -38,7 +38,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
 }
 
 describe("session list replacement options", () => {
-  it("preserves derived-title hydration when refreshing after session patches", async () => {
+  it("preserves sidebar metadata hydration when refreshing after session patches", async () => {
     const key = "agent:main:untitled";
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.list") {
@@ -70,6 +70,7 @@ describe("session list replacement options", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
       force: true,
     });
     await sessions.patch(key, { pinned: true }, { agentId: "main" });
@@ -82,6 +83,7 @@ describe("session list replacement options", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
       limit: 50,
     });
     expect(request).toHaveBeenCalledWith("sessions.patch", {

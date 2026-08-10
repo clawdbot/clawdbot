@@ -6,6 +6,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   assertRecordShape,
   nextGeneration,
@@ -40,6 +41,7 @@ import {
   createPlacementWorkspaceResultOps,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
 
 const RETIRABLE_PLACEMENT_STATES = ["local", "reclaimed", "failed"] as const;
@@ -127,6 +129,7 @@ export function createWorkerSessionPlacementStore(
 
   return {
     ...createPlacementTurnClaimOps(runtime),
+    ...createPlacementPendingFailureOps(runtime),
     ...createPlacementWorkspaceJournalOps(runtime),
     ...createPlacementWorkspaceResultOps(runtime),
 
@@ -236,6 +239,8 @@ export function createWorkerSessionPlacementStore(
               last_transcript_ack_cursor: null,
               last_live_event_ack_cursor: null,
               recovery_error: null,
+              terminal_reason: null,
+              terminal_at_ms: null,
               updated_at_ms: updatedAtMs,
               state_changed_at_ms: updatedAtMs,
             })
@@ -266,6 +271,9 @@ export function createWorkerSessionPlacementStore(
       }
       if (input.from === "draining" && input.to === "reconciling") {
         throw new Error("Use startReconcile after fencing the drained worker environment");
+      }
+      if (input.to === "failed") {
+        throw new Error("Use fail to record terminal worker placement diagnostics");
       }
       const sessionId = required(input.sessionId, "session id");
       return write((db) => {
@@ -335,6 +343,8 @@ export function createWorkerSessionPlacementStore(
           lastTranscriptAckCursor: values.last_transcript_ack_cursor,
           lastLiveEventAckCursor: values.last_live_event_ack_cursor,
           recoveryError: values.recovery_error,
+          terminalReason: values.terminal_reason,
+          terminalAtMs: values.terminal_at_ms,
           turnClaim,
         });
         const result = executeSqliteQuerySync(
@@ -458,7 +468,7 @@ export function createWorkerSessionPlacementStore(
       expectedGeneration?: number;
     }): WorkerSessionPlacementRecord {
       const sessionId = required(input.sessionId, "session id");
-      const recoveryError = required(input.recoveryError, "recovery error");
+      const recoveryError = boundedWorkerError(input.recoveryError);
       const outcome = write((db) => {
         const current = getRequired(db, sessionId);
         if (
@@ -495,6 +505,8 @@ export function createWorkerSessionPlacementStore(
               state: "failed",
               transition_generation: nextGeneration(current.generation),
               recovery_error: recoveryError,
+              terminal_reason: recoveryError,
+              terminal_at_ms: updatedAtMs,
               turn_claim_owner: localClaim ? "local" : null,
               turn_claim_id: localClaim?.claimId ?? null,
               turn_claim_run_id: localClaim?.runId ?? null,

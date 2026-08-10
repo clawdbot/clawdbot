@@ -298,6 +298,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   agentId: string;
   entry: SessionEntry;
   messages: readonly unknown[];
+  pendingFinalDeliveryIntentId?: string;
   reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
   storePath: string;
   sessionKey: string;
@@ -321,6 +322,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     pendingFinalDelivery: undefined,
     restartRecoveryForceSafeTools: undefined,
     restartRecoveryRuns: undefined,
+    ...buildMainSessionRecoveryClearPatch(params.entry),
     runtimeMs:
       typeof params.entry.startedAt === "number"
         ? Math.max(0, endedAt - params.entry.startedAt)
@@ -471,6 +473,8 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
       if (
         !entry ||
         entry.sessionId !== params.entry.sessionId ||
+        (params.pendingFinalDeliveryIntentId !== undefined &&
+          entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId) ||
         entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||

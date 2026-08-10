@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -24,15 +25,41 @@ async function openCreatorMenu(sidebar: SidebarLifecycleState): Promise<HTMLElem
   return menu;
 }
 
-async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string | null) {
+async function selectSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
   const menu = await openCreatorMenu(sidebar);
+  expect(menu.querySelector(`[value="${value}"]`)).not.toBeNull();
   menu.dispatchEvent(
     new CustomEvent("wa-select", {
       bubbles: true,
-      detail: { item: { value: `creator:${creatorId ?? ""}` } },
+      detail: { item: { value } },
     }),
   );
   await sidebar.updateComplete;
+}
+
+async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string | null) {
+  await selectSessionMenuValue(sidebar, `creator:${creatorId ?? ""}`);
+}
+
+async function selectSort(sidebar: SidebarLifecycleState, mode: string) {
+  await selectSessionMenuValue(sidebar, `sort:${mode}`);
+}
+
+async function expectSort(sidebar: SidebarLifecycleState, mode: string, keys: string[]) {
+  await selectSort(sidebar, mode);
+  expect(visibleSessionKeys(sidebar)).toEqual(keys);
+}
+
+function sessionSharingHello(hasMultipleIdentities: boolean) {
+  return {
+    policy: { hasMultipleSessionSharingIdentities: hasMultipleIdentities },
+  } as ApplicationGatewaySnapshot["hello"];
+}
+
+function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {
+  return [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session[data-session-key]")]
+    .filter((row) => !row.classList.contains("sidebar-recent-session--child"))
+    .map((row) => row.dataset.sessionKey ?? "");
 }
 
 describe("AppSidebar session ownership", () => {
@@ -240,6 +267,79 @@ describe("AppSidebar session ownership", () => {
     ).toBe(false);
     expect(menu.querySelector('[value^="creator:"]')).toBeNull();
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
+  });
+
+  it("owns People availability and fallback at the server identity capability", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const keys = ["main", "b1", "a1", "b2", "a2"].map((id) => `agent:main:${id}`);
+    const harness = createSessionsHarness("main", keys);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    for (const [index, id, label, updatedAt] of [
+      [1, "profile-bob", "Bob", 40],
+      [2, "profile-ada", "Ada", 40],
+      [3, "profile-bob", "Bob", 30],
+      [4, "profile-ada", "Ada", 20],
+    ] as const) {
+      Object.assign(result.sessions[index]!, {
+        createdActor: { type: "human", id, label },
+        updatedAt,
+      });
+    }
+    result.creators = [{ id: "profile-bob", label: "Bob" }];
+    const createdOrder = keys.slice(1);
+    const updatedOrder = [keys[1]!, keys[2]!, keys[3]!, keys[4]!];
+    const peopleOrder = [keys[2]!, keys[4]!, keys[1]!, keys[3]!];
+
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    let menu = await openCreatorMenu(sidebar);
+    expect(menu.querySelector('[value="sort:people"]')).toBeNull();
+    expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
+    menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+    await sidebar.updateComplete;
+
+    gateway.publish({ hello: sessionSharingHello(true) });
+    await sidebar.updateComplete;
+    await expectSort(sidebar, "people", peopleOrder);
+
+    gateway.publish({ hello: null });
+    await sidebar.updateComplete;
+    menu = await openCreatorMenu(sidebar);
+    expect(menu.querySelector('[value="sort:people"]')).toBeNull();
+    expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
+    menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+    await sidebar.updateComplete;
+
+    gateway.publish({ hello: sessionSharingHello(true) });
+    await sidebar.updateComplete;
+    expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
+
+    await expectSort(sidebar, "updated", updatedOrder);
+    await expectSort(sidebar, "created", createdOrder);
+    await expectSort(sidebar, "people", peopleOrder);
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+    ];
+    harness.publishList({ result, agentId: "main" });
+    gateway.publish({ hello: sessionSharingHello(false) });
+    await sidebar.updateComplete;
+    await sidebar.updateComplete;
+
+    menu = await openCreatorMenu(sidebar);
+    expect(menu.querySelector('[value="sort:people"]')).toBeNull();
+    expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
+    menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+    gateway.publish({ hello: sessionSharingHello(true) });
+    await sidebar.updateComplete;
+    menu = await openCreatorMenu(sidebar);
+    expect(menu.querySelector('[value="sort:people"]')).not.toBeNull();
+    expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows archive attribution only in collaborative archived-session lists", async () => {

@@ -1,26 +1,18 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 
-type ChatPaneStartupContext = Pick<ApplicationContext, "cloudStartup" | "initialUserMessage">;
+type ChatPaneStartupContext = Pick<ApplicationContext, "cloudStartup">;
 
 export function subscribeChatPaneStartup(
   context: ChatPaneStartupContext,
   getState: () => ChatPageHost | undefined,
 ): () => void {
-  const stopInitialUserMessage = context.initialUserMessage.subscribe(() => {
+  return context.cloudStartup.subscribe(() => {
     const state = getState();
-    if (
-      state &&
-      admitInitialUserMessageHandoff(state.initialUserMessage, state, state.sessionKey)
-    ) {
+    if (state) {
+      admitInitialUserMessageHandoff(state, state.sessionKey);
       state.requestUpdate?.();
     }
   });
-  const stopCloudStartup = context.cloudStartup.subscribe(() => getState()?.requestUpdate?.());
-
-  return () => {
-    stopCloudStartup();
-    stopInitialUserMessage();
-  };
 }

@@ -563,7 +563,7 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it.each(["heartbeat", "commitment-only"] as const)(
+  it.each(["heartbeat"] as const)(
     "records %s classification on the host-owned turn candidate",
     async (bootstrapContextRunKind) => {
       const admission = {

@@ -1,7 +1,7 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { recomputeNextRuns } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {

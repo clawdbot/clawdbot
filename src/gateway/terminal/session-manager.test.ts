@@ -10,7 +10,7 @@ import {
 } from "./session-manager.test-helpers.js";
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
-const OPERATOR_INTRO = composeTerminalIntroBanner(80);
+const OPERATOR_INTRO = composeTerminalIntroBanner();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

@@ -233,6 +233,10 @@ function shouldNeverBundleDependency(id: string): boolean {
   });
 }
 
+function shouldNeverBundleDeclarationDependency(id: string): boolean {
+  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
+}
+
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
@@ -349,9 +353,6 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
-    "commitments/runtime": "src/commitments/runtime.ts",
-    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
-    "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
@@ -616,8 +617,8 @@ const unifiedDistEntries = buildUnifiedDistEntries();
 const unifiedDeps = {
   alwaysBundle: shouldAlwaysBundleDependency,
   neverBundle: shouldNeverBundleDependency,
-  // Keep dts generation from inlining externalized package types.
-  dts: { neverBundle: shouldNeverBundleDependency },
+  // Keep dependency-owned types canonical across independently emitted declaration graphs.
+  dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
 
 const configs = [

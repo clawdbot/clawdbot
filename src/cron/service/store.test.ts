@@ -1,12 +1,13 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { findJobOrThrow } from "./jobs.js";
+import { findJobOrThrow } from "./jobs-scheduling.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
@@ -151,6 +152,98 @@ describe("cron service store seam coverage", () => {
       }),
     ]);
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
+  });
+
+  it("quarantines persisted every schedules that cannot produce valid Date timestamps", async () => {
+    const { storePath } = await makeStorePath();
+    const invalidInterval = createReloadCronJob({
+      id: "invalid-date-interval",
+      schedule: { kind: "every", everyMs: 1_000 },
+    });
+    const invalidAnchor = createReloadCronJob({
+      id: "invalid-date-anchor",
+      schedule: { kind: "every", everyMs: 1_000, anchorMs: 0 },
+    });
+    const unsatisfiableInterval = createReloadCronJob({
+      id: "unsatisfiable-date-interval",
+      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS },
+    });
+    const disabledUnsatisfiableInterval = createReloadCronJob({
+      id: "disabled-unsatisfiable-date-interval",
+      enabled: false,
+      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS },
+    });
+    const invalidStagger = createReloadCronJob({ id: "invalid-date-stagger" });
+    const repairableState = createReloadCronJob({
+      id: "repairable-runtime-state",
+      state: { lastRunAtMs: MAX_DATE_TIMESTAMP_MS },
+    });
+    const surviving = createReloadCronJob({ id: "valid-schedule" });
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        invalidInterval,
+        invalidAnchor,
+        unsatisfiableInterval,
+        disabledUnsatisfiableInterval,
+        invalidStagger,
+        repairableState,
+        surviving,
+      ],
+    });
+    const db = openOpenClawStateDatabase().db;
+    db.prepare("UPDATE cron_jobs SET every_ms = ? WHERE job_id = ?").run(
+      MAX_DATE_TIMESTAMP_MS + 1,
+      invalidInterval.id,
+    );
+    db.prepare("UPDATE cron_jobs SET anchor_ms = ? WHERE job_id = ?").run(
+      MAX_DATE_TIMESTAMP_MS + 1,
+      invalidAnchor.id,
+    );
+    db.prepare("UPDATE cron_jobs SET stagger_ms = ? WHERE job_id = ?").run(
+      MAX_DATE_TIMESTAMP_MS + 1,
+      invalidStagger.id,
+    );
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([
+      disabledUnsatisfiableInterval.id,
+      repairableState.id,
+      surviving.id,
+    ]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({ job: expect.objectContaining({ id: invalidInterval.id }) }),
+      expect.objectContaining({ job: expect.objectContaining({ id: invalidAnchor.id }) }),
+      expect.objectContaining({
+        reason: "unsatisfiable-schedule",
+        job: expect.objectContaining({ id: unsatisfiableInterval.id }),
+      }),
+      expect.objectContaining({ job: expect.objectContaining({ id: invalidStagger.id }) }),
+    ]);
+  });
+
+  it("quarantines persisted runtime timestamps outside the Date domain", async () => {
+    const { storePath } = await makeStorePath();
+    const invalidState = createReloadCronJob({ id: "invalid-runtime-state" });
+    const surviving = createReloadCronJob({ id: "valid-runtime-state" });
+    await saveCronStore(storePath, { version: 1, jobs: [invalidState, surviving] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET last_run_at_ms = ? WHERE job_id = ?")
+      .run(MAX_DATE_TIMESTAMP_MS + 1, invalidState.id);
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({
+        reason: "invalid-state",
+        job: expect.objectContaining({ id: invalidState.id }),
+        state: expect.objectContaining({ lastRunAtMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+      }),
+    ]);
   });
 
   it("publishes durable wake changes only after save and exactly once after retry", async () => {

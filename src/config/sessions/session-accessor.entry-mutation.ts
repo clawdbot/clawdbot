@@ -17,11 +17,6 @@ import {
   recordSqliteInboundSessionMeta,
   updateSqliteSessionLastRoute,
 } from "./session-accessor.sqlite-entry.js";
-import {
-  forkSqliteSessionEntryFromParentTarget,
-  forkSqliteSessionTranscriptFromParent,
-  resolveSqliteSessionParentForkDecision,
-} from "./session-accessor.sqlite-parent-session.js";
 import { appendSqliteTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionAccessScope,
@@ -30,11 +25,6 @@ import type {
   SessionAbortTargetContext,
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
-  SessionParentForkDecision,
-  ForkSessionFromParentTranscriptResult,
-  ForkSessionFromParentTranscriptParams,
-  ForkSessionEntryFromParentTargetResult,
-  ForkSessionEntryFromParentTargetParams,
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCreateWithTranscriptPrepareResult,
@@ -64,29 +54,11 @@ function projectSessionEntryForPersistenceRevision(params: {
   return projected.store.entry ?? stripped;
 }
 
-export async function forkSessionFromParentTranscript(
-  params: ForkSessionFromParentTranscriptParams,
-): Promise<ForkSessionFromParentTranscriptResult> {
-  return await forkSqliteSessionTranscriptFromParent(params);
-}
-
-/**
- * Forks parent transcript content and persists the child entry/alias cleanup in
- * one storage-owned operation.
- */
-export async function forkSessionEntryFromParentTarget(
-  params: ForkSessionEntryFromParentTargetParams,
-): Promise<ForkSessionEntryFromParentTargetResult> {
-  return await forkSqliteSessionEntryFromParentTarget(params);
-}
-
-/** Resolves whether a parent session is small enough to fork through the active store. */
-export async function resolveSessionParentForkDecision(params: {
-  parentEntry: SessionEntry;
-  storePath: string;
-}): Promise<SessionParentForkDecision> {
-  return await resolveSqliteSessionParentForkDecision(params);
-}
+export {
+  forkSqliteSessionEntryFromParentTarget as forkSessionEntryFromParentTarget,
+  forkSqliteSessionTranscriptFromParent as forkSessionFromParentTranscript,
+  resolveSqliteSessionParentForkDecision as resolveSessionParentForkDecision,
+} from "./session-accessor.sqlite-parent-session.js";
 
 /**
  * Creates or updates one session entry and initializes its transcript header as

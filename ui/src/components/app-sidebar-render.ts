@@ -165,6 +165,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
+  const hasComposerDraft = !active && host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
   // Home shares the sidebar's leading-slot contract: run state rings its icon
@@ -211,7 +212,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${approvalNeeded || outboxCount > 0
+      ${approvalNeeded || outboxCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
             ${approvalNeeded
               ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
@@ -223,7 +224,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
                   >
                 </openclaw-tooltip>`
               : nothing}
-            ${renderSessionRowBadges({ hasAutomation: false, outboxCount })}
+            ${renderSessionRowBadges({ hasAutomation: false, outboxCount, hasComposerDraft })}
           </span>`
         : nothing}
     </a>

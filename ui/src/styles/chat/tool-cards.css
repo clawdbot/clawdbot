@@ -785,7 +785,8 @@
   min-width: 176px;
 }
 
-.chat-tool-card__widget-actions-trigger {
+.chat-tool-card__widget-actions-trigger,
+.chat-tool-card__widget-action {
   width: 26px;
   height: 26px;
   min-height: 26px;
@@ -794,12 +795,15 @@
 }
 
 .chat-tool-card__widget-actions-trigger:hover,
-.chat-tool-card__widget-actions-trigger:focus-visible {
+.chat-tool-card__widget-actions-trigger:focus-visible,
+.chat-tool-card__widget-action:hover,
+.chat-tool-card__widget-action:focus-visible {
   color: var(--text);
   background: var(--bg-hover);
 }
 
-.chat-tool-card__widget-actions-trigger svg {
+.chat-tool-card__widget-actions-trigger svg,
+.chat-tool-card__widget-action svg {
   width: 16px;
   height: 16px;
 }
@@ -814,24 +818,13 @@
   opacity: 1;
 }
 
-.chat-tool-card__widget-action {
-  background: transparent;
-  border: 0;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  font: inherit;
-  font-size: 11px;
-  padding: 2px 4px;
-}
-
-.chat-tool-card__widget-action:hover,
-.chat-tool-card__widget-action:focus-visible {
-  color: var(--text);
+.chat-tool-card__widget-action[data-pinned] {
+  color: var(--accent);
 }
 
 .chat-tool-card__widget-action:disabled {
   cursor: default;
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .chat-tool-card__preview-panel {

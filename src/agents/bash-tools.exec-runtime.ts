@@ -753,13 +753,14 @@ export async function runExecProcess(opts: {
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
+  let sandboxPrepared = false;
   let sandboxFinalized = false;
   const finalizeSandboxExec = async (params: {
     status: "completed" | "failed";
     exitCode: number | null;
     timedOut: boolean;
   }) => {
-    if (sandboxFinalized || !opts.sandbox?.finalizeExec) {
+    if (!sandboxPrepared || sandboxFinalized || !opts.sandbox?.finalizeExec) {
       return;
     }
     sandboxFinalized = true;
@@ -814,20 +815,7 @@ export async function runExecProcess(opts: {
     return finalOutcome;
   };
 
-  const spawnSpec:
-    | {
-        mode: "child";
-        argv: string[];
-        env: NodeJS.ProcessEnv;
-        stdinMode: "pipe-open" | "pipe-closed";
-      }
-    | {
-        mode: "pty";
-        ptyCommand: string;
-        childFallbackArgv: string[];
-        env: NodeJS.ProcessEnv;
-        stdinMode: "pipe-open";
-      } = await (async () => {
+  const prepareSpawnSpec = async () => {
     if (opts.sandbox) {
       const backendExecSpec = await opts.sandbox.buildExecSpec?.({
         command: execCommand,
@@ -836,6 +824,9 @@ export async function runExecProcess(opts: {
         usePty: opts.usePty,
       });
       sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+      // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
+      // double-finalize backend failures, while removing it leaks the registered exec session.
+      sandboxPrepared = true;
       return {
         mode: "child" as const,
         argv: backendExecSpec?.argv ?? [
@@ -886,10 +877,10 @@ export async function runExecProcess(opts: {
       env: shellRuntimeEnv,
       stdinMode: "pipe-closed" as const,
     };
-  })();
+  };
 
   let managedRun: ManagedRun | null = null;
-  let usingPty = spawnSpec.mode === "pty";
+  let usingPty = opts.usePty && !opts.sandbox;
   const cursorResponse = buildCursorPositionResponse();
 
   const onSupervisorStdout = (chunk: string) => {
@@ -907,6 +898,8 @@ export async function runExecProcess(opts: {
   };
 
   try {
+    const spawnSpec = await prepareSpawnSpec();
+    usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
       sessionId: opts.sessionKey?.trim() || sessionId,
@@ -919,89 +912,52 @@ export async function runExecProcess(opts: {
       onStdout: onSupervisorStdout,
       onStderr: handleStderr,
     };
-    managedRun =
-      spawnSpec.mode === "pty"
-        ? await supervisor.spawn({
-            ...spawnBase,
-            mode: "pty",
-            ptyCommand: spawnSpec.ptyCommand,
-          })
-        : await supervisor.spawn({
-            ...spawnBase,
-            mode: "child",
-            argv: spawnSpec.argv,
-            stdinMode: spawnSpec.stdinMode,
-          });
-  } catch (err) {
     if (spawnSpec.mode === "pty") {
-      const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
-      logWarn(
-        `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
-      );
-      opts.warnings.push(warning);
-      usingPty = false;
       try {
         managedRun = await supervisor.spawn({
-          runId: sessionId,
-          sessionId: opts.sessionKey?.trim() || sessionId,
-          backendId: "exec-host",
-          scopeKey: opts.scopeKey,
+          ...spawnBase,
+          mode: "pty",
+          ptyCommand: spawnSpec.ptyCommand,
+        });
+      } catch (err) {
+        const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
+        logWarn(
+          `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
+        );
+        opts.warnings.push(warning);
+        usingPty = false;
+        managedRun = await supervisor.spawn({
+          ...spawnBase,
           mode: "child",
           argv: spawnSpec.childFallbackArgv,
-          cwd: opts.workdir,
-          env: spawnSpec.env,
           stdinMode: "pipe-open",
-          timeoutMs,
-          captureOutput: false,
           onStdout: handleStdout,
-          onStderr: handleStderr,
         });
-      } catch (retryErr) {
-        markExited(session, null, null, "failed");
-        maybeNotifyOnExit(session, "failed");
-        await finalizeSandboxExec({
-          status: "failed",
-          exitCode: null,
-          timedOut: false,
-        }).catch((finalizeErr: unknown) => {
-          logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
-        });
-        emitExecProcessCompleted({
-          command: opts.command,
-          mode: "child",
-          outcome: buildExecRuntimeErrorOutcome({
-            error: retryErr,
-            aggregated: session.aggregated.trim(),
-            durationMs: Date.now() - startedAt,
-          }),
-          sessionKey: opts.sessionKey,
-          target: diagnosticTarget,
-        });
-        throw retryErr;
       }
     } else {
-      markExited(session, null, null, "failed");
-      maybeNotifyOnExit(session, "failed");
-      await finalizeSandboxExec({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-      }).catch((finalizeErr: unknown) => {
-        logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
+      managedRun = await supervisor.spawn({
+        ...spawnBase,
+        mode: "child",
+        argv: spawnSpec.argv,
+        stdinMode: spawnSpec.stdinMode,
       });
-      emitExecProcessCompleted({
-        command: opts.command,
-        mode: spawnSpec.mode,
-        outcome: buildExecRuntimeErrorOutcome({
-          error: err,
-          aggregated: session.aggregated.trim(),
-          durationMs: Date.now() - startedAt,
-        }),
-        sessionKey: opts.sessionKey,
-        target: diagnosticTarget,
-      });
-      throw err;
     }
+  } catch (error) {
+    const outcome = await finalizeAndSettleSession(
+      buildExecRuntimeErrorOutcome({
+        error,
+        aggregated: session.aggregated.trim(),
+        durationMs: Date.now() - startedAt,
+      }),
+    );
+    emitExecProcessCompleted({
+      command: opts.command,
+      mode: usingPty ? "pty" : "child",
+      outcome,
+      sessionKey: opts.sessionKey,
+      target: diagnosticTarget,
+    });
+    throw error;
   }
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;

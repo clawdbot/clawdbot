@@ -138,6 +138,18 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes sandbox media staging file URL handling to Windows", () => {
+    for (const fileUrlPath of [
+      "src/auto-reply/reply/stage-sandbox-media.ts",
+      "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
+    ]) {
+      expect(detectChangedScope([fileUrlPath]), fileUrlPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes usage footer template changes and native coverage to Windows", () => {
     for (const templatePath of [
       "src/auto-reply/usage-bar/template.ts",
@@ -159,6 +171,30 @@ describe("detectChangedScope Windows routing", () => {
       "src/media-understanding/attachments.file-url.windows.test.ts",
     ]) {
       expect(detectChangedScope([mediaPath]), mediaPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes shared home display owners and visible command coverage to Windows", () => {
+    for (const displayPath of [
+      "src/utils.ts",
+      "src/utils.test.ts",
+      "src/infra/home-display.ts",
+      "src/infra/path-guards.ts",
+      "src/commands/agents.commands.list.ts",
+      "src/commands/agents.commands.list.test.ts",
+      "src/cli/daemon-cli/status.print.ts",
+      "src/cli/daemon-cli/status.print.test.ts",
+      "packages/terminal-core/src/display-string.ts",
+      "packages/terminal-core/src/display-string.test.ts",
+      "src/agents/sandbox/fs-paths.ts",
+      "src/agents/sandbox/fs-paths.test.ts",
+      "src/agents/sessions/tools/render-utils.ts",
+      "src/agents/sessions/tools/render-utils.test.ts",
+    ]) {
+      expect(detectChangedScope([displayPath]), displayPath).toMatchObject({
         runNode: true,
         runWindows: true,
       });
