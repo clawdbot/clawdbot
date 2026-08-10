@@ -85,6 +85,20 @@ update occurred. Existing synchronous and asynchronous callbacks that return `vo
 backward-compatible and are treated as visible; new acceptance-aware implementations should use
 an explicit boolean.
 
+### Commentary delivery ownership
+
+Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
+Channels that normally render commentary in one evolving progress draft can also provide
+`shouldDeliverCommentaryPayloads`. Core freezes verbose visibility for the turn, registers that
+getter through `onVerboseProgressVisibility`, evaluates the delivery callback once before
+dispatch, and snapshots that result for the whole turn. Session changes apply on the next turn.
+
+Return `false` while the draft owns normal progress and `true` when verbose progress makes that
+draft yield to durable commentary. Keep the callback synchronous and read only channel-owned,
+already prepared state. Omitting it preserves durable delivery for existing plugins that use the
+static opt-in. The callback does not control reasoning, partial replies, tool progress, or final
+answers.
+
 Inbound receivers that defer platform acknowledgements should declare
 `message.receive.defaultAckPolicy` and `supportedAckPolicies` instead of hiding
 ack timing in monitor-local state. Cover every declared policy with

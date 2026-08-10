@@ -363,13 +363,20 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         return await forwardItemEvent?.(payload);
       }
     : undefined;
-  // Let draft-rendering channels yield their ephemeral commentary lines while
-  // the durable verbose commentary lane is delivering the same content.
+  const resolveVerboseProgressVisibility = () =>
+    deliverStandaloneCommentaryProgress &&
+    shouldSendVerboseProgressMessages() &&
+    !shouldSuppressProgressDelivery();
+  const shouldDeliverCommentaryPayloads = params.replyOptions?.shouldDeliverCommentaryPayloads;
+  // New commentary-owner consumers share one per-turn decision between the
+  // draft and durable lanes. Legacy visibility listeners remain live.
+  const frozenCommentaryProgressVisibility = shouldDeliverCommentaryPayloads
+    ? resolveVerboseProgressVisibility()
+    : undefined;
   params.replyOptions?.onVerboseProgressVisibility?.(
-    () =>
-      deliverStandaloneCommentaryProgress &&
-      shouldSendVerboseProgressMessages() &&
-      !shouldSuppressProgressDelivery(),
+    frozenCommentaryProgressVisibility === undefined
+      ? resolveVerboseProgressVisibility
+      : () => frozenCommentaryProgressVisibility,
   );
 
   const replyResolver =
@@ -407,6 +414,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     deliverStandaloneCommentaryProgress,
     canForwardSuppressedSourceItemEvents,
     onItemEvent,
+    commentaryPayloadsEnabled:
+      state.commentaryPayloadsEnabled && (shouldDeliverCommentaryPayloads?.() ?? true),
     replyResolver,
     replyConfig,
     progressState,
