@@ -382,7 +382,7 @@ suite.define(() => {
         expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
         expect(disabledContinueStyle.cursor).toBe("not-allowed");
         expect(await cancelButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
-          "default",
+          "pointer",
         );
         expect(
           await Promise.all(
@@ -437,7 +437,7 @@ suite.define(() => {
         });
         await page.getByLabel("Twitch").check();
         expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
-          "default",
+          "pointer",
         );
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByLabel("Announcements").waitFor();
