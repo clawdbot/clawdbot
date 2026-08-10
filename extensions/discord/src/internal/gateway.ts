@@ -15,6 +15,8 @@ import {
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
 } from "discord-api-types/v10";
+import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as ws from "ws";
 import { Plugin, type Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
@@ -71,6 +73,9 @@ export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
+// Discord negotiates ~41s; a sub-second interval is a broken HELLO. sendHeartbeat
+// clears the ACK flag, so every sub-second cycle ends in a zombie reconnect.
+const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
 
 export class GatewayPlugin extends Plugin {
   readonly id = "gateway";
@@ -261,7 +266,10 @@ export class GatewayPlugin extends Plugin {
     switch (payload.op) {
       case GatewayOpcodes.Hello: {
         this.startHeartbeat(
-          (payload.d as { heartbeat_interval?: number }).heartbeat_interval ?? 45_000,
+          asSafeIntegerInRange(asOptionalRecord(payload.d)?.heartbeat_interval, {
+            min: MIN_HEARTBEAT_INTERVAL_MS,
+            max: MAX_TIMER_TIMEOUT_MS,
+          }) ?? 45_000,
         );
         const resumeState = resume ? this.getResumeState() : null;
         if (resumeState) {
