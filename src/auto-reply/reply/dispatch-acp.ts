@@ -432,6 +432,7 @@ export async function tryDispatchAcpReply(params: {
   originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
+  shouldSendFullToolDetails: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
   recordProcessed: DispatchProcessedRecorder;
@@ -549,6 +550,7 @@ export async function tryDispatchAcpReply(params: {
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
+    shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,

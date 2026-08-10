@@ -579,8 +579,31 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         summary?: string;
         title?: string;
         name?: string;
+        status?: string;
+        exitCode?: number | null;
       },
     ) => {
+      if (params.event === "command-output") {
+        const status =
+          params.exitCode === 0
+            ? "completed"
+            : params.exitCode != null
+              ? `exit ${params.exitCode}`
+              : params.status;
+        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
+        const raw =
+          (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
+          "raw";
+        return {
+          kind: "command-output",
+          ...(id ? { id } : {}),
+          text: raw && params.title ? params.title : (status ?? params.name ?? "exec"),
+          label: params.name ?? "exec",
+          ...(raw && params.title ? { detail: params.title } : {}),
+          ...(status ? { status } : {}),
+          toolName: params.name ?? "exec",
+        };
+      }
       if (params.event === "tool") {
         if (params.name === mockedEmptyProgressToolName) {
           return undefined;
@@ -3799,6 +3822,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
+  });
+
+  it("preserves command output text when raw Slack progress is configured", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "command_output",
+        phase: "end",
+        title: "pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 1,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { label: "Shelling", commandText: "raw" },
+          },
+        },
+      }),
+    );
+
+    expect(draftStream.update.mock.calls.flat().join("\n")).toContain("pnpm test -- --watch=false");
   });
 
   it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {

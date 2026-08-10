@@ -144,7 +144,6 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
   channel: string;
   to: string;
   threadId?: string;
-  error: unknown;
   partialDelivered?: boolean;
 }): string {
   const targetParts = [`${params.channel}:${params.to}`];
@@ -155,7 +154,7 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
     "A scheduled automation attempted to deliver to this channel, but delivery failed.",
     `Job: ${params.job.name || params.job.id}`,
     `Target: ${targetParts.join(" ")}`,
-    `Delivery error: ${formatErrorMessage(params.error)}`,
+    "Check automation history for delivery error details.",
     params.partialDelivered
       ? "One or more scheduled message payloads may already have been delivered."
       : "No scheduled message was delivered.",
