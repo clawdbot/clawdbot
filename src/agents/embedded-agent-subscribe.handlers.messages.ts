@@ -38,7 +38,7 @@ import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
-  extractAssistantText,
+  extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantCommentaryText,
   extractAssistantVisibleText,
@@ -1292,7 +1292,7 @@ export function handleMessageEnd(
       event: "assistant_message_end",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
-      rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
+      rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     });
     const commentaryAlreadyStreamed =
@@ -1329,7 +1329,7 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
+  const rawText = coerceChatContentText(extractEmbeddedAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),

@@ -212,6 +212,6 @@ function snapshotString(value: string, state: { remainingStringLength: number })
   return `${prefix}...[truncated]`;
 }
 
-export function truncateText(value: string, maxLength: number): string {
+export function truncateRelayText(value: string, maxLength: number): string {
   return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }

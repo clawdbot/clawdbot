@@ -279,7 +279,7 @@ export {
   readNumberParam,
   readReactionParams,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
 export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";

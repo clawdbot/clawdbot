@@ -52,7 +52,7 @@ type AssistantTextExtractionResult = {
   hadRequestedPhase: boolean;
 };
 
-function extractAssistantTextForPhase(
+function extractEmbeddedAssistantTextForPhase(
   msg: AssistantMessage,
   phase?: AssistantPhase,
   options?: { unphasedSignedFinalAnswer?: boolean },
@@ -124,21 +124,22 @@ function extractAssistantTextForPhase(
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
-  const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
+  const finalAnswerExtraction = extractEmbeddedAssistantTextForPhase(msg, "final_answer");
   if (finalAnswerExtraction.hadRequestedPhase) {
     return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
   }
 
-  return extractAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true }).text;
+  return extractEmbeddedAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true })
+    .text;
 }
 
 /** Extract the commentary/narration text of a commentary-phase assistant message. */
 export function extractAssistantCommentaryText(msg: AssistantMessage): string {
-  return extractAssistantTextForPhase(msg, "commentary").text;
+  return extractEmbeddedAssistantTextForPhase(msg, "commentary").text;
 }
 
 /** Extract sanitized assistant text across all text content blocks. */
-export function extractAssistantText(msg: AssistantMessage): string {
+export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) => sanitizeAssistantText(text),

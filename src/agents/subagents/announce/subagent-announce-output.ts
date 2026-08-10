@@ -12,7 +12,7 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
-import { extractAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
+import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import {
   isAnnounceSkip,
   selectDeliverableSessionsReply,
@@ -130,7 +130,7 @@ function extractSubagentAssistantText(message: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
   }
-  return extractAssistantText(message) ?? "";
+  return extractStoredAssistantText(message) ?? "";
 }
 
 function countAssistantToolCalls(message: unknown): number {
