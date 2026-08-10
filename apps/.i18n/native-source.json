@@ -32979,7 +32979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 242,
+      "line": 220,
       "path": "apps/macos/Sources/OpenClaw/GatewayEnvironment.swift",
       "source": " (local: \\(projectEntrypoint ?? \"unknown\"))",
       "surface": "apple",
@@ -32987,7 +32987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 246,
+      "line": 224,
       "path": "apps/macos/Sources/OpenClaw/GatewayEnvironment.swift",
       "source": "(\\(gatewayLabel))",
       "surface": "apple",
