@@ -5,6 +5,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../shared/deferred.js";
 import {
+  createCodeModeActivityOwner,
+  discardCodeModeRunActivity,
+  registerCodeModeRunActivity,
+  sampleCodeModeRunFinalQuiescence,
+  type CodeModeActivityOwner,
+} from "./code-mode-activity.js";
+import {
   createCodeModeStats,
   drainCodeModeAttemptStats,
   mergeCodeModeStats,
@@ -22,17 +29,57 @@ import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode wait, scope, and suspended runs", () => {
+  let activityOwner: CodeModeActivityOwner;
+
   beforeEach(() => {
     vi.useRealTimers();
+    activityOwner = createCodeModeActivityOwner();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     resetCodeModeTestState();
+    discardCodeModeRunActivity(activityOwner);
+  });
+
+  it("reports synchronous completion as quiescent", async () => {
+    registerCodeModeRunActivity(activityOwner);
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeActivityOwner: activityOwner,
+    });
+    applyCodeModeCatalog({
+      tools: codeModeTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const completed = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-completed",
+        { code: 'return "done";' },
+      ),
+    );
+
+    expect(completed).toMatchObject({ status: "completed", value: "done" });
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("quiescent");
   });
 
   it("marks yield-only suspensions replay-safe and resumes the snapshot with wait", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    registerCodeModeRunActivity(activityOwner);
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeActivityOwner: activityOwner,
+    });
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
       config,
@@ -60,6 +107,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(first.reason).toBe("yield");
     expect(first.replaySafe).toBe(true);
     expect(first.output).toEqual([{ type: "text", text: "before" }]);
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("non_quiescent");
 
     const runId = first.runId;
     expect(typeof runId).toBe("string");
@@ -74,9 +122,12 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.value).toBe("done");
     expect(resumed.replaySafe).toBe(true);
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("quiescent");
   });
 
   it("carries parked lifecycle deltas into a fresh attempt catalog", async () => {
+    registerCodeModeRunActivity(activityOwner);
+    const foreignActivityOwner = createCodeModeActivityOwner();
     const firstCatalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -92,6 +143,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
       runId: "run-code-mode",
+      codeModeActivityOwner: activityOwner,
       catalogRef: firstCatalogRef,
     };
     const firstTools = createCodeModeTools(firstCtx);
@@ -151,8 +203,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     const foreignCatalogRef = createToolSearchCatalogRef();
     const foreignCtx = {
       ...firstCtx,
-      sessionId: "foreign-session",
-      sessionKey: "agent:foreign:main",
+      codeModeActivityOwner: foreignActivityOwner,
       catalogRef: foreignCatalogRef,
     };
     const foreignTools = createCodeModeTools(foreignCtx);
@@ -169,7 +220,9 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         "code-wait-cross-attempt-foreign",
         { runId: suspendedRunId },
       ),
-    ).rejects.toThrow("different session");
+    ).rejects.toThrow("different agent run");
+    expect(testing.activeRuns.has(suspendedRunId)).toBe(true);
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("non_quiescent");
     expect(drainCodeModeAttemptStats(foreignCatalogRef)).toEqual({
       controlCalls: { wait: 1 },
       bridgeCalls: {},
@@ -201,6 +254,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       ),
     );
     expect(completed).toMatchObject({ status: "completed", value: { value: "bridge-complete" } });
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("quiescent");
     const secondAttemptStats = drainCodeModeAttemptStats(secondCatalogRef);
     expect(secondAttemptStats?.controlCalls).toEqual({ wait: 1 });
     expect(secondAttemptStats?.bridgeCalls).toEqual({});
@@ -567,6 +621,22 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     await expect(
       otherWaitTool.execute("code-wait-wrong-session", { runId: first.runId }),
     ).rejects.toThrow("different session");
+
+    const otherRunWaitTool = expectDefined(
+      createCodeModeTools({
+        config,
+        runtimeConfig: config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "other-agent-run",
+        catalogRef,
+      })[1],
+      "Code Mode wait with a different outer run",
+    );
+    await expect(
+      otherRunWaitTool.execute("code-wait-wrong-run", { runId: first.runId }),
+    ).rejects.toThrow("different agent run");
+    expect(testing.activeRuns.has(first.runId as string)).toBe(true);
   });
 
   describe("suspended-run owner scope", () => {
@@ -636,6 +706,137 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         expect(rightfulResult).toMatchObject({ status: "completed", value: "owner-secret" });
       },
     );
+  });
+
+  it("keeps ownerless toolsets with identical public identities isolated", async () => {
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          timeoutMs: 500,
+        },
+      },
+    } as never;
+    const publicIdentity = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runId: "run-code-mode",
+    };
+    const firstCatalogRef = createToolSearchCatalogRef();
+    const firstTools = createCodeModeTools({ ...publicIdentity, catalogRef: firstCatalogRef });
+    applyCodeModeCatalog({
+      tools: firstTools,
+      ...publicIdentity,
+      catalogRef: firstCatalogRef,
+    });
+    const secondCatalogRef = createToolSearchCatalogRef();
+    const secondTools = createCodeModeTools({ ...publicIdentity, catalogRef: secondCatalogRef });
+    applyCodeModeCatalog({
+      tools: secondTools,
+      ...publicIdentity,
+      catalogRef: secondCatalogRef,
+    });
+
+    const suspended = resultDetails(
+      await expectDefined(firstTools[0], "First ownerless exec test invariant").execute(
+        "code-call-ownerless-first",
+        { code: 'await yield_control("pause"); return "first-owner";' },
+      ),
+    );
+    expect(suspended.status).toBe("waiting");
+
+    await expect(
+      expectDefined(secondTools[1], "Second ownerless wait test invariant").execute(
+        "code-wait-ownerless-foreign",
+        { runId: suspended.runId },
+      ),
+    ).rejects.toThrow("different agent run");
+    expect(testing.activeRuns.has(suspended.runId as string)).toBe(true);
+
+    const completed = resultDetails(
+      await expectDefined(firstTools[1], "First ownerless wait test invariant").execute(
+        "code-wait-ownerless-first",
+        { runId: suspended.runId },
+      ),
+    );
+    expect(completed).toMatchObject({ status: "completed", value: "first-owner" });
+  });
+
+  it("keeps overlapping ownerless toolset snapshots isolated", async () => {
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          timeoutMs: 500,
+        },
+      },
+    } as never;
+    const publicIdentity = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runId: "run-code-mode",
+    };
+    const firstCatalogRef = createToolSearchCatalogRef();
+    const firstTools = createCodeModeTools({ ...publicIdentity, catalogRef: firstCatalogRef });
+    applyCodeModeCatalog({
+      tools: firstTools,
+      ...publicIdentity,
+      catalogRef: firstCatalogRef,
+    });
+    const secondCatalogRef = createToolSearchCatalogRef();
+    const secondTools = createCodeModeTools({ ...publicIdentity, catalogRef: secondCatalogRef });
+    applyCodeModeCatalog({
+      tools: secondTools,
+      ...publicIdentity,
+      catalogRef: secondCatalogRef,
+    });
+
+    const [first, second] = await Promise.all([
+      expectDefined(firstTools[0], "First ownerless exec test invariant").execute(
+        "code-call-ownerless-overlap-first",
+        { code: 'await yield_control("pause"); return "first-owner";' },
+      ),
+      expectDefined(secondTools[0], "Second ownerless exec test invariant").execute(
+        "code-call-ownerless-overlap-second",
+        { code: 'await yield_control("pause"); return "second-owner";' },
+      ),
+    ]).then((results) => results.map(resultDetails));
+    expect(first?.status).toBe("waiting");
+    expect(second?.status).toBe("waiting");
+
+    await expect(
+      expectDefined(firstTools[1], "First ownerless wait test invariant").execute(
+        "code-wait-ownerless-overlap-foreign-first",
+        { runId: second?.runId },
+      ),
+    ).rejects.toThrow("different agent run");
+    await expect(
+      expectDefined(secondTools[1], "Second ownerless wait test invariant").execute(
+        "code-wait-ownerless-overlap-foreign-second",
+        { runId: first?.runId },
+      ),
+    ).rejects.toThrow("different agent run");
+    expect(testing.activeRuns.has(first?.runId as string)).toBe(true);
+    expect(testing.activeRuns.has(second?.runId as string)).toBe(true);
+
+    const [firstCompleted, secondCompleted] = await Promise.all([
+      expectDefined(firstTools[1], "First ownerless wait test invariant").execute(
+        "code-wait-ownerless-overlap-first",
+        { runId: first?.runId },
+      ),
+      expectDefined(secondTools[1], "Second ownerless wait test invariant").execute(
+        "code-wait-ownerless-overlap-second",
+        { runId: second?.runId },
+      ),
+    ]).then((results) => results.map(resultDetails));
+    expect(firstCompleted).toMatchObject({ status: "completed", value: "first-owner" });
+    expect(secondCompleted).toMatchObject({ status: "completed", value: "second-owner" });
   });
 
   it("rejects concurrent waits for the same suspended run", async () => {

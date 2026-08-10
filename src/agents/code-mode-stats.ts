@@ -36,6 +36,7 @@ export type CodeModeStats = {
     settled?: number;
     failed?: number;
     cancelRequested?: number;
+    cancelledBeforeStart?: number;
     settledAfterCancel?: number;
     /** Outstanding bridge count sampled when stats leave one Code Mode attempt. */
     unresolvedAtExtraction?: number;
@@ -197,6 +198,7 @@ function codeModeStatsDelta(
     "settled",
     "failed",
     "cancelRequested",
+    "cancelledBeforeStart",
     "settledAfterCancel",
   ] as const) {
     const value = positiveDelta(current.bridgeLifecycle[key], previous?.bridgeLifecycle[key]);
@@ -314,6 +316,7 @@ export function mergeCodeModeStats(target: CodeModeStats, source: CodeModeStats)
     "settled",
     "failed",
     "cancelRequested",
+    "cancelledBeforeStart",
     "settledAfterCancel",
   ] as const) {
     const value = source.bridgeLifecycle[key];
@@ -391,6 +394,10 @@ export function recordCodeModeBridgeStarted(stats: CodeModeStats | undefined): v
 
 export function recordCodeModeBridgeCancelRequested(stats: CodeModeStats | undefined): void {
   incrementLifecycle(stats, "cancelRequested");
+}
+
+export function recordCodeModeBridgeCancelledBeforeStart(stats: CodeModeStats | undefined): void {
+  incrementLifecycle(stats, "cancelledBeforeStart");
 }
 
 export function recordCodeModeBridgeSettled(

@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  assertSessionLifecycleUnblocked,
+  type SessionLifecycleBlockerKind,
+  type SessionLifecycleBlockerLease,
+} from "./session-lifecycle-blocker.js";
 import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
 
 export type SessionWorkAdmissionLease = {
   createHandoff: () => string;
+  createLifecycleBlocker: (kind: SessionLifecycleBlockerKind) => SessionLifecycleBlockerLease;
   release: () => void;
   released: Promise<void>;
   run: <T>(run: () => Promise<T>) => Promise<T>;
@@ -32,6 +38,7 @@ export function createSessionWorkAdmissionHandoff(
   admission: HandoffSessionWorkAdmission,
   lease: SessionWorkAdmissionLease,
 ): string {
+  assertSessionLifecycleUnblocked(admission.identities);
   const handoffId = randomUUID();
   admission.handoffIds.add(handoffId);
   SESSION_WORK_ADMISSION_HANDOFFS.set(handoffId, { admission, lease });
@@ -70,6 +77,7 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   ) {
     return undefined;
   }
+  assertSessionLifecycleUnblocked(identities);
   SESSION_WORK_ADMISSION_HANDOFFS.delete(handoffId);
   handoff.admission.handoffIds.delete(handoffId);
   handoff.admission.interrupt = params.onInterrupt;

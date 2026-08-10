@@ -31,6 +31,7 @@ import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-mig
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
+  beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
@@ -3065,6 +3066,72 @@ describe("gateway server chat", () => {
     } finally {
       releaseLock.resolve(undefined);
       await lockPromise?.catch(() => undefined);
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send retries after command-owned Code Mode work becomes quiescent", async () => {
+    const { storePath } = openDirectChatSession();
+    const runId = "idem-code-mode-lifecycle-blocked";
+    const context = createDirectChatContext();
+    let blocker: { release: () => void } | undefined;
+    try {
+      await writeStoredMainSession(makeDoneSessionEntry());
+      const admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+      });
+      blocker = admission.createLifecycleBlocker("code_mode_non_quiescent");
+      admission.release();
+
+      const blockedResponses: CapturedChatResponse[] = [];
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "wait for prior Code Mode work",
+        respond: captureChatResponse(blockedResponses),
+      });
+
+      expect(blockedResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Session still has non-quiescent Code Mode tool work; retry after it settles.",
+            retryable: true,
+          },
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
+
+      blocker.release();
+      blocker = undefined;
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      const retryResponses: CapturedChatResponse[] = [];
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "wait for prior Code Mode work",
+        respond: captureChatResponse(retryResponses),
+      });
+
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+          error: undefined,
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    } finally {
+      blocker?.release();
       resetDirectChatSession();
     }
   });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
+import { ensureCodeModeActivityOwner, type CodeModeActivityContext } from "./code-mode-activity.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
@@ -31,6 +32,7 @@ import {
 } from "./code-mode-runtime.js";
 import {
   cancelPendingBridgeStates,
+  CodeModeBridgeDispatchQueue,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -180,7 +182,7 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
 
 /** Run Code Mode to completion without publishing resumable snapshot state. */
 export async function runCodeModeScriptHeadless(params: {
-  ctx: ToolSearchToolContext;
+  ctx: ToolSearchToolContext & CodeModeActivityContext;
   code: string;
   language?: "javascript" | "typescript";
   overrides?: Partial<
@@ -198,7 +200,8 @@ export async function runCodeModeScriptHeadless(params: {
   extraNamespaces?: CodeModeNamespaceDescriptor[];
   signal?: AbortSignal;
 }): Promise<CodeModeHeadlessResult> {
-  const config = resolveCodeModeHeadlessConfig(params.ctx, params.overrides);
+  const ownedCtx = ensureCodeModeActivityOwner(params.ctx);
+  const config = resolveCodeModeHeadlessConfig(ownedCtx, params.overrides);
   const wallClockMs = clampNumber(
     readPositiveInteger(params.wallClockMs, DEFAULT_HEADLESS_WALL_CLOCK_MS),
     1,
@@ -219,7 +222,12 @@ export async function runCodeModeScriptHeadless(params: {
     // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
     const swarmEnabled = false;
     const codeModeRunId = `cm_headless_${randomUUID()}`;
-    const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+    const runtime = new ToolSearchRuntime(ownedCtx, toToolSearchConfig(config));
+    const bridgeDispatchQueue = new CodeModeBridgeDispatchQueue(
+      config.maxPendingToolCalls,
+      undefined,
+      ownedCtx.codeModeActivityOwner,
+    );
     const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
@@ -297,9 +305,10 @@ export async function runCodeModeScriptHeadless(params: {
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,
-          ctx: params.ctx,
+          ctx: ownedCtx,
           privateAuthority,
           signal: abortScope.signal,
+          bridgeDispatchQueue,
         }),
       );
       // Preserve the waiting frontier before the lazy deadline callback;

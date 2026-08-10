@@ -33,6 +33,7 @@ function inspectors(): GatewayActiveWorkInspectors {
     getRootRequests: () => getActiveGatewayRootWorkCount(),
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
+    getSessionBlockers: () => 0,
     getChatRuns: () => 0,
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,

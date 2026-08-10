@@ -7,6 +7,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import { isSessionLifecycleBlockedError } from "../sessions/session-lifecycle-blocker.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
@@ -924,6 +925,9 @@ export function resolveModelFallbackError(
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
   if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
+  if (isSessionLifecycleBlockedError(err)) {
     return { kind: "coordination", error: err };
   }
   // Gateway admission can fail before any provider turn starts. Preserve that

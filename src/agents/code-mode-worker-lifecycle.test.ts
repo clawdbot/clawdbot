@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  beginCodeModeControlActivity,
+  createCodeModeActivityOwner,
+  discardCodeModeRunActivity,
+  registerCodeModeRunActivity,
+  sampleCodeModeRunFinalQuiescence,
+  type CodeModeActivityOwner,
+} from "./code-mode-activity.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CodeModePrivateAuthority } from "./code-mode-private-authority.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
@@ -6,6 +14,7 @@ import {
   activeRuns,
   disposeAllCodeModeRuns,
   disposeCodeModeRun,
+  disposeCodeModeRunsByActivityOwner,
   reserveActiveRunSlot,
   resumingRunIds,
   storeSnapshotState,
@@ -24,6 +33,7 @@ const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
 function parkExpiringRun(
   method: "callValue" | "agentWait",
   runId = EXPIRING_RUN_ID,
+  activityOwner: CodeModeActivityOwner = createCodeModeActivityOwner(),
 ): ReturnType<typeof vi.fn> {
   const rawConfig = {
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
@@ -31,7 +41,12 @@ function parkExpiringRun(
   const config = resolveCodeModeConfig(rawConfig);
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
-  const ctx = { config: rawConfig, runtimeConfig: rawConfig, catalogRef };
+  const ctx = {
+    config: rawConfig,
+    runtimeConfig: rawConfig,
+    catalogRef,
+    codeModeActivityOwner: activityOwner,
+  };
   const runtime = new ToolSearchRuntime(ctx, toToolSearchConfig(config));
   const cancel = vi.fn();
   const pending: PendingBridgeState = {
@@ -140,6 +155,65 @@ describe("Code Mode worker lifecycle", () => {
     disposeCodeModeRun(`${CAPACITY_RUN_PREFIX}0`);
     const releaseFreedSlot = reserveActiveRunSlot();
     releaseFreedSlot();
+  });
+
+  it("keeps resumed ownership non-quiescent while a parked snapshot transfers", () => {
+    const activityOwner = createCodeModeActivityOwner();
+    registerCodeModeRunActivity(activityOwner);
+    parkExpiringRun("callValue", EXPIRING_RUN_ID, activityOwner);
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("non_quiescent");
+
+    const releaseControl = beginCodeModeControlActivity(activityOwner);
+    const releaseSlot = reserveActiveRunSlot(EXPIRING_RUN_ID);
+    try {
+      expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+      expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("non_quiescent");
+    } finally {
+      releaseSlot();
+      releaseControl();
+    }
+
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("quiescent");
+    discardCodeModeRunActivity(activityOwner);
+  });
+
+  it("disposes only parked runs owned by the terminating command", () => {
+    const targetOwner = createCodeModeActivityOwner();
+    const foreignOwner = createCodeModeActivityOwner();
+    registerCodeModeRunActivity(targetOwner);
+    registerCodeModeRunActivity(foreignOwner);
+    const targetFirstId = `${CAPACITY_RUN_PREFIX}owned_first`;
+    const targetSecondId = `${CAPACITY_RUN_PREFIX}owned_second`;
+    const foreignId = `${CAPACITY_RUN_PREFIX}foreign`;
+    const unrelatedId = `${CAPACITY_RUN_PREFIX}unrelated`;
+    const cancelTargetFirst = parkExpiringRun("callValue", targetFirstId, targetOwner);
+    const cancelTargetSecond = parkExpiringRun("agentWait", targetSecondId, targetOwner);
+    const cancelForeign = parkExpiringRun("callValue", foreignId, foreignOwner);
+    const cancelUnrelated = parkExpiringRun("callValue", unrelatedId);
+    resumingRunIds.add(targetFirstId);
+    resumingRunIds.add(foreignId);
+
+    expect(sampleCodeModeRunFinalQuiescence(targetOwner)).toBe("non_quiescent");
+    expect(sampleCodeModeRunFinalQuiescence(foreignOwner)).toBe("non_quiescent");
+
+    disposeCodeModeRunsByActivityOwner(targetOwner);
+    disposeCodeModeRunsByActivityOwner(targetOwner);
+
+    expect(cancelTargetFirst).toHaveBeenCalledOnce();
+    expect(cancelTargetSecond).toHaveBeenCalledOnce();
+    expect(cancelForeign).not.toHaveBeenCalled();
+    expect(cancelUnrelated).not.toHaveBeenCalled();
+    expect(activeRuns.has(targetFirstId)).toBe(false);
+    expect(activeRuns.has(targetSecondId)).toBe(false);
+    expect(activeRuns.has(foreignId)).toBe(true);
+    expect(activeRuns.has(unrelatedId)).toBe(true);
+    expect(resumingRunIds.has(targetFirstId)).toBe(false);
+    expect(resumingRunIds.has(foreignId)).toBe(true);
+    expect(sampleCodeModeRunFinalQuiescence(targetOwner)).toBe("quiescent");
+    expect(sampleCodeModeRunFinalQuiescence(foreignOwner)).toBe("non_quiescent");
+
+    discardCodeModeRunActivity(targetOwner);
+    discardCodeModeRunActivity(foreignOwner);
   });
 
   it("rejects an unavailable run without leaking a capacity reservation", () => {
@@ -546,7 +620,7 @@ describe("Code Mode worker lifecycle", () => {
     {
       name: "timeout",
       body: "setInterval(() => {}, 1000);",
-      timeoutMs: 25,
+      timeoutMs: 500,
       abort: false,
       code: "timeout",
     },

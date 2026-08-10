@@ -5,6 +5,7 @@ import {
   drainCodeModeAttemptStats,
   ensureCodeModeStats,
   recordCodeModeBridgeCancelRequested,
+  recordCodeModeBridgeCancelledBeforeStart,
   recordCodeModeBridgeRegistered,
   recordCodeModeBridgeSettled,
   recordCodeModeBridgeStarted,
@@ -84,6 +85,22 @@ describe("Code Mode bridge accounting", () => {
       settled: 2,
       cancelRequested: 2,
       settledAfterCancel: 2,
+      unresolvedAtExtraction: 0,
+    });
+  });
+
+  it("records queued cancellation separately from active cancellation", () => {
+    const stats = createCodeModeStats();
+    recordCodeModeBridgeRegistered(stats, "callValue");
+    recordCodeModeBridgeCancelRequested(stats);
+    recordCodeModeBridgeCancelledBeforeStart(stats);
+    recordCodeModeBridgeSettled(stats, { failed: false, settledAfterCancel: false });
+
+    expect(cloneCodeModeStats(stats).bridgeLifecycle).toEqual({
+      registered: 1,
+      settled: 1,
+      cancelRequested: 1,
+      cancelledBeforeStart: 1,
       unresolvedAtExtraction: 0,
     });
   });

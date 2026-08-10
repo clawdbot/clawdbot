@@ -16,6 +16,7 @@ type SafeGatewayRestartCounts = {
   backgroundExecSessions: number;
   rootRequests: number;
   activeTasks: number;
+  sessionBlockers: number;
   totalActive: number;
 };
 type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
@@ -26,7 +27,8 @@ type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
     | "cron-run"
     | "background-exec"
     | "root-request"
-    | "task";
+    | "task"
+    | "session-blocker";
 };
 
 type SafeRestartInspectors = Pick<
@@ -39,6 +41,7 @@ type SafeRestartInspectors = Pick<
   | "getRootRequests"
   | "getActiveTasks"
   | "getTaskBlockers"
+  | "getSessionBlockers"
 >;
 
 type SafeGatewayRestartPreflight = {
@@ -79,6 +82,7 @@ export function createSafeGatewayRestartPreflight(
     backgroundExecSessions: snapshot.counts.backgroundExecSessions,
     rootRequests: snapshot.counts.rootRequests,
     activeTasks: snapshot.counts.activeTasks,
+    sessionBlockers: snapshot.counts.sessionBlockers,
     totalActive:
       snapshot.counts.queueSize +
       snapshot.counts.pendingReplies +
@@ -86,7 +90,8 @@ export function createSafeGatewayRestartPreflight(
       snapshot.counts.cronRuns +
       snapshot.counts.backgroundExecSessions +
       snapshot.counts.rootRequests +
-      snapshot.counts.activeTasks,
+      snapshot.counts.activeTasks +
+      snapshot.counts.sessionBlockers,
   };
   const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
 

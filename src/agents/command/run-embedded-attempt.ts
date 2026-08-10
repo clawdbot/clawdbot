@@ -8,6 +8,7 @@ import {
   ModelSelectionLockedError,
   isModelSelectionLocked,
 } from "../../sessions/model-overrides.js";
+import { SessionLifecycleBlockedError } from "../../sessions/session-lifecycle-blocker.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -22,6 +23,10 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
+import {
+  sampleCodeModeRunFinalQuiescence,
+  type CodeModeActivityOwner,
+} from "../code-mode-activity.js";
 import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
@@ -72,6 +77,7 @@ type RunEmbeddedAgentAttemptParams = {
   embeddedSessionState: EmbeddedSessionState;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   commandRunAccounting?: RunAccountingAccumulator;
+  codeModeActivityOwner: CodeModeActivityOwner;
 };
 
 export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptParams) {
@@ -226,6 +232,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     fallbackModel = model;
   let fallbackExhausted = false,
     liveSwitchRetries = 0;
+  let candidateStarted = false;
   let terminal: EmbeddedAgentRunEntryTerminal;
   let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
   const fastModeStartedAtMs = Date.now();
@@ -342,6 +349,16 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
+          if (
+            candidateStarted &&
+            sampleCodeModeRunFinalQuiescence(params.codeModeActivityOwner) === "non_quiescent"
+          ) {
+            throw new SessionLifecycleBlockedError(
+              "code_mode_non_quiescent",
+              new Set([sessionKey ?? sessionId, sessionId]),
+            );
+          }
+          candidateStarted = true;
           const candidateAccounting = params.commandRunAccounting?.beginCandidate({
             provider: providerOverride,
             model: modelOverride,
@@ -396,6 +413,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             effectiveTurnThinkLevel = candidateThinkLevel;
             const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               commandRunAccounting: candidateAccounting,
+              codeModeActivityOwner: params.codeModeActivityOwner,
               providerOverride,
               modelOverride,
               configuredAuthProfileId,

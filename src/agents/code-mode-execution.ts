@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import {
+  restartRecoveryRejectedRequestError,
+  type CodeModeToolContext,
+  usableCodeModeResumeBudgetMs,
+} from "./code-mode-execution-policy.js";
+import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
@@ -21,13 +26,13 @@ import {
   type CodeModeLanguage,
   type CodeModeSettlementMode,
   type CodeModeWorkerResult,
-  type PendingBridgeRequest,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
 import {
   activeRuns,
   cancelPendingBridgeStates,
   codeModeWaitingReason,
+  CodeModeBridgeDispatchQueue,
   createPendingBridgeStates,
   disposeCodeModeRun,
   pendingBridgeRequestsReplaySafe,
@@ -47,30 +52,17 @@ import {
 import {
   ensureCodeModeStats,
   registerCodeModeStatsSource,
-  recordCodeModeSnapshot,
-  recordCodeModeWorkerRun,
   type CodeModeStats,
 } from "./code-mode-stats.js";
-import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
+import { runTrackedCodeModeWorker } from "./code-mode-worker-accounting.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
-import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
+import { ToolSearchRuntime } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
-
-const RESTART_RECOVERY_AGENT_SPAWN_ERROR =
-  "restart recovery cannot resume agents.run: cold recovery cannot reattach its prior collector and must not launch a new one.";
-
-function restartRecoveryRejectedRequestError(
-  pendingRequests: readonly PendingBridgeRequest[],
-): string {
-  return pendingRequests.some((request) => request.method === "agentSpawn")
-    ? RESTART_RECOVERY_AGENT_SPAWN_ERROR
-    : "restart-safe code mode cannot call side-effecting tools.";
-}
 
 export async function runExec(params: {
   toolCallId: string;
-  ctx: ToolSearchToolContext;
+  ctx: CodeModeToolContext;
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
@@ -187,46 +179,6 @@ export async function runExec(params: {
   }
 }
 
-function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): number | undefined {
-  // VM restore costs tens of ms and counts against the guest interrupt budget;
-  // resuming with less than this floor converts an otherwise successful run
-  // into an immediate interrupt timeout, so callers park the snapshot instead.
-  const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
-  const remaining = deadlineMs - Date.now();
-  return remaining >= minimum ? remaining : undefined;
-}
-
-async function runTrackedCodeModeWorker(params: {
-  stats?: CodeModeStats;
-  kind: "exec" | "resume";
-  workerData: unknown;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): Promise<CodeModeWorkerResult> {
-  let workerSpawnedAt: number | undefined;
-  try {
-    const result = normalizeCodeModeWorkerResult(
-      await runCodeModeWorker({
-        workerData: params.workerData,
-        timeoutMs: params.timeoutMs,
-        signal: params.signal,
-        onWorkerSpawned: () => {
-          workerSpawnedAt = Date.now();
-        },
-      }),
-    );
-    if (result.snapshotAttempt) {
-      recordCodeModeSnapshot(params.stats, result.snapshotAttempt);
-    }
-    const { snapshotAttempt: _snapshotAttempt, ...settlementResult } = result;
-    return settlementResult as CodeModeWorkerResult;
-  } finally {
-    if (workerSpawnedAt !== undefined) {
-      recordCodeModeWorkerRun(params.stats, params.kind, Date.now() - workerSpawnedAt);
-    }
-  }
-}
-
 async function waitForPending(
   pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
@@ -281,7 +233,7 @@ async function settleCodeModeResult(params: {
   replaySafety: { safe: boolean };
   parentToolCallId: string;
   codeModeReplayId: string;
-  ctx: ToolSearchToolContext;
+  ctx: CodeModeToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
@@ -289,6 +241,7 @@ async function settleCodeModeResult(params: {
   deadlineMs: number;
   deliveredOutputCount?: number;
   pending?: PendingBridgeState[];
+  bridgeDispatchQueue?: CodeModeBridgeDispatchQueue;
   codeModeStats?: CodeModeStats;
   activeRunId?: string;
   reservedActiveRunSlot?: boolean;
@@ -298,6 +251,13 @@ async function settleCodeModeResult(params: {
 }) {
   let result = params.result;
   let pending = params.pending ?? [];
+  const bridgeDispatchQueue =
+    params.bridgeDispatchQueue ??
+    new CodeModeBridgeDispatchQueue(
+      params.config.maxPendingToolCalls,
+      params.codeModeStats,
+      params.ctx.codeModeActivityOwner,
+    );
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
   const deliveredOutputCount = params.deliveredOutputCount ?? 0;
@@ -407,9 +367,9 @@ async function settleCodeModeResult(params: {
           activeRunId,
           ctx: params.ctx,
           privateAuthority: params.privateAuthority,
-          codeModeStats: params.codeModeStats,
           signal: params.signal,
           onUpdate: params.onUpdate,
+          bridgeDispatchQueue,
         }),
       );
       const ready = await waitForPending(
@@ -419,7 +379,7 @@ async function settleCodeModeResult(params: {
         params.signal,
       );
       const resumeBudgetMs = ready
-        ? usableResumeBudgetMs(settleDeadline, params.config)
+        ? usableCodeModeResumeBudgetMs(settleDeadline, params.config)
         : undefined;
       if (!ready || resumeBudgetMs === undefined) {
         // Abort drops the run instead of parking it: a suspended snapshot for a
@@ -442,6 +402,7 @@ async function settleCodeModeResult(params: {
           parentToolCallId: params.parentToolCallId,
           ctx: params.ctx,
           config: params.config,
+          bridgeDispatchQueue,
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           privateAuthority: params.privateAuthority,
@@ -548,9 +509,9 @@ async function settleCodeModeResult(params: {
             activeRunId,
             ctx: params.ctx,
             privateAuthority: params.privateAuthority,
-            codeModeStats: params.codeModeStats,
             signal: params.signal,
             onUpdate: params.onUpdate,
+            bridgeDispatchQueue,
           }),
         );
         return storeSnapshotState({
@@ -564,6 +525,7 @@ async function settleCodeModeResult(params: {
           parentToolCallId: params.parentToolCallId,
           ctx: params.ctx,
           config: params.config,
+          bridgeDispatchQueue,
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           privateAuthority: params.privateAuthority,
@@ -599,6 +561,7 @@ async function settleCodeModeResult(params: {
       settlementMode: result.settlementMode,
       signal: params.signal,
       onUpdate: params.onUpdate,
+      bridgeDispatchQueue,
       codeModeStats: params.codeModeStats,
     });
   }
@@ -627,7 +590,7 @@ async function settleCodeModeResult(params: {
 
 export async function runWait(params: {
   toolCallId: string;
-  ctx: ToolSearchToolContext;
+  ctx: CodeModeToolContext;
   runId: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -647,6 +610,9 @@ export async function runWait(params: {
     (state.ctx.agentId && state.ctx.agentId !== params.ctx.agentId)
   ) {
     throw new ToolInputError("code mode run belongs to a different session.");
+  }
+  if (state.activityOwner !== params.ctx.codeModeActivityOwner) {
+    throw new ToolInputError("code mode run belongs to a different agent run.");
   }
   if (resumingRunIds.has(state.runId)) {
     throw new ToolInputError("code mode run is already being resumed.");
@@ -668,7 +634,9 @@ export async function runWait(params: {
       Math.max(1, deadlineMs - Date.now()),
       params.signal,
     );
-    const resumeBudgetMs = ready ? usableResumeBudgetMs(deadlineMs, state.config) : undefined;
+    const resumeBudgetMs = ready
+      ? usableCodeModeResumeBudgetMs(deadlineMs, state.config)
+      : undefined;
     if (!ready || resumeBudgetMs === undefined) {
       // An aborted wait drops the suspended run: nothing will resume it, and
       // parking it would pin a process-global active-run slot until TTL expiry.
@@ -746,6 +714,7 @@ export async function runWait(params: {
       runtime: state.runtime,
       namespaceRuntime: state.namespaceRuntime,
       privateAuthority: state.privateAuthority,
+      bridgeDispatchQueue: state.bridgeDispatchQueue,
       codeModeStats: state.codeModeStats,
       bridgeDispatch: { started: true },
       deliveredOutputCount: state.deliveredOutputCount,

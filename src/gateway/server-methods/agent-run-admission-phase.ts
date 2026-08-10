@@ -45,6 +45,7 @@ import {
   resolveGatewayAgentTaskTrackingMode,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
+import { sessionWorkAdmissionErrorShape } from "./session-lifecycle-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type PreparedAgentRunDispatch = {
@@ -224,7 +225,7 @@ export async function prepareAgentRunDispatch(params: {
       );
     }
   } catch (err) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+    params.respond(false, undefined, sessionWorkAdmissionErrorShape(err));
     return undefined;
   }
   if (params.respondToGatewayAdmissionOutcome()) {

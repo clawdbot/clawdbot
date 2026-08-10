@@ -3,7 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
+import { SessionLifecycleBlockedError } from "../../sessions/session-lifecycle-blocker.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
@@ -1687,6 +1691,112 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       releaseAcquire();
       dateNow.mockRestore();
+    }
+  });
+
+  it("reports non-quiescent session lifecycle blockers as unavailable", async () => {
+    prime();
+    const context = makeContext();
+    const respond = vi.fn();
+    const sessionId = "existing-session-id";
+
+    const result = await prepareAgentRunDispatch({
+      request: {
+        message: "wait for prior Code Mode work",
+        idempotencyKey: "idem-session-lifecycle-blocked",
+      },
+      cfg: {},
+      sessionEntry: { sessionId, updatedAt: Date.now() },
+      resolvedSessionKey: "agent:main:main",
+      activeSessionAgentId: "main",
+      delivery: {} as never,
+      allowModelOverride: false,
+      lifecycleGeneration: "test-generation",
+      getAdmittedSessionId: () => sessionId,
+      suppressVisibleSessionEffects: false,
+      isOneShotModelRun: false,
+      isRestartRecoveryResumeRun: false,
+      runId: "idem-session-lifecycle-blocked",
+      agentDedupeKeys: ["agent:idem-session-lifecycle-blocked"],
+      context,
+      client: null,
+      respond,
+      abortForLifecycleRotation: () => false,
+      acquireGatewayWorkAdmission: async () => {
+        throw new SessionLifecycleBlockedError("code_mode_non_quiescent", [
+          "agent:main:main",
+          sessionId,
+        ]);
+      },
+      assertGatewayWorkAdmissionAllowed: () => {},
+      hasGatewayAdmissionOutcome: () => false,
+      respondToGatewayAdmissionOutcome: () => false,
+      admissionAgentId: () => "main",
+      getGatewayWorkAdmission: () => undefined,
+      setAdmittedRunAbort: () => {},
+      getAdmittedRunAbort: () => undefined,
+      markAgentRunAccepted: () => {},
+    } as unknown as Parameters<typeof prepareAgentRunDispatch>[0]);
+
+    expect(result).toBeUndefined();
+    expectRecordFields(respond.mock.calls[0]?.[2], {
+      code: "UNAVAILABLE",
+      message: "Session still has non-quiescent Code Mode tool work; retry after it settles.",
+      retryable: true,
+    });
+  });
+
+  it("clears early lifecycle admission dedupe so the same agent request can retry", async () => {
+    prime();
+    const admission = await beginSessionWorkAdmission({
+      scope: "/tmp/sessions.json",
+      identities: ["agent:main:main", "existing-session-id"],
+      assertAllowed: () => {},
+    });
+    const blocker = admission.createLifecycleBlocker("code_mode_non_quiescent");
+    admission.release();
+    const context = makeContext();
+    const runId = "idem-early-session-lifecycle-blocked";
+
+    try {
+      const blockedRespond = vi.fn();
+      await invokeAgent(
+        {
+          message: "wait for prior Code Mode work",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, respond: blockedRespond, reqId: runId },
+      );
+
+      expectRespondError(blockedRespond, {
+        code: "UNAVAILABLE",
+        message: "Session still has non-quiescent Code Mode tool work; retry after it settles.",
+        retryable: true,
+      });
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+
+      blocker.release();
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+      const retryRespond = vi.fn();
+      await invokeAgent(
+        {
+          message: "wait for prior Code Mode work",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, respond: retryRespond, reqId: runId },
+      );
+
+      expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+    } finally {
+      blocker.release();
     }
   });
 

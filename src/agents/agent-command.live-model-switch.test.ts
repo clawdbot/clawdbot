@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { SessionEntry } from "../config/sessions.js";
 import * as agentRunRegistry from "../infra/agent-run-registry.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { createDeferred } from "../shared/deferred.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -28,7 +29,25 @@ import {
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import {
+  beginCodeModeBridgeActivity,
+  beginCodeModeControlActivity,
+  beginCodeModeSnapshotActivity,
+  createCodeModeActivityOwner,
+  discardCodeModeRunActivity,
+  registerCodeModeRunActivity,
+  sampleCodeModeRunFinalQuiescence,
+  type CodeModeActivityOwner,
+} from "./code-mode-activity.js";
+import {
+  activeRuns,
+  CodeModeBridgeDispatchQueue,
+  disposeCodeModeRun,
+  resumingRunIds,
+} from "./code-mode-state.js";
 import { resolveAgentCommandRunAccounting } from "./command/run-accounting.js";
+import { resolveEmbeddedRunAccountingObservers } from "./embedded-agent-runner/run/accounting-observers.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -247,7 +266,7 @@ vi.mock("./command/session.js", () => ({
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
     return {
-      sessionId: "session-1",
+      sessionId: sessionEntry.sessionId,
       sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
       sessionEntry,
       sessionStore: state.sessionStoreMock,
@@ -693,14 +712,18 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
 let agentCommandFromIngress: typeof import("./agent-command.js").agentCommandFromIngress;
+let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
 let agentCommandTesting: typeof import("./agent-command.js").testing;
+let gatewayRuntime: typeof import("../runtime.js").defaultRuntime;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
   agentCommandFromSystem ??= mod.agentCommandFromSystem;
   agentCommandFromIngress ??= mod.agentCommandFromIngress;
+  agentCommandFromGatewayIngress ??= mod.agentCommandFromGatewayIngress;
   agentCommandTesting ??= mod.testing;
+  gatewayRuntime ??= (await import("../runtime.js")).defaultRuntime;
 });
 
 type FallbackRunnerParams = {
@@ -827,6 +850,27 @@ async function runSystemAgentCommand() {
       deliver: false,
     },
     { boundary: "gateway.boot" },
+  );
+}
+
+async function runPublicIngressAgentCommand() {
+  await agentCommandFromIngress({
+    message: "public ingress",
+    sessionKey: "agent:main:public-ingress",
+    allowModelOverride: false,
+  });
+}
+
+async function runGatewayIngressAgentCommand() {
+  await agentCommandFromGatewayIngress(
+    {
+      message: "gateway ingress",
+      sessionKey: "agent:main:gateway-ingress",
+      allowModelOverride: false,
+    },
+    gatewayRuntime,
+    undefined,
+    {},
   );
 }
 
@@ -1527,6 +1571,509 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       state.deliverAgentCommandResultMock.mock.invocationCallOrder.at(-1) ?? 0,
     );
     vi.useRealTimers();
+  });
+
+  it("samples Code Mode quiescence before disposing command-owned parked runs", async () => {
+    const runId = "run-code-mode-final-quiescence";
+    const parkedRunId = "command-owned-parked-code-mode-run";
+    let activityOwner: CodeModeActivityOwner | undefined;
+    let releaseControl: (() => void) | undefined;
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        runId: string;
+        providerOverride: string;
+        modelOverride: string;
+        codeModeActivityOwner: CodeModeActivityOwner;
+        commandRunAccounting: {
+          selectRuntime: (runtime: "embedded") => void;
+          observeEmbeddedAttempt: (observation: {
+            provider: string;
+            model: string;
+            assistantTurnsObserved: boolean;
+            toolsObserved: boolean;
+            codeModeEngaged: boolean;
+            codeModeLifecycleObserved: boolean;
+          }) => void;
+        };
+      };
+      attempt.commandRunAccounting.selectRuntime("embedded");
+      attempt.commandRunAccounting.observeEmbeddedAttempt({
+        provider: attempt.providerOverride,
+        model: attempt.modelOverride,
+        assistantTurnsObserved: true,
+        toolsObserved: true,
+        codeModeEngaged: true,
+        codeModeLifecycleObserved: true,
+      });
+      activityOwner = attempt.codeModeActivityOwner;
+      registerCodeModeRunActivity(activityOwner);
+      releaseControl = beginCodeModeControlActivity(activityOwner);
+      activeRuns.set(parkedRunId, {
+        runId: parkedRunId,
+        activityOwner,
+        pending: [],
+        expiresAt: Date.now() + 10_000,
+        releaseSnapshotActivity: beginCodeModeSnapshotActivity(activityOwner),
+      } as never);
+      resumingRunIds.add(parkedRunId);
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+      const result = requireRecord(requireRecord(params, "delivery params").result, "result");
+      expect(resolveEmbeddedRunAccountingObservers(result)).toBeUndefined();
+      expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("non_quiescent");
+      releaseControl?.();
+      return undefined;
+    });
+
+    await agentCommand({ message: "hello", to: "+1234567890", runId });
+
+    const accountingSnapshot = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1)?.[1];
+    expect(accountingSnapshot).toMatchObject({
+      codeMode: {
+        engaged: true,
+        lifecycle: { finalQuiescence: { state: "non_quiescent" } },
+      },
+    });
+    expect(activeRuns.has(parkedRunId)).toBe(false);
+    expect(resumingRunIds.has(parkedRunId)).toBe(false);
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("unavailable");
+    disposeCodeModeRun(parkedRunId);
+  });
+
+  it("samples terminal-only Code Mode quiescence when an attempt throws", async () => {
+    let activityOwner: CodeModeActivityOwner | undefined;
+    const failure = new Error("candidate failed before returning a result");
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        codeModeActivityOwner: CodeModeActivityOwner;
+        commandRunAccounting: {
+          selectRuntime: (runtime: "embedded") => void;
+        };
+      };
+      attempt.commandRunAccounting.selectRuntime("embedded");
+      activityOwner = attempt.codeModeActivityOwner;
+      registerCodeModeRunActivity(activityOwner);
+      beginCodeModeControlActivity(activityOwner)();
+      throw failure;
+    });
+
+    await expect(runBasicAgentCommand()).rejects.toBe(failure);
+
+    expect(resolveAgentCommandRunAccounting(failure)).toMatchObject({
+      codeMode: {
+        engaged: true,
+        lifecycle: { finalQuiescence: { state: "quiescent" } },
+      },
+    });
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("unavailable");
+  });
+
+  it("returns promptly while command-owned bridge work blocks later session admission", async () => {
+    const failure = createAgentRunRestartAbortError();
+    const bridgeStarted = createDeferred();
+    let releaseBridge: (() => void) | undefined;
+    let attempts = 0;
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      attempts += 1;
+      if (attempts > 1) {
+        return makeSuccessResult("openai", "gpt-5.4");
+      }
+      const attempt = attemptParams as {
+        codeModeActivityOwner: CodeModeActivityOwner;
+      };
+      registerCodeModeRunActivity(attempt.codeModeActivityOwner);
+      releaseBridge = beginCodeModeBridgeActivity(attempt.codeModeActivityOwner);
+      bridgeStarted.resolve();
+      throw failure;
+    });
+
+    const command = runGatewayIngressAgentCommand();
+    await bridgeStarted.promise;
+    await expect(command).rejects.toBe(failure);
+
+    await expect(runGatewayIngressAgentCommand()).rejects.toThrow(
+      "Session still has non-quiescent Code Mode tool work",
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+    releaseBridge?.();
+    await expect(runGatewayIngressAgentCommand()).resolves.toBeUndefined();
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns promptly while a never-settling abort-wrapped tool poisons the session", async () => {
+    const failure = createAgentRunRestartAbortError();
+    const rawToolStarted = createDeferred();
+    const rawToolCompletion = createDeferred();
+    let attempts = 0;
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      attempts += 1;
+      if (attempts > 1) {
+        return makeSuccessResult("openai", "gpt-5.4");
+      }
+      const attempt = attemptParams as {
+        codeModeActivityOwner: CodeModeActivityOwner;
+      };
+      registerCodeModeRunActivity(attempt.codeModeActivityOwner);
+      const runAbort = new AbortController();
+      const tool = expectDefined(
+        finalizeAgentTools({
+          tools: [
+            {
+              name: "ignore_abort",
+              label: "Ignore abort",
+              description: "Test tool that settles after cancellation.",
+              parameters: { type: "object", properties: {} },
+              execute: async () => {
+                rawToolStarted.resolve();
+                await rawToolCompletion.promise;
+                return { content: [{ type: "text", text: "late" }], details: { late: true } };
+              },
+            },
+          ],
+          hookContext: {},
+          wrapBeforeToolCallHook: false,
+          abortSignal: runAbort.signal,
+        })[0],
+        "finalized command cancellation test tool",
+      );
+      const queue = new CodeModeBridgeDispatchQueue(1, undefined, attempt.codeModeActivityOwner);
+      const bridge = queue.enqueue({
+        id: "bridge:abort-wrapped-tool",
+        method: "callValue",
+        start: async () => {
+          try {
+            await tool.execute("tool-call", {});
+            return { id: "bridge:abort-wrapped-tool", ok: true, value: "late" };
+          } catch {
+            return {
+              id: "bridge:abort-wrapped-tool",
+              ok: false,
+              error: "code mode bridge call cancelled",
+            };
+          }
+        },
+        cancelActive: () => runAbort.abort(),
+      });
+      await rawToolStarted.promise;
+      bridge.cancel();
+      throw failure;
+    });
+
+    const command = runGatewayIngressAgentCommand();
+    await rawToolStarted.promise;
+    await expect(command).rejects.toBe(failure);
+
+    await expect(runGatewayIngressAgentCommand()).rejects.toThrow(
+      "Session still has non-quiescent Code Mode tool work",
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+    rawToolCompletion.resolve();
+    await expect(runGatewayIngressAgentCommand()).resolves.toBeUndefined();
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not start a fallback candidate while prior Code Mode work is non-quiescent", async () => {
+    let releaseBridge: (() => void) | undefined;
+    let attempts = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      try {
+        const result = await params.run(params.provider, params.model);
+        return {
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        };
+      } catch {
+        const result = await params.run("anthropic", "claude");
+        return {
+          result,
+          provider: "anthropic",
+          model: "claude",
+          attempts: [],
+        };
+      }
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      attempts += 1;
+      if (attempts > 1) {
+        return makeSuccessResult("openai", "gpt-5.4");
+      }
+      const attempt = attemptParams as {
+        codeModeActivityOwner: CodeModeActivityOwner;
+      };
+      registerCodeModeRunActivity(attempt.codeModeActivityOwner);
+      releaseBridge = beginCodeModeBridgeActivity(attempt.codeModeActivityOwner);
+      throw new Error("primary candidate failed");
+    });
+
+    await expect(runGatewayIngressAgentCommand()).rejects.toThrow(
+      "Session still has non-quiescent Code Mode tool work",
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+    await expect(runGatewayIngressAgentCommand()).rejects.toThrow(
+      "Session still has non-quiescent Code Mode tool work",
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+
+    releaseBridge?.();
+    await expect(runGatewayIngressAgentCommand()).resolves.toBeUndefined();
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not report Code Mode engagement when controls were only exposed", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        providerOverride: string;
+        modelOverride: string;
+        codeModeActivityOwner: CodeModeActivityOwner;
+        commandRunAccounting: {
+          selectRuntime: (runtime: "embedded") => void;
+        };
+      };
+      attempt.commandRunAccounting.selectRuntime("embedded");
+      registerCodeModeRunActivity(attempt.codeModeActivityOwner);
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+
+    await runBasicAgentCommand();
+
+    const accountingSnapshot = state.bindAgentCommandRunAccountingMock.mock.calls.at(-1)?.[1];
+    expect(accountingSnapshot).not.toHaveProperty("codeMode");
+  });
+
+  it.each([
+    {
+      name: "system success",
+      run: runSystemAgentCommand,
+      failure: undefined,
+    },
+    {
+      name: "public ingress failure",
+      run: runPublicIngressAgentCommand,
+      failure: new Error("public ingress attempt failed"),
+    },
+    {
+      name: "Gateway direct abort",
+      run: runGatewayIngressAgentCommand,
+      failure: createAgentRunDirectAbortError(),
+    },
+    {
+      name: "Gateway restart abort",
+      run: runGatewayIngressAgentCommand,
+      failure: createAgentRunRestartAbortError(),
+    },
+  ])(
+    "cleans command-owned Code Mode state for $name without accounting",
+    async ({ run, failure }) => {
+      const parkedRunId = `parked-${failure?.message ?? "success"}`;
+      let activityOwner: CodeModeActivityOwner | undefined;
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+        const attempt = attemptParams as {
+          codeModeActivityOwner: CodeModeActivityOwner;
+          commandRunAccounting?: unknown;
+          providerOverride: string;
+          modelOverride: string;
+        };
+        expect(attempt.commandRunAccounting).toBeUndefined();
+        activityOwner = attempt.codeModeActivityOwner;
+        registerCodeModeRunActivity(activityOwner);
+        activeRuns.set(parkedRunId, {
+          runId: parkedRunId,
+          activityOwner,
+          pending: [],
+          expiresAt: Date.now() + 10_000,
+          releaseSnapshotActivity: beginCodeModeSnapshotActivity(activityOwner),
+        } as never);
+        resumingRunIds.add(parkedRunId);
+        if (failure) {
+          throw failure;
+        }
+        return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+      });
+
+      if (failure) {
+        await expect(run()).rejects.toBe(failure);
+      } else {
+        await run();
+      }
+
+      expect(activeRuns.has(parkedRunId)).toBe(false);
+      expect(resumingRunIds.has(parkedRunId)).toBe(false);
+      expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("unavailable");
+    },
+  );
+
+  it("preserves a foreign parked Code Mode run during command cleanup", async () => {
+    const ownedRunId = "command-owned-parked-run";
+    const foreignRunId = "foreign-parked-run";
+    const foreignOwner = createCodeModeActivityOwner();
+    registerCodeModeRunActivity(foreignOwner);
+    activeRuns.set(foreignRunId, {
+      runId: foreignRunId,
+      activityOwner: foreignOwner,
+      pending: [],
+      expiresAt: Date.now() + 10_000,
+      releaseSnapshotActivity: beginCodeModeSnapshotActivity(foreignOwner),
+    } as never);
+    resumingRunIds.add(foreignRunId);
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        codeModeActivityOwner: CodeModeActivityOwner;
+        providerOverride: string;
+        modelOverride: string;
+      };
+      registerCodeModeRunActivity(attempt.codeModeActivityOwner);
+      activeRuns.set(ownedRunId, {
+        runId: ownedRunId,
+        activityOwner: attempt.codeModeActivityOwner,
+        pending: [],
+        expiresAt: Date.now() + 10_000,
+        releaseSnapshotActivity: beginCodeModeSnapshotActivity(attempt.codeModeActivityOwner),
+      } as never);
+      resumingRunIds.add(ownedRunId);
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+
+    await runSystemAgentCommand();
+
+    expect(activeRuns.has(ownedRunId)).toBe(false);
+    expect(activeRuns.has(foreignRunId)).toBe(true);
+    expect(resumingRunIds.has(foreignRunId)).toBe(true);
+    expect(sampleCodeModeRunFinalQuiescence(foreignOwner)).toBe("non_quiescent");
+
+    disposeCodeModeRun(foreignRunId);
+    discardCodeModeRunActivity(foreignOwner);
+  });
+
+  it("keeps non-Code-Mode system runs independent from accounting", async () => {
+    let activityOwner: CodeModeActivityOwner | undefined;
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        codeModeActivityOwner: CodeModeActivityOwner;
+        commandRunAccounting?: unknown;
+        providerOverride: string;
+        modelOverride: string;
+      };
+      expect(attempt.commandRunAccounting).toBeUndefined();
+      activityOwner = attempt.codeModeActivityOwner;
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+
+    await runSystemAgentCommand();
+
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("unavailable");
+  });
+
+  it("isolates sequential commands that reuse the default session-derived run id", async () => {
+    const owners: CodeModeActivityOwner[] = [];
+    const runIds: string[] = [];
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        runId: string;
+        providerOverride: string;
+        modelOverride: string;
+        codeModeActivityOwner: CodeModeActivityOwner;
+      };
+      const owner = attempt.codeModeActivityOwner;
+      owners.push(owner);
+      runIds.push(attempt.runId);
+      registerCodeModeRunActivity(owner);
+      const release = beginCodeModeControlActivity(owner);
+      release();
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+
+    await runBasicAgentCommand();
+    await runBasicAgentCommand();
+
+    expect(owners).toHaveLength(2);
+    expect(runIds).toEqual(["session-1", "session-1"]);
+    expect(owners[0]).not.toBe(owners[1]);
+    expect(sampleCodeModeRunFinalQuiescence(owners[0])).toBe("unavailable");
+    expect(sampleCodeModeRunFinalQuiescence(owners[1])).toBe("unavailable");
+  });
+
+  it("isolates overlapping commands with the same explicit public run id", async () => {
+    const sharedRunId = "duplicate-public-run-id";
+    const firstAttemptEntered = createDeferred();
+    const firstDeliveryEntered = createDeferred();
+    const secondDeliveryEntered = createDeferred();
+    const finishFirstDelivery = createDeferred();
+    const finishSecondDelivery = createDeferred();
+    const owners: CodeModeActivityOwner[] = [];
+    const releases: Array<() => void> = [];
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        providerOverride: string;
+        modelOverride: string;
+        codeModeActivityOwner: CodeModeActivityOwner;
+      };
+      const owner = attempt.codeModeActivityOwner;
+      owners.push(owner);
+      registerCodeModeRunActivity(owner);
+      releases.push(beginCodeModeControlActivity(owner));
+      if (owners.length === 1) {
+        firstAttemptEntered.resolve();
+      }
+      return makeSuccessResult(attempt.providerOverride, attempt.modelOverride);
+    });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      const deliveryOrdinal = state.deliverAgentCommandResultMock.mock.calls.length;
+      if (deliveryOrdinal === 1) {
+        firstDeliveryEntered.resolve();
+        await finishFirstDelivery.promise;
+        releases[0]?.();
+      } else {
+        secondDeliveryEntered.resolve();
+        await finishSecondDelivery.promise;
+        releases[1]?.();
+      }
+      return undefined;
+    });
+
+    state.sessionEntryMock = createCommandSessionEntry({ sessionId: "session-overlap-a" });
+    state.resolvedSessionKeyMock = "agent:main:overlap-a";
+    const first = agentCommand({
+      message: "first",
+      to: "+1234567890",
+      runId: sharedRunId,
+    });
+    await firstAttemptEntered.promise;
+
+    state.sessionEntryMock = createCommandSessionEntry({ sessionId: "session-overlap-b" });
+    state.resolvedSessionKeyMock = "agent:main:overlap-b";
+    const second = agentCommand({
+      message: "second",
+      to: "+1234567890",
+      runId: sharedRunId,
+    });
+    await Promise.all([firstDeliveryEntered.promise, secondDeliveryEntered.promise]);
+
+    expect(owners).toHaveLength(2);
+    expect(owners[0]).not.toBe(owners[1]);
+    expect(sampleCodeModeRunFinalQuiescence(owners[0])).toBe("non_quiescent");
+    expect(sampleCodeModeRunFinalQuiescence(owners[1])).toBe("non_quiescent");
+
+    finishFirstDelivery.resolve();
+    await first;
+    expect(sampleCodeModeRunFinalQuiescence(owners[0])).toBe("unavailable");
+    expect(sampleCodeModeRunFinalQuiescence(owners[1])).toBe("non_quiescent");
+
+    finishSecondDelivery.resolve();
+    await second;
+    expect(sampleCodeModeRunFinalQuiescence(owners[1])).toBe("unavailable");
   });
 
   it("retains accounting on a thrown non-switch provider failure", async () => {
@@ -4488,6 +5035,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("classifies empty embedded run results before model fallback accepts them", async () => {
     let observedClassification: unknown;
+    let firstOwner: CodeModeActivityOwner | undefined;
+    let winningOwner: CodeModeActivityOwner | undefined;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       const primaryResult = await params.run(params.provider, params.model);
       observedClassification = await params.classifyResult?.({
@@ -4514,8 +5063,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       };
     });
     state.runAgentAttemptMock
-      .mockResolvedValueOnce(makeEmptyResult("anthropic", "claude"))
-      .mockResolvedValueOnce(makeSuccessResult("openai", "gpt-5.4"));
+      .mockImplementationOnce(async (attemptParams: unknown) => {
+        const attempt = attemptParams as {
+          codeModeActivityOwner: CodeModeActivityOwner;
+        };
+        firstOwner = attempt.codeModeActivityOwner;
+        registerCodeModeRunActivity(attempt.codeModeActivityOwner);
+        return makeEmptyResult("anthropic", "claude");
+      })
+      .mockImplementationOnce(async (attemptParams: unknown) => {
+        const attempt = attemptParams as {
+          codeModeActivityOwner: CodeModeActivityOwner;
+        };
+        winningOwner = attempt.codeModeActivityOwner;
+        return makeSuccessResult("openai", "gpt-5.4");
+      });
 
     await runBasicAgentCommand();
 
@@ -4524,6 +5086,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       code: "empty_result",
     });
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+    expect(firstOwner).toBe(winningOwner);
     expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
@@ -4534,6 +5097,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "delivery params",
     );
     const result = requireRecord(deliveryParams.result, "delivery result");
+    expect(resolveEmbeddedRunAccountingObservers(result)).toBeUndefined();
+    expect(sampleCodeModeRunFinalQuiescence(winningOwner)).toBe("unavailable");
     const meta = requireRecord(result.meta, "delivery result meta");
     const agentMeta = requireRecord(meta.agentMeta, "delivery agent meta");
     const fallbackAttempts = requireArray(agentMeta.fallbackAttempts, "fallback attempts");

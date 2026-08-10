@@ -46,10 +46,37 @@ describe("safe gateway restart coordinator", () => {
         backgroundExecSessions: 0,
         rootRequests: 0,
         activeTasks: 0,
+        sessionBlockers: 0,
         totalActive: 0,
       },
       blockers: [],
       summary: "safe to restart now",
+    });
+  });
+
+  it("defers restart for non-quiescent session lifecycle blockers", () => {
+    const preflight = createSafeGatewayRestartPreflight({
+      getQueueSize: () => 0,
+      getPendingReplies: () => 0,
+      getEmbeddedRuns: () => 0,
+      getCronRuns: () => 0,
+      getBackgroundExecSessions: () => 0,
+      getRootRequests: () => 0,
+      getActiveTasks: () => 0,
+      getTaskBlockers: () => [],
+      getSessionBlockers: () => 1,
+    });
+
+    expect(preflight).toMatchObject({
+      safe: false,
+      counts: { sessionBlockers: 1, totalActive: 1 },
+      blockers: [
+        {
+          kind: "session-blocker",
+          count: 1,
+          message: "1 non-quiescent session lifecycle blocker(s)",
+        },
+      ],
     });
   });
 

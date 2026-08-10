@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
+import { SessionLifecycleBlockedError } from "../sessions/session-lifecycle-blocker.js";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
@@ -1464,6 +1465,15 @@ describe("failover-error", () => {
         expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
         expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
       }
+    });
+
+    it("returns true for non-quiescent session lifecycle blockers", () => {
+      const blocked = new SessionLifecycleBlockedError("code_mode_non_quiescent", [
+        "agent:main:main",
+      ]);
+
+      expect(isNonProviderRuntimeCoordinationError(blocked)).toBe(true);
+      expect(resolveModelFallbackError(blocked)).toEqual({ kind: "coordination", error: blocked });
     });
 
     it("returns true when the coordination error is nested via cause", () => {

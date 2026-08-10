@@ -21,6 +21,7 @@ import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js"
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
+import { createAgentCommandCodeModeLifecycle } from "./agent-command-code-mode-lifecycle.js";
 import { executionIdentity } from "./agent-command-execution-identity.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
@@ -185,6 +186,7 @@ async function agentCommandInternal(
     );
   }
 
+  const codeModeLifecycle = createAgentCommandCodeModeLifecycle(commandRunAccounting);
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -508,6 +510,7 @@ async function agentCommandInternal(
         embeddedSessionState,
         trackInternalModelRunTarget,
         commandRunAccounting,
+        codeModeActivityOwner: codeModeLifecycle.owner,
       });
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();
@@ -542,6 +545,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    codeModeLifecycle.settle(sessionWorkAdmission);
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned

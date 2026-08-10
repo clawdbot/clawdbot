@@ -18,7 +18,6 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
-import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
@@ -39,6 +38,7 @@ import {
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
+import { sessionWorkAdmissionErrorShape } from "./session-lifecycle-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
@@ -325,7 +325,7 @@ export async function admitChatSend(params: {
       respondChatActiveLeafChanged(respond);
       return { ok: false as const };
     }
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+    respond(false, undefined, sessionWorkAdmissionErrorShape(err));
     return { ok: false as const };
   }
   clearPendingChatSendReservation();

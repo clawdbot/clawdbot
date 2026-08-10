@@ -10,6 +10,7 @@ import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
+import { getActiveSessionLifecycleBlockerCount } from "../sessions/session-lifecycle-blocker.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
   type ActiveTaskRestartBlocker,
@@ -26,6 +27,7 @@ type GatewayActiveWorkCounts = {
   rootRequests: number;
   sessionAdmissions: number;
   sessionMutations: number;
+  sessionBlockers: number;
   chatRuns: number;
   queuedTurns: number;
   terminalPersistence: number;
@@ -45,6 +47,7 @@ export type GatewayActiveWorkBlocker = {
     | "root-request"
     | "session-admission"
     | "session-mutation"
+    | "session-blocker"
     | "chat-run"
     | "queued-turn"
     | "terminal-persistence"
@@ -71,6 +74,7 @@ export type GatewayActiveWorkInspectors = {
   getRootRequests: () => number;
   getSessionAdmissions: () => number;
   getSessionMutations: () => number;
+  getSessionBlockers?: () => number;
   getChatRuns: () => number;
   getQueuedTurns: () => number;
   getTerminalPersistence: () => number;
@@ -88,6 +92,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
   getSessionMutations: getActiveSessionLifecycleMutationCount,
+  getSessionBlockers: getActiveSessionLifecycleBlockerCount,
   getChatRuns: () => 0,
   getQueuedTurns: () => 0,
   getTerminalPersistence: () => 0,
@@ -112,6 +117,7 @@ export function createGatewayActiveWorkSnapshot(
     rootRequests: normalizeCount(resolved.getRootRequests()),
     sessionAdmissions: normalizeCount(resolved.getSessionAdmissions()),
     sessionMutations: normalizeCount(resolved.getSessionMutations()),
+    sessionBlockers: normalizeCount(resolved.getSessionBlockers?.() ?? 0),
     chatRuns: normalizeCount(resolved.getChatRuns()),
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
     terminalPersistence: normalizeCount(resolved.getTerminalPersistence()),
@@ -152,6 +158,11 @@ export function createGatewayActiveWorkSnapshot(
     counts.sessionMutations,
     "session-mutation",
     `${counts.sessionMutations} active session lifecycle mutation(s)`,
+  );
+  add(
+    counts.sessionBlockers,
+    "session-blocker",
+    `${counts.sessionBlockers} non-quiescent session lifecycle blocker(s)`,
   );
   add(counts.chatRuns, "chat-run", `${counts.chatRuns} active chat run(s)`);
   add(counts.queuedTurns, "queued-turn", `${counts.queuedTurns} queued chat turn(s)`);

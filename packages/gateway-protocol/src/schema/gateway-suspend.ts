@@ -31,6 +31,7 @@ export const GatewaySuspendBlockerSchema = closedObject({
     Type.Literal("root-request"),
     Type.Literal("session-admission"),
     Type.Literal("session-mutation"),
+    Type.Literal("session-blocker"),
     Type.Literal("chat-run"),
     Type.Literal("queued-turn"),
     Type.Literal("terminal-persistence"),

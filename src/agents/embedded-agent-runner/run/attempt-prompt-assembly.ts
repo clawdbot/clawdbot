@@ -133,6 +133,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           prompt: attempt.prompt,
           messages: promptBuildMessages,
           hookCtx,
+          attempt,
           hookRunner: input.hookRunner,
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,
         });

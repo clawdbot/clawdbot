@@ -7,6 +7,12 @@ import {
 } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import {
+  assertSessionLifecycleUnblocked,
+  registerSessionLifecycleBlocker,
+  SessionLifecycleBlockedError,
+  type SessionLifecycleBlockerKind,
+} from "./session-lifecycle-blocker.js";
 import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lifecycle-identity.js";
 import {
   clearSessionWorkAdmissionHandoffs,
@@ -26,6 +32,7 @@ export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
 export const SESSION_ARCHIVE_ACTIVE_RUN_ERROR = "Cannot archive a session with an active run.";
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
+  interruptionError?: Error;
   released: Promise<void>;
 };
 
@@ -222,6 +229,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(
       await CURRENT_SESSION_WORK_ADMISSIONS.run(callerAdmissions, async () => {
         await runWithSessionIdentityLocks(identities, 0, async () => {
           signal?.throwIfAborted();
+          assertSessionLifecycleUnblocked(identities);
           mutationActivated = true;
           removeAbortListener();
           ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.add(mutationRun);
@@ -241,7 +249,10 @@ export async function runExclusiveSessionLifecycleMutation<T>(
         // mutation whose caller must observe cleanup and completion.
         try {
           await params.prepare?.();
-          return await runWithSessionIdentityLocks(identities, 0, params.run);
+          return await runWithSessionIdentityLocks(identities, 0, async () => {
+            assertSessionLifecycleUnblocked(identities);
+            return await params.run();
+          });
         } finally {
           await runWithSessionIdentityLocks(identities, 0, async () => {
             for (const identity of identities) {
@@ -449,12 +460,14 @@ export async function beginSessionWorkAdmission(params: {
     identities: params.identities,
     signal: params.signal,
     run: async () => {
+      assertSessionLifecycleUnblocked(identities);
       await params.assertAllowed();
       // assertAllowed can yield while a host suspension acquires its fence.
       // Recheck immediately before registration to close that admission race.
       if (isGatewaySubordinateWorkAdmissionClosed()) {
         throw new GatewayDrainingError();
       }
+      assertSessionLifecycleUnblocked(identities);
       let resolveReleased = () => {};
       const admission: SessionWorkAdmission = {
         handoffIds: new Set(),
@@ -486,6 +499,15 @@ export async function beginSessionWorkAdmission(params: {
         clearSessionWorkAdmissionHandoffs(admission);
         resolveReleased();
       };
+      const assertRunnable = () => {
+        if (admission.interruptionError) {
+          throw admission.interruptionError;
+        }
+        assertSessionLifecycleUnblocked(identities);
+        if (admission.interrupted) {
+          throw new Error("session work admission was interrupted before execution");
+        }
+      };
       const lease: SessionWorkAdmissionLease = {
         createHandoff: () => {
           if (released) {
@@ -493,12 +515,45 @@ export async function beginSessionWorkAdmission(params: {
           }
           return createSessionWorkAdmissionHandoff(admission, lease);
         },
+        createLifecycleBlocker: (kind: SessionLifecycleBlockerKind) => {
+          if (released) {
+            throw new Error("cannot block lifecycle from a released session work admission");
+          }
+          const blocker = registerSessionLifecycleBlocker({
+            normalizedIdentities: admission.identities,
+            kind,
+          });
+          const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+          const competing = new Set<SessionWorkAdmission>();
+          for (const identity of admission.identities) {
+            for (const active of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
+              if (active !== admission && !currentAdmissions?.has(active)) {
+                competing.add(active);
+              }
+            }
+          }
+          for (const active of competing) {
+            active.interrupted = true;
+            active.interruptionError = new SessionLifecycleBlockedError(kind, admission.identities);
+            try {
+              active.interrupt?.();
+            } catch {
+              // One broken interruption callback must not leak the blocker or
+              // prevent the remaining competing admissions from being fenced.
+            }
+          }
+          return blocker;
+        },
         release,
         released: admission.released,
         run: async <T>(run: () => Promise<T>) => {
+          assertRunnable();
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
           current.add(admission);
-          return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, run);
+          return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, async () => {
+            assertRunnable();
+            return await run();
+          });
         },
       };
       const signal = params.signal;
@@ -531,13 +586,16 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             params.signal?.throwIfAborted();
+            assertSessionLifecycleUnblocked(identities);
             await (params.revalidateAllowed ?? params.assertAllowed)();
+            assertSessionLifecycleUnblocked(identities);
           },
           // Writer-owned rollover callbacks can open replacement admissions.
           // Reenter that lane or the writer waits on work queued behind itself.
           { reentrant: true },
         );
         await (queuedAbort ? Promise.race([writerBarrier, queuedAbort]) : writerBarrier);
+        assertRunnable();
         return lease;
       } catch (error) {
         release();

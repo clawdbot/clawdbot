@@ -34,7 +34,10 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -3960,6 +3963,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(response?.[2]?.message).toMatch(/archived/i);
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(readTranscriptJsonLines(mockState.transcriptPath)).toHaveLength(1);
+  });
+
+  it("chat.inject reports non-quiescent Code Mode blockers without appending", async () => {
+    await createTranscriptFixture("openclaw-chat-inject-code-mode-blocked-");
+    const admission = await beginSessionWorkAdmission({
+      scope: mockState.storePath,
+      identities: ["main", mockState.sessionId],
+      assertAllowed: () => {},
+    });
+    const blocker = admission.createLifecycleBlocker("code_mode_non_quiescent");
+    admission.release();
+    const { context, respond, inject } = createChatRequestFixture();
+
+    try {
+      await inject({ sessionKey: "main", message: "must wait for Code Mode settlement" });
+
+      const response = lastRespondCall(respond);
+      expect(response?.[0]).toBe(false);
+      expect(response?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        message: "Session still has non-quiescent Code Mode tool work; retry after it settles.",
+        retryable: true,
+      });
+      expect(context.broadcast).not.toHaveBeenCalled();
+      expect(readTranscriptJsonLines(mockState.transcriptPath)).toHaveLength(1);
+    } finally {
+      blocker.release();
+    }
   });
 
   it("chat.inject rechecks archive state after lifecycle admission waits", async () => {

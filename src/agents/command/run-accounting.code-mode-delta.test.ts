@@ -77,7 +77,7 @@ describe("command run accounting Code Mode deltas", () => {
     expect(codeMode?.lifecycle).toEqual({
       maxUnresolvedAtExtraction: 1,
       attemptsWithUnresolved: 1,
-      finalQuiescence: { state: "partial", reasons: ["attempt_extraction_only"] },
+      finalQuiescence: { state: "unavailable", reasons: ["not_observed"] },
     });
   });
 });

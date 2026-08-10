@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
@@ -27,6 +26,7 @@ import { buildAgentSessionPatch } from "./agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 import { prepareAgentSession } from "./agent-session-prepare.js";
 import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
+import { sessionWorkAdmissionErrorShape } from "./session-lifecycle-error.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
@@ -341,7 +341,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       try {
         await acquireGatewayWorkAdmission(storePath ?? `agent:${sessionAgentId}`);
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        respond(false, undefined, sessionWorkAdmissionErrorShape(err));
         return;
       }
       if (respondToGatewayAdmissionOutcome()) {

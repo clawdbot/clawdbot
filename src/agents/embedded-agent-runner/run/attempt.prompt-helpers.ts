@@ -99,6 +99,7 @@ export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
+  attempt?: EmbeddedRunAttemptParams;
   hookRunner?: PromptBuildHookRunner | null;
   bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult> {
@@ -175,7 +176,7 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
-  return {
+  const result = {
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
@@ -195,6 +196,7 @@ export async function resolvePromptBuildHookResult(params: {
     prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
     appendSystemContext: wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
   };
+  return params.attempt ? copyEmbeddedRunAccountingObservers(params.attempt, result) : result;
 }
 
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {

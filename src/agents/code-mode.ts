@@ -7,6 +7,11 @@ import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
+  beginCodeModeControlActivity,
+  ensureCodeModeActivityOwner,
+  type CodeModeActivityContext,
+} from "./code-mode-activity.js";
+import {
   codeModeReplayIdForToolCall,
   runBridgeRequest,
   setCodeModeSwarmDepsForTest,
@@ -72,7 +77,7 @@ export {
 };
 export type { CodeModeFailureCode, CodeModeHeadlessResult } from "./code-mode-runtime.js";
 
-type CodeModeToolContext = ToolSearchToolContext;
+type CodeModeToolContext = ToolSearchToolContext & CodeModeActivityContext;
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
@@ -187,10 +192,11 @@ function createCodeModeExecDescription(
 }
 
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
+  const ownedCtx = ensureCodeModeActivityOwner(ctx);
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
-    description: createCodeModeExecDescription(ctx),
+    description: createCodeModeExecDescription(ownedCtx),
     parameters: Type.Object({
       // `command` stays runtime-only for hook compatibility. Requiring the sole
       // model-facing field prevents schema-valid empty calls from constrained models.
@@ -209,8 +215,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
-      const stats = ensureCodeModeStats(ctx.catalogRef);
+      const stats = ensureCodeModeStats(ownedCtx.catalogRef);
       recordCodeModeControlCall(stats, "exec");
+      const releaseActivity = beginCodeModeControlActivity(ownedCtx.codeModeActivityOwner);
       let outcome: "completed" | "waiting" | "failed" | "aborted" = "failed";
       try {
         const input = readCode(args);
@@ -219,13 +226,13 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         const result = normalizeCodeModeTimeoutResult(
           await runExec({
             toolCallId,
-            ctx,
+            ctx: ownedCtx,
             code: input.code,
             assistantTurnId:
               executionContext?.assistantMessage.responseId?.trim() ||
               executionContext?.assistantMessage.turnId?.trim(),
             language: input.language,
-            enforceReplaySafeTools: ctx.forceRestartSafeTools === true,
+            enforceReplaySafeTools: ownedCtx.forceRestartSafeTools === true,
             signal,
             onUpdate,
             onRuntime: (value) => {
@@ -237,6 +244,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           result.status === "failed" && result.code === "aborted" ? "aborted" : result.status;
         return formatToolSearchControlResult(result, runtime);
       } finally {
+        releaseActivity();
         recordCodeModeOutcome(stats, outcome);
       }
     },
@@ -255,15 +263,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
-      const stats = ensureCodeModeStats(ctx.catalogRef);
+      const stats = ensureCodeModeStats(ownedCtx.catalogRef);
       recordCodeModeControlCall(stats, "wait");
+      const releaseActivity = beginCodeModeControlActivity(ownedCtx.codeModeActivityOwner);
       let outcome: "completed" | "waiting" | "failed" | "aborted" = "failed";
       try {
         let runtime: ToolSearchRuntime | undefined;
         const result = normalizeCodeModeTimeoutResult(
           await runWait({
             toolCallId,
-            ctx,
+            ctx: ownedCtx,
             runId: readRunId(args),
             signal,
             onUpdate,
@@ -276,6 +285,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           result.status === "failed" && result.code === "aborted" ? "aborted" : result.status;
         return formatToolSearchControlResult(result, runtime);
       } finally {
+        releaseActivity();
         recordCodeModeOutcome(stats, outcome);
       }
     },

@@ -35,7 +35,7 @@ type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
-export async function finalizeEmbeddedAgentCommand(params: {
+type FinalizeEmbeddedAgentCommandParams = {
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   deps: CliDeps;
@@ -59,7 +59,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
   commandRunAccounting?: RunAccountingAccumulator;
-}) {
+};
+
+async function finalizeEmbeddedAgentCommandInternal(params: FinalizeEmbeddedAgentCommandParams) {
   const {
     cfg,
     body,
@@ -416,4 +418,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     lifecycle.emitPostTurnError(error, terminal);
     throw error;
   }
+}
+
+export async function finalizeEmbeddedAgentCommand(params: FinalizeEmbeddedAgentCommandParams) {
+  return await finalizeEmbeddedAgentCommandInternal(params);
 }

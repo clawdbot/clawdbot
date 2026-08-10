@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Abort-signal wrapping for agent tools.
@@ -7,8 +8,44 @@ import { createAbortError } from "../infra/abort-signal.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
+type RawToolSettlementObserver = (settlement: Promise<unknown>) => void;
+
+const activeRawToolSettlementObserver = new AsyncLocalStorage<RawToolSettlementObserver>();
+
 function throwAbortError(): never {
   throw createAbortError("Aborted");
+}
+
+/**
+ * Preserve caller-facing abort behavior while joining the underlying tool work
+ * before the owning lifecycle reports terminal settlement.
+ */
+export async function runWithAbortWrappedToolSettlements<T>(run: () => Promise<T>): Promise<T> {
+  const pending = new Set<Promise<void>>();
+  const observe: RawToolSettlementObserver = (rawSettlement) => {
+    const settlement = rawSettlement.then(
+      () => undefined,
+      () => undefined,
+    );
+    pending.add(settlement);
+    void settlement.then(() => {
+      pending.delete(settlement);
+    });
+  };
+  return await activeRawToolSettlementObserver.run(observe, async () => {
+    const outcome = await run().then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    while (pending.size > 0) {
+      await Promise.all(pending);
+    }
+    if (!outcome.ok) {
+      // Tool settlements pass through untouched, including non-Error rejections.
+      throw outcome.error;
+    }
+    return outcome.value;
+  });
 }
 
 /**
@@ -16,7 +53,8 @@ function throwAbortError(): never {
  * settles the wrapped call immediately instead of awaiting the tool forever.
  * JavaScript cannot cancel a running promise: a tool that never observes the
  * signal keeps executing in the background and may settle later, but its late
- * settlement is detached here so the result never lands in an aborted run.
+ * result stays detached from the aborted caller. Lifecycle owners may still
+ * join the raw settlement through runWithAbortWrappedToolSettlements.
  * Tool settlements pass through untouched to preserve tool error semantics,
  * including non-Error rejections.
  */
@@ -81,8 +119,10 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
+      const rawSettlement = execute(toolCallId, params, combinedSignal, onUpdate);
+      activeRawToolSettlementObserver.getStore()?.(rawSettlement);
       return await raceWithAbortSignal(
-        execute(toolCallId, params, combinedSignal, onUpdate),
+        rawSettlement,
         combinedSignal,
         tool.name === "sessions_yield" ? abortSignal : undefined,
       );

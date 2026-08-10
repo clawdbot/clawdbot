@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CodeModeRunFinalQuiescence } from "../code-mode-activity.js";
 import type { CodeModeStats } from "../code-mode-stats.js";
 import type { EmbeddedRunAccountingObservation } from "../embedded-agent-runner/run/accounting-observers.js";
 import type { EmbeddedRunOpaqueWorkReason } from "../embedded-agent-runner/run/accounting-observers.js";
@@ -75,6 +76,7 @@ export type RunAccountingAccumulator = {
   beginModelCall: () => AgentCommandModelCallAccounting;
   markNoModelWork: () => void;
   markOpaqueWork: (reason: EmbeddedRunOpaqueWorkReason) => void;
+  observeCodeModeFinalQuiescence: (state: CodeModeRunFinalQuiescence) => void;
   project: () => AgentCommandRunAccountingSnapshot;
 };
 
@@ -140,7 +142,12 @@ export type AgentCommandRunAccountingSnapshot = {
     lifecycle: {
       maxUnresolvedAtExtraction?: number;
       attemptsWithUnresolved?: number;
-      finalQuiescence: AgentCommandRunAccountingCoverage;
+      finalQuiescence:
+        | { state: Exclude<CodeModeRunFinalQuiescence, "unavailable"> }
+        | {
+            state: "unavailable";
+            reasons: AgentCommandRunAccountingCoverageReason[];
+          };
     };
   };
 };

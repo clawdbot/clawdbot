@@ -4,6 +4,7 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { getActiveSessionLifecycleBlockerCount } from "../sessions/session-lifecycle-blocker.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -27,6 +28,7 @@ export function createGatewayActiveWorkTracker(options: {
     const backgroundExecSessions = getActiveBackgroundExecSessionCount();
     const rootRequests = getActiveGatewayRootWorkCount({ excludeCurrent: true });
     const activeTasks = getInspectableActiveTaskRestartBlockers().length;
+    const sessionBlockers = getActiveSessionLifecycleBlockerCount();
     return {
       queueSize,
       pendingReplies,
@@ -34,13 +36,15 @@ export function createGatewayActiveWorkTracker(options: {
       backgroundExecSessions,
       rootRequests,
       activeTasks,
+      sessionBlockers,
       totalActive:
         queueSize +
         pendingReplies +
         embeddedRuns +
         backgroundExecSessions +
         rootRequests +
-        activeTasks,
+        activeTasks +
+        sessionBlockers,
     };
   };
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -62,6 +66,9 @@ export function createGatewayActiveWorkTracker(options: {
     }
     if (counts.activeTasks > 0) {
       details.push(`${counts.activeTasks} background task run(s)`);
+    }
+    if (counts.sessionBlockers > 0) {
+      details.push(`${counts.sessionBlockers} non-quiescent session blocker(s)`);
     }
     return details;
   };

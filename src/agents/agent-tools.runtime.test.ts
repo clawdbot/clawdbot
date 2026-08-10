@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import {
+  runWithAbortWrappedToolSettlements,
+  wrapToolWithAbortSignal,
+} from "./agent-tools.abort.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   getActiveAgentRingZeroTools,
@@ -290,6 +293,38 @@ describe("wrapToolWithAbortSignal", () => {
     );
     await flushMicrotasks();
     expect(lateOutcome).toBe("rejected");
+  });
+
+  it("joins a detached raw execution before its owning lifecycle settles", async () => {
+    const runAbort = new AbortController();
+    let resolveTool!: (value: unknown) => void;
+    const wrapped = wrapToolWithAbortSignal(
+      asAgentTool({
+        name: "late",
+        execute: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveTool = resolve;
+            }),
+        ),
+      }),
+      runAbort.signal,
+    );
+
+    let lifecycleSettled = false;
+    const lifecycle = runWithAbortWrappedToolSettlements(() =>
+      wrapped.execute("call-1", {}),
+    ).finally(() => {
+      lifecycleSettled = true;
+    });
+    await flushMicrotasks();
+    runAbort.abort();
+    await flushMicrotasks();
+    expect(lifecycleSettled).toBe(false);
+
+    resolveTool(textResult("late"));
+    await expect(lifecycle).rejects.toMatchObject({ name: "AbortError", message: "Aborted" });
+    expect(lifecycleSettled).toBe(true);
   });
 
   it("detaches a late tool rejection after the abort without an unhandled rejection", async () => {

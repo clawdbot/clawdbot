@@ -33,6 +33,7 @@ type GatewayActiveCounts = {
   backgroundExecSessions: number;
   rootRequests: number;
   activeTasks: number;
+  sessionBlockers: number;
   totalActive: number;
 };
 

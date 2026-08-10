@@ -18,7 +18,6 @@ import {
   loadSessionEntryReadOnly,
   resolveSessionModelRef,
 } from "../session-utils.js";
-import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
@@ -27,6 +26,7 @@ import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-o
 import { handleChatSend } from "./chat-send-handler.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import { sessionWorkAdmissionErrorShape } from "./session-lifecycle-error.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -184,7 +184,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         admission.release();
       }
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+      respond(false, undefined, sessionWorkAdmissionErrorShape(err));
       return;
     }
     if (!appended.ok || !appended.messageId || !appended.message) {

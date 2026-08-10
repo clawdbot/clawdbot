@@ -101,6 +101,10 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
   return embeddedLog;
 }
 
+function usageHasNonzeroValue(usage?: NormalizedUsage): boolean {
+  return hasNonzeroUsage(usage);
+}
+
 function mergeAssistantUsageSnapshots(
   pendingUsage: NormalizedUsage | undefined,
   resolvedUsage: NormalizedUsage,
@@ -734,7 +738,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     for (const candidate of structuralCandidates) {
       const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
-      if (hasNonzeroUsage(usage)) {
+      if (usageHasNonzeroValue(usage)) {
         return usage;
       }
     }
