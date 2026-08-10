@@ -353,8 +353,7 @@
   {
     "name": "resolveSessionTranscriptActiveLeafEntryId",
     "wrapped": "src/config/sessions/session-accessor.sqlite-message-cut.ts",
-    "wrapper": "src/config/sessions/session-accessor.message-cut.ts",
-    "via": "src/config/sessions/session-accessor.sqlite.ts"
+    "wrapper": "src/config/sessions/session-accessor.message-cut.ts"
   },
   {
     "name": "resolveStorePath",
