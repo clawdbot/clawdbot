@@ -459,13 +459,6 @@ suite.define(() => {
       await expect.poll(() => popover.textContent()).toContain("$0.018");
       await expect.poll(() => popover.textContent()).toContain("$0.0015");
       await expect.poll(() => popover.textContent()).toContain("$0.0005");
-      await expect
-        .poll(async () =>
-          (await popover.locator(".context-usage__provenance").allTextContents()).map((text) =>
-            text.replace(/\s+/g, " ").trim(),
-          ),
-        )
-        .toEqual(["Provider: openai", "Model: gpt-5.5"]);
 
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);

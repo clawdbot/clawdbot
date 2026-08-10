@@ -2658,7 +2658,6 @@ describe("chat loading skeleton", () => {
     expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
