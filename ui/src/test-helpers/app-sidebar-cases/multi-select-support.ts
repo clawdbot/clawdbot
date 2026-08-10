@@ -10,12 +10,7 @@ import {
 } from "../app-sidebar.ts";
 
 /** Shared by the multi-select and new-group-dialog sidebar cases. */
-const MULTI_SELECT_KEYS = [
-  "agent:main:main",
-  "agent:main:a",
-  "agent:main:b",
-  "agent:main:c",
-];
+const MULTI_SELECT_KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
 
 export function rowLink(sidebar: SidebarLifecycleState, key: string): HTMLAnchorElement {
   const link = sidebar.querySelector<HTMLAnchorElement>(
