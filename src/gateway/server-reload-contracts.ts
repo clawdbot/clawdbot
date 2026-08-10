@@ -150,7 +150,10 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
-    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+    beforeReplace: (
+      channels: ReadonlySet<ChannelKind>,
+      accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
+    ) => Promise<void>;
     commitRuntime: () => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;

@@ -24,7 +24,6 @@ import { isLoopbackHost } from "./net.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import {
   listChannelPluginConfigTargetIds,
-  listRunningCommandCatalogChannelIds,
   pluginConfigTargetsChanged,
 } from "./plugin-channel-reload-targets.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
@@ -38,7 +37,6 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type GatewayStartupChannelPlugin = {
   id: ChannelId;
   meta: { aliases?: readonly string[] };
-  commands?: object;
 };
 
 function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
@@ -408,18 +406,16 @@ export async function startGatewayCoreRuntime(input: {
   const reloadAttachedGatewayPlugins = async (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
-    beforeReplace: (channels: ReadonlySet<ChannelId>) => Promise<void>;
+    beforeReplace: (
+      channels: ReadonlySet<ChannelId>,
+      accounts?: ReadonlyMap<ChannelId, ReadonlySet<string>>,
+    ) => Promise<void>;
     commitRuntime: () => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
   }): Promise<GatewayPluginReloadResult> => {
     const beforeChannelTargets = listAttachedChannelConfigTargets();
     const beforeChannelIds = new Set(beforeChannelTargets.keys());
-    const beforeRuntimeSnapshot = channelManager.getRuntimeSnapshot();
-    const runningCommandCatalogChannels = listRunningCommandCatalogChannelIds(
-      listGatewayStartupChannelPlugins(),
-      beforeRuntimeSnapshot,
-    );
     const [
       { loadPluginLookUpTable },
       { listAmbientOnlyConfiguredChannelIds },
@@ -482,10 +478,10 @@ export async function startGatewayCoreRuntime(input: {
         channelsToStopBeforeReplace.add(channelId);
       }
     }
-    for (const channelId of runningCommandCatalogChannels) {
-      channelsToStopBeforeReplace.add(channelId);
-    }
-    await params.beforeReplace(channelsToStopBeforeReplace);
+    await params.beforeReplace(
+      channelsToStopBeforeReplace,
+      channelManager.getPluginCommandCatalogAccounts(),
+    );
     // If an in-process restart signalled abort during beforeReplace,
     // stop before any plugin metadata/runtime side effects continue.
     if (params.isAborted?.()) {

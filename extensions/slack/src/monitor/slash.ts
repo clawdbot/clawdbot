@@ -937,8 +937,12 @@ export async function registerSlackMonitorSlashCommands(params: {
 
   let nativeCommands: SlackNativeCommandSpec[] = [];
   let slashCommandsRuntime: typeof import("./slash-commands.runtime.js") | null = null;
-  let pluginCommandRuntime: typeof import("openclaw/plugin-sdk/plugin-command-runtime") | null =
-    null;
+  let pluginCommandRuntimeModule:
+    | typeof import("openclaw/plugin-sdk/plugin-command-runtime")
+    | null = null;
+  let pluginCommandRuntime:
+    | import("openclaw/plugin-sdk/plugin-command-runtime").PluginCommandRuntime
+    | null = null;
   if (
     registration.mode === "disabled" &&
     resolveNativeCommandsEnabled({
@@ -959,10 +963,11 @@ export async function registerSlackMonitorSlashCommands(params: {
       skillCommands,
       provider: "slack",
     });
-    pluginCommandRuntime = await loadPluginCommandRuntime();
+    pluginCommandRuntimeModule = await loadPluginCommandRuntime();
+    pluginCommandRuntime = pluginCommandRuntimeModule.createPluginCommandRuntime();
     nativeCommands = mergeNativeCommandSpecs({
       primary: nativeCommands,
-      secondary: pluginCommandRuntime.createPluginCommandRuntime().listNativeCandidates("slack"),
+      secondary: pluginCommandRuntime.listNativeCandidates("slack"),
     });
     registration = nativeCommands.length > 0 ? { mode: "native" } : { mode: "disabled" };
   }
@@ -993,7 +998,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       },
     );
   } else if (registration.mode === "native") {
-    if (!slashCommandsRuntime || !pluginCommandRuntime) {
+    if (!slashCommandsRuntime || !pluginCommandRuntimeModule || !pluginCommandRuntime) {
       throw new Error("Missing command runtimes for native Slack commands.");
     }
     for (const command of nativeCommands) {
@@ -1036,10 +1041,13 @@ export async function registerSlackMonitorSlashCommands(params: {
           commandArgs,
           commandDefinition: commandDefinition ?? undefined,
           pluginCommandReplyOptions: {
-            [pluginCommandRuntime.PLUGIN_COMMAND_DISPATCH]: pluginCommandDispatch,
+            [pluginCommandRuntimeModule.PLUGIN_COMMAND_DISPATCH]: pluginCommandDispatch,
           },
         });
       });
+    }
+    if (nativeCommands.some((command) => "prepareDispatch" in command)) {
+      pluginCommandRuntime.retainNativeCatalog("slack");
     }
   } else {
     logVerbose("slack: slash commands disabled");
@@ -1226,8 +1234,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         prompt,
         commandArgs,
         commandDefinition: commandDefinition ?? undefined,
-        pluginCommandReplyOptions: pluginCommandRuntime
-          ? { [pluginCommandRuntime.PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH }
+        pluginCommandReplyOptions: pluginCommandRuntimeModule
+          ? { [pluginCommandRuntimeModule.PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH }
           : undefined,
       });
     });

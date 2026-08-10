@@ -9,7 +9,10 @@ import {
   mergeNativeCommandSpecs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
+import type {
+  PluginCommandNativeCandidate,
+  PluginCommandRuntime,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
@@ -37,11 +40,11 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   const listNativeCommandSpecs =
     params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;
   const maxDiscordCommands = params.maxDiscordCommands ?? 100;
-  const pluginCommandSpecs = params.nativeEnabled
-    ? (await loadPluginCommandRuntime())
-        .createPluginCommandRuntime()
-        .listNativeCandidates("discord")
-    : [];
+  let pluginCommandRuntime: PluginCommandRuntime | undefined;
+  if (params.nativeEnabled) {
+    pluginCommandRuntime = (await loadPluginCommandRuntime()).createPluginCommandRuntime();
+  }
+  const pluginCommandSpecs = pluginCommandRuntime?.listNativeCandidates("discord") ?? [];
   const onCollision = (normalizedName: string) => {
     params.runtime.error?.(
       danger(
@@ -112,6 +115,9 @@ export async function resolveDiscordProviderCommandSpecs(params: {
         `${commandSpecs.length} commands exceed the ${maxDiscordCommands}-command Discord limit; some commands may fail to deploy.`,
       ),
     );
+  }
+  if (commandSpecs.some((command) => "prepareDispatch" in command)) {
+    pluginCommandRuntime?.retainNativeCatalog("discord");
   }
   return { skillCommands, commandSpecs };
 }

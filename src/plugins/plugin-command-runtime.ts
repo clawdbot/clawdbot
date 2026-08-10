@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
+import { retainPluginCommandCatalogForCurrentAccount } from "./plugin-command-account-start-scope.js";
 import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandReplyOptions,
@@ -84,6 +85,7 @@ type PluginCommandInvocationMatch = Readonly<{
 
 export type PluginCommandRuntime = Readonly<{
   listNativeCandidates: (provider: string) => readonly PluginCommandNativeCandidate[];
+  retainNativeCatalog: (provider: string) => void;
 }>;
 
 type PluginCommandRuntimeState = Readonly<{
@@ -208,6 +210,14 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
             });
           }),
       );
+    },
+    retainNativeCatalog(provider: string): void {
+      assertCurrent();
+      const channel = normalizeOptionalLowercaseString(provider) ?? "";
+      if (!state.commands.some((command) => pluginCommandSupportsChannel(command, channel))) {
+        return;
+      }
+      retainPluginCommandCatalogForCurrentAccount(channel);
     },
   });
   runtimeStates.set(runtime, state);

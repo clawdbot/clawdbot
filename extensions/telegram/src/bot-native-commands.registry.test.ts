@@ -8,6 +8,26 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const retainNativeCatalog = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/plugin-command-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/plugin-command-runtime")>();
+  return {
+    ...actual,
+    createPluginCommandRuntime: () => {
+      const runtime = actual.createPluginCommandRuntime();
+      return {
+        ...runtime,
+        retainNativeCatalog: (provider: string) => {
+          retainNativeCatalog(provider);
+          runtime.retainNativeCatalog(provider);
+        },
+      };
+    },
+  };
+});
+
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
@@ -154,6 +174,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     setActivePluginRegistry(activePluginRegistry as never);
     clearPluginCommands();
     resetNativeCommandMenuMocks();
+    retainNativeCatalog.mockClear();
   });
 
   afterEach(() => {
@@ -317,20 +338,37 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     expect(discordHandler).not.toHaveBeenCalled();
   });
 
-  it("keeps real plugin command handlers available when native menu registration is disabled", () => {
-    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+  it.each([
+    { command: "pair", channels: undefined, retained: true },
+    { command: "discord-only", channels: ["discord"], retained: false },
+  ])(
+    "registers only supported plugin handlers when native menu display is disabled: $command",
+    ({ command, channels, retained }) => {
+      const { bot, commandHandlers, setMyCommands } = createCommandBot();
 
-    registerPairPluginCommand();
+      expect(
+        registerPluginCommand("demo-plugin", {
+          name: command,
+          description: `${command} command`,
+          channels,
+          handler: async () => ({ text: "ok" }),
+        }),
+      ).toEqual({ ok: true });
 
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { accountId: "default" }),
-      bot,
-      nativeEnabled: false,
-    });
+      registerTelegramNativeCommands({
+        ...createNativeCommandTestParams({}, { accountId: "default" }),
+        bot,
+        nativeEnabled: false,
+      });
 
-    expect(setMyCommands).not.toHaveBeenCalled();
-    expect(commandHandlers.has("pair")).toBe(true);
-  });
+      expect(setMyCommands).not.toHaveBeenCalled();
+      expect(commandHandlers.has(command)).toBe(retained);
+      expect(retainNativeCatalog).toHaveBeenCalledTimes(retained ? 1 : 0);
+      if (retained) {
+        expect(retainNativeCatalog).toHaveBeenCalledWith("telegram");
+      }
+    },
+  );
 
   it("allows requireAuth:false plugin commands for unauthorized senders through the real registry", async () => {
     const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
