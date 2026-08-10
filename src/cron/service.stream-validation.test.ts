@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -172,6 +173,22 @@ describe("cron stream schedule validation", () => {
         expect.stringContaining("stream source exhausted restarts"),
         expect.any(Object),
       );
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("rejects invalid scheduler timestamps from external event sources", async () => {
+    const cron = await createCron(true);
+    try {
+      const created = await cron.add(streamJob());
+
+      await expect(
+        cron.recordExternalFailure(created.id, "invalid source state", {
+          startupCatchupAtMs: MAX_DATE_TIMESTAMP_MS + 1,
+        }),
+      ).rejects.toThrow("cron state.startupCatchupAtMs");
+      expect(cron.getJob(created.id)?.state.startupCatchupAtMs).toBeUndefined();
     } finally {
       cron.stop();
     }

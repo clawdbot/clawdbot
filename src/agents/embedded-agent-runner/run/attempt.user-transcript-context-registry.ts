@@ -1,5 +1,5 @@
 import type { AgentMessage } from "../../runtime/index.js";
-import type { UserTranscriptContext } from "./attempt.user-message-boundary.js";
+import type { UserTranscriptContext } from "./attempt-history.js";
 
 /** Retains attempt-local runtime-to-transcript pairs across queued user turns. */
 export function createUserTranscriptContextRegistry() {

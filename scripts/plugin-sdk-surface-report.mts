@@ -142,7 +142,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "text-runtime": 192,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  "agent-harness-runtime": 4,
+  // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
+  "agent-harness-runtime": 8,
   "agent-config-primitives": 2,
   "command-auth": 78,
   discord: 47,
@@ -250,7 +251,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: channel streaming config reader re-exports and session-agent scope resolver.
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
-      4848,
+      // +1: native command spec merger through the native-command-registry facade.
+      // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
+      // -7: retire unused and duplicate inbound-dispatch compatibility exports.
+      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      4847,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -303,7 +308,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: simple channel secret contract factory replacing repeated collectors.
       // +4: focused agent scope functions for doctor migration enumeration.
       // +3: channel streaming config reader functions and session-agent scope resolver.
-      2920,
+      // +1: native command spec merger through the native-command-registry facade.
+      // -1: remove the unused WhatsApp-specific ack policy helper.
+      // -10: collapse inbound-dispatch callable aliases and wrappers.
+      // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
+      2917,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -316,14 +325,17 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
       // +1: shipped channel setup state-migration declaration during its migration window.
-      1704,
+      // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
+      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      1715,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // -1: text-runtime now names its global-singleton exports explicitly.
       // -1: infra-runtime now names its error exports explicitly.
-      80,
+      // -1: infra-runtime excludes the internal system-event receipt API.
+      79,
       env,
     ),
   };

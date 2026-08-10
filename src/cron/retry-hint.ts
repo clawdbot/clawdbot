@@ -1,3 +1,5 @@
+import type { FailoverReason } from "../agents/failover/signal.js";
+
 /** Classifies cron run failures for retry policy decisions. */
 export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
 
@@ -10,7 +12,7 @@ type CronRetryHint = {
 type CronRetryHintInput = {
   error: string | undefined;
   retryOn?: CronRetryOn[];
-  classifiedReason?: string | null;
+  classifiedReason?: FailoverReason | null;
   executionStarted?: boolean;
 };
 
@@ -56,9 +58,12 @@ export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRe
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   const classified = classifiedReason ?? undefined;
-  if (classified && keys.includes(classified as CronRetryOn)) {
-    // Structured provider classifications win over brittle message regexes when allowed.
-    return { retryable: true, category: classified as CronRetryOn };
+  if (classified) {
+    // Structured provider classifications are authoritative. Falling through
+    // would let incidental transient text override a permanent reason.
+    return keys.includes(classified as CronRetryOn)
+      ? { retryable: true, category: classified as CronRetryOn }
+      : { retryable: false };
   }
   for (const key of keys) {
     if (TRANSIENT_PATTERNS[key]?.test(error)) {

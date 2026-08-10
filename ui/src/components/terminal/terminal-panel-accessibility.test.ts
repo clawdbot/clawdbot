@@ -59,6 +59,32 @@ describe("OpenClawTerminalPanel accessibility", () => {
     ).toBe(true);
   });
 
+  it("opens the base-mounted full-screen terminal in an isolated tab", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const panel = createPanel(createPickerClient());
+    panel.basePath = "/openclaw";
+    await waitForFast(() =>
+      expect(
+        panel.renderRoot.querySelector('[aria-label="Open full-screen terminal"]'),
+      ).not.toBeNull(),
+    );
+
+    panel.renderRoot
+      .querySelector<HTMLButtonElement>('[aria-label="Open full-screen terminal"]')
+      ?.click();
+
+    expect(open).toHaveBeenCalledWith(
+      "http://localhost:3000/openclaw/terminal",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    panel.fullscreen = true;
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector('[aria-label="Open full-screen terminal"]')).toBeNull();
+    open.mockRestore();
+  });
+
   afterEach(async () => {
     document.body.replaceChildren();
     localStorage.clear();

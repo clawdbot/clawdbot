@@ -54,7 +54,6 @@ const MULTI_NODE_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/multi-node-update-docker.
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH = "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
-const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
 const SYSTEM_AGENT_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/system-agent-first-run-docker.sh";
 const SYSTEM_AGENT_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/system-agent-rescue-docker.sh";
 const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH = "scripts/e2e/session-runtime-context-docker.sh";
@@ -534,6 +533,38 @@ print_log_tail "$LOG_PATH"
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
+  });
+
+  it("resolves source and compiled candidate test-state entrypoints", () => {
+    const resolveEntrypoint = (rootDir: string) =>
+      spawnSync(
+        "bash",
+        ["-c", `source "${DOCKER_E2E_IMAGE_HELPER_PATH}"; docker_e2e_test_state_entrypoint`],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, ROOT_DIR: rootDir },
+        },
+      );
+
+    const sourceResult = resolveEntrypoint(process.cwd());
+    expect(sourceResult.status, sourceResult.stderr).toBe(0);
+    expect(sourceResult.stdout.trim()).toBe(
+      join(process.cwd(), "scripts/lib/openclaw-test-state.mts"),
+    );
+
+    const compiledRoot = tempDirs.make("openclaw-compiled-test-state-");
+    const missingResult = resolveEntrypoint(compiledRoot);
+    expect(missingResult.status).toBe(1);
+    expect(missingResult.stderr).toContain("OpenClaw test-state entrypoint not found");
+
+    const compiledDir = join(compiledRoot, "scripts/lib");
+    mkdirSync(compiledDir, { recursive: true });
+    const compiledEntrypoint = join(compiledDir, "openclaw-test-state.mjs");
+    writeFileSync(compiledEntrypoint, "", "utf8");
+    const compiledResult = resolveEntrypoint(compiledRoot);
+    expect(compiledResult.status, compiledResult.stderr).toBe(0);
+    expect(compiledResult.stdout.trim()).toBe(compiledEntrypoint);
   });
 
   it("rejects malformed Docker E2E resource limits before a suite starts", () => {
@@ -2338,6 +2369,8 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
       publishedRunner.indexOf("phase assert-prepublish-requests node"),
     );
+    expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
+    expect(publishedRunner).toContain('"$clawhub_security_mode"');
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
       publishedRunner.indexOf("phase doctor run_doctor"),
     );
@@ -3763,7 +3796,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
   it("keeps captured Docker E2E run log replay bounded", () => {
     for (const path of [
       AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
-      COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
       SYSTEM_AGENT_FIRST_RUN_DOCKER_E2E_PATH,
       SYSTEM_AGENT_RESCUE_DOCKER_E2E_PATH,
       PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,

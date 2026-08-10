@@ -5,6 +5,8 @@ import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import type { CronServiceState } from "../cron/service/state.js";
+import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import {
   emitAgentAuditEvent,
   emitAgentEvent,
@@ -16,7 +18,11 @@ import {
   emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { createTaskRecord, markTaskTerminalById } from "../tasks/task-registry.js";
+import {
+  createTaskRecord,
+  markTaskLostById,
+  markTaskTerminalById,
+} from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
@@ -27,6 +33,12 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import {
+  baseOpenRequest,
+  makeFakePty,
+  taskAgentOwner,
+} from "./terminal/session-manager.test-helpers.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -398,6 +410,105 @@ describe("startGatewayEventSubscriptions", () => {
       notifyPolicy: "silent",
     });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(
+    "closes task-run terminals exactly once for a %s transition",
+    async (status) => {
+      const closeAgentSessions = vi.fn(() => 1);
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        terminalSessions: { closeAgentSessions },
+      });
+      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        requesterSessionKey: "",
+        ownerKey: "",
+        scopeKind: "system",
+        task: `${status} cron task`,
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      if (!task) {
+        throw new Error("expected task record");
+      }
+      const terminalize = () => {
+        if (status === "lost") {
+          markTaskLostById({ taskId: task.taskId, endedAt: 2_000 });
+          return;
+        }
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status,
+          endedAt: 2_000,
+        });
+      };
+
+      terminalize();
+      terminalize();
+
+      expect(closeAgentSessions).toHaveBeenCalledOnce();
+      expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
+    },
+  );
+
+  it("closes a completed cron task terminal while preserving a conversation terminal", async () => {
+    const taskPty = makeFakePty();
+    const persistentPty = makeFakePty();
+    const ptys = [taskPty, persistentPty];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => ptys.shift() ?? makeFakePty(),
+    });
+    unsubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      terminalSessions: manager,
+    });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+    const runId = "cron:job-1:run-1";
+    const runSessionKey = "agent:main:cron:job-1:run:run-1";
+    const task = createTaskRecord({
+      runtime: "cron",
+      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: runSessionKey,
+      runId,
+      task: "Cron task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    const taskOpen = await manager.open(
+      baseOpenRequest({
+        owner: taskAgentOwner(runSessionKey, task.taskId),
+      }),
+    );
+    const persistentOpen = await manager.open(
+      baseOpenRequest({ owner: { kind: "agent", agentSessionKey: "agent:main:main" } }),
+    );
+    if (!taskOpen.ok || !persistentOpen.ok) {
+      throw new Error("expected terminal sessions");
+    }
+
+    tryFinishCronTaskRunWithoutHistory({ deps: { log: mockLog } } as unknown as CronServiceState, {
+      taskRunId: runId,
+      status: "ok",
+      endedAt: 2_000,
+      childSessionKey: runSessionKey,
+    });
+
+    expect(taskPty.killed).toBe(true);
+    expect(persistentPty.killed).toBe(false);
+    expect(manager.size).toBe(1);
+    expect(manager.listAgent("agent:main:main")).toHaveLength(1);
   });
 
   it("closes task-run terminals only after the authoritative task becomes terminal", async () => {

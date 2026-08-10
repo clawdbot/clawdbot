@@ -6,7 +6,10 @@ import process from "node:process";
 import type { PluginManifest as RuntimePluginManifest } from "../src/plugins/manifest-types.js";
 import type { PackageManifest as RuntimePackageManifest } from "../src/plugins/package-manifest.js";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
-import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mts";
+import {
+  assertPluginInventoryCoverage,
+  resolvePluginSurface,
+} from "./lib/plugin-inventory-doc.mts";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
@@ -60,7 +63,7 @@ const RELATED_DOC_PRODUCT_IDS = new Set([
 ]);
 
 type PluginManifest = Partial<RuntimePluginManifest>;
-type PluginPackageJson = RuntimePackageManifest & {
+type PluginPackageJson = Partial<RuntimePackageManifest> & {
   openclaw?: RuntimePackageManifest["openclaw"] & {
     release?: Partial<Record<"publishToClawHub" | "publishToNpm", boolean>>;
   };
@@ -83,7 +86,7 @@ function createPluginRecord(entry: PluginSourceEntry, excludedDirs: Set<string>)
     id,
     installRoute: resolveInstallRoute(packageJson, status),
     name: humanizeId(id),
-    packageName: packageJson.name ?? "-",
+    packageName: packageJson.name ?? (status === "core" ? "openclaw" : "-"),
     status,
     surface: resolvePluginSurface(manifest),
   };
@@ -517,8 +520,9 @@ title: "Plugin reference"
 
 # Plugin reference
 
-This page is generated from \`extensions/*/package.json\` and
-\`openclaw.plugin.json\`. Regenerate it with:
+This page is generated from top-level \`extensions/*/openclaw.plugin.json\`
+manifests. Package metadata enriches entries when \`package.json\` is present.
+Regenerate it with:
 
 \`\`\`bash
 pnpm plugins:inventory:gen
@@ -536,10 +540,12 @@ function collectPluginSourceEntries(): PluginSourceEntry[] {
     .toSorted((left, right) => left.localeCompare(right))) {
     const packagePath = path.join(EXTENSIONS_DIR, dirName, "package.json");
     const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-    if (!fs.existsSync(packagePath) || !fs.existsSync(manifestPath)) {
+    if (!fs.existsSync(manifestPath)) {
       continue;
     }
-    const packageJson = readJsonPath(packagePath) as PluginPackageJson;
+    const packageJson = fs.existsSync(packagePath)
+      ? (readJsonPath(packagePath) as PluginPackageJson)
+      : {};
     const manifest = readJsonPath(manifestPath) as PluginManifest;
     const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
     entries.push({ dirName, id, manifest, packageJson });
@@ -547,37 +553,28 @@ function collectPluginSourceEntries(): PluginSourceEntry[] {
   return entries;
 }
 
-function validatePluginCoverage(records: PluginRecord[], sourceEntries: PluginSourceEntry[]) {
-  const expectedIds = sourceEntries
-    .map((entry) => entry.id)
-    .toSorted((left, right) => left.localeCompare(right));
-  const actualIds = records
-    .map((record) => record.id)
-    .toSorted((left, right) => left.localeCompare(right));
-  const missing = expectedIds.filter((id) => !actualIds.includes(id));
-  const extra = actualIds.filter((id) => !expectedIds.includes(id));
-  const duplicateIds = actualIds.filter((id, index) => actualIds.indexOf(id) !== index);
-  if (missing.length > 0 || extra.length > 0 || duplicateIds.length > 0) {
-    throw new Error(
-      [
-        "plugin inventory coverage mismatch",
-        missing.length > 0 ? `missing: ${missing.join(", ")}` : null,
-        extra.length > 0 ? `extra: ${extra.join(", ")}` : null,
-        duplicateIds.length > 0 ? `duplicates: ${duplicateIds.join(", ")}` : null,
-      ]
-        .filter(Boolean)
-        .join("; "),
-    );
-  }
+function enumerateTopLevelPluginManifests() {
+  return fs
+    .readdirSync(EXTENSIONS_DIR)
+    .toSorted((left, right) => left.localeCompare(right))
+    .flatMap((dirName) => {
+      const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
+      if (!fs.existsSync(manifestPath)) {
+        return [];
+      }
+      const manifest = readJsonPath(manifestPath) as PluginManifest;
+      const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
+      return [{ dirName, id }];
+    });
 }
 
 function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
   const sourceEntries = collectPluginSourceEntries();
+  assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
   const records = sourceEntries.map((entry) => createPluginRecord(entry, excludedDirs));
 
-  validatePluginCoverage(records, sourceEntries);
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -627,8 +624,9 @@ title: "Plugin inventory"
 
 # Plugin inventory
 
-This page is generated from \`extensions/*/package.json\`, \`openclaw.plugin.json\`,
-and the root npm package \`files\` exclusions. Regenerate it with:
+This page is generated from top-level \`extensions/*/openclaw.plugin.json\`
+manifests and the root npm package \`files\` exclusions. Optional \`package.json\`
+metadata enriches package and distribution details. Regenerate it with:
 
 \`\`\`bash
 pnpm plugins:inventory:gen

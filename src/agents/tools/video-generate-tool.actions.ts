@@ -12,7 +12,7 @@ import {
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
   findDuplicateGuardVideoGenerationTaskForSession,
-} from "../video-generation-task-status.js";
+} from "../media-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskActions,

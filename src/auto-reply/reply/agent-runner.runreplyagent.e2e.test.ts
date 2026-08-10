@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -15,7 +14,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -23,7 +21,6 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -1002,21 +999,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     await run();
 
     expect(runState.admission).toEqual({ status: "owned" });
-  });
-
-  it("keeps heartbeat mechanics while isolating commitment bootstrap context", async () => {
-    const { run } = createMinimalRun({
-      opts: {
-        isHeartbeat: true,
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-
-    await run();
-
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).trigger).toBe("heartbeat");
-    expect((call as AgentRunParams).bootstrapContextRunKind).toBe("commitment-only");
   });
 
   it("runs visible turns with the session id returned by admission", async () => {
@@ -2468,73 +2450,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
       expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
       expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
-    } finally {
-      replyOperation.complete();
-    }
-  });
-
-  it("preserves an adopted restart claim when the replacement takes the SQLite lease", async () => {
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      abortedLastRun: false,
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "msg",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "running",
-    });
-    const replyOperation = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    replyOperation.setPhase("running");
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const current = await readStoredMainSession(storePath);
-      expect(current.restartRecoveryDeliveryRunId).toBe("msg");
-      await replaceSessionEntry(
-        { storePath, sessionKey: "main" },
-        {
-          ...current,
-          abortedLastRun: true,
-          status: "killed",
-          updatedAt: Date.now(),
-        },
-      );
-      throw new SessionWriteLockStaleError({
-        lockPath: "sqlite:session-write:agent:main:main",
-        owner: "replacement gateway",
-        staleReasons: ["lease-lost"],
-      });
-    });
-
-    try {
-      const { run } = createMinimalRun({
-        replyOperation,
-        sessionCtx: {
-          Provider: "webchat",
-          OriginatingChannel: "webchat",
-        },
-        runOverrides: { agentId: "main", messageProvider: "webchat" },
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-
-      await expect(run()).resolves.toEqual({ text: SILENT_REPLY_TOKEN });
-
-      expect(replyOperation.result).toEqual({
-        kind: "aborted",
-        code: "aborted_for_restart",
-      });
-      expect(await readStoredMainSession(storePath)).toMatchObject({
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "msg",
-        restartRecoveryDeliverySourceRunId: "control-ui-run",
-        status: "killed",
-      });
-      expect(
-        (await readStoredMainSession(storePath)).restartRecoveryTerminalRunIds,
-      ).toBeUndefined();
     } finally {
       replyOperation.complete();
     }

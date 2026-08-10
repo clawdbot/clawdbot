@@ -696,7 +696,10 @@ const SOURCE_TEST_TARGETS = new Map([
     "src/commitments/model-selection.runtime.ts",
     ["src/commitments/runtime.test.ts", "src/agents/model-selection.test.ts"],
   ],
-  ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/agents/test-helpers/live-model-turn-probes.ts",
+    ["src/agents/live-model-turn-probes.test.ts"],
+  ],
   [
     "src/plugins/provider-auth-choice.ts",
     ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
@@ -2044,6 +2047,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/lib/failed-trailer.mts", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
+  ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
@@ -2518,7 +2522,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     new RegExp(
       [
-        "^scripts\\/e2e\\/(?!(?:commitments-safety|config-reload-source|",
+        "^scripts\\/e2e\\/(?!(?:config-reload-source|",
         "kitchen-sink-(?:plugin|rpc)|npm-telegram-live|onboard|openai-chat-tools|",
         "plugin-lifecycle-matrix|release-media-memory|session-runtime-context|",
         "update-corrupt-plugin)-docker\\.sh$).+-docker\\.sh$",
@@ -2536,10 +2540,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/e2e\/codex-media-path-docker\.sh$/u, ["codex-media-path-client"]],
   [/^scripts\/e2e\/live-plugin-tool-docker\.sh$/u, ["live-plugin-tool-assertions"]],
-  [
-    /^scripts\/e2e\/commitments-safety-docker\.sh$/u,
-    [dockerE2e, "src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
-  ],
   [/^scripts\/e2e\/onboard-docker\.sh$/u, [dockerBuild, "openclaw-test-state"]],
   [
     new RegExp(
@@ -2627,10 +2627,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/system-agent/operations.test.ts",
       "src/system-agent/audit.test.ts",
     ],
-  ],
-  [
-    /^scripts\/e2e\/commitments-safety-docker(?:-client)?\.(?:sh|ts)$/u,
-    ["src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
   ],
   [
     /^scripts\/e2e\/session-runtime-context-docker(?:-client)?\.(?:sh|ts)$/u,

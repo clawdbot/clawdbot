@@ -324,7 +324,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--card) 70%, transparent);
   color: var(--muted);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 10px;
   font-weight: 550;
   letter-spacing: 0.04em;
@@ -486,7 +486,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 76%, transparent);
+  color: var(--muted);
 }
 
 /* Settings rail entries are anchors but read as app chrome: default arrow,
@@ -502,7 +502,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -574,7 +574,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -696,7 +696,7 @@ openclaw-settings-save-indicator {
   margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  color: var(--muted);
 }
 
 /* ===========================================
@@ -1059,7 +1059,7 @@ openclaw-settings-save-indicator {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 .sidebar-attention__dismiss {
@@ -1071,7 +1071,7 @@ openclaw-settings-save-indicator {
   border: 0;
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   opacity: 0.6;
 }
 
@@ -1189,7 +1189,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
   color: var(--text);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-align: left;
   transition:
     background var(--duration-fast) ease,
@@ -1216,7 +1216,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
@@ -1305,7 +1305,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .sidebar-update-card__dismiss:hover {
@@ -1370,9 +1370,9 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 10px;
   margin: 0 -8px;
-  /* Sessions are app chrome, not hyperlinks: the whole region uses the
-     default arrow cursor; the pointer hand is reserved for real links. */
-  cursor: default;
+  /* Sessions are app chrome, not hyperlinks: the whole region follows the
+     base.css cursor policy so it tracks the window it is running in. */
+  cursor: var(--cursor-action);
 }
 
 .sidebar-shell__body--scroll-top {
@@ -1721,8 +1721,7 @@ html.openclaw-native-macos
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  opacity: 0.85;
+  color: var(--muted);
 }
 
 .sidebar-session-group-toggle
@@ -1733,19 +1732,21 @@ html.openclaw-native-macos
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
-.sidebar-recent-sessions__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 12px;
-}
-
+.sidebar-recent-sessions__list,
 .sidebar-session-tree,
-.sidebar-session-tree__children {
+.sidebar-session-tree__children,
+.sidebar-session-tree__list,
+.sidebar-session-catalog-host__sessions,
+.sidebar-session-catalog-project,
+.sidebar-session-catalog-project__sessions {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.sidebar-recent-sessions__list {
+  min-height: 12px;
 }
 
 .sidebar-session-tree__children {
@@ -1828,13 +1829,6 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
-.sidebar-session-catalog-host__sessions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
@@ -1847,7 +1841,7 @@ html.openclaw-native-macos
   background: transparent;
   color: color-mix(in srgb, var(--muted) 35%, var(--text) 65%);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-align: left;
   transition:
     background var(--duration-fast) ease,
@@ -1876,14 +1870,18 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+/* Structural label, not content: at the session row's 13px/500 a group reads as
+   just another session. Type carries the whole split because the head color
+   stays near `--text` for readability; case stays as authored (project names). */
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
 }
 
 .sidebar-session-catalog-project__count {
@@ -1961,7 +1959,7 @@ html.openclaw-native-macos
   padding-right: 4px;
   border-radius: var(--radius-md);
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1997,7 +1995,7 @@ html.openclaw-native-macos
   min-width: 0;
   padding: 3px 4px 3px 0;
   color: inherit;
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -2200,7 +2198,7 @@ html.openclaw-native-macos
   border: none;
   border-radius: var(--radius-full);
   background: none;
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 .viewer-facepile-trigger:hover,
@@ -2488,8 +2486,8 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: 13px;
   text-align: left;
-  /* More-menu route rows are anchors acting as chrome (see base.css cursor convention). */
-  cursor: default;
+  /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
+  cursor: var(--cursor-action);
   text-decoration: none;
 }
 
@@ -2637,6 +2635,28 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   text-align: left;
 }
 
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
+   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
+   that margin as the icon column instead of stacking into a ~17px gutter. */
+wa-dropdown-item.session-menu__item {
+  gap: 0;
+}
+
+/* The icon slot wrapper is a block-level flex item, so its inline child sits on
+   the row's text baseline ~2px above the label's optical centre. */
+wa-dropdown-item.session-menu__item::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+/* Web Awesome insets the submenu chevron 1em at its own font size, landing it
+   inside the shortcut column and heavier than the hints. Share their rail. */
+wa-dropdown-item.session-menu__item::part(submenu-icon) {
+  inset-inline-end: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .session-menu__item:hover:not(:disabled),
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
@@ -2651,6 +2671,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .session-menu__item--destructive {
   color: var(--danger);
+}
+
+/* Web Awesome renders checkbox marks before the label. Selection state in this
+   menu uses the trailing details rail, so keep the native semantics but hide its visual. */
+.sidebar-session-sort-menu__item::part(checkmark) {
+  display: none;
 }
 
 .session-menu__icon,
@@ -2700,12 +2726,15 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
 }
 
+/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
+   .chat-question-panel__option kbd), fixed-width so letters and digits share
+   one rail beside the labels. */
 .session-menu__shortcut {
   flex: 0 0 auto;
+  min-width: 12px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 550;
-  letter-spacing: 0.04em;
+  font: 11px/1 var(--mono);
+  text-align: center;
 }
 
 .session-menu__info {
@@ -2715,124 +2744,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .session-menu__separator {
-  margin: 6px 4px;
+  margin: 4px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-.session-menu__icon-picker {
-  width: 184px;
-  padding: 8px;
-}
-
-.session-menu__icon-picker-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 7px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.session-menu__icon-picker-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-}
-
-.session-menu__icon-picker-back:hover,
-.session-menu__icon-picker-back:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.session-menu__icon-picker-back svg {
-  width: 15px;
-  height: 15px;
-}
-
-.session-menu__icon-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 24px);
-  gap: 5px;
-}
-
-.session-menu__icon-choice {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-}
-
-.session-menu__icon-choice:hover,
-.session-menu__icon-choice[aria-checked="true"] {
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
-  color: var(--text-strong);
-}
-
-.session-menu__icon-choice svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-}
-
-.session-menu__emoji-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.session-menu__emoji-field input {
-  width: 58px;
-  min-width: 0;
-  margin-left: auto;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
-.session-menu__remove-icon {
-  width: 100%;
-  margin-top: 7px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  text-align: left;
-}
-
-.session-menu__remove-icon:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.session-menu__remove-icon:disabled,
-.session-menu__icon-choice:disabled {
-  opacity: 0.42;
 }
 
 /* Nav rail entries are anchors (for middle-click/new-tab) but read as app
@@ -2849,7 +2762,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -3001,26 +2914,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 16px;
 }
 
-.sidebar-pinned-session__icon .session-icon__named,
-.sidebar-pinned-session__icon .session-icon__svg {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-}
-
-.sidebar-pinned-session__icon .session-icon__named svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-pinned-session__icon .session-icon__emoji {
-  font-size: 15px;
-  line-height: 1;
-}
-
 .sidebar-zone-entry .sidebar-recent-session:hover .sidebar-pinned-session__icon,
 .sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
   opacity: 1;
@@ -3054,7 +2947,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) ease;
 }
 
@@ -3185,7 +3078,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition:
     color var(--duration-fast) ease,
     background var(--duration-fast) ease;
@@ -3241,7 +3134,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) ease;
 }
 
@@ -3472,7 +3365,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__metadata-value--mono {
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 11px;
 }
 
@@ -3486,7 +3379,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-family: inherit;
   font-size: 11px;
   font-weight: 600;
@@ -3594,7 +3487,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3620,7 +3513,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   color: var(--danger);
 }
 

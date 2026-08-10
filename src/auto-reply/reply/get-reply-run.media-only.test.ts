@@ -9,7 +9,6 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -20,7 +19,6 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
-import { applySessionHints } from "./body.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
@@ -427,6 +425,54 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "mention",
+      ctx: { WasMentioned: true },
+    },
+    {
+      name: "native command",
+      ctx: {
+        CommandTurn: {
+          kind: "native" as const,
+          source: "native" as const,
+          authorized: true,
+          commandName: "status",
+          body: "/status",
+        },
+      },
+    },
+  ])("keeps empty-assistant silence disabled for a directed group $name", async ({ ctx }) => {
+    await runPrepared({
+      ctx: {
+        ...baseParams().ctx,
+        ...ctx,
+      },
+    });
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it("keeps empty-assistant silence available for ambient room events", async () => {
+    const defaults = baseParams();
+    await runPrepared({
+      ctx: {
+        ...defaults.ctx,
+        InboundEventKind: "room_event",
+        WasMentioned: true,
+      },
+      sessionCtx: {
+        ...defaults.sessionCtx,
+        InboundEventKind: "room_event",
+        WasMentioned: true,
+      },
+    });
+
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
@@ -3472,19 +3518,6 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call.commandBody).toContain("System: [t] Model switched.");
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
-  });
-
-  it("does not drain queued system events for commitment-only heartbeat runs", async () => {
-    await runPrepared({
-      abortedLastRun: true,
-      opts: {
-        isHeartbeat: true,
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-
-    expect(drainFormattedSystemEvents).not.toHaveBeenCalled();
-    expect(applySessionHints).not.toHaveBeenCalled();
   });
 
   it("keeps sender ownership when queued system events are prepended", async () => {

@@ -115,7 +115,6 @@ export async function runPreparedEmbeddedLoop(
     profileFailureStore,
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
-    advanceAttemptAuthProfile,
     maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer,
     getApiKeyInfo,
@@ -264,7 +263,9 @@ export async function runPreparedEmbeddedLoop(
     getLastProfileId: () => preparedRuntime.snapshot().lastProfileId,
     getSessionId: () => sessionPromptState.sessionId,
     harnessOwnsTransport: () => preparedRuntime.snapshot().pluginHarnessOwnsTransport,
+    getRuntimeAuthOwnerId: () => preparedRuntime.snapshot().agentHarness.id,
     getApiKeyInfo,
+    advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
   });
   const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
   const contextEngineLogicalTurnLease =
@@ -488,17 +489,14 @@ export async function runPreparedEmbeddedLoop(
         emptyErrorRetries,
         overloadProfileRotations,
         overloadProfileRotationLimit: failoverRetryController.overloadProfileRotationLimit,
-        rateLimitProfileRotations: failoverRetryController.rateLimitProfileRotations,
-        rateLimitProfileRotationLimit: failoverRetryController.rateLimitProfileRotationLimit,
         sameModelIdleTimeoutRetries,
         previousRetryFailoverReason: lastRetryFailoverReason,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-        maybeEscalateRateLimitProfileFallback:
-          failoverRetryController.maybeEscalateRateLimitProfileFallback,
         maybeRetrySameModelRateLimit: failoverRetryController.maybeRetrySameModelRateLimit,
         maybeBackoffBeforeOverloadFailover:
           failoverRetryController.maybeBackoffBeforeOverloadFailover,
-        advanceAttemptAuthProfile,
+        advanceAuthProfile: failoverRetryController.advanceAuthProfile,
+        advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
         traceAttempts,
         suspendForFailure,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
@@ -602,6 +600,11 @@ export async function runPreparedEmbeddedLoop(
         return terminalTimeoutResult;
       }
 
+      const terminalAuthPlan = preparedRuntime.snapshot().activePreparedAuthPlan;
+      const requestTransportOverrides =
+        terminalAuthPlan.modelRoute?.requestTransportOverrides ??
+        terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
+        "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
         runParams: params,
         retryState: terminalRetryState,
@@ -638,6 +641,8 @@ export async function runPreparedEmbeddedLoop(
         modelId,
         modelTransportId: effectiveModel.id ?? modelId,
         modelTransportApi: effectiveModel.api ?? model.api,
+        ...(effectiveModel.baseUrl ? { modelTransportBaseUrl: effectiveModel.baseUrl } : {}),
+        requestTransportOverrides,
         authProfileId: lastProfileId,
         profileFailureStore,
         attemptAuthProfileStore,

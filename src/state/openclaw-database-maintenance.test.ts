@@ -8,12 +8,12 @@ import {
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMNS } from "./openclaw-state-db-maintenance.js";
 import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
@@ -129,7 +129,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
         ({ columnName, tableName }) => `${tableName}.${columnName}`,
       ),
-    ).toEqual(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);
+    ).toEqual(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns);
     expect(
       CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
         ({ columnName, dataType, tableName }) => `${tableName}.${columnName} ${dataType}`,
@@ -145,6 +145,8 @@ describe("OpenClaw database maintenance schema validation", () => {
       "claw_package_refs.extension_mapped_json TEXT",
       "claw_package_refs.extension_unavailable_json TEXT",
       "worker_environments.shared_host INTEGER",
+      "worker_session_placements.terminal_reason TEXT",
+      "worker_session_placements.terminal_at_ms INTEGER",
       "worktrees.run_end_cleanup_json TEXT",
     ]);
 

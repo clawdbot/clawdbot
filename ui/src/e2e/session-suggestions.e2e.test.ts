@@ -109,7 +109,7 @@ suite.define(() => {
       typing: true,
       ts: Date.now(),
     });
-    await expect(page.locator(".agent-chat__typing-indicator")).toHaveText("Owner is typing…");
+    await expect(page.locator(".agent-chat__typing-text")).toHaveText("Owner is typing…");
     await composer.fill("Try the focused change");
     const typing = await gateway.waitForRequest("session.typing");
     expect(typing.params).toMatchObject({ sessionId: "session-main" });

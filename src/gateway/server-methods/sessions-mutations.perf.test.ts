@@ -54,6 +54,64 @@ function humanClient(): GatewayClient {
   };
 }
 
+test("single non-label sessions.patch avoids a whole-store projection", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const targetKey = "agent:main:single-patch-target";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: targetKey },
+      { sessionId: "session-single-patch-target", updatedAt: 1 },
+    );
+    for (let index = 0; index < 20; index += 1) {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: `agent:main:single-patch-unrelated-${index}` },
+        { sessionId: `session-single-patch-unrelated-${index}`, updatedAt: index + 2 },
+      );
+    }
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const statements = trackSqliteStatementExecutions(
+      database.db,
+      ["whole-store-projection"] as const,
+      (sql) => {
+        const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
+        return normalized.includes(
+          'select "current_session_id", "entry_json", "session_key", "updated_at"',
+        ) &&
+          normalized.includes('from "session_nodes"') &&
+          normalized.includes('order by "session_key"')
+          ? "whole-store-projection"
+          : null;
+      },
+    );
+    const respond = vi.fn();
+    try {
+      await sessionMutationHandlers["sessions.patch"]!({
+        params: { key: targetKey, pinned: true },
+        respond,
+        context: {
+          getRuntimeConfig: () => ({}),
+          loadGatewayModelCatalog: vi.fn(async () => []),
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+          chatAbortControllers: new Map(),
+          chatQueuedTurns: new Map(),
+          dedupe: new Map(),
+        } as unknown as GatewayRequestContext,
+        client: humanClient(),
+      } as never);
+    } finally {
+      statements.restore();
+    }
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(statements.counts["whole-store-projection"]).toBe(0);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: targetKey })).toHaveProperty("pinnedAt");
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:single-patch-unrelated-0" }),
+    ).not.toHaveProperty("pinnedAt");
+  });
+});
+
 test("sessions.patchMany archives 30 human sessions without transcript hydration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targets = Array.from({ length: 30 }, (_, index) => ({

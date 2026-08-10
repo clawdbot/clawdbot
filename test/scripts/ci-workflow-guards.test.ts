@@ -587,6 +587,7 @@ timeout_outcome="none"`,
         GITHUB_RUN_ID: "42",
         LC_ALL: "POSIX",
         PATH: fixturePath,
+        PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
         QA_PROFILE: "all",
         REQUESTED_REF: "fixture",
         SUPERVISOR_READY_FILE: path.join(root, "supervisor-ready"),
@@ -599,6 +600,7 @@ timeout_outcome="none"`,
       readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
     ) as {
       exitCode: number;
+      target: { protocolBaseSha: string };
       timedOut: boolean;
       timeoutOutcome: "none" | "term" | "kill";
     };
@@ -776,6 +778,164 @@ function runPushDiffBaseFixture(options: {
 function writeExecutable(filePath: string, lines: string[]): void {
   writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
   chmodSync(filePath, 0o755);
+}
+
+function writeProtocolDescriptor(
+  repo: string,
+  additions: Array<{ name: string; since?: string }> = [],
+): void {
+  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(({ name, since }) => {
+    const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
+    return `  { name: ${JSON.stringify(name)}${sinceProperty} },`;
+  });
+  const descriptor = path.join(repo, "src/gateway/methods/core-descriptors.ts");
+  mkdirSync(path.dirname(descriptor), { recursive: true });
+  writeFileSync(
+    descriptor,
+    `export const CORE_GATEWAY_METHOD_SPECS = [\n${rows.join("\n")}\n] as const;\n`,
+  );
+}
+
+function commitProtocolFixture(repo: string, message: string): string {
+  runGit(repo, ["add", "-A"]);
+  runGit(repo, ["commit", "-q", "-m", message]);
+  return runGit(repo, ["rev-parse", "HEAD"]);
+}
+
+function createQaProtocolTopology() {
+  const root = tempDirs.make("openclaw-qa-protocol-topology-");
+  const origin = path.join(root, "origin");
+  const checkout = path.join(root, "checkout");
+  const releaseBranch = "release/2026.8.1";
+  const releaseTag = "v2026.8.1";
+  const mainReleaseTag = "v2026.8.2";
+
+  runGit(root, ["init", "-q", "-b", "main", origin]);
+  runGit(origin, ["config", "commit.gpgsign", "false"]);
+  runGit(origin, ["config", "user.email", "qa-protocol@example.invalid"]);
+  runGit(origin, ["config", "user.name", "QA Protocol Fixture"]);
+  writeFileSync(
+    path.join(origin, "package.json"),
+    '{"name":"qa-protocol-fixture","version":"2026.8.0"}\n',
+  );
+  writeProtocolDescriptor(origin);
+  const mainBase = commitProtocolFixture(origin, "base protocol");
+
+  writeProtocolDescriptor(origin, [{ name: "sessions.patchMany", since: "2026.8" }]);
+  const mainHead = commitProtocolFixture(origin, "add main protocol method");
+  runGit(origin, ["tag", mainReleaseTag]);
+  writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
+  commitProtocolFixture(origin, "advance main");
+
+  runGit(origin, ["checkout", "-q", "-b", releaseBranch, mainBase]);
+  writeProtocolDescriptor(origin, [{ name: "sessions.releaseOnly" }]);
+  const releaseHead = commitProtocolFixture(origin, "add release protocol method");
+
+  runGit(origin, ["checkout", "-q", "--detach", mainBase]);
+  writeFileSync(path.join(origin, "tag.txt"), "release tag\n");
+  const releaseTagHead = commitProtocolFixture(origin, "create release tag target");
+  runGit(origin, ["tag", releaseTag]);
+
+  runGit(origin, ["checkout", "-q", "-b", "feature/untrusted", mainBase]);
+  writeFileSync(path.join(origin, "feature.txt"), "untrusted\n");
+  const featureHead = commitProtocolFixture(origin, "add untrusted feature");
+  runGit(origin, ["checkout", "-q", "main"]);
+
+  runGit(root, ["clone", "-q", "--no-local", origin, checkout]);
+  const fakeBin = path.join(root, "bin");
+  mkdirSync(fakeBin);
+  writeExecutable(path.join(fakeBin, "timeout"), ["#!/usr/bin/env bash", "shift 3", 'exec "$@"']);
+
+  return {
+    checkout,
+    fakeBin,
+    featureHead,
+    mainBase,
+    mainHead,
+    mainReleaseTag,
+    origin,
+    releaseBranch,
+    releaseHead,
+    releaseTag,
+    releaseTagHead,
+  };
+}
+
+function readWorkflowOutputs(outputPath: string): Record<string, string> {
+  if (!existsSync(outputPath)) {
+    return {};
+  }
+  const output = readFileSync(outputPath, "utf8").trim();
+  return output
+    ? Object.fromEntries(
+        output.split("\n").map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+      )
+    : {};
+}
+
+function runQaSelectedRefValidation(
+  topology: ReturnType<typeof createQaProtocolTopology>,
+  inputRef: string,
+  revision: string,
+  expectedSha = revision,
+) {
+  runGit(topology.checkout, ["checkout", "-q", "--detach", revision]);
+  const githubOutput = path.join(topology.checkout, "github-output");
+  rmSync(githubOutput, { force: true });
+  const validateStep = expectDefined(
+    readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
+      (step: WorkflowStep) => step.name === "Validate selected ref",
+    ),
+    "QA profile selected-ref validation step",
+  );
+  const result = runWorkflowShellScript(expectDefined(validateStep.run, "validation script"), {
+    cwd: topology.checkout,
+    env: {
+      ...process.env,
+      EXPECTED_SHA: expectedSha,
+      GITHUB_OUTPUT: githubOutput,
+      GITHUB_STEP_SUMMARY: path.join(topology.checkout, "github-summary"),
+      INPUT_REF: inputRef,
+      PATH: `${topology.fakeBin}:${process.env.PATH ?? ""}`,
+    },
+  });
+  return { ...result, outputs: readWorkflowOutputs(githubOutput) };
+}
+
+function runProtocolSinceFixture(checkout: string, baseSha: string) {
+  for (const scriptPath of [
+    "packages/normalization-core/src/record-coerce.ts",
+    "scripts/check-protocol-since.mts",
+    "scripts/lib/repo-root.mjs",
+  ]) {
+    const target = path.join(checkout, scriptPath);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(scriptPath, "utf8"));
+  }
+  writeFileSync(
+    path.join(checkout, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        paths: {
+          "@openclaw/normalization-core/record-coerce": [
+            "./packages/normalization-core/src/record-coerce.ts",
+          ],
+        },
+      },
+    }),
+  );
+  const nodeModules = path.join(checkout, "node_modules");
+  if (!existsSync(nodeModules)) {
+    symlinkSync(path.resolve("node_modules"), nodeModules, "dir");
+  }
+  return spawnSync(process.execPath, ["--import", "tsx", "scripts/check-protocol-since.mts"], {
+    cwd: checkout,
+    encoding: "utf8",
+    env: { ...process.env, PROTOCOL_SINCE_BASE_SHA: baseSha },
+  });
 }
 
 function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts: string[] }): {
@@ -2580,14 +2740,16 @@ NODE
       "checks-node-core-test-nondist-shard",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
+    const hostedRetryJobs = new Set(["checks-ui-e2e", "checks-ui-e2e-real-gateway"]);
     for (const { jobName, stepWith } of stickyConsumers) {
       const stickyCondition = stepWith["sticky-disk"];
       const cacheCondition = stepWith["use-actions-cache"];
-      if (jobName === "checks-ui-e2e") {
+      if (hostedRetryJobs.has(jobName)) {
         continue;
       }
       expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
@@ -3508,6 +3670,11 @@ NODE
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-sqlite-session-schema-baseline",
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
@@ -3796,6 +3963,25 @@ NODE
     );
   });
 
+  it("runs the export name collision ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("export-name-collisions)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions',
+    );
+  });
+
   it("runs the transcript reader ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -3891,72 +4077,111 @@ NODE
     ).toBe(true);
   });
 
-  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
-    "keeps Mantis reaction ownership stable in %s",
-    (workflowPath) => {
-      const source = readFileSync(workflowPath, "utf8");
-      const workflow = parse(source);
-      const resolveJob = workflow.jobs.resolve_request;
-      const resolveSteps = resolveJob.steps as WorkflowStep[];
-      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
-      const cleanupSteps = cleanupJob.steps as WorkflowStep[];
-      const findStep = (steps: WorkflowStep[], id: string) =>
-        expectDefined(
-          steps.find((step) => step.id === id),
-          `${workflowPath} ${id}`,
-        );
-      const createTokenStep = findStep(resolveSteps, "mantis_reaction_token");
-      const createStep = findStep(resolveSteps, "add_reaction");
-      const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token");
-      const deleteStep = expectDefined(
-        cleanupSteps.find((step) => step.env?.REACTION_ID),
-        `${workflowPath} reaction cleanup step`,
+  it("keeps shared Mantis reaction ownership stable", () => {
+    const resolveWorkflowPath = ".github/workflows/mantis-resolve-request.yml";
+    const cleanupWorkflowPath = ".github/workflows/mantis-clear-reaction.yml";
+    const resolveSource = readFileSync(resolveWorkflowPath, "utf8");
+    const cleanupSource = readFileSync(cleanupWorkflowPath, "utf8");
+    const resolveWorkflow = parse(resolveSource);
+    const cleanupWorkflow = parse(cleanupSource);
+    const expectedWorkflowCallSecrets = {
+      MANTIS_GITHUB_APP_ID: { required: true },
+      MANTIS_GITHUB_APP_PRIVATE_KEY: { required: true },
+    };
+    const resolveJob = resolveWorkflow.jobs.resolve;
+    const cleanupJob = cleanupWorkflow.jobs.clear;
+    const resolveSteps = resolveJob.steps as WorkflowStep[];
+    const cleanupSteps = cleanupJob.steps as WorkflowStep[];
+    const findStep = (steps: WorkflowStep[], id: string, workflowPath: string) =>
+      expectDefined(
+        steps.find((step) => step.id === id),
+        `${workflowPath} ${id}`,
       );
+    const createTokenStep = findStep(resolveSteps, "mantis_reaction_token", resolveWorkflowPath);
+    const createStep = findStep(resolveSteps, "add_reaction", resolveWorkflowPath);
+    const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token", cleanupWorkflowPath);
+    const deleteStep = expectDefined(
+      cleanupSteps.find((step) => step.env?.REACTION_ID),
+      `${cleanupWorkflowPath} reaction cleanup step`,
+    );
 
-      expect(resolveJob.outputs.reaction_id, workflowPath).toBe(
-        "${{ steps.add_reaction.outputs.reaction_id }}",
-      );
-      for (const [label, tokenStep] of [
-        ["creation", createTokenStep],
-        ["cleanup", cleanupTokenStep],
-      ] as const) {
-        expect(tokenStep, `${workflowPath} ${label} token`).toMatchObject({
-          uses: CREATE_GITHUB_APP_TOKEN_V3,
-          with: {
-            "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
-            "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
-          },
-        });
-        expect(
-          Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
-          `${workflowPath} ${label} permissions`,
-        ).toEqual([["permission-issues", "write"]]);
-      }
-      expect(createStep, workflowPath).toMatchObject({
-        if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
-        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    expect(resolveWorkflow.on.workflow_call.secrets, resolveWorkflowPath).toEqual(
+      expectedWorkflowCallSecrets,
+    );
+    expect(cleanupWorkflow.on.workflow_call.secrets, cleanupWorkflowPath).toEqual(
+      expectedWorkflowCallSecrets,
+    );
+    expect(resolveJob.outputs.reaction_id, resolveWorkflowPath).toBe(
+      "${{ steps.add_reaction.outputs.reaction_id }}",
+    );
+    for (const [label, tokenStep] of [
+      ["creation", createTokenStep],
+      ["cleanup", cleanupTokenStep],
+    ] as const) {
+      expect(tokenStep, `${label} token`).toMatchObject({
+        uses: CREATE_GITHUB_APP_TOKEN_V3,
+        with: {
+          "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+          "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+        },
       });
-      expect(createStep.with?.script, workflowPath).toContain("createForIssueComment");
-      expect(createStep.with?.script, workflowPath).toContain(
-        'core.setOutput("reaction_id", String(reaction.id))',
-      );
-      expect(source.match(/createForIssueComment/gu), workflowPath).toHaveLength(1);
+      expect(
+        Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
+        `${label} permissions`,
+      ).toEqual([["permission-issues", "write"]]);
+    }
+    expect(createStep, resolveWorkflowPath).toMatchObject({
+      if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    });
+    expect(createStep.with?.script, resolveWorkflowPath).toContain("createForIssueComment");
+    expect(createStep.with?.script, resolveWorkflowPath).toContain(
+      'core.setOutput("reaction_id", String(reaction.id))',
+    );
+    expect(resolveSource.match(/createForIssueComment/gu), resolveWorkflowPath).toHaveLength(1);
+    expect(cleanupJob.permissions, cleanupWorkflowPath).toEqual({});
+    expect(deleteStep, cleanupWorkflowPath).toMatchObject({
+      env: {
+        COMMENT_ID: "${{ inputs.comment-id }}",
+        REACTION_ID: "${{ inputs.reaction-id }}",
+      },
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    });
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain("deleteForIssueComment");
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain(
+      "Number(process.env.REACTION_ID)",
+    );
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain("reaction_id: reactionId");
+    expect(JSON.stringify(cleanupJob), cleanupWorkflowPath).not.toMatch(
+      /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
+    );
+  });
+
+  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
+    "routes Mantis reaction ownership through shared workflows in %s",
+    (workflowPath) => {
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const resolveJob = workflow.jobs.resolve_request;
+      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
+      const expectedSecrets = {
+        MANTIS_GITHUB_APP_ID: "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        MANTIS_GITHUB_APP_PRIVATE_KEY: "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      };
+
+      expect(resolveJob.uses, workflowPath).toBe("./.github/workflows/mantis-resolve-request.yml");
+      expect(resolveJob.secrets, workflowPath).toEqual(expectedSecrets);
+      expect(cleanupJob.uses, workflowPath).toBe("./.github/workflows/mantis-clear-reaction.yml");
       expect(cleanupJob.if, workflowPath).toContain(
         "needs.resolve_request.outputs.reaction_id != ''",
       );
       expect(cleanupJob.permissions, workflowPath).toEqual({});
-      expect(deleteStep, workflowPath).toMatchObject({
-        env: { REACTION_ID: "${{ needs.resolve_request.outputs.reaction_id }}" },
-        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+      expect(cleanupJob.with, workflowPath).toMatchObject({
+        "comment-id": "${{ format('{0}', github.event.comment.id) }}",
+        "reaction-id": "${{ needs.resolve_request.outputs.reaction_id }}",
       });
-      expect(deleteStep.with?.script, workflowPath).toContain("deleteForIssueComment");
-      expect(deleteStep.with?.script, workflowPath).toContain("Number(process.env.REACTION_ID)");
-      expect(deleteStep.with?.script, workflowPath).toContain("reaction_id: reactionId");
-      expect(JSON.stringify(cleanupJob), workflowPath).not.toMatch(
-        /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
-      );
+      expect(cleanupJob.secrets, workflowPath).toEqual(expectedSecrets);
     },
   );
 
@@ -4485,13 +4710,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(preflightGuards).toContain('has_package_script "check:doctor-deprecation-registry"');
     expect(preflightGuards).toContain("pnpm check:doctor-deprecation-registry");
     expect(preflightGuards).toContain(
-      "[skip] historical target skips the wall-clock doctor deprecation registry guard",
+      "[skip] frozen target predates the wall-clock doctor deprecation registry guard",
     );
     expect(preflightGuards).toContain(
       "Current CI targets must provide the check:doctor-deprecation-registry package script.",
     );
-    expect(preflightGuards.indexOf('if [[ "$HISTORICAL_TARGET" == "true" ]]')).toBeLessThan(
+    expect(preflightGuards.indexOf('elif [[ "$FROZEN_TARGET" == "true" ]]')).toBeGreaterThan(
       preflightGuards.indexOf("pnpm check:doctor-deprecation-registry"),
+    );
+    const checkShard = parsedWorkflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    );
+    expect(checkShard.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(parsedWorkflow.jobs.preflight.outputs.frozen_target).toBe(
+      "${{ steps.manifest.outputs.frozen_target }}",
     );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
@@ -4952,6 +5184,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       0,
     );
     expect(frozenMissingCurrentCapabilities.outputs.historical_target).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.frozen_target).toBe("true");
     expect(frozenMissingCurrentCapabilities.outputs.run_ios_build).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_macos_swift).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_native_i18n).toBe("false");
@@ -5130,9 +5363,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.jobs["checks-ui"].env.COMPATIBILITY_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
-    expect(uiInstall.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
+    expect(uiInstall.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(uiInstall.run).toContain('if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]');
     expect(uiInstall.run).toContain("pnpm --dir ui exec playwright install chromium");
     expect(uiInstall.run).toContain("node --import tsx scripts/ensure-playwright-chromium.mts");
+    expect(uiInstall.run).toContain(
+      'elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]',
+    );
+    expect(uiInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
+    expect(uiInstall.run).toContain(
+      "Target does not provide a supported Playwright Chromium installer.",
+    );
     expect(uiInstall.run).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
     expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
@@ -5140,43 +5381,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
-  it("gates current Control UI changes on the full mocked Chromium E2E suite", () => {
+  it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
+    const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
 
     expect(uiE2e.permissions).toEqual({ contents: "read" });
     expect(uiE2e.needs).toEqual(["preflight"]);
     expect(uiE2e.if).toBe(
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
-    expect(uiE2e["runs-on"]).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
-    );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     // Each Chromium worker keeps serial file ownership while all four shards
     // together remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
+    expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy).toEqual({
       "fail-fast": false,
       "max-parallel": 4,
       matrix: { shard: [1, 2, 3, 4] },
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
+
+    expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
+    expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
+    expect(uiE2eRealGateway.if).toBe(uiE2e.if);
+    expect(uiE2eRealGateway["timeout-minutes"]).toBe(20);
+    expect(uiE2eRealGateway.env).toBeUndefined();
 
     const uiE2eSetup = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
       "Control UI E2E Node setup",
     );
     expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
-    expect(uiE2eSetup.with).toEqual({
+    const expectedUiE2eSetup = {
       "node-version": "24.x",
       "install-bun": "false",
       "sticky-disk":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
       "use-actions-cache":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
-    });
+    } as const;
+    expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
+    const realGatewaySetup = expectDefined(
+      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "real-Gateway Control UI E2E Node setup",
+    );
+    expect(realGatewaySetup).toEqual(uiE2eSetup);
+
+    const routedUiE2eJobs = [
+      {
+        job: uiE2e,
+        name: "checks-ui-e2e",
+        setup: uiE2eSetup,
+        blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
+      },
+      {
+        job: uiE2eRealGateway,
+        name: "checks-ui-e2e-real-gateway",
+        setup: realGatewaySetup,
+        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+      },
+    ] as const;
     const routingScenarios = [
       {
         name: "same-repo pull request first attempt",
@@ -5186,11 +5454,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          stickyDisk: "true",
-          useActionsCache: "false",
-        },
+        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
       },
       {
         name: "same-repo pull request retry",
@@ -5200,11 +5464,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "fork pull request",
@@ -5214,11 +5474,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "workflow dispatch",
@@ -5227,11 +5483,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "canonical push retry",
@@ -5240,29 +5492,48 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: {
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          stickyDisk: "true",
-          useActionsCache: "false",
-        },
+        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
       },
     ] as const;
-    for (const { context, expected, name } of routingScenarios) {
-      expect(evaluateWorkflowExpression(uiE2e["runs-on"], context), name).toBe(expected.runner);
-      expect(evaluateWorkflowExpression(uiE2eSetup.with?.["sticky-disk"], context), name).toBe(
-        expected.stickyDisk,
+    for (const { blacksmithRunner, job, name: jobName, setup } of routedUiE2eJobs) {
+      expect(job["runs-on"]).toBe(
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && '" +
+          blacksmithRunner +
+          "' || 'ubuntu-24.04') }}",
       );
-      expect(
-        evaluateWorkflowExpression(uiE2eSetup.with?.["use-actions-cache"], context),
-        name,
-      ).toBe(expected.useActionsCache);
+      for (const { context, expected, name: scenarioName } of routingScenarios) {
+        const assertionName = `${jobName}: ${scenarioName}`;
+        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
+        expect(evaluateWorkflowExpression(job["runs-on"], context), assertionName).toBe(
+          expectedRunner,
+        );
+        expect(
+          evaluateWorkflowExpression(setup.with?.["sticky-disk"], context),
+          assertionName,
+        ).toBe(expected.stickyDisk);
+        expect(
+          evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context),
+          assertionName,
+        ).toBe(expected.useActionsCache);
+      }
     }
 
     const chromiumInstall = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
       "Control UI E2E Chromium installation",
     );
-    expect(chromiumInstall.run).toBe("node --import tsx scripts/ensure-playwright-chromium.mts");
+    expect(chromiumInstall.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(chromiumInstall.run).toContain(
+      "node --import tsx scripts/ensure-playwright-chromium.mts",
+    );
+    expect(chromiumInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
+    const realGatewayChromiumInstall = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Install Playwright Chromium",
+      ),
+      "real-Gateway Control UI E2E Chromium installation",
+    );
+    expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
 
     const scenario = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
@@ -5277,7 +5548,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(browserCopilot.if).toBe("matrix.shard == 1");
     expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
-    expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+    for (const { job } of routedUiE2eJobs) {
+      const jobContract = JSON.stringify(job);
+      expect(jobContract).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+      expect(jobContract).not.toContain("OPENCLAW_VITEST_NO_OUTPUT_RETRY");
+    }
+
+    const realGatewayRuns = uiE2eRealGateway.steps
+      .filter((step: WorkflowStep) => step.name?.includes("with a real Gateway"))
+      .map((step: WorkflowStep) => step.run);
+    expect(realGatewayRuns).toEqual([
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+    ]);
+    const realGatewayRunContract = realGatewayRuns.join("\n");
+    expect(realGatewayRunContract).not.toContain("--retry");
+    expect(realGatewayRunContract).not.toContain("--hookTimeout");
+    expect(realGatewayRunContract).not.toContain("--testTimeout");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {
@@ -5611,6 +5898,37 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("uses candidate-owned script interfaces for frozen target CI", () => {
+    const workflow = readCiWorkflow();
+    const buildChecks = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Run built artifact checks",
+    );
+    const qaBuild = workflow.jobs["qa-smoke-ci-profile"].steps.find(
+      (step: WorkflowStep) => step.name === "Build QA smoke runtime",
+    );
+    const additionalChecks = workflow.jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+
+    expect(buildChecks.run).toContain("pnpm test:gateway:watch-regression -- --skip-build");
+    expect(buildChecks.run).not.toContain("scripts/check-gateway-watch-regression.mts");
+    expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(2);
+    expect(qaBuild.run).toContain('package_script="scripts/package-openclaw-for-docker.mts"');
+    expect(qaBuild.run).toContain('package_script="scripts/package-openclaw-for-docker.mjs"');
+    expect(additionalChecks.run).toContain(
+      "boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)",
+    );
+    expect(additionalChecks.run).toContain(
+      "boundary_runner=(node scripts/run-additional-boundary-checks.mjs)",
+    );
+    expect(additionalChecks.run).not.toContain(
+      "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
+    );
+    expect(additionalChecks.run).not.toContain(
+      "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
+    );
+  });
+
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -5621,6 +5939,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "checks-fast-core",
       "qa-smoke-ci-profile",
@@ -5704,6 +6023,152 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "resolves topology-aware protocol bases and drives the real guard",
+    () => {
+      const topology = createQaProtocolTopology();
+      const cases = [
+        ["main", topology.mainHead, "main-ancestor", topology.mainBase],
+        [topology.releaseBranch, topology.releaseHead, "release-branch-head", topology.mainBase],
+        [
+          `refs/heads/${topology.releaseBranch}`,
+          topology.releaseHead,
+          "release-branch-head",
+          topology.mainBase,
+        ],
+        [topology.releaseTag, topology.releaseTagHead, "release-tag", topology.mainBase],
+        [topology.releaseTagHead, topology.releaseTagHead, "release-tag", topology.mainBase],
+        [topology.mainReleaseTag, topology.mainHead, "release-tag", topology.mainHead],
+      ] as const;
+
+      for (const [inputRef, revision, trustedReason, protocolBase] of cases) {
+        const result = runQaSelectedRefValidation(topology, inputRef, revision);
+        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expect(result.outputs).toEqual({
+          protocol_base_revision: protocolBase,
+          selected_revision: revision,
+          trusted_reason: trustedReason,
+        });
+      }
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.mainHead]);
+      const mainCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+      expect(mainCheck.status, `${mainCheck.stdout}${mainCheck.stderr}`).toBe(0);
+      expect(mainCheck.stdout).toContain("1 new core method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.releaseHead]);
+      const releaseCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+      expect(releaseCheck.status).not.toBe(0);
+      expect(releaseCheck.stderr).toContain("sessions.releaseOnly is missing since metadata");
+
+      for (const [expectedSha, inputRef, revision] of [
+        ["not-a-sha", "main", topology.mainHead],
+        [topology.featureHead, topology.featureHead, topology.featureHead],
+        [topology.mainHead, topology.releaseTag, topology.releaseTagHead],
+      ] as const) {
+        const result = runQaSelectedRefValidation(topology, inputRef, revision, expectedSha);
+        expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+        expect(result.outputs).toEqual({});
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "wires and fetches one explicit protocol base before QA execution",
+    () => {
+      const qaWorkflow = readQaProfileEvidenceWorkflow();
+      const maturityWorkflow = readMaturityScorecardWorkflow();
+      const validateJob = qaWorkflow.jobs.validate_selected_ref;
+      const runJob = qaWorkflow.jobs.run_qa_profile;
+      const stepNames = runJob.steps.map((step: WorkflowStep) => step.name);
+      const buildStep = expectDefined(
+        runJob.steps.find((step: WorkflowStep) => step.name === "Build private QA runtime"),
+        "private QA runtime build",
+      );
+      const fetchStep = expectDefined(
+        runJob.steps.find((step: WorkflowStep) => step.name === "Fetch protocol comparison base"),
+        "protocol comparison base fetch",
+      );
+      const runStep = expectDefined(
+        runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile"),
+        "QA profile run",
+      );
+      const evidenceStep = expectDefined(
+        runJob.steps.find((step: WorkflowStep) => step.name === "Validate QA profile evidence"),
+        "QA profile evidence validation",
+      );
+      const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
+      const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
+
+      expect(qaWorkflow.on.workflow_call.inputs.trusted_ref).toEqual({
+        description: "Optional trusted branch, tag, or SHA identity for an immutable ref",
+        required: false,
+        default: "",
+        type: "string",
+      });
+      expect(validateJob.outputs.protocol_base_revision).toBe(
+        "${{ steps.validate.outputs.protocol_base_revision }}",
+      );
+      expect(validateJob.steps[1].env.INPUT_REF).toBe(trustedInput);
+      const ordered = [
+        "Checkout selected ref",
+        "Fetch protocol comparison base",
+        "Setup Node environment",
+        "Build private QA runtime",
+        "Run QA profile",
+      ].map((name) => stepNames.indexOf(name));
+      expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
+      expect(fetchStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(protocolOutput);
+      expect(buildStep.run).toBe("pnpm build qaRuntime");
+      expect(runStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(protocolOutput);
+      expect(runStep.env?.REQUESTED_REF).toBe(trustedInput);
+      expect(runStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA");
+      expect(evidenceStep.env?.PROTOCOL_BASE_SHA).toBe(protocolOutput);
+      expect(evidenceStep.env?.REQUESTED_REF).toBe(trustedInput);
+      expect(evidenceStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_BASE_SHA");
+      expect(maturityWorkflow.jobs.generate_qa_evidence.with.trusted_ref).toBe("${{ inputs.ref }}");
+
+      const topology = createQaProtocolTopology();
+      const checkout = tempDirs.make("openclaw-qa-protocol-fetch-");
+      runGit(checkout, ["init", "-q", "-b", "main"]);
+      runGit(checkout, ["remote", "add", "origin", topology.origin]);
+      runGit(checkout, [
+        "fetch",
+        "-q",
+        "--depth=1",
+        "origin",
+        `+${topology.mainHead}:refs/remotes/origin/selected`,
+      ]);
+      runGit(checkout, ["checkout", "-q", "--detach", "refs/remotes/origin/selected"]);
+      const sentinel = path.join(checkout, "qa-sentinel");
+      const runFetch = (baseSha: string) =>
+        runWorkflowShellScript(
+          `${expectDefined(fetchStep.run, "protocol fetch script")}\nprintf 'ran\\n' > "$QA_SENTINEL"\n`,
+          {
+            cwd: checkout,
+            env: {
+              ...process.env,
+              PATH: `${topology.fakeBin}:${process.env.PATH ?? ""}`,
+              PROTOCOL_SINCE_BASE_SHA: baseSha,
+              QA_SENTINEL: sentinel,
+            },
+          },
+        );
+
+      const success = runFetch(topology.mainBase);
+      expect(success.status, `${success.stdout}${success.stderr}`).toBe(0);
+      expect(runGit(checkout, ["rev-parse", "refs/remotes/origin/qa-protocol-base"])).toBe(
+        topology.mainBase,
+      );
+      expect(existsSync(sentinel)).toBe(true);
+
+      rmSync(sentinel);
+      const failure = runFetch("f".repeat(40));
+      expect(failure.status, `${failure.stdout}${failure.stderr}`).not.toBe(0);
+      expect(existsSync(sentinel)).toBe(false);
+    },
+  );
+
   it("bounds QA profile selected-ref fetches", () => {
     const validateSelectedRef = expectDefined(
       readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
@@ -5715,12 +6180,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       .split("\n")
       .filter((line: string) => line.includes("git fetch"));
 
-    expect(gitFetchLines).toHaveLength(2);
+    expect(gitFetchLines).toHaveLength(3);
     expect(
       gitFetchLines.every((line: string) =>
         line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
       ),
     ).toBe(true);
+    expect(gitFetchLines.some((line: string) => line.includes("+refs/tags/"))).toBe(true);
   });
 
   it.skipIf(process.platform !== "linux")(
@@ -5769,6 +6235,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expect(result.commandStatus, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.status).toMatchObject({
           exitCode: scenario.exitCode,
+          target: { protocolBaseSha: "b".repeat(40) },
           timedOut: scenario.timedOut,
           timeoutOutcome: scenario.timeoutOutcome,
         });
@@ -5903,15 +6370,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const ensurePlaywrightStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Ensure Playwright Chromium",
     );
-    expect(ensurePlaywrightStep.run).toBe(
-      "node --import tsx scripts/ensure-playwright-chromium.mts",
-    );
+    expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mts");
+    expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mjs");
     const runProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
     expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
-    expect(runProfileStep.env?.REQUESTED_REF).toBe("${{ inputs.ref }}");
+    expect(runProfileStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
+    );
+    expect(runProfileStep.env?.REQUESTED_REF).toBe("${{ inputs.trusted_ref || inputs.ref }}");
     expect(runProfileStep.env?.TARGET_SHA).toBe(
       "${{ needs.validate_selected_ref.outputs.selected_revision }}",
     );
@@ -5954,6 +6423,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runProfileStep.run).not.toContain('case "$qa_exit_code"');
     expect(runProfileStep.run).toContain('TIMEOUT_OUTCOME="$timeout_outcome"');
     expect(runProfileStep.run).toContain("qa-profile-run-status.json");
+    expect(runProfileStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA");
     expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
     expect(runProfileStep.run).toContain('timedOut: timeoutOutcome !== "none"');
     expect(runProfileStep.run).toContain("timeoutOutcome,");
@@ -5977,8 +6447,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
-      // Reusable jobs start later, so forward the immutable revision instead of a moving branch.
       ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      trusted_ref: "${{ inputs.ref }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       qa_profile: "all",
       allow_failures: "${{ inputs.allow_failures }}",
@@ -6138,10 +6608,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
     expect(qaEvidenceStep.run).toContain("profilePlanSha256");
     expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
+    expect(qaEvidenceStep.env.PROTOCOL_BASE_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
+    );
+    expect(qaEvidenceStep.env.REQUESTED_REF).toBe("${{ inputs.trusted_ref || inputs.ref }}");
     expect(qaEvidenceStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
     expect(qaEvidenceStep.run).toContain("qaExitCode: Number(process.env.QA_EXIT_CODE)");
     expect(qaEvidenceStep.run).toContain('qaPassed: process.env.QA_EXIT_CODE === "0"');
     expect(qaEvidenceStep.run).toContain('allowFailures: process.env.ALLOW_FAILURES === "true"');
+    expect(qaEvidenceStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_BASE_SHA");
     expect(qaEvidenceStep.run).toContain("QA failures allowed:");
 
     const qaUploadStep = qaRunJob.steps.find(
@@ -6287,6 +6762,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const root = tempDirs.make("openclaw-qa-profile-artifact-");
       const evidencePath = path.join(root, "qa-evidence.json");
       const manifestPath = path.join(root, "qa-profile-evidence-manifest.json");
+      const protocolBaseSha = "b".repeat(40);
       const targetSha = "a".repeat(40);
       const expectedCell = {
         scenarioId: "scenario-one",
@@ -6372,6 +6848,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             GITHUB_OUTPUT: path.join(root, "github-output"),
             GITHUB_STEP_SUMMARY: path.join(root, "github-summary"),
             OUTPUT_DIR: root,
+            PROTOCOL_BASE_SHA: protocolBaseSha,
             QA_EXIT_CODE: qaExitCode,
             QA_PROFILE: "all",
             REQUESTED_REF: targetSha,
@@ -6395,6 +6872,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           completeProducer.status,
           `${completeProducer.stdout}${completeProducer.stderr}`,
         ).toBe(0);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+          protocolBaseSha,
+          targetSha,
+        });
         const completeConsumer = runConsumer();
         expect(
           completeConsumer.status,
@@ -6620,25 +7101,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    const publicRuntimeBuild = smokeBuildStep.run.indexOf(
-      "node --import tsx scripts/build-all.mts qaRuntime",
-    );
+    const publicRuntimeBuild = smokeBuildStep.run.indexOf("pnpm build qaRuntime");
     const uiBuild = smokeBuildStep.run.indexOf("pnpm ui:build");
     const packageBuild = smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs");
     const privateRuntimeBuild = smokeBuildStep.run.lastIndexOf(
-      "node --import tsx scripts/build-all.mts qaRuntime",
+      "OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime",
     );
-    expect(smokeBuildStep.run).toContain("node --import tsx scripts/build-all.mts qaRuntime");
+    expect(smokeBuildStep.run).toContain("pnpm build qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env).not.toHaveProperty("OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("unset OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("--skip-build");
-    expect(smokeBuildStep.run).toContain(
-      "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime",
-    );
-    expect(
-      smokeBuildStep.run.match(/node --import tsx scripts\/build-all\.mts qaRuntime/g),
-    ).toHaveLength(2);
+    expect(smokeBuildStep.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime");
+    expect(smokeBuildStep.run.match(/pnpm build qaRuntime/g)).toHaveLength(2);
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');

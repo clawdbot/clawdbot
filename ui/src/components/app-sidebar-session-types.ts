@@ -2,7 +2,7 @@ import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -73,7 +73,6 @@ export type SidebarRecentSession = {
   archived?: boolean;
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
-  icon?: string;
   category?: string;
   boardFace?: BoardFace;
   channel?: string;
@@ -88,7 +87,9 @@ export type SidebarRecentSession = {
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;
+  hasComposerDraft?: boolean;
   unread: boolean;
+  lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
   agentStatusNote?: string;
@@ -146,7 +147,7 @@ export type SidebarSessionGroupMenuState = {
   y: number;
 };
 
-export type SidebarSessionSortMode = "created" | "updated";
+export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
@@ -187,7 +188,6 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   category?: string | null;
-  icon?: string | null;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
@@ -307,7 +307,7 @@ export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
   );
 }
 
-export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
+function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
   getSafeLocalStorage()?.setItem(
     SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY,
     JSON.stringify([...ids]),
@@ -317,12 +317,25 @@ export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
   }
 }
 
+/** Single owner for hide/show of one section: sidebar menu, undo, and Settings all
+ * land here, so no caller re-derives the set from its own possibly stale copy. */
+export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean) {
+  const next = new Set(loadStoredHiddenSessionCatalogIds());
+  if (hidden) {
+    next.add(catalogId);
+  } else {
+    next.delete(catalogId);
+  }
+  storeHiddenSessionCatalogIds(next);
+}
+
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
+  { mode: "people", labelKey: "sessionsView.people" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

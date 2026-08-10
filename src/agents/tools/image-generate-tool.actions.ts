@@ -15,7 +15,7 @@ import {
   findActiveImageGenerationTaskForSession,
   findDuplicateGuardImageGenerationTaskForSession,
   listActiveImageGenerationTasksForSession,
-} from "../image-generation-task-status.js";
+} from "../media-generation-task-status.js";
 import {
   createMediaGenerateDuplicateGuardResult,
   createMediaGenerateProviderListActionResult,

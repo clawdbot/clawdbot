@@ -597,69 +597,49 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
-  it("does not defer ordinary or non-empty results that resemble a synthetic placeholder", async () => {
-    const ordinaryDriver = installLiveStdoutDriver({
-      onWrite: (stdout) => {
-        stdout(
-          jsonl([
-            { type: "system", subtype: "init", session_id: "live-ordinary-placeholder" },
-            {
-              type: "assistant",
-              session_id: "live-ordinary-placeholder",
-              message: {
-                model: "claude-fable-5",
-                role: "assistant",
-                content: [{ type: "text", text: "No response requested." }],
-              },
-            },
-            {
-              type: "result",
-              subtype: "success",
-              session_id: "live-ordinary-placeholder",
-              result: "",
-            },
-          ]),
-        );
-      },
-    });
-    const ordinary = await startLiveTurn({ runId: "run-ordinary-placeholder" });
-    expect(ordinary.output.text).toBe("");
-    expect(ordinaryDriver.cancel).not.toHaveBeenCalled();
+  it("keeps a synthetic result provisional while background work continues", async () => {
+    const driver = installLiveStdoutDriver({ autoStart: false });
+    const resultPromise = startLiveTurn({ runId: "run-synthetic-background" });
+    await driver.stdout.waitReady();
+    driver.stdout.startCurrentInput();
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-background" },
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-1", task_type: "local_agent" }],
+        },
+        {
+          type: "assistant",
+          message: {
+            model: "<synthetic>",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        { type: "result", subtype: "success", result: "" },
+      ]),
+    );
+    let settled = false;
+    void resultPromise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
 
-    resetClaudeLiveSessionsForTest();
-    const nonEmptyDriver = installLiveStdoutDriver({
-      onWrite: (stdout) => {
-        stdout(
-          jsonl([
-            { type: "system", subtype: "init", session_id: "live-synthetic-nonempty" },
-            {
-              type: "assistant",
-              session_id: "live-synthetic-nonempty",
-              message: {
-                model: "<synthetic>",
-                role: "assistant",
-                content: [{ type: "text", text: "No response requested." }],
-              },
-            },
-            {
-              type: "result",
-              subtype: "success",
-              session_id: "live-synthetic-nonempty",
-              result: "real answer",
-            },
-          ]),
-        );
-      },
-    });
-    const nonEmpty = await startLiveTurn({
-      runId: "run-synthetic-nonempty",
-      useResume: true,
-    });
-    expect(nonEmpty.output.text).toBe("real answer");
-    expect(nonEmptyDriver.cancel).not.toHaveBeenCalled();
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "background_tasks_changed", tasks: [] },
+        { type: "result", subtype: "success", result: "background answer" },
+      ]),
+    );
+
+    await expect(resultPromise).resolves.toMatchObject({ output: { text: "background answer" } });
+    expect(driver.cancel).not.toHaveBeenCalled();
   });
 
-  it("does not defer a synthetic placeholder on a fresh live process", async () => {
+  it("fails a current-input synthetic placeholder on a fresh live process", async () => {
     const driver = installLiveStdoutDriver({
       onWrite: (stdout) => {
         stdout(
@@ -685,9 +665,12 @@ describe("claude live session provisional results", () => {
       },
     });
 
-    const result = await startLiveTurn({ runId: "run-synthetic-fresh" });
-    expect(result.output.text).toBe("");
-    expect(driver.cancel).not.toHaveBeenCalled();
+    await expect(startLiveTurn({ runId: "run-synthetic-fresh" })).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      code: "cli_synthetic_no_response",
+    });
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it("times out and cleans up when lifecycle records never start the current input", async () => {

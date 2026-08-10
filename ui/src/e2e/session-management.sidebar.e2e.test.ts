@@ -25,6 +25,55 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("shows an unsent-draft pencil after switching sessions and removes it after clearing", async () => {
+    const firstKey = "agent:main:draft-first";
+    const secondKey = "agent:main:draft-second";
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(firstKey, "Draft first", 2),
+          sessionRow(secondKey, "Draft second", 1),
+        ]),
+      },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
+      const firstRow = page.locator(`[data-session-key="${firstKey}"]`);
+      const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      await firstRow.waitFor({ state: "visible", timeout: 10_000 });
+      await secondRow.waitFor({ state: "visible" });
+      await composer.waitFor({ state: "visible" });
+      await captureUiProof(page, "draft-indicator-before.png");
+
+      await composer.fill("Keep this unsent");
+      await secondRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
+      await firstRow.getByRole("img", { name: "Unsent draft" }).waitFor();
+      await captureUiProof(page, "draft-indicator-after.png");
+
+      await firstRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      expect(await firstRow.getByRole("img", { name: "Unsent draft" }).count()).toBe(0);
+
+      await composer.fill("");
+      await secondRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
+      await expect.poll(() => firstRow.getByRole("img", { name: "Unsent draft" }).count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("expands child sessions inline and opens a child chat", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
@@ -350,26 +399,11 @@ suite.define(() => {
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
 
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Change icon" })
-        .click();
-      const iconPicker = page.getByRole("dialog", { name: "Change icon" });
-      await iconPicker.waitFor({ state: "visible" });
-      await expect
-        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
-      await page.keyboard.press("Tab");
-      await expect
-        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
-      await iconPicker.getByRole("button", { name: "Back" }).click();
-      await menu.waitFor({ state: "visible" });
       await expect
         .poll(() =>
           page
             .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Change icon" })
+            .getByRole("menuitem", { name: "Pin session" })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
@@ -391,7 +425,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("openclaw-session-menu")
-            .getByRole("menuitem", { name: "Open chat" })
+            .getByRole("menuitem", { name: "Pin session" })
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
@@ -453,7 +487,7 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect

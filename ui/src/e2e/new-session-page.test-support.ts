@@ -100,6 +100,25 @@ export function createdSessionListResult(sessionKey: string) {
   };
 }
 
+export async function expectPendingCloudStartupBeforeRuntime(
+  page: Page,
+  gateway: MockGatewayControls,
+  sessionKey: string,
+) {
+  await waitForCommittedChatRoute(page);
+  expect(page.url()).toContain(controlUiSessionPath(sessionKey));
+  const startupStatus = page.locator('.chat-cloud-startup[role="status"]');
+  await expect.poll(() => startupStatus.count()).toBe(1);
+  await pollLocatorText(startupStatus).toContain("Starting…");
+  await expect
+    .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+    .toBe(true);
+  expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+  expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+  await captureUiProof(page, "02-cloud-startup-chunk-pending.png");
+  return startupStatus;
+}
+
 export async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;

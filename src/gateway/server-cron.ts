@@ -55,10 +55,7 @@ import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import {
-  consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
-} from "../infra/system-events.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type {
@@ -223,6 +220,86 @@ function sanitizeCronHeartbeatOverride(
   heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
 ): AgentDefaultsConfig["heartbeat"] | undefined {
   return heartbeat?.target === "last" ? omitExplicitHeartbeatDestination(heartbeat) : heartbeat;
+}
+
+async function finalizeCronCompletionAnnouncement(params: {
+  job: CronJob;
+  text?: string;
+  abortSignal?: AbortSignal;
+  deps: CliDeps;
+  resolveCronAgent: (requested?: string | null) => { agentId: string; cfg: OpenClawConfig };
+  logger: ReturnType<typeof getChildLogger>;
+  label: string;
+  traceResolvedFailure?: boolean;
+}) {
+  const plan = resolveCronDeliveryPlan(params.job);
+  const delivery = {
+    intended: pickDefined(
+      {
+        channel: plan.channel,
+        to: plan.to,
+        accountId: plan.accountId,
+        threadId: plan.threadId,
+        source: "explicit" as const,
+      },
+      ["channel", "to", "accountId", "threadId", "source"],
+    ),
+  };
+  if (plan.mode !== "announce" || params.text === undefined) {
+    return { deliveryAttempted: false, delivered: false, delivery };
+  }
+
+  const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
+  try {
+    await sendCronAnnouncePayloadStrict({
+      deps: params.deps,
+      cfg,
+      agentId,
+      jobId: params.job.id,
+      target: {
+        channel: plan.channel,
+        to: plan.to,
+        threadId: plan.threadId,
+        accountId: plan.accountId,
+        sessionKey: resolveCronDeliverySessionKey(params.job),
+      },
+      payload: { text: params.text },
+      abortSignal: params.abortSignal ?? new AbortController().signal,
+    });
+    return {
+      deliveryAttempted: true,
+      delivered: true,
+      delivery: { ...delivery, delivered: true },
+    };
+  } catch (err) {
+    const deliveryError = formatErrorMessage(err);
+    params.logger.warn(
+      { jobId: params.job.id, err: deliveryError },
+      `cron: ${params.label} delivery failed`,
+    );
+    return {
+      deliveryAttempted: true,
+      delivered: false,
+      deliveryError,
+      delivery: {
+        ...delivery,
+        delivered: false,
+        ...(params.traceResolvedFailure
+          ? {
+              resolved: {
+                channel: plan.channel,
+                to: plan.to,
+                accountId: plan.accountId,
+                threadId: plan.threadId,
+                source: "explicit" as const,
+                ok: false,
+                error: deliveryError,
+              },
+            }
+          : {}),
+      },
+    };
+  }
 }
 
 /** Map internal CronJob to the public plugin SDK shape. */
@@ -657,17 +734,12 @@ export function buildGatewayCronService(params: {
       if (!sessionKey) {
         throw new Error("Cron system event target did not resolve a session key.");
       }
-      const event = enqueueSystemEventEntry(text, {
+      const remove = enqueueSystemEventWithReceipt(text, {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
       });
-      return event
-        ? {
-            accepted: true,
-            remove: () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0,
-          }
-        : { accepted: false };
+      return remove ? { accepted: true, remove } : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {
       // Resolve the wake target the same way the enqueue/heartbeat deps do,
@@ -754,104 +826,45 @@ export function buildGatewayCronService(params: {
         abortSignal,
         nowMs: Date.now,
       });
-      const plan = resolveCronDeliveryPlan(job);
-      const deliveryTrace = {
-        intended: pickDefined(
-          {
-            channel: plan.channel,
-            to: plan.to,
-            threadId: plan.threadId,
-            accountId: plan.accountId,
-            source: "explicit" as const,
-          },
-          ["channel", "to", "accountId", "threadId", "source"],
-        ),
-      };
       const summaryIsSilent =
         typeof result.summary === "string" && isSilentReplyText(result.summary, SILENT_REPLY_TOKEN);
       if (summaryIsSilent) {
         const { summary: _summary, ...silentResult } = result;
-        return {
-          ...silentResult,
-          deliveryAttempted: false,
-          delivered: false,
-          delivery: deliveryTrace,
-        };
-      }
-      const shouldAnnounce =
-        plan.mode === "announce" && typeof result.summary === "string" && result.summary.trim();
-      if (!shouldAnnounce) {
-        return {
-          ...result,
-          deliveryAttempted: false,
-          delivered: false,
-          delivery: deliveryTrace,
-        };
-      }
-      const message = isCommandCronJob(job)
-        ? redactCronCommandSummaryForExternalDelivery(result.summary)
-        : result.summary;
-      if (typeof message !== "string") {
-        return {
-          ...result,
-          deliveryAttempted: false,
-          delivered: false,
-          delivery: deliveryTrace,
-        };
-      }
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      try {
-        await sendCronAnnouncePayloadStrict({
+        const completion = await finalizeCronCompletionAnnouncement({
+          job,
           deps: params.deps,
-          cfg: runtimeConfig,
-          agentId,
-          jobId: job.id,
-          target: {
-            channel: plan.channel,
-            to: plan.to,
-            threadId: plan.threadId,
-            accountId: plan.accountId,
-            sessionKey: resolveCronDeliverySessionKey(job),
-          },
-          payload: { text: message },
-          abortSignal: abortSignal ?? new AbortController().signal,
+          resolveCronAgent,
+          logger: cronLogger,
+          label: "command",
         });
-        return {
-          ...result,
-          deliveryAttempted: true,
-          delivered: true,
-          delivery: {
-            ...deliveryTrace,
-            delivered: true,
-          },
-        };
-      } catch (err) {
-        const error = formatErrorMessage(err);
+        return { ...silentResult, ...completion };
+      }
+      const completion = await finalizeCronCompletionAnnouncement({
+        job,
+        text:
+          typeof result.summary === "string" && result.summary.trim()
+            ? redactCronCommandSummaryForExternalDelivery(result.summary)
+            : undefined,
+        abortSignal,
+        deps: params.deps,
+        resolveCronAgent,
+        logger: cronLogger,
+        label: "command",
+        traceResolvedFailure: true,
+      });
+      if ("deliveryError" in completion) {
+        const { deliveryError, ...deliveryResult } = completion;
         const requiredDeliveryFailed = job.delivery?.bestEffort === false && result.status === "ok";
-        cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery failed");
         return {
           ...result,
           // Default announce delivery is best-effort, but an explicit
           // bestEffort:false keeps delivery inside the job's success contract.
           status: requiredDeliveryFailed ? ("error" as const) : result.status,
-          ...(requiredDeliveryFailed ? { error } : { deliveryError: error }),
-          deliveryAttempted: true,
-          delivered: false,
-          delivery: {
-            ...deliveryTrace,
-            delivered: false,
-            resolved: {
-              channel: plan.channel,
-              to: plan.to,
-              accountId: plan.accountId,
-              threadId: plan.threadId,
-              source: "explicit" as const,
-              ok: false,
-              error,
-            },
-          },
+          ...(requiredDeliveryFailed ? { error: deliveryError } : { deliveryError }),
+          ...deliveryResult,
         };
       }
+      return { ...result, ...completion };
     },
     sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs, onDeliveryAccepted }) => {
       await sendGatewayCronWebhook({
@@ -899,19 +912,6 @@ export function buildGatewayCronService(params: {
       }
 
       const notify = execution.notify?.trim() ? execution.notify : undefined;
-      const plan = resolveCronDeliveryPlan(job);
-      const deliveryTrace = {
-        intended: pickDefined(
-          {
-            channel: plan.channel,
-            to: plan.to,
-            accountId: plan.accountId,
-            threadId: plan.threadId,
-            source: "explicit" as const,
-          },
-          ["channel", "to", "accountId", "threadId", "source"],
-        ),
-      };
       const base = {
         status: "ok" as const,
         notify,
@@ -919,47 +919,26 @@ export function buildGatewayCronService(params: {
         stateChanged: execution.stateChanged,
         ...(execution.stateChanged ? { state: execution.state } : {}),
         nextCheck: execution.nextCheck,
-        delivery: deliveryTrace,
       };
-      if (job.sessionTarget === "main" || plan.mode !== "announce" || !notify) {
-        return { ...base, deliveryAttempted: false, delivered: false };
-      }
-
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      try {
-        await sendCronAnnouncePayloadStrict({
-          deps: params.deps,
-          cfg: runtimeConfig,
-          agentId,
-          jobId: job.id,
-          target: {
-            channel: plan.channel,
-            to: plan.to,
-            threadId: plan.threadId,
-            accountId: plan.accountId,
-            sessionKey: resolveCronDeliverySessionKey(job),
-          },
-          payload: { text: notify },
-          abortSignal: abortSignal ?? new AbortController().signal,
-        });
-        return {
-          ...base,
-          deliveryAttempted: true,
-          delivered: true,
-          delivery: { ...deliveryTrace, delivered: true },
-        };
-      } catch (err) {
-        const error = formatErrorMessage(err);
-        cronLogger.warn({ jobId: job.id, err: error }, "cron: script payload delivery failed");
+      const completion = await finalizeCronCompletionAnnouncement({
+        job,
+        text: job.sessionTarget === "main" ? undefined : notify,
+        abortSignal,
+        deps: params.deps,
+        resolveCronAgent,
+        logger: cronLogger,
+        label: "script payload",
+      });
+      if ("deliveryError" in completion) {
+        const { deliveryError, ...deliveryResult } = completion;
         return {
           ...base,
           status: job.delivery?.bestEffort ? ("ok" as const) : ("error" as const),
-          ...(job.delivery?.bestEffort ? { deliveryError: error } : { error }),
-          deliveryAttempted: true,
-          delivered: false,
-          delivery: { ...deliveryTrace, delivered: false },
+          ...(job.delivery?.bestEffort ? { deliveryError } : { error: deliveryError }),
+          ...deliveryResult,
         };
       }
+      return { ...base, ...completion };
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {

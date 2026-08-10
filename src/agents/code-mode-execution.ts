@@ -44,7 +44,7 @@ import {
 } from "./code-mode-state.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
 

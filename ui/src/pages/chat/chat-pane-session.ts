@@ -1,10 +1,6 @@
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -40,8 +36,8 @@ import {
   nativeHistoryMessageIdentity,
   summarizeSessionPullRequests,
 } from "./chat-pane-shared.ts";
-import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -67,47 +63,7 @@ import {
 } from "./composer-persistence.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
-export abstract class ChatPaneSession extends ChatPaneSharing {
-  protected async refreshTaskSuggestions(): Promise<void> {
-    const requestVersion = ++this.taskSuggestionsRequestVersion;
-    const scope = this.captureConnectionScope();
-    if (
-      !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list")
-    ) {
-      this.taskSuggestions = [];
-      this.requestUpdate();
-      return;
-    }
-    const sessionKey = scope.state.sessionKey;
-    if (parseCatalogSessionKey(sessionKey)) {
-      this.taskSuggestions = [];
-      this.requestUpdate();
-      return;
-    }
-    const agentId = resolveChatAgentId(scope.state);
-    try {
-      const result = await scope.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
-        agentId,
-      });
-      if (
-        requestVersion !== this.taskSuggestionsRequestVersion ||
-        !this.isConnectionScopeCurrent(scope) ||
-        sessionKey !== scope.state.sessionKey
-      ) {
-        return;
-      }
-      this.taskSuggestions = result.suggestions.filter((suggestion) =>
-        this.suggestionMatchesCurrentSession(suggestion),
-      );
-      this.requestUpdate();
-    } catch {
-      // Suggestions are an optional ephemeral affordance; chat remains usable
-      // when an older Gateway or a reconnect loses the process-local registry.
-      // Keep event-delivered cards when a background reconciliation fails.
-    }
-  }
-
+export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
     const scope = this.captureConnectionScope();
     if (
@@ -188,81 +144,6 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
     this.requestUpdate();
   };
-
-  protected handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
-    if (event.action === "created") {
-      if (!this.suggestionMatchesCurrentSession(event.suggestion)) {
-        return;
-      }
-      this.taskSuggestions = [
-        event.suggestion,
-        ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
-      ];
-    } else {
-      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== event.taskId);
-      this.taskSuggestionBusyIds.delete(event.taskId);
-    }
-    this.requestUpdate();
-    // The replacement snapshot includes the event plus unrelated suggestions;
-    // its request version prevents any older snapshot from overwriting either.
-    void this.refreshTaskSuggestions();
-  }
-
-  protected readonly acceptTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
-    this.resolveTaskSuggestion(suggestion, "accept");
-
-  protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
-    this.resolveTaskSuggestion(suggestion, "dismiss");
-
-  protected async resolveTaskSuggestion(
-    suggestion: TaskSuggestion,
-    action: "accept" | "dismiss",
-  ): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (
-      !scope ||
-      !this.suggestionMatchesCurrentSession(suggestion) ||
-      this.taskSuggestionOperations.has(suggestion.id)
-    ) {
-      return;
-    }
-    const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
-    const isCurrent = () =>
-      this.isConnectionScopeCurrent(scope) &&
-      scope.state.sessionKey === sessionKey &&
-      this.taskSuggestionOperations.get(suggestion.id) === operation;
-    this.taskSuggestionOperations.set(suggestion.id, operation);
-    this.taskSuggestionBusyIds.add(suggestion.id);
-    this.requestUpdate();
-    try {
-      const result = await scope.client.request<TaskSuggestionsAcceptResult>(
-        action === "accept" ? "taskSuggestions.accept" : "taskSuggestions.dismiss",
-        { taskId: suggestion.id },
-      );
-      if (!isCurrent()) {
-        return;
-      }
-      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
-      if (action === "accept") {
-        this.onPaneSessionChange?.(this.paneId, result.key);
-      }
-    } catch (error) {
-      if (!isCurrent()) {
-        return;
-      }
-      scope.state.lastError = error instanceof Error ? error.message : String(error);
-      scope.state.chatError = scope.state.lastError;
-    } finally {
-      if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
-        this.taskSuggestionOperations.delete(suggestion.id);
-        this.taskSuggestionBusyIds.delete(suggestion.id);
-        if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
-          this.requestUpdate();
-        }
-      }
-    }
-  }
 
   protected deferSessionHydrationUntilTranscript(
     sessionKey: string,

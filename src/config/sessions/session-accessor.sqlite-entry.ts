@@ -22,6 +22,7 @@ import type {
   SessionTranscriptInstance,
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
+  SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import {
   readSqliteSessionEntryCache,
@@ -75,6 +76,10 @@ import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWriterFence,
+} from "./transcript-write-context.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -450,10 +455,13 @@ export function replaceSqliteSessionEntrySync(
 
 /** Creates a missing session identity without replacing a concurrently owned row. */
 export function ensureSqliteSessionEntrySync(
-  scope: SessionAccessScope,
+  scope: SessionAccessScope &
+    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
   entry: SessionEntry,
 ): boolean {
-  const resolved = resolveSqliteScope(scope);
+  // Every sync initializer inherits and enforces the admitted writer claim.
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteScope(fencedScope);
   assertCanonicalSessionWriteScope(resolved);
   let owned = false;
   let previous = new Map<string, SessionEntry>();
@@ -463,7 +471,14 @@ export function ensureSqliteSessionEntrySync(
     previous = readSqliteSessionIdentitySnapshot(database, identityKeys);
     const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
     if (existing) {
+      // This branch is a read-only ownership probe. The immediately following
+      // transcript mutation rechecks the lifecycle and writer claim in its own
+      // transaction, where a rebound can be reported precisely.
       owned = existing.sessionId === entry.sessionId;
+      current = previous;
+      return;
+    }
+    if (fencedScope.expectedWriterRunId !== undefined) {
       current = previous;
       return;
     }
@@ -473,6 +488,9 @@ export function ensureSqliteSessionEntrySync(
   }, toDatabaseOptions(resolved));
   if (current.size !== previous.size || owned) {
     emitCommittedSessionIdentityDiff(previous, current);
+  }
+  if (fencedScope.expectedWriterRunId !== undefined && !owned) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
   }
   return owned;
 }

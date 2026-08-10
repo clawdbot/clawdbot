@@ -965,10 +965,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openSyncKeyedStore: vi.fn(() => {
         throw new Error("openSyncKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
-      withLease: vi.fn(
-        async (_options, run) =>
-          await run({ signal: new AbortController().signal, assertOwned: vi.fn() }),
-      ),
       openChannelIngressQueue: vi.fn(() => {
         throw new Error("openChannelIngressQueue mock is not configured");
       }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],

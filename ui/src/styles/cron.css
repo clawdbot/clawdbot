@@ -38,7 +38,7 @@
   text-align: left;
   font: inherit;
   color: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   border: 0;
   background: transparent;
   margin: calc(-1 * var(--space-2));
@@ -289,7 +289,7 @@
 .cron-table__row {
   padding-top: var(--space-2);
   padding-bottom: var(--space-2);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -468,7 +468,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   padding: 2px 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
 
@@ -686,7 +686,7 @@
 /* Advanced (collapsible section: summary stands in for the heading) */
 
 .cron-advanced__summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-advanced > .settings-section__desc {
@@ -731,7 +731,7 @@
   text-align: left;
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-form-status__link:hover {
@@ -790,7 +790,7 @@
   text-align: left;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-job-menu__item:hover {
@@ -831,7 +831,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .cron-run-sort:hover {

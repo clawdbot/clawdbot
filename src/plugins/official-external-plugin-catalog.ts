@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";

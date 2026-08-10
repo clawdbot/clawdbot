@@ -43,6 +43,9 @@ const managerModule = await import("./manager.js");
 export const AcpSessionManager = managerModule.AcpSessionManager;
 export const resetAcpSessionManagerForTests = () =>
   managerModule.testing.resetAcpSessionManagerForTests();
+const managerLifecycleModule = await import("./manager.lifecycle.js");
+export const disposeAcpSessionManagerInstance =
+  managerLifecycleModule.disposeAcpSessionManagerInstance;
 export const { AcpRuntimeError } = await import("../runtime/errors.js");
 
 export const baseCfg = {

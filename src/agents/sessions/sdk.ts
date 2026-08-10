@@ -26,7 +26,7 @@ import {
   type InternalBeforeToolBatchHook,
 } from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
-import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
+import { AgentSession, type AgentSessionWriteSettlementRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
@@ -123,8 +123,8 @@ export interface CreateAgentSessionOptions {
   settingsManager?: SettingsManager;
   /** Session start event metadata for extension runtime startup. */
   sessionStartEvent?: SessionStartEvent;
-  /** Optional lock used before session-file writes or write-capable extension hooks. */
-  withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /** Optional settlement boundary for session writes and write-capable extension hooks. */
+  withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
 }
 
 type CreateAgentSessionInternalOptions = Pick<
@@ -463,8 +463,10 @@ async function createAgentSessionImpl(
   };
 
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
-  const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
-    options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
+  const runWithSessionWriteSettlement = async <T>(run: () => Promise<T> | T): Promise<T> =>
+    options.withSessionWriteSettlement
+      ? await options.withSessionWriteSettlement(run)
+      : await run();
 
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
@@ -500,7 +502,7 @@ async function createAgentSessionImpl(
       if (!runner?.hasHandlers("before_provider_request")) {
         return payload;
       }
-      return await runWithSessionWriteLock(
+      return await runWithSessionWriteSettlement(
         async () => await runner.emitBeforeProviderRequest(payload),
       );
     },
@@ -510,7 +512,7 @@ async function createAgentSessionImpl(
       if (!runner?.hasHandlers("after_provider_response")) {
         return;
       }
-      await runWithSessionWriteLock(
+      await runWithSessionWriteSettlement(
         async () =>
           await runner.emit({
             type: "after_provider_response",
@@ -568,7 +570,7 @@ async function createAgentSessionImpl(
     disableBuiltInTools,
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
-    withSessionWriteLock: options.withSessionWriteLock,
+    withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
   });
   const extensionsResult = resourceLoader.getExtensions();

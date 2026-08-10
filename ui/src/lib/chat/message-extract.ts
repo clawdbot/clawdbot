@@ -1,10 +1,7 @@
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import {
-  isMeaningfulMediaFact,
-  readPersistedMediaFacts,
-} from "../../../../src/media/media-facts.js";
+import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -125,12 +122,6 @@ export function extractRawText(message: unknown): string | null {
   return null;
 }
 
-function hasTranscriptMediaFacts(message: unknown): boolean {
-  return message != null && typeof message === "object"
-    ? (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact)
-    : false;
-}
-
 export function readTranscriptMediaEntries(message: unknown): Array<{
   path: string;
   mediaType: string | undefined;
@@ -196,7 +187,7 @@ export function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
     return false;
   }
-  if (hasTranscriptMediaFacts(entry)) {
+  if (readTranscriptMediaEntries(entry).length > 0) {
     return false;
   }
   if (!isTextOnlyContent(entry.content ?? entry.text)) {

@@ -1890,20 +1890,6 @@ describe("Codex app-server turn params", () => {
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
 
-    params.bootstrapContextRunKind = "commitment-only";
-    const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
-      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-    });
-    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
-      "# Collaboration Mode: Default",
-    );
-    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
-      "Turn-only workspace instructions.",
-    );
-    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
-      "This is an OpenClaw heartbeat turn",
-    );
-
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {

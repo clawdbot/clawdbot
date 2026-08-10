@@ -113,7 +113,7 @@ describe("setup migration import options", () => {
     );
   });
 
-  it("offers official installable Codex when bundled plugins are unavailable", async () => {
+  it("does not offer install-only providers during a transactional import", async () => {
     const previousDisableBundled = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     try {
@@ -122,8 +122,8 @@ describe("setup migration import options", () => {
         detections: [],
       });
 
-      expect(options).toEqual(
-        expect.arrayContaining([expect.objectContaining({ providerId: "codex", label: "Codex" })]),
+      expect(options).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ providerId: "codex" })]),
       );
     } finally {
       if (previousDisableBundled === undefined) {

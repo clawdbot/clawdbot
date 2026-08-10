@@ -528,16 +528,16 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
     },
   },
   agents: {
-    list: [
-      {
-        id: "reader",
+    entries: {
+      reader: {
+        default: true,
         tts: {
           providers: {
             elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
           },
         },
       },
-    ],
+    },
   },
 }
 ```

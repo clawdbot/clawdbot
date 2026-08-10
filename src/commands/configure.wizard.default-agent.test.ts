@@ -30,6 +30,18 @@ vi.mock("../config/logging.js", () => ({ logConfigUpdated: vi.fn() }));
 
 vi.mock("../plugins/install-record-commit.js", () => ({
   commitConfigWithPendingPluginInstalls: mocks.commitConfig,
+  transformConfigWithPendingPluginInstalls: async (params: {
+    transform: (config: OpenClawConfig) => { nextConfig: OpenClawConfig };
+    writeOptions?: Record<string, unknown>;
+  }) => {
+    const snapshot = mocks.state.snapshot as {
+      sourceConfig?: OpenClawConfig;
+      config: OpenClawConfig;
+    };
+    const nextConfig = params.transform(snapshot.sourceConfig ?? snapshot.config).nextConfig;
+    const committed = await mocks.commitConfig({ nextConfig, writeOptions: params.writeOptions });
+    return { nextConfig: committed.config };
+  },
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({

@@ -26,6 +26,7 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
 
 import {
   buildCleanupPlan,
+  listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -301,6 +302,22 @@ describe("cleanup path removals", () => {
     expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
+  it("continues after an injected workspace remover rejects", async () => {
+    const runtime = createRuntimeMock();
+    const removeWorkspace = vi
+      .fn<(workspace: string) => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error("trash unavailable"))
+      .mockResolvedValueOnce(true);
+
+    const failures = await removeWorkspaceDirs(["/tmp/first", "/tmp/second"], runtime, {
+      removeWorkspace,
+    });
+
+    expect(removeWorkspace).toHaveBeenCalledTimes(2);
+    expect(failures).toEqual(["/tmp/first"]);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("trash unavailable"));
+  });
+
   it("refuses to remove the current working directory", async () => {
     const runtime = createRuntimeMock();
     const result = await removePath(process.cwd(), runtime, { dryRun: true });
@@ -336,6 +353,20 @@ describe("cleanup path removals", () => {
     } finally {
       cwdSpy.mockRestore();
       await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("listAgentSessionDirs", () => {
+  it("treats a missing agents root as empty but propagates inspection failures", async () => {
+    await expect(listAgentSessionDirs("/tmp/openclaw-missing-state")).resolves.toEqual([]);
+
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
+    try {
+      await expect(listAgentSessionDirs("/tmp/openclaw-unreadable-state")).rejects.toBe(error);
+    } finally {
+      readdir.mockRestore();
     }
   });
 });

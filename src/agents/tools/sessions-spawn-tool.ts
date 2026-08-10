@@ -24,17 +24,17 @@ import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
 import { getSubagentDeliveryBacklogPressure } from "../subagent-registry.js";
+import { normalizeSubagentTaskName } from "../subagent-task-name.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
-} from "../subagent-spawn.js";
-import { normalizeSubagentTaskName } from "../subagent-task-name.js";
+} from "../subagents/spawn/subagent-spawn.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "../swarm-code-mode.js";
-import { resolveSwarmConfig } from "../swarm-config.js";
+} from "../subagents/swarm/swarm-code-mode.js";
+import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
@@ -72,10 +72,10 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-type AcpSpawnModule = typeof import("../acp-spawn.js");
+type AcpSpawnModule = typeof import("../subagents/spawn/acp-spawn.js");
 
 const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
-  () => import("../acp-spawn.js"),
+  () => import("../subagents/spawn/acp-spawn.js"),
 );
 
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {

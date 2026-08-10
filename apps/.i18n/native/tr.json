@@ -24,6 +24,36 @@
       "translated": "Android'i takip et · $systemLanguageTag"
     },
     {
+      "id": "native.android.0eb613765dffd7d5",
+      "source": "Chat failed",
+      "translated": "Sohbet başarısız oldu"
+    },
+    {
+      "id": "native.android.49b641d61b32710e",
+      "source": "Reply to OpenClaw…",
+      "translated": "OpenClaw'a yanıt ver…"
+    },
+    {
+      "id": "native.android.c17863b62b70d822",
+      "source": "Reply",
+      "translated": "Yanıtla"
+    },
+    {
+      "id": "native.android.8700c1dee5524079",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.2028e1559e760da1",
+      "source": "You",
+      "translated": "Siz"
+    },
+    {
+      "id": "native.android.38a6e56b90d42b9f",
+      "source": "Chat",
+      "translated": "Sohbet"
+    },
+    {
       "id": "native.android.2932b1c5134668df",
       "source": "Every ${days}d",
       "translated": "Her ${days} günde bir"
@@ -18619,6 +18649,11 @@
       "translated": "Güncellemeleri Denetle…"
     },
     {
+      "id": "native.apple.2318ba3118a022eb",
+      "source": "App updates are unavailable while a profile is active.",
+      "translated": "Bir profil etkinken uygulama güncellemeleri kullanılamaz."
+    },
+    {
       "id": "native.apple.ddec1d4e5e5b43cb",
       "source": "Updates unavailable in this build.",
       "translated": "Bu derlemede güncellemeler kullanılamıyor."
@@ -20209,6 +20244,11 @@
       "translated": "Not: macOS, Erişilebilirlik veya Ekran Kaydı etkinleştirildikten sonra OpenClaw’ın yeniden başlatılmasını gerektirebilir."
     },
     {
+      "id": "native.apple.974d1478dd99ffb0",
+      "source": "Login-agent restart is unavailable under a profile.",
+      "translated": "Profil altında login-agent yeniden başlatma kullanılamaz."
+    },
+    {
       "id": "native.apple.e52d463773aef1e1",
       "source": "Restart OpenClaw",
       "translated": "OpenClaw’ı yeniden başlat"
@@ -20322,11 +20362,6 @@
       "id": "native.apple.e7d1ee5662c1d646",
       "source": "Degraded",
       "translated": "Bozulmuş"
-    },
-    {
-      "id": "native.apple.0397fa643df26663",
-      "source": "Test",
-      "translated": "Test"
     },
     {
       "id": "native.apple.a8af393b84d63ab8",
@@ -20519,14 +20554,14 @@
       "translated": "Gateway bağlantısı başarısız oldu."
     },
     {
-      "id": "native.apple.8a9259535246e7cf",
-      "source": "OpenClaw needs attention",
-      "translated": "OpenClaw dikkat gerektiriyor"
-    },
-    {
       "id": "native.apple.412b40dec8b94e09",
       "source": "Open Connection settings to fix it.",
       "translated": "Düzeltmek için Bağlantı ayarlarını açın."
+    },
+    {
+      "id": "native.apple.8a9259535246e7cf",
+      "source": "OpenClaw needs attention",
+      "translated": "OpenClaw dikkat gerektiriyor"
     },
     {
       "id": "native.apple.0bec3829fd3ff778",
@@ -20747,16 +20782,6 @@
       "id": "native.apple.a861b3a0aafb24cc",
       "source": "Launch at login",
       "translated": "Oturum açıldığında başlat"
-    },
-    {
-      "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "Oturum açtıktan sonra OpenClaw'ı otomatik olarak başlat."
-    },
-    {
-      "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "Girişte başlatmayı etkinleştirmeden önce OpenClaw'u Applications klasörüne taşıyın."
     },
     {
       "id": "native.apple.927819c087ca3520",
@@ -21199,6 +21224,21 @@
       "translated": "Günlükleri aç"
     },
     {
+      "id": "native.apple.39f0173209fd7e74",
+      "source": "Launch at login is unavailable while an app profile is active.",
+      "translated": "Bir uygulama profili etkinken oturum açıldığında başlatma kullanılamaz."
+    },
+    {
+      "id": "native.apple.405e74c96498b7c0",
+      "source": "Automatically start OpenClaw after you sign in.",
+      "translated": "Oturum açtıktan sonra OpenClaw'ı otomatik olarak başlat."
+    },
+    {
+      "id": "native.apple.8b74758a60f78642",
+      "source": "Move OpenClaw to Applications before enabling launch at login.",
+      "translated": "Girişte başlatmayı etkinleştirmeden önce OpenClaw'u Applications klasörüne taşıyın."
+    },
+    {
       "id": "native.apple.4d96b20de25a9ddf",
       "source": "probe degraded",
       "translated": "probe degraded"
@@ -21312,21 +21352,6 @@
       "id": "native.apple.12d83e5f01c98fc0",
       "source": "\\(status.label) presence",
       "translated": "\\(status.label) varlığı"
-    },
-    {
-      "id": "native.apple.ee499f632a5076c5",
-      "source": "Android",
-      "translated": "Android"
-    },
-    {
-      "id": "native.apple.57ca2baac54a05fc",
-      "source": "Sparkles",
-      "translated": "Parıltılar"
-    },
-    {
-      "id": "native.apple.c9a63d0f5247185d",
-      "source": "Plain",
-      "translated": "Düz"
     },
     {
       "id": "native.apple.3f4378c2de189ec9",
@@ -21784,6 +21809,11 @@
       "translated": "\\(self.label):"
     },
     {
+      "id": "native.apple.5ca13315339f6c15",
+      "source": "Persistent Mac node service unavailable under app profile; runtime node remains available.",
+      "translated": "Kalıcı Mac düğüm hizmeti uygulama profili altında kullanılamaz; çalışma zamanı düğümü kullanılabilir kalır."
+    },
+    {
       "id": "native.apple.800d9fd07f5dde85",
       "source": "Finish",
       "translated": "Bitir"
@@ -21872,26 +21902,6 @@
       "id": "native.apple.51a8291ef11e844d",
       "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
       "translated": "Ayrıntılar yukarıdaki her seçenekte listeleniyor. Girişi düzeltip yeniden deneyebilir veya aşağıda bir API anahtarı ya da token ile bağlanabilirsiniz."
-    },
-    {
-      "id": "native.apple.6526ced182e1fe50",
-      "source": "Your AI is ready",
-      "translated": "AI'nız hazır"
-    },
-    {
-      "id": "native.apple.5d8998398be53d6f",
-      "source": "Setup details",
-      "translated": "Kurulum ayrıntıları"
-    },
-    {
-      "id": "native.apple.1967fcaeb9e74257",
-      "source": "Copy setup details",
-      "translated": "Kurulum ayrıntılarını kopyala"
-    },
-    {
-      "id": "native.apple.c90ec3f0f60d21bc",
-      "source": "Choose a different AI…",
-      "translated": "Farklı bir yapay zeka seç…"
     },
     {
       "id": "native.apple.e0458fcb8c0536ea",
@@ -22434,16 +22444,6 @@
       "translated": " · ssh \\(parsed.port)"
     },
     {
-      "id": "native.apple.4bad86566d023a64",
-      "source": "Grant permissions",
-      "translated": "İzinleri ver"
-    },
-    {
-      "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "Bu macOS izinleri, OpenClaw'ın bu Mac'te uygulamaları otomatikleştirmesine ve bağlamı yakalamasına olanak tanır. Durum otomatik olarak güncellenir."
-    },
-    {
       "id": "native.apple.42af85cdf91d0264",
       "source": "Getting things ready",
       "translated": "Hazırlanıyor"
@@ -22509,11 +22509,6 @@
       "translated": "Her şey hazır!"
     },
     {
-      "id": "native.apple.9f73f753266a9fa2",
-      "source": "Finish opens the chat — say hi to your new agent.",
-      "translated": "Bitir, sohbeti açar — yeni aracınıza merhaba deyin."
-    },
-    {
       "id": "native.apple.678dee9dedd72ce4",
       "source": "Configure later",
       "translated": "Daha sonra yapılandır"
@@ -22522,16 +22517,6 @@
       "id": "native.apple.f87bc67e676d1289",
       "source": "Pick Local or Remote in Settings → General whenever you’re ready.",
       "translated": "Hazır olduğunuzda Settings → General bölümünden Local veya Remote seçin."
-    },
-    {
-      "id": "native.apple.2eb061cd9d5f19fe",
-      "source": "Remote gateway checklist",
-      "translated": "Remote gateway kontrol listesi"
-    },
-    {
-      "id": "native.apple.952e85bfb2d4b4f5",
-      "source": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.",
-      "translated": "Gateway host’unuzda: `openclaw` paketini yükleyin/güncelleyin ve kimlik bilgilerinin mevcut olduğundan emin olun\n(genellikle `~/.openclaw/credentials/oauth.json`). Ardından gerekirse yeniden bağlanın."
     },
     {
       "id": "native.apple.4e5ccb411db3e80f",
@@ -22597,36 +22582,6 @@
       "id": "native.apple.e54dfc2913c56f6f",
       "source": "Launch at login",
       "translated": "Oturum açılışında başlat"
-    },
-    {
-      "id": "native.apple.040f2884f928f376",
-      "source": "Skills included",
-      "translated": "Dahil edilen Skills"
-    },
-    {
-      "id": "native.apple.e38ea89bafb6b75d",
-      "source": "Refresh",
-      "translated": "Yenile"
-    },
-    {
-      "id": "native.apple.38fc7e2b80c4e0fa",
-      "source": "Couldn’t load skills from the Gateway.",
-      "translated": "Skills Gateway’den yüklenemedi."
-    },
-    {
-      "id": "native.apple.3b06694a81edc126",
-      "source": "Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).",
-      "translated": "Gateway’in çalıştığından ve bağlı olduğundan emin olun, ardından Yenile’ye basın (veya Ayarlar → Skills bölümünü açın)."
-    },
-    {
-      "id": "native.apple.b6de2a51e5fb8397",
-      "source": "Details: \\(error)",
-      "translated": "Ayrıntılar: \\(error)"
-    },
-    {
-      "id": "native.apple.b82621bc28d4c6e3",
-      "source": "No skills reported yet.",
-      "translated": "Henüz hiçbir Skills bildirilmedi."
     },
     {
       "id": "native.apple.048e9cc88fb7af55",
@@ -23884,6 +23839,11 @@
       "translated": "Kurulum gerekiyor"
     },
     {
+      "id": "native.apple.5bea2c67b8d4ccf9",
+      "source": "Bundled",
+      "translated": "Paketle birlikte gelen"
+    },
+    {
       "id": "native.apple.1b2cab26853b1074",
       "source": "Managed",
       "translated": "Yönetilen"
@@ -23987,11 +23947,6 @@
       "id": "native.apple.6b59063df92d2991",
       "source": "Skill enabled",
       "translated": "Skill etkin"
-    },
-    {
-      "id": "native.apple.5bea2c67b8d4ccf9",
-      "source": "Bundled",
-      "translated": "Paketle birlikte gelen"
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",

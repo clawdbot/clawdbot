@@ -169,11 +169,6 @@ async function detectNativeCodexAppServer(
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
-    detectNativeCodexAppServer,
-  };
-}
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; the first entry is the bootstrap

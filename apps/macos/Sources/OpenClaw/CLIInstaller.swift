@@ -22,14 +22,14 @@ enum CLIInstallBuild {
 }
 
 enum CLIInstallPolicy {
-    static func storedPolicy(defaults: UserDefaults = .standard) -> String? {
+    static func storedPolicy(defaults: UserDefaults = AppDefaults.standard) -> String? {
         defaults.string(forKey: cliInstallPolicyKey)
     }
 
     static func requiredGatewayVersionString(
         appVersion: String?,
         isDebug: Bool,
-        defaults: UserDefaults = .standard) -> String?
+        defaults: UserDefaults = AppDefaults.standard) -> String?
     {
         guard !CLIInstallBuild.isStable(appVersion: appVersion, isDebug: isDebug) else {
             return appVersion
@@ -315,8 +315,8 @@ enum CLIInstaller {
 
     private static func rememberValidated(_ status: Status) {
         guard case let .ready(location, version) = status else { return }
-        UserDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
-        UserDefaults.standard.set(version, forKey: cliValidatedVersionKey)
+        AppDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
+        AppDefaults.standard.set(version, forKey: cliValidatedVersionKey)
     }
 
     @discardableResult
@@ -470,11 +470,13 @@ enum CLIInstaller {
         executable: String,
         targetVersion: String,
         restartGateway: Bool = true,
-        repair: Bool = false) -> [String]
+        repair: Bool = false,
+        profile: AppProfile = .current) -> [String]
     {
-        var command = repair
-            ? [executable, "update", "repair", "--json", "--timeout", "900", "--yes"]
-            : [executable, "update", "--tag", targetVersion, "--json", "--timeout", "900"]
+        let arguments = repair
+            ? ["update", "repair", "--json", "--timeout", "900", "--yes"]
+            : ["update", "--tag", targetVersion, "--json", "--timeout", "900"]
+        var command = profile.localCLICommand(prefix: [executable], arguments: arguments)
         if !restartGateway {
             command.append("--no-restart")
         }
@@ -559,7 +561,7 @@ enum CLIInstaller {
         case .exact: "exact"
         case let .channel(channel): channel.rawValue
         }
-        UserDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
+        AppDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
     }
 
     private static func devCheckoutLocation(prefix: String) -> String {

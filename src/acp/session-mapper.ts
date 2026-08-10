@@ -27,7 +27,7 @@ export function parseSessionMeta(meta: unknown): AcpSessionMeta {
 }
 
 /** Resolves the Gateway session key for an ACP request using metadata, defaults, or fallback. */
-export async function resolveSessionKey(params: {
+export async function resolveAcpSessionKey(params: {
   meta: AcpSessionMeta;
   fallbackKey: string;
   gateway: GatewayClient;

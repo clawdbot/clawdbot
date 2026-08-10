@@ -16,6 +16,24 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
+export type SessionActionRow = Pick<
+  SidebarRecentSession,
+  "key" | "label" | "pinned" | "archived" | "active"
+>;
+
+export type SessionActionHost = Pick<
+  SessionOrganizerControllerHost,
+  | "pruneSidebarSessionEntry"
+  | "replaceCurrentSession"
+  | "selectSession"
+  | "sidebarSessionStatusFilter"
+> & {
+  readonly sessionData: Pick<
+    SessionOrganizerControllerHost["sessionData"],
+    "isSessionMutationScopeCurrent" | "publishSessionMutationError" | "refreshSidebarSessions"
+  >;
+};
+
 function isLegacyPatchManyMethodRejection(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
@@ -25,7 +43,7 @@ function isLegacyPatchManyMethodRejection(error: unknown): boolean {
 }
 
 export function sessionRowAgentId(
-  session: SidebarRecentSession,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ): string {
   return parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
@@ -39,9 +57,9 @@ export function sessionRowAgentId(
  * result carries the stale/failed reporting the per-row refresh owed its caller.
  */
 export async function refreshSessionsAfterBatch(
-  host: SessionOrganizerControllerHost,
+  host: SessionActionHost,
   scope: SidebarSessionMutationScope,
-  rows: readonly SidebarRecentSession[],
+  rows: readonly SessionActionRow[],
 ): Promise<SidebarSessionMutationResult> {
   const agentIds = [...new Set(rows.map((row) => sessionRowAgentId(row, scope)))];
   const refreshSidebar = host.sidebarSessionStatusFilter() !== "active";
@@ -66,17 +84,17 @@ export async function refreshSessionsAfterBatch(
 }
 
 export async function patchSessionRows(
-  host: SessionOrganizerControllerHost,
-  rows: readonly SidebarRecentSession[],
+  host: SessionActionHost,
+  rows: readonly SessionActionRow[],
   patch: SessionsPatchMutation,
   scope: SidebarSessionMutationScope,
   options: {
     deferListRefresh?: boolean;
-    fallback?: () => Promise<SidebarRecentSession[] | null>;
+    fallback?: () => Promise<SessionActionRow[] | null>;
   } = {},
-): Promise<SidebarRecentSession[] | null> {
+): Promise<SessionActionRow[] | null> {
   const dispatched: Array<{
-    rows: readonly SidebarRecentSession[];
+    rows: readonly SessionActionRow[];
     result: SessionsPatchManyResult;
   }> = [];
   let terminalError: unknown = null;

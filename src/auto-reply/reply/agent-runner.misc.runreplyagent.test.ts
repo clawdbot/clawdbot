@@ -198,10 +198,6 @@ vi.mock("../../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: async () => undefined,
 }));
 
-vi.mock("../../commitments/runtime.js", () => ({
-  enqueueCommitmentExtraction: () => false,
-}));
-
 vi.mock("./followup-runner.js", () => ({
   createFollowupRunner: () => vi.fn(async () => undefined),
 }));

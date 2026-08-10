@@ -690,7 +690,7 @@ generation through the same `openai/gpt-image-2` model ref.
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-2" },
+      mediaModels: { image: { primary: "openai/gpt-image-2" } },
     },
   },
 }
@@ -786,7 +786,7 @@ uploaded video in the `video` field.
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "openai/sora-2" },
+      mediaModels: { video: { primary: "openai/sora-2" } },
     },
   },
 }
@@ -842,10 +842,10 @@ separate and configurable.
   <Tab title="Config">
     ```json5
     {
-      agents: {
-        defaults: {
-          promptOverlays: {
-            gpt5: { personality: "friendly" },
+      plugins: {
+        entries: {
+          openai: {
+            config: { personality: "friendly" },
           },
         },
       },
@@ -854,7 +854,7 @@ separate and configurable.
   </Tab>
   <Tab title="CLI">
     ```bash
-    openclaw config set agents.defaults.promptOverlays.gpt5.personality off
+    openclaw config set plugins.entries.openai.config.personality off
     ```
   </Tab>
 </Tabs>
@@ -865,9 +865,9 @@ friendly style layer.
 </Tip>
 
 <Note>
-Legacy `plugins.entries.openai.config.personality` is still read as a
-compatibility fallback when the shared
-`agents.defaults.promptOverlays.gpt5.personality` setting is unset.
+The retired `agents.defaults.promptOverlays` key is no longer read; config
+validation rejects it, and `openclaw doctor --fix` migrates its personality
+value into `plugins.entries.openai.config.personality` when that key is unset.
 </Note>
 
 ## Voice and speech

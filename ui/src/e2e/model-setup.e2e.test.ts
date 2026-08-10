@@ -42,6 +42,9 @@ suite.define(() => {
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     await suite.withPage(
       {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
@@ -116,14 +119,38 @@ suite.define(() => {
         await expect
           .poll(async () => page.locator(".model-setup-success").textContent())
           .toContain("Verified in 73 ms");
+        await gateway.setMethodResponse("openclaw.setup.detect", {
+          candidates: [],
+          manualProviders: [{ id: "openai", label: "OpenAI" }],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: true,
+          configuredModel: "openai/gpt-5",
+        });
+        await page.getByRole("button", { name: "Stay in settings" }).click();
+        await page.getByRole("button", { name: "Continue setup" }).waitFor();
+        await page.reload();
+        await page.getByRole("button", { name: "Continue setup" }).waitFor();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-durable-continuation.png"),
+          });
+        }
         await page.getByRole("button", { name: "Continue setup" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
-        await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+        // Onboarding chrome keeps only the header actions; no identity heading.
+        await page.locator(".custodian__header--minimal").waitFor();
+        await page.getByRole("button", { name: "Exit setup" }).waitFor();
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--onboarding");
         expect(await page.locator(".shell-nav").isVisible()).toBe(false);
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "custodian-onboarding-handoff.png"),
+          });
+        }
 
         const chatRequest = await gateway.waitForRequest("openclaw.chat");
         expect(chatRequest.params).toMatchObject({
@@ -147,6 +174,9 @@ suite.define(() => {
   it("completes device-code sign-in and re-detects the configured model", async () => {
     await suite.withPage(
       {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
@@ -175,6 +205,14 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
+            "config.get": {
+              config: {},
+              sourceConfig: {},
+              raw: "{}",
+              hash: "config-hash-1",
+              valid: true,
+              issues: [],
+            },
             "openclaw.setup.detect": initialDetection,
             "openclaw.setup.auth.start": {
               sessionId: "device-code-session",
@@ -202,12 +240,39 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
         expect(response?.status()).toBe(200);
+        const configReadsBeforeStart = (await gateway.getRequests("config.get")).length;
+        await gateway.deferNext("config.get");
         await page.getByRole("button", { name: "Pair" }).click();
 
         const start = await gateway.waitForRequest("openclaw.setup.auth.start");
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(configReadsBeforeStart + 1);
         await page.getByText("ABCD-1234").waitFor();
+        await page.getByText("Working…").waitFor();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-refresh-pending.png"),
+          });
+        }
+        await gateway.rejectDeferred("config.get", {
+          code: "UNAVAILABLE",
+          message: "authoritative snapshot unavailable",
+        });
+        await expect.poll(() => page.getByText("Working…").count()).toBe(0);
         await page.getByText("Expires in 14 minutes").waitFor();
+        await page
+          .locator("openclaw-modal-dialog")
+          .getByRole("alert")
+          .filter({ hasText: "authoritative snapshot unavailable" })
+          .waitFor();
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-refresh-warning.png"),
+          });
+        }
         const signInLink = page.getByRole("link", { name: "Open sign-in page" });
         await expect.poll(() => signInLink.getAttribute("href")).toBe("https://example.com/device");
 

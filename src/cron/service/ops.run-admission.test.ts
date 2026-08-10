@@ -17,7 +17,7 @@ import { CommandLane } from "../../process/lanes.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";

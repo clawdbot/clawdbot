@@ -4,7 +4,6 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
-import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -17,10 +16,7 @@ import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choos
 import { hasAskUserPayload, hasExecApprovalPayload } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
-import {
-  withFullRuntimeReplyConfig,
-  withPublishedRuntimeReplyConfig,
-} from "./get-reply-fast-path.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -382,17 +378,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         loadGetReplyFromConfigRuntime(),
       )
     ).getReplyFromConfig;
-  // Channel runtimes can outlive a config reload. Ordinary Gateway turns rebind to the
-  // committed model owner; an explicit per-turn projection stays exact to its caller config.
-  const publishedRuntimeReplyConfig = getRuntimeConfigSnapshot();
-  const runtimeReplyConfig = publishedRuntimeReplyConfig ?? cfg;
-  const replyConfig = params.configOverride
-    ? withFullRuntimeReplyConfig(
-        applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig,
-      )
-    : params.usePublishedModelRuntime || publishedRuntimeReplyConfig
-      ? withPublishedRuntimeReplyConfig(runtimeReplyConfig)
-      : withFullRuntimeReplyConfig(cfg);
+  const runtimeReplyConfig = state.preparedReplyDispatchRuntime?.config ?? cfg;
+  const replyConfig = withFullRuntimeReplyConfig(
+    params.configOverride
+      ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
+      : runtimeReplyConfig,
+  );
   state.recordAgentDispatchStarted();
   const nextState = extendPreparedDispatchState(state, {
     sendPlanUpdate,

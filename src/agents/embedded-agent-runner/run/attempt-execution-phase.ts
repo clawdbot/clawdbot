@@ -4,8 +4,8 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import { runEmbeddedAttemptSettledPhase } from "./attempt-execution-settle.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
+import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -53,7 +53,6 @@ export async function runEmbeddedAttemptExecutionPhase(
     attempt,
     activeSession,
     sessionManager,
-    sessionLockController: input.sessionLock.sessionLockController,
     ownedTranscriptWriteContext: input.sessionLock.ownedTranscriptWriteContext,
     runAbortController: input.runAbortController,
     externalAbortController: input.externalAbortController,

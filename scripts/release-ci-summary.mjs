@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
@@ -98,14 +98,17 @@ export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
   const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
-  return execFileSyncImpl(resolvePlainGhBin(), args, {
-    encoding: "utf8",
-    env: plainGhEnv(),
-    killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio,
-    timeout: timeoutMs,
-  });
+  return execGhRead(
+    args,
+    {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio,
+      timeout: timeoutMs,
+    },
+    { execFileSyncImpl },
+  );
 }
 
 function gh(args) {
@@ -131,8 +134,12 @@ export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
 function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
   const output = openSync(destination, "w");
   try {
-    runReleaseCiGh(artifactDownloadArgs(artifactId, repository), {
+    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
+      env: plainGhEnv(),
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024 * 1024,
       stdio: ["ignore", output, "pipe"],
+      timeout: GH_COMMAND_TIMEOUT_MS,
     });
   } finally {
     closeSync(output);
@@ -1045,6 +1052,9 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
+    compareCommitLineage(base, head) {
+      return githubRestJson(`compare/${base}...${head}?per_page=1&page=2`, normalizedRepository);
+    },
     compareCommits(base, head) {
       return githubRestJson(`compare/${base}...${head}`, normalizedRepository);
     },
@@ -1149,7 +1159,7 @@ export function validateTrustedProducerIdentity(evidence, client, verifier, trus
     workflowRefProof = shaPinned ? "manifest-v3-sha-pinned-main-ancestry" : "manifest-v3-branch";
   }
 
-  const comparison = client.compareCommits(manifest.workflowSha, verifier.sourceSha);
+  const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
   if (
     !["ahead", "identical"].includes(String(comparison.status)) ||
     comparison.merge_base_commit?.sha !== manifest.workflowSha
