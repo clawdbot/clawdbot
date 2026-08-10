@@ -1338,7 +1338,8 @@ describe("createOpenClawCodingTools", () => {
 
     expect(latestCreateOpenClawToolsOptions()).toMatchObject({
       agentAccountId: "delivery",
-      gatewayCaller: { channel: "discord", accountId: "creator" },
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "discord",
     });
   });
 

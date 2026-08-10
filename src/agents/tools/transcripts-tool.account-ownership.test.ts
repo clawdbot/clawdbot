@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { activeSessions } from "./transcripts-tool-runtime.js";
-import { createTranscriptsTool } from "./transcripts-tool.js";
+import { createBoundTranscriptsTool, createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
@@ -43,6 +43,25 @@ function storeFor(stateDir: string): TranscriptsStore {
 }
 
 describe("transcripts tool account ownership", () => {
+  it("hides bound transcripts when trusted caller-channel provenance is unavailable", () => {
+    expect(
+      createBoundTranscriptsTool(
+        { agentChannel: "discord", gatewayCallerChannel: null },
+        "main",
+        { transcripts: { enabled: true } },
+        "account-a",
+      ),
+    ).toBeUndefined();
+    expect(
+      createBoundTranscriptsTool(
+        { agentChannel: "discord", gatewayCallerChannel: "discord" },
+        "main",
+        { transcripts: { enabled: true } },
+        "account-a",
+      )?.name,
+    ).toBe("transcripts");
+  });
+
   afterEach(() => {
     activeSessions.clear();
     closeOpenClawStateDatabaseForTest();

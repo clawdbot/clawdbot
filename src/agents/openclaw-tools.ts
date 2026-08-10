@@ -15,7 +15,6 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
-import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import {
@@ -90,7 +89,7 @@ import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-f
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
-import { createTranscriptsTool } from "./tools/transcripts-tool.js";
+import { createBoundTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
@@ -112,7 +111,9 @@ export function createOpenClawTools(
     agentChannel?: string;
     runId?: string;
     agentAccountId?: string;
-    gatewayCaller?: { channel?: string | null; accountId?: string };
+    /** Trusted account used for authorization; delivery keeps agentAccountId. */
+    gatewayCallerAccountId?: string;
+    gatewayCallerChannel?: string | null;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -262,13 +263,7 @@ export function createOpenClawTools(
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
-  // Scheduled turns authorize tools as their creator while retaining separate delivery routing.
-  const caller = { ...options };
-  const callerChannel = options?.gatewayCaller?.channel;
-  caller.agentChannel =
-    callerChannel === null ? undefined : (callerChannel ?? options?.agentChannel);
-  caller.agentAccountId = options?.gatewayCaller?.accountId ?? options?.agentAccountId;
-  Object.assign(caller, { agentId: sessionAgentId, config: resolvedConfig });
+  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -460,8 +455,6 @@ export function createOpenClawTools(
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     pluginToolDenylist: options?.pluginToolDenylist,
   });
-  const transcriptsEnabled = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
-  const includeTranscriptsTool = transcriptsEnabled && options?.gatewayCaller?.channel !== null;
   const tools: AnyAgentTool[] = [
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -550,7 +543,9 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool ? [createTranscriptsTool(caller)] : []),
+    ...collectPresentOpenClawTools([
+      createBoundTranscriptsTool(options, sessionAgentId, resolvedConfig, gatewayCallerAccountId),
+    ]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []

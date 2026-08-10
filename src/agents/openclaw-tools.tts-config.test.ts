@@ -118,8 +118,13 @@ vi.mock("./tools/subagents-tool.js", () => ({
 }));
 
 vi.mock("./tools/transcripts-tool.js", () => ({
-  createTranscriptsTool: (options: unknown) => {
-    mocks.createTranscriptsToolOptions(options);
+  createBoundTranscriptsTool: (
+    caller: { agentChannel?: string; gatewayCallerChannel?: string | null },
+    agentId: string,
+    config: OpenClawConfig,
+    callerAccountId: string,
+  ) => {
+    mocks.createTranscriptsToolOptions({ caller, agentId, config, callerAccountId });
     return mocks.stubTool("transcripts");
   },
 }));
@@ -287,7 +292,8 @@ describe("createOpenClawTools transcript ownership wiring", () => {
       config: injectedConfig,
       agentChannel: "discord",
       agentAccountId: "delivery",
-      gatewayCaller: { channel: "telegram", accountId: "creator" },
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "telegram",
       disableMessageTool: true,
       disablePluginTools: true,
     });
@@ -295,8 +301,11 @@ describe("createOpenClawTools transcript ownership wiring", () => {
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentId: "main",
-        agentChannel: "telegram",
-        agentAccountId: "creator",
+        caller: expect.objectContaining({
+          agentChannel: "discord",
+          gatewayCallerChannel: "telegram",
+        }),
+        callerAccountId: "creator",
         config: injectedConfig,
       }),
     );
@@ -311,7 +320,28 @@ describe("createOpenClawTools transcript ownership wiring", () => {
     });
 
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
-      expect.objectContaining({ agentAccountId: "delivery" }),
+      expect.objectContaining({
+        caller: expect.objectContaining({ agentChannel: "discord" }),
+        callerAccountId: "delivery",
+      }),
+    );
+  });
+
+  it("passes unavailable scheduled caller-channel provenance to the transcript owner", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: null,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        caller: expect.objectContaining({ gatewayCallerChannel: null }),
+        callerAccountId: "creator",
+      }),
     );
   });
 
