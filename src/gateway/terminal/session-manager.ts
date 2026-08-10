@@ -13,6 +13,7 @@ import {
   type TerminalBackend,
 } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
+import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
 import {
@@ -268,6 +269,7 @@ export class TerminalSessionManager {
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
       this.indexByConn(request.owner.connId, session.id);
+      session.output.push(composeTerminalIntroBanner(request.cols));
     }
 
     backend.onData((chunk) => {
