@@ -204,6 +204,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
+
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel,
@@ -219,9 +220,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
-    ...(requiredCapabilities.reconcileUnknownSend === true
-      ? { requireUnknownSendReconciliation: true }
-      : {}),
+    ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });

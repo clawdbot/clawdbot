@@ -8,8 +8,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import type { AssistantMessage, Message, Tool } from "../llm/types.js";
-import { extractAssistantText } from "./embedded-agent-utils.js";
+import type { AssistantMessage, Message, Tool } from "../../llm/types.js";
+import { extractAssistantText } from "../embedded-agent-utils.js";
 import {
   assertAgainstBaseline,
   type BaselineFindings,
@@ -25,7 +25,7 @@ import {
   shouldAcceptEmptyCacheProbe,
   shouldRetryBaselineFindings,
   shouldRetryCacheProbeText,
-} from "./live-cache-regression-policy.js";
+} from "../live-cache-regression-policy.js";
 import {
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -34,8 +34,8 @@ import {
   type LiveResolvedModel,
   logLiveCache,
   withLiveDirectModelApiKey,
-} from "./live-cache-test-support.js";
-import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
+} from "../live-cache-test-support.js";
+import { shouldSkipLiveProviderDrift } from "../live-test-provider-drift.js";
 
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
@@ -45,7 +45,7 @@ const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
 const LIVE_TEST_PNG_URL = new URL(
-  "../../apps/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
+  "../../../apps/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
   import.meta.url,
 );
 

@@ -7,7 +7,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
@@ -29,6 +28,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,

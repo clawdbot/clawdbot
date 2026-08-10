@@ -500,6 +500,9 @@ function secretRefDefaults(value: unknown): SecretRefDefaults | undefined {
   if (typeof value.exec === "string") {
     defaults.exec = value.exec;
   }
+  if (typeof value.store === "string") {
+    defaults.store = value.store;
+  }
   return defaults;
 }
 

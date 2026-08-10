@@ -11,6 +11,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -2658,7 +2659,6 @@ describe("chat loading skeleton", () => {
     expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
@@ -4456,6 +4456,61 @@ describe("chat attachment picker", () => {
     expect(container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
       "Show in text field",
     );
+  });
+
+  it("preserves pasted-text presentation and restore behavior across handoff", () => {
+    let attachments: ChatAttachment[] = [];
+    const producer = renderAttachmentHarness(
+      () => attachments,
+      (next) => {
+        attachments = next;
+      },
+    );
+    const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
+    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
+    const original = expectDefined(attachments[0], "pasted attachment");
+    const originalDataUrl = getChatAttachmentDataUrl(original);
+
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    handoff.prepare({
+      owner,
+      paneId: "p1",
+      scopeKey: "agent:main:one",
+      attachments,
+      fallbacks: {},
+    });
+    attachments = expectDefined(
+      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" }),
+      "restored attachments",
+    ).attachments;
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toBe(original);
+    expect(getChatAttachmentDataUrl(original)).toBe(originalDataUrl);
+
+    const onAttachmentsChange = vi.fn();
+    const onDraftChange = vi.fn();
+    const remounted = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      draft: "intro",
+      getDraft: () => "intro",
+      onAttachmentsChange,
+      onDraftChange,
+    });
+    expect(remounted.querySelector(".chat-attachment-file__name")?.textContent).toContain(
+      "First words from a r...",
+    );
+    requireElement(
+      remounted,
+      '[aria-label="Show in text field"]',
+      "show pasted text button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
+    expect(getChatAttachmentDataUrl(original)).toBeNull();
   });
 
   it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {

@@ -29,7 +29,6 @@ type ReplyRestartRecoveryClaimController = {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "admitted" | "pending">;
     pendingFinalDelivery?: {
       context?: DeliveryContext;
-      deliveries: NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"];
       intentId: string;
       text: string;
     };
@@ -377,7 +376,6 @@ export function createReplyRestartRecoveryClaimController(params: {
                         ...(pendingFinalDelivery.intentId
                           ? { intentId: pendingFinalDelivery.intentId }
                           : {}),
-                        deliveries: pendingFinalDelivery.deliveries,
                         ...(pendingFinalDelivery.context
                           ? { context: pendingFinalDelivery.context }
                           : {}),

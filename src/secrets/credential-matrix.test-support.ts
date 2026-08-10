@@ -1,4 +1,4 @@
-/** Generates the documented matrix of user-supplied credential fields that accept SecretRefs. */
+/** Test support for the documented matrix of user-supplied fields that accept SecretRefs. */
 import { getSecretTargetRegistry } from "./target-registry-data.js";
 import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 

@@ -1,4 +1,8 @@
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatComposerDraftRetry,
+  ChatQueueItem,
+} from "../../lib/chat/chat-types.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   MAX_STORED_QUEUE_ITEMS,
@@ -66,10 +70,7 @@ type RestoreOptions = {
   sessionKey?: string;
 };
 
-export type ChatComposerDraftRetry = {
-  expectedDraftRevision: number;
-  draftRevision: number;
-};
+export type { ChatComposerDraftRetry } from "../../lib/chat/chat-types.ts";
 
 type ChatComposerPersistStatus = "persisted" | "conflict" | "storage-failed";
 

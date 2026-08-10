@@ -224,7 +224,7 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
 
 <AccordionGroup>
   <Accordion title="Common flags">
-    - `--provider-source <env|file|exec>`
+    - `--provider-source <env|file|exec|store>`
     - `--provider-timeout-ms <ms>` (`file`, `exec`)
 
   </Accordion>
@@ -443,7 +443,7 @@ openclaw config set channels.discord.token \
   <Accordion title="If dry-run fails">
     - `config schema validation failed`: your post-change config shape is invalid; fix the path/value or provider/ref object shape.
     - `Config policy validation failed: unsupported SecretRef usage`: move that credential back to plaintext/string input; keep SecretRefs on supported surfaces only.
-    - `SecretRef assignment(s) could not be resolved`: the referenced provider/ref cannot currently resolve (missing env var, invalid file pointer, exec provider failure, or provider/source mismatch).
+    - `SecretRef assignment(s) could not be resolved`: the referenced provider/ref cannot currently resolve (missing env/store name, invalid file pointer, exec provider failure, or provider/source mismatch).
     - `model reference validation failed`: a changed text-model primary or fallback is unknown; run `openclaw models list` and choose an available model.
     - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: rerun with `--allow-exec` if you need exec resolvability validation.
     - For batch mode, fix failing entries and rerun `--dry-run` before writing.

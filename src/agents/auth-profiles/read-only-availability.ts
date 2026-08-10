@@ -42,12 +42,11 @@ export function resolveSecretRefReadOnlyAvailability(
     return false;
   }
   const source = cfg.secrets?.providers?.[value.provider];
-  if (
-    (!source &&
-      (value.source !== "env" ||
-        value.provider !== resolveDefaultSecretProviderAlias(cfg, "env"))) ||
-    (source && source.source !== value.source)
-  ) {
+  const isImplicitProvider =
+    (value.source === "env" && value.provider === resolveDefaultSecretProviderAlias(cfg, "env")) ||
+    (value.source === "store" &&
+      value.provider === resolveDefaultSecretProviderAlias(cfg, "store"));
+  if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
     return false;
   }
   if (value.source === "env") {

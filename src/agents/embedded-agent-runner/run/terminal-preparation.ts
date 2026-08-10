@@ -100,7 +100,7 @@ export function prepareEmbeddedRunTerminal(input: {
     sessionFile: input.sessionFileUsed,
     provider: reportedModelRef.provider,
     model: reportedModelRef.model,
-    ...input.outerContextTokenMeta,
+    contextTokens: attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens,
     agentHarnessId: attempt.agentHarnessId,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,

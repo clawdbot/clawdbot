@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI staged attachments:** preserve unsent images, files, pasted images, and large pasted text across same-tab route and narrow split-pane remounts while keeping pane close, mismatched pane/session/Gateway remounts, application shutdown, and hard reload as cleanup boundaries. Fixes #121519. Thanks @shakkernerd.
 - **Control UI browser annotations:** keep marked screenshots and generated page context together in structured composer cards, preserve user-written drafts when annotations are removed or replaced, retain complete unsent annotation packages across same-tab route and active split-pane remounts, and offer bounded Undo without restoring removed context into another session. Fixes #120744. Thanks @shakkernerd.
 - **Control UI profile avatar refreshes:** carry canonical content revisions through mutation responses and live presence so rapid replacements refresh every connected browser without stale cache rollback. Thanks @shakkernerd.
 - **Control UI appearance accessibility:** keep the unavailable custom-theme card announced as an Import command while preserving selected-state semantics for selectable themes and text sizes. Thanks @shakkernerd.

@@ -1199,7 +1199,7 @@
     "name": "reportClawHubPluginInstallTelemetry",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
-      "src/infra/clawhub.ts"
+      "src/infra/clawhub-packages.ts"
     ]
   },
   {

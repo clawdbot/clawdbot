@@ -85,6 +85,7 @@ const JSON_NOT_APPLICABLE = {
       "directory groups",
       "security",
       "secrets",
+      "secrets store",
       "models aliases",
       "models fallbacks",
       "models image-fallbacks",
@@ -197,6 +198,9 @@ const JSON_NOT_APPLICABLE = {
       "channels remove",
       "channels login",
       "channels logout",
+      "secrets store set",
+      "secrets store rm",
+      "secrets store import",
     ],
   },
   rawArtifacts: {

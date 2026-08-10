@@ -8,23 +8,23 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Model } from "../llm/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { Model } from "../../llm/types.js";
 import type {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
-} from "../plugins/provider-runtime.js";
-import type { ProviderResolveDynamicModelContext } from "../plugins/types.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { listPrioritizedHighSignalLiveModelRefs } from "./live-model-filter.js";
+} from "../../plugins/provider-runtime.js";
+import type { ProviderResolveDynamicModelContext } from "../../plugins/types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { listPrioritizedHighSignalLiveModelRefs } from "../live-model-filter.js";
 
-type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
+type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;
 type DynamicModelPreparer = typeof prepareProviderDynamicModel;
 type DynamicModelNormalizer = (model: Model, agentDir: string) => Model | Promise<Model>;
 
 const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
-  () => import("../plugins/provider-runtime.js"),
+  () => import("../../plugins/provider-runtime.js"),
 );
 
 async function prepareProviderDynamicModelDefault(
@@ -46,7 +46,7 @@ async function normalizeDynamicModelDefault(
   agentDir: string,
   options: { config?: OpenClawConfig; workspaceDir?: string },
 ): Promise<Model> {
-  const { normalizeDiscoveredAgentModel } = await import("./agent-model-discovery.js");
+  const { normalizeDiscoveredAgentModel } = await import("../agent-model-discovery.js");
   return normalizeDiscoveredAgentModel(model, agentDir, options);
 }
 

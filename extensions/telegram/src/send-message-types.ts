@@ -49,8 +49,6 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
-  /** @internal Refresh durable custody immediately before Telegram Bot API I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 export type TelegramApiCallOpts = Pick<
@@ -78,10 +76,5 @@ export type TelegramSendResult = {
 export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
   Pick<
     TelegramSendOpts,
-    | "buttons"
-    | "quoteText"
-    | "promptContextProjectionPlan"
-    | "silent"
-    | "onDeliveryResult"
-    | "onPlatformSendDispatch"
+    "buttons" | "quoteText" | "promptContextProjectionPlan" | "silent" | "onDeliveryResult"
   >;

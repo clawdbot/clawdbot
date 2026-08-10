@@ -1131,7 +1131,7 @@ Secret refs are additive: plaintext values still work.
 Use one object shape:
 
 ```json5
-{ source: "env" | "file" | "exec", provider: "default", id: "..." }
+{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }
 ```
 
 Validation:

@@ -4,7 +4,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatAuthProfileFailureMessage } from "../../agents/auth-profiles/failure-copy.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
-  classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -12,19 +11,22 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatRateLimitOrOverloadedErrorCopy,
-  isBillingErrorMessage,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
+  describeFailoverError,
   findCliMaxTurnsError,
   findCliTimeoutError,
   isFailoverError,
+  type FallbackAttemptRecord,
 } from "../../agents/failover-error.js";
 import { isPeriodicUsageLimitErrorMessage } from "../../agents/failover/classify.js";
-import { isMissingProviderAuthError } from "../../agents/model-auth.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
+import {
+  classifyProviderRequestFacets,
+  type ProviderRequestFacet,
+} from "../../agents/failover/request-error-facets.js";
+import type { FailoverClassification } from "../../agents/failover/signal.js";
+import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -36,33 +38,106 @@ import type { ReplyPayload } from "../types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+  PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE,
+  PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./agent-runner-failure-copy.js";
-import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 
 const RATE_LIMIT_RETRY_MESSAGE =
   "⚠️ The model request was rate-limited. Please try again in a few minutes.";
 
+export function resolveReplyFailoverFacts(error: unknown, message: string) {
+  const described = describeFailoverError(error);
+  const classification = described.reason
+    ? ({ kind: "reason", reason: described.reason } as const)
+    : null;
+  return {
+    reason: classification?.kind === "reason" ? classification.reason : undefined,
+    providerRequestError: mapProviderRequestError({
+      classification,
+      facet: classifyProviderRequestFacets({
+        status: described.status,
+        message: described.rawError ?? message,
+      }),
+      status: described.status,
+      technicalMessage: message,
+    }),
+  };
+}
+
+type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
+
+type ProviderRequestErrorCode =
+  | "provider_authentication_error"
+  | "provider_conversation_state_error"
+  | "provider_internal_error"
+  | "provider_model_unavailable"
+  | "provider_rate_limit_or_quota_error";
+
+function mapProviderRequestError(params: {
+  classification: FailoverClassification | null;
+  facet: ProviderRequestFacet | null;
+  status?: number;
+  technicalMessage: string;
+}) {
+  const reason =
+    params.classification?.kind === "reason" ? params.classification.reason : undefined;
+  const mapped: [ProviderRequestErrorCode, string, true?] | undefined =
+    reason === "auth" && params.status === 401
+      ? ["provider_authentication_error", PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE]
+      : reason === "model_not_found"
+        ? ["provider_model_unavailable", PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE]
+        : params.facet === "quota-429"
+          ? ["provider_rate_limit_or_quota_error", PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE]
+          : params.facet === "conversation-state"
+            ? ["provider_conversation_state_error", PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE]
+            : params.facet === "provider-internal" || params.facet === "provider-internal-503"
+              ? [
+                  "provider_internal_error",
+                  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+                  params.facet === "provider-internal-503" || undefined,
+                ]
+              : undefined;
+  return mapped
+    ? {
+        code: mapped[0],
+        userMessage: mapped[1],
+        technicalMessage: params.technicalMessage,
+        ...(mapped[2] ? { allowTransientHttpRetry: true as const } : {}),
+      }
+    : undefined;
+}
+
 /** Builds a human-friendly rate-limit message, including a known cooldown. */
 export function buildRateLimitCooldownMessage(err: unknown): string {
-  const codexUsageLimitMessage = extractCodexUsageLimitErrorMessage(err);
+  const message = formatErrorMessage(err);
+  const failoverFacts = resolveReplyFailoverFacts(err, message);
+  const attempts = readFallbackAttempts(err);
+  const codexUsageLimitMessage = extractCodexUsageLimitErrorMessage(
+    attempts,
+    message,
+    failoverFacts.reason,
+    isFailoverError(err) ? err.provider : undefined,
+  );
   if (codexUsageLimitMessage) {
     return codexUsageLimitMessage;
   }
-  if (isFallbackSummaryError(err) && hasBillingAttemptSummary(err)) {
+  if (attempts.some((attempt) => attempt.reason === "billing")) {
     return BILLING_ERROR_USER_MESSAGE;
   }
-  const message = formatErrorMessage(err);
-  if (isBillingErrorMessage(message)) {
+  if (failoverFacts.reason === "billing") {
     return BILLING_ERROR_USER_MESSAGE;
   }
-  if (!isFallbackSummaryError(err)) {
-    if (isPeriodicUsageLimitErrorMessage(message)) {
+  if (attempts.length === 0) {
+    if (failoverFacts.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(message)) {
       const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
     return RATE_LIMIT_RETRY_MESSAGE;
   }
-  const expiry = err.soonestCooldownExpiry;
+  const expiry = isFailoverError(err) ? err.soonestCooldownExpiry : undefined;
   const now = Date.now();
   if (typeof expiry === "number" && expiry > now) {
     const secsLeft = Math.max(1, Math.ceil((expiry - now) / 1000));
@@ -72,24 +147,29 @@ export function buildRateLimitCooldownMessage(err: unknown): string {
     return `⚠️ Rate-limited — ready in ~${Math.ceil(secsLeft / 60)} min. Please try again shortly.`;
   }
   const attemptedModels = new Set(
-    err.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`),
+    attempts.map((attempt) => `${attempt.provider}/${attempt.model}`),
   );
-  if (attemptedModels.size > 1 && isPureTransientRateLimitSummary(err)) {
+  if (
+    attemptedModels.size > 1 &&
+    attempts.every((attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded")
+  ) {
     return "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.";
   }
   return RATE_LIMIT_RETRY_MESSAGE;
 }
 
 export function resolveBillingFailureReplyText(err: unknown): string {
-  const billingFailure = isFallbackSummaryError(err)
-    ? err.attempts.find(
-        (attempt) =>
-          attempt.reason === "billing" &&
-          (attempt.authMode === "oauth" || attempt.authMode === "token"),
-      )
-    : isFailoverError(err) && err.reason === "billing"
-      ? err
-      : undefined;
+  const attempts = readFallbackAttempts(err);
+  const billingFailure =
+    attempts.length > 0
+      ? attempts.find(
+          (attempt) =>
+            attempt.reason === "billing" &&
+            (attempt.authMode === "oauth" || attempt.authMode === "token"),
+        )
+      : isFailoverError(err) && err.reason === "billing"
+        ? err
+        : undefined;
   if (
     !billingFailure ||
     (billingFailure.authMode !== "oauth" && billingFailure.authMode !== "token")
@@ -103,36 +183,23 @@ export function resolveBillingFailureReplyText(err: unknown): string {
   );
 }
 
-function extractCodexUsageLimitErrorMessage(err: unknown): string | undefined {
-  if (isFallbackSummaryError(err)) {
-    for (const attempt of err.attempts) {
-      const message = extractCodexUsageLimitMessage(attempt.error);
-      if (message) {
-        return `⚠️ ${message}`;
-      }
-    }
+function extractCodexUsageLimitErrorMessage(
+  attempts: readonly ReplyFallbackAttempt[],
+  directMessage: string,
+  directReason: ReplyFailoverFacts["reason"],
+  directProvider: string | undefined,
+): string | undefined {
+  const attempt = attempts.find(
+    (candidate) =>
+      candidate.provider === "openai" && candidate.reason === "rate_limit" && candidate.error,
+  );
+  const text =
+    attempt?.error ??
+    (directProvider === "openai" && directReason === "rate_limit" ? directMessage : undefined);
+  if (!text) {
     return undefined;
   }
-  const message = extractCodexUsageLimitMessage(formatErrorMessage(err));
-  return message ? `⚠️ ${message}` : undefined;
-}
-
-function extractCodexUsageLimitMessage(text: string): string | undefined {
-  const markers = [
-    "You've reached your Codex subscription usage limit.",
-    "Codex usage limit reached.",
-  ];
-  let markerIndex: number | undefined;
-  for (const marker of markers) {
-    const index = text.indexOf(marker);
-    if (index >= 0 && (markerIndex === undefined || index < markerIndex)) {
-      markerIndex = index;
-    }
-  }
-  if (markerIndex === undefined) {
-    return undefined;
-  }
-  const message = sanitizeUserFacingText(text.slice(markerIndex), { errorContext: true })
+  const message = sanitizeUserFacingText(text, { errorContext: true })
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -141,26 +208,16 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
   if (!message) {
     return undefined;
   }
-  return message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+  const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
+  return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
 }
 
-export function isPureTransientRateLimitSummary(err: unknown): boolean {
-  return (
-    isFallbackSummaryError(err) &&
-    err.attempts.length > 0 &&
-    err.attempts.every((attempt) => {
-      const reason = attempt.reason;
-      return reason === "rate_limit" || reason === "overloaded";
-    })
-  );
-}
+type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
-export function hasBillingAttemptSummary(err: unknown): boolean {
-  return (
-    isFallbackSummaryError(err) &&
-    err.attempts.length > 0 &&
-    err.attempts.some((attempt) => attempt.reason === "billing")
-  );
+function readFallbackAttempts(err: unknown): readonly ReplyFallbackAttempt[] {
+  return isFailoverError(err) && Array.isArray(err.attempts)
+    ? (err.attempts as readonly ReplyFallbackAttempt[])
+    : [];
 }
 
 function collapseRepeatedFailureDetail(message: string): string {
@@ -321,17 +378,12 @@ function buildCliBackendTimeoutFailureText(input: {
 }
 
 function buildMissingApiKeyFailureText(input: { message: string; error?: unknown }): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(input.message);
-  const provider = isMissingProviderAuthError(input.error)
-    ? input.error.provider.trim().toLowerCase()
-    : normalizedMessage
-        .match(/No API key found for provider "([^"]+)"/u)?.[1]
-        ?.trim()
-        .toLowerCase();
+  const authError = isProviderAuthError(input.error) ? input.error : undefined;
+  const provider = authError?.provider.trim().toLowerCase();
   if (!provider) {
     return null;
   }
-  if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
+  if (provider === "openai" && authError?.providerGuidance) {
     return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
@@ -385,13 +437,16 @@ export function buildExternalRunFailureReply(
     includeDetails?: boolean;
     isHeartbeat?: boolean;
     replayPrevented?: boolean;
+    failoverFacts?: ReplyFailoverFacts;
   },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
+  const failoverFacts =
+    options?.failoverFacts ??
+    resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
+  const oauthRefreshFailure = classifyOAuthRefreshFailureError(error);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
@@ -435,7 +490,7 @@ export function buildExternalRunFailureReply(
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
-  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
+  const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
     return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
   }
@@ -534,12 +589,12 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
   const message = formatErrorMessage(params.err);
-  const isFallbackSummary = isFallbackSummaryError(params.err);
-  const isBilling = isFallbackSummary
-    ? hasBillingAttemptSummary(params.err)
-    : isFailoverError(params.err)
-      ? params.err.reason === "billing"
-      : isBillingErrorMessage(message);
+  const failoverFacts = resolveReplyFailoverFacts(params.err, message);
+  const fallbackAttempts = readFallbackAttempts(params.err);
+  const hasFallbackAttempts = fallbackAttempts.length > 0;
+  const isBilling = hasFallbackAttempts
+    ? fallbackAttempts.some((attempt) => attempt.reason === "billing")
+    : failoverFacts.reason === "billing";
   if (isBilling) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
@@ -565,21 +620,22 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     });
   }
 
-  const isPureTransientSummary = isFallbackSummary
-    ? isPureTransientRateLimitSummary(params.err)
+  const isPureTransientSummary = hasFallbackAttempts
+    ? fallbackAttempts.every(
+        (attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded",
+      )
     : false;
-  const failoverReason =
-    !isFallbackSummary && isFailoverError(params.err) ? params.err.reason : undefined;
-  const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
-  const isRateLimit = isFallbackSummary
+  const failoverReason = failoverFacts.reason;
+  const isOverloaded = hasFallbackAttempts
+    ? fallbackAttempts.every((attempt) => attempt.reason === "overloaded")
+    : failoverReason === "overloaded";
+  const isRateLimit = hasFallbackAttempts
     ? isPureTransientSummary
-    : failoverReason
-      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
-      : isRateLimitErrorMessage(message);
+    : failoverReason === "rate_limit" || failoverReason === "overloaded";
   const rateLimitOrOverloadedCopy =
-    !isFallbackSummary || isPureTransientSummary
+    !hasFallbackAttempts || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(
-          failoverReason === "overloaded" ? "overloaded" : message,
+          isFailoverError(params.err) && failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
 
@@ -609,6 +665,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     {
       includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
       includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+      failoverFacts,
     },
   );
   if (externalRunFailureReply.isGenericRunnerFailure) {
