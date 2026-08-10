@@ -275,12 +275,12 @@ function verifyBase(cwd, base, upstream, branch) {
 }
 
 function stagedPaths(cwd) {
-  return listPaths(runGit(cwd, ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"]));
+  return listPaths(runGit(cwd, ["diff", "--cached", "--name-only", "--diff-filter=ACMRD", "-z"]));
 }
 
 function rangePaths(cwd, upstream) {
   return listPaths(
-    runGit(cwd, ["diff", "--name-only", "--diff-filter=ACMR", "-z", `${upstream}..HEAD`]),
+    runGit(cwd, ["diff", "--name-only", "--diff-filter=ACMRD", "-z", `${upstream}..HEAD`]),
   );
 }
 

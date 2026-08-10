@@ -307,6 +307,40 @@ describe("publication preflight real hook behavior", () => {
     const failure = runFailure(dir, "git", ["push", "origin", "HEAD"]);
     expect(failure).toContain("commit range does not match the explicit manifest allowlist");
   });
+
+  it("rejects an unallowlisted tracked-file deletion through the real hook", () => {
+    const bareRemote = mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-publication-preflight-deletion-remote-"),
+    );
+    tempDirs.push(bareRemote);
+    run(bareRemote, "git", ["init", "-q", "--bare"]);
+
+    const { dir, manifest } = makeRepository({ remoteUrl: `file://${bareRemote}` });
+    run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs"), "--install"]);
+    run(dir, "node", [
+      SCRIPT,
+      "prepare",
+      "--manifest",
+      manifest,
+      "--path",
+      "safe.txt",
+      "--inventory-json",
+      "[]",
+    ]);
+    run(dir, "git", ["commit", "-q", "-m", "publication preflight fixture"]);
+    run(dir, "node", [SCRIPT, "check", "--manifest", manifest]);
+    run(dir, "node", [SCRIPT, "approve", "--manifest", manifest]);
+    run(dir, "git", ["push", "origin", "HEAD"]);
+
+    run(dir, "git", ["rm", "-q", "--", "README.md"]);
+    run(dir, "git", ["commit", "-q", "-m", "unallowlisted deletion fixture"]);
+    expect(run(dir, "git", ["diff", "--name-status", "origin/main..HEAD"])).toContain(
+      "D\tREADME.md",
+    );
+    const failure = runFailure(dir, "git", ["push", "origin", "HEAD"]);
+    expect(failure).toContain("commit range does not match the explicit manifest allowlist");
+    expect(failure).toContain("README.md");
+  });
 });
 
 describe("publication preflight repository integration", () => {
