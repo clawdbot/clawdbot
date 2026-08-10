@@ -76,8 +76,8 @@ export function getClaudeGeneration(owner: ClaudeLiveSessionOwner): string | und
   return liveSessions.get(key)?.generation ?? liveSessionCreates.get(key)?.generation;
 }
 
-export function getClaudeSession<T extends ClaudeLiveProcessHandle>(key: string): T | undefined {
-  return liveSessions.get(key) as T | undefined;
+export function getClaudeSession(key: string): ClaudeLiveProcessHandle | undefined {
+  return liveSessions.get(key);
 }
 
 export function registerClaudeSession(

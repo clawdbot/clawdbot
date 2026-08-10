@@ -375,7 +375,7 @@ async function runSerializedClaudeTurn(
     env: params.env,
   });
   const systemPromptHash = sha256Hex(stripSystemPromptCacheBoundary(params.context.systemPrompt));
-  let session = getClaudeSession<ClaudeLiveProcess>(key);
+  let session = getClaudeSession(key) as ClaudeLiveProcess | undefined;
   if (
     session &&
     params.requiredSessionGeneration &&
