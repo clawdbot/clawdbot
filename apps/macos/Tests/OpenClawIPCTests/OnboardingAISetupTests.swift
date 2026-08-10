@@ -961,7 +961,8 @@ struct OnboardingAISetupTests {
         }
         #expect(model.activeAuthOption == nil)
         #expect(model.authError == nil)
-        #expect(model.connectedModelRef == preparedModelRef)
+        #expect(model.connected)
+        #expect(model.selectedKind == "provider-auto:llama-cpp")
         let completedRequests = await recorder.snapshot()
         #expect(completedRequests.methods.suffix(2) == [
             "wizard.next",
@@ -1029,7 +1030,8 @@ struct OnboardingAISetupTests {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        #expect(model.connectedModelRef == preparedModelRef)
+        #expect(model.connected)
+        #expect(model.selectedKind == "provider-auto:llama-cpp")
         #expect(await (recorder.snapshot()).methods == [
             "openclaw.setup.detect",
             "openclaw.setup.prepare.start",
@@ -1148,30 +1150,6 @@ struct OnboardingAISetupTests {
         #expect(candidates.allSatisfy { $0.detail == "installed" })
     }
 
-    @Test func `activation decodes and retains copyable setup lines`() throws {
-        let data = Data(
-            #"""
-            {"ok":true,"modelRef":"openai/gpt-5.5","lines":[
-              "Model: openai/gpt-5.5","  Plugin registry refresh failed: offline  ",""
-            ]}
-            """#.utf8)
-        let result = try JSONDecoder().decode(OnboardingAISetupModel.ActivateResult.self, from: data)
-        let model = OnboardingAISetupModel()
-
-        model._test_setConnectedSetupLines(result.lines)
-
-        #expect(model.connectedSetupLines == [
-            "Model: openai/gpt-5.5",
-            "Plugin registry refresh failed: offline",
-        ])
-        #expect(model.connectedSetupCopyText ==
-            "Model: openai/gpt-5.5\nPlugin registry refresh failed: offline")
-
-        model.resetForGatewayChange()
-        #expect(model.connectedSetupLines.isEmpty)
-        #expect(model.connectedSetupCopyText.isEmpty)
-    }
-
     @Test func `gateway hello maps exact-model setup capability`() throws {
         let data = Data(
             #"""
@@ -1247,47 +1225,6 @@ struct OnboardingAISetupTests {
         #expect(pendingState(defaults) == .none)
     }
 
-    @Test func `choose a different AI relists routes without auto-activating`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingChooseDifferentAITests"))
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let harness = AISetupHarness(url: url) { _, request, _ in
-            switch request.method {
-            case "openclaw.setup.detect":
-                // credentials:true would auto-activate; the choose-different
-                // pass must end at the picker even for actionable candidates.
-                actionableDetectedSetupResponse(id: request.id)
-            case "openclaw.setup.activate": verifiedSetupResponse(id: request.id)
-            default: nil
-            }
-        }
-        let model = harness.model(defaults: defaults)
-
-        await model.detectAndAutoConnect()
-        #expect(model.connected)
-
-        #expect(model.beginChooseDifferentAI())
-        await model.detectAndAutoConnect()
-
-        #expect(!model.connected)
-        #expect(!model.isBusy)
-        #expect(model.candidates.count == 1)
-        #expect(model.statuses["claude-cli"] == .untried)
-        #expect(model.showManualEntry)
-        // Exactly one activation: the initial auto-connect. The re-detect pass
-        // must not redo the choice the user just asked to change.
-        let snapshot = await harness.recorder.snapshot()
-        #expect(snapshot.methods.filter { $0 == "openclaw.setup.activate" }.count == 1)
-        #expect(snapshot.methods.last == "openclaw.setup.detect")
-    }
-
-    @Test func `choose a different AI requires a connected setup`() throws {
-        let defaults = isolatedAISetupDefaults(prefix: "OnboardingChooseDifferentAIGuardTests") ?? .standard
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let model = AISetupHarness(url: url).model(defaults: defaults)
-
-        #expect(!model.beginChooseDifferentAI())
-    }
-
     @Test func `adopts pending activation stored under the retired crestodian key`() throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRetiredKeyMigrationTests"))
 
@@ -1333,7 +1270,7 @@ struct OnboardingAISetupTests {
             "openclaw.setup.verify",
         ])
         #expect(model.connected)
-        #expect(model.connectedModelRef == "openai/gpt-5.5")
+        #expect(model.selectedKind == "codex-cli")
         #expect(handoffCount == 1)
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
@@ -1480,8 +1417,6 @@ struct OnboardingAISetupTests {
         model.resetForGatewayChange()
 
         #expect(model.phase == .idle)
-        #expect(model.connectedModelRef == nil)
-        #expect(model.connectedLatencyMs == nil)
         #expect(model.manualProviderID.isEmpty)
         #expect(model.manualKey.isEmpty)
         #expect(!model.showManualEntry)
@@ -1546,7 +1481,6 @@ struct OnboardingAISetupTests {
         #expect(!model.connected)
         #expect(model.pendingActivationVerification)
         #expect(model.phase == .detecting)
-        #expect(model.connectedModelRef == nil)
 
         await model.activate(kind: "codex-cli")
         #expect(model.pendingActivationVerification)
@@ -1556,9 +1490,7 @@ struct OnboardingAISetupTests {
 
         #expect(model.connected)
         #expect(!model.pendingActivationVerification)
-        #expect(model.connectedModelRef == "openai/gpt-5.5")
         #expect(model.selectedKind == "existing-model")
-        #expect(model.statuses["existing-model"] == .connected)
     }
 
     @Test func `pending handoff connects only after route-bound live verification`() async throws {
@@ -1574,8 +1506,7 @@ struct OnboardingAISetupTests {
         let requests = await harness.recorder.snapshot()
         #expect(requests.methods == ["openclaw.setup.verify"])
         #expect(model.connected)
-        #expect(model.connectedModelRef == "openai/gpt-5.5")
-        #expect(model.connectedLatencyMs == 42)
+        #expect(model.selectedKind == "existing-model")
     }
 
     @Test func `overlapping pending verification callers share one route-bound request`() async throws {

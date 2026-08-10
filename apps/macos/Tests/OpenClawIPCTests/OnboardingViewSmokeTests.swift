@@ -45,7 +45,6 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         let view = OnboardingView(
             state: state,
-            permissionMonitor: PermissionMonitor.shared,
             discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
         _ = view.body
     }
@@ -80,25 +79,6 @@ struct OnboardingViewSmokeTests {
 
         #expect(short == 409)
         #expect(short < preferred)
-    }
-
-    @Test func `permissions page scrolls when the onboarding window is short`() throws {
-        let state = AppState(preview: true)
-        let view = OnboardingView(state: state)
-        let hosting = NSHostingView(rootView: view.permissionsPage())
-        let contentHeight = OnboardingView.contentHeight(
-            for: OnboardingView.minimumWindowHeight,
-            usesCompactHero: false)
-        hosting.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: OnboardingView.windowWidth,
-            height: contentHeight)
-        hosting.layoutSubtreeIfNeeded()
-
-        let scrollView = try #require(Self.firstDescendant(of: NSScrollView.self, in: hosting))
-        #expect(contentHeight == 303)
-        #expect(scrollView.documentView != nil)
     }
 
     @Test func `configured flows end at AI setup and hand off to the dashboard`() {
@@ -302,7 +282,6 @@ struct OnboardingViewSmokeTests {
             state.remoteTarget = "user@old-host:2222"
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Unresolved",
@@ -343,7 +322,6 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
             view.aiSetup.manualKey = "route-a-secret"
@@ -450,7 +428,6 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
             view.aiSetup.manualKey = "pending-secret"
@@ -542,13 +519,5 @@ struct OnboardingViewSmokeTests {
         #expect(Array(Capability.importanceOrdered.prefix(3))
             == [.appleScript, .accessibility, .screenRecording])
         #expect(Capability.importanceOrdered.last == Capability.location)
-    }
-
-    private static func firstDescendant<T: NSView>(of type: T.Type, in view: NSView) -> T? {
-        if let match = view as? T { return match }
-        for child in view.subviews {
-            if let match = self.firstDescendant(of: type, in: child) { return match }
-        }
-        return nil
     }
 }

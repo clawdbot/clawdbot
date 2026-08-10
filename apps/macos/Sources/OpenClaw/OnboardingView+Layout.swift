@@ -68,7 +68,6 @@ extension OnboardingView {
             self.onboardingDidDisappear()
         }
         .task {
-            await self.refreshPerms()
             await self.refreshCLIStatus()
             self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
@@ -96,7 +95,6 @@ extension OnboardingView {
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        stopPermissionMonitoring()
         stopDiscovery()
     }
 

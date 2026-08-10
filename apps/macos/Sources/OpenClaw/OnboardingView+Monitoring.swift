@@ -1,27 +1,6 @@
 import Foundation
-import OpenClawIPC
 
 extension OnboardingView {
-    @MainActor
-    func refreshPerms() async {
-        await permissionMonitor.refreshNow()
-    }
-
-    @MainActor
-    func request(_ cap: Capability) async {
-        guard !isRequesting else { return }
-        isRequesting = true
-        defer { isRequesting = false }
-        _ = await PermissionManager.ensure([cap], interactive: true)
-        await self.refreshPerms()
-    }
-
-    func updatePermissionMonitoring(for pageIndex: Int) {
-        PermissionMonitoringSupport.setMonitoring(
-            pageIndex == permissionsPageIndex,
-            monitoring: &monitoringPermissions)
-    }
-
     func updateDiscoveryMonitoring(for pageIndex: Int) {
         let isConnectionPage = pageIndex == connectionPageIndex
         let shouldMonitor = isConnectionPage
@@ -40,7 +19,6 @@ extension OnboardingView {
     }
 
     func updateMonitoring(for pageIndex: Int) {
-        self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
         self.maybeStartAISetup(for: pageIndex)
@@ -158,10 +136,6 @@ extension OnboardingView {
         // Cmd-W bypasses the disabled close button; the delegate asks first.
         OnboardingController.shared.busyReason = "OpenClaw is installing the Gateway service."
         Task { @MainActor in await self.runCLIInstall() }
-    }
-
-    func stopPermissionMonitoring() {
-        PermissionMonitoringSupport.stopMonitoring(&monitoringPermissions)
     }
 
     func stopDiscovery() {
