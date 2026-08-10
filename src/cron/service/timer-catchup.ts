@@ -67,8 +67,8 @@ async function persistStartupCatchupReservations(
   state: CronServiceState,
   rollbackSnapshot: ReturnType<typeof snapshotStoreForRollback>,
   pendingReleases: readonly Pick<StartupCatchupCandidate, "jobId" | "reservationIdentity">[],
+  postPersistNotifications: DeferredCronNotifications = [],
 ): Promise<void> {
-  const postPersistNotifications: DeferredCronNotifications = [];
   recomputeNextRunsForMaintenance(state, {
     repairFutureCronNextRunAtMs: false,
     deferredNotifications: postPersistNotifications,
@@ -300,6 +300,7 @@ async function applyStartupCatchupOutcomes(
       state,
       plan.candidates.filter((candidate) => !startedJobIds.has(candidate.jobId)),
     );
+    const postPersistNotifications: DeferredCronNotifications = [];
     if (state.stopped || (outcomes.length === 0 && plan.deferredJobs.length === 0)) {
       if (pendingReleases.length > 0) {
         await persistStartupCatchupReservations(state, rollbackSnapshot, pendingReleases);
@@ -321,7 +322,7 @@ async function applyStartupCatchupOutcomes(
             state,
             job,
             candidate: baseNow + deferred.delayMs + offset - staggerMs,
-            context: "startup_catchup_delay",
+            deferredNotifications: postPersistNotifications,
           });
           job.state.nextRunAtMs = runAtMs;
           job.state.startupCatchupAtMs = runAtMs;
@@ -332,7 +333,7 @@ async function applyStartupCatchupOutcomes(
           state,
           job,
           candidate: baseNow + offset,
-          context: "startup_catchup_stagger",
+          deferredNotifications: postPersistNotifications,
         });
         job.state.nextRunAtMs = runAtMs;
         job.state.startupCatchupAtMs = runAtMs;
@@ -342,7 +343,12 @@ async function applyStartupCatchupOutcomes(
 
     // Startup overflow owns these staggered wake times; repairing future
     // schedules here would silently move a deferred run to its natural slot.
-    await persistStartupCatchupReservations(state, rollbackSnapshot, pendingReleases);
+    await persistStartupCatchupReservations(
+      state,
+      rollbackSnapshot,
+      pendingReleases,
+      postPersistNotifications,
+    );
   });
   return outcomes;
 }

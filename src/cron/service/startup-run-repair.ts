@@ -174,7 +174,7 @@ export function restoreFinalizedStartupRun(params: {
           state,
           job,
           candidate: finalizedNextRunAtMs,
-          context: "startup_run_repair",
+          deferredNotifications: params.deferredNotifications,
         });
   // The finalized ledger row owns the schedule decision made before the stale
   // store write. No next run means that one-shot was permanently disabled.

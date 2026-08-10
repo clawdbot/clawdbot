@@ -66,12 +66,9 @@ export function resolveCronRunTriggerOwnership(params: {
     : "current";
 }
 
-function assignNextRunAtMs(params: {
-  state: CronServiceState;
-  job: CronJob;
-  candidate: unknown;
-  context: string;
-}): number | undefined {
+function assignNextRunAtMs(
+  params: Parameters<typeof resolveNextRunAtMsOrDisable>[0],
+): number | undefined {
   const nextRunAtMs = resolveNextRunAtMsOrDisable(params);
   params.job.state.nextRunAtMs = nextRunAtMs;
   return nextRunAtMs;
@@ -237,7 +234,7 @@ export function applyJobResult(
               state,
               job,
               candidate: result.endedAt + retryDecision.backoffMs,
-              context: "disabled_heartbeat_retry",
+              deferredNotifications: opts?.deferredNotifications,
             }) !== undefined
           ) {
             state.deps.log.info(
@@ -284,7 +281,7 @@ export function applyJobResult(
               state,
               job,
               candidate: result.endedAt + retryDecision.backoffMs,
-              context: "one_shot_retry",
+              deferredNotifications: opts?.deferredNotifications,
             }) !== undefined
           ) {
             state.deps.log.info(
@@ -391,7 +388,7 @@ export function applyJobResult(
             state,
             job,
             candidate: result.endedAt + retryDecision.backoffMs,
-            context: "recurring_retry",
+            deferredNotifications: opts?.deferredNotifications,
           });
           if (retryNextRunAtMs === undefined) {
             return shouldDelete;
@@ -424,7 +421,7 @@ export function applyJobResult(
           state,
           job,
           candidate: undefined,
-          context: "error_backoff",
+          deferredNotifications: opts?.deferredNotifications,
         });
         return shouldDelete;
       }
@@ -432,7 +429,7 @@ export function applyJobResult(
         state,
         job,
         candidate: result.endedAt + backoff,
-        context: "error_backoff",
+        deferredNotifications: opts?.deferredNotifications,
       });
       if (backoffNext === undefined) {
         return shouldDelete;
@@ -445,7 +442,7 @@ export function applyJobResult(
               job,
               naturalNext: normalNext,
               lowerBoundMs: backoffNext,
-              context: "error_backoff",
+              deferredNotifications: opts?.deferredNotifications,
             })
           : normalNext !== undefined
             ? Math.max(normalNext, backoffNext)
@@ -483,7 +480,7 @@ export function applyJobResult(
               result.endedAt + Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs()),
             )
           : pacedNextRunAtMs,
-        context: "pacing",
+        deferredNotifications: opts?.deferredNotifications,
       });
       job.state.pacedNextRunAtMs = nextRunAtMs;
     } else if (isJobEnabled(job)) {
@@ -519,7 +516,7 @@ export function applyJobResult(
           job,
           naturalNext,
           lowerBoundMs: minNext,
-          context: "completion",
+          deferredNotifications: opts?.deferredNotifications,
         });
       } else {
         const triggerNext =
@@ -532,7 +529,7 @@ export function applyJobResult(
             state,
             job,
             candidate: triggerNext,
-            context: job.trigger ? "trigger_completion" : "completion",
+            deferredNotifications: opts?.deferredNotifications,
           });
         }
       }
@@ -613,7 +610,7 @@ export function applyTriggerNoFireResult(
         job,
         candidate:
           naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs),
-        context: "quiet_trigger",
+        deferredNotifications: opts?.deferredNotifications,
       });
     }
   } catch (err) {

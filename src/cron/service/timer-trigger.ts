@@ -10,12 +10,17 @@ import type {
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
   isJobEnabled,
 } from "./jobs-scheduling.js";
-import type { CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
+import type {
+  CronServiceState,
+  CronSystemEventEnqueueResult,
+  DeferredCronNotifications,
+} from "./state.js";
 import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
 
@@ -47,21 +52,21 @@ export function resolveNextRunAtMsOrDisable(params: {
   state: CronServiceState;
   job: CronJob;
   candidate: unknown;
-  context: string;
+  deferredNotifications?: DeferredCronNotifications;
 }): number | undefined {
   const nextRunAtMs = asDateTimestampMs(params.candidate);
   if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
     return nextRunAtMs;
   }
-  params.job.enabled = false;
-  params.state.deps.log.warn(
-    {
-      jobId: params.job.id,
-      jobName: params.job.name,
-      context: params.context,
-    },
-    "cron: disabling job because its next run is outside the supported Date range",
-  );
+  autoDisableCronJob({
+    state: params.state,
+    job: params.job,
+    reason: "schedule-errors",
+    atMs: params.state.deps.nowMs(),
+    consecutiveErrors: 1,
+    error: "next run is outside the supported Date range",
+    deferredNotifications: params.deferredNotifications,
+  });
   return undefined;
 }
 
@@ -118,14 +123,13 @@ export function resolveCronNextRunWithLowerBound(params: {
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  context: "completion" | "error_backoff";
+  deferredNotifications?: DeferredCronNotifications;
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(
       {
         jobId: params.job.id,
         jobName: params.job.name,
-        context: params.context,
       },
       "cron: next run unresolved; clearing schedule to avoid a refire loop",
     );
@@ -135,7 +139,7 @@ export function resolveCronNextRunWithLowerBound(params: {
     state: params.state,
     job: params.job,
     candidate: Math.max(params.naturalNext, params.lowerBoundMs),
-    context: params.context,
+    deferredNotifications: params.deferredNotifications,
   });
 }
 

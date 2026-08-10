@@ -98,11 +98,13 @@ describe("startup run repair auto-disable", () => {
       payload: { kind: "systemEvent", text: "do not replay" },
       state: { nextRunAtMs: runningAtMs, runningAtMs },
     };
+    const deferredNotifications: Array<() => void> = [];
 
     restoreFinalizedStartupRun({
       state,
       job,
       runningAtMs,
+      deferredNotifications,
       entry: {
         ts: runningAtMs + 1_000,
         jobId: job.id,
@@ -116,6 +118,18 @@ describe("startup run repair auto-disable", () => {
 
     expect(job.enabled).toBe(false);
     expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.autoDisabled).toEqual({
+      reason: "schedule-errors",
+      atMs: runningAtMs + 1_000,
+      consecutiveErrors: 1,
+    });
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+    expect(deferredNotifications).toHaveLength(1);
+
+    deferredNotifications[0]?.();
+    expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
   });
 
   it.each(["runAtMs", "ts"] as const)(

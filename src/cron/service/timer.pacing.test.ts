@@ -122,10 +122,11 @@ describe("cron trigger evaluation ownership", () => {
 
 describe("applyJobResult dynamic cadence", () => {
   it.each(["one-shot retry", "recurring retry", "pacing", "trigger floor", "quiet trigger"])(
-    "disables a job when %s cannot produce a Date-valid next run",
+    "auto-disables a job when %s cannot produce a Date-valid next run",
     (scenario) => {
       const endedAt = MAX_DATE_TIMESTAMP_MS - 1_000;
       const state = makeState();
+      const deferredNotifications: Array<() => void> = [];
       const job = makeCronJob({
         schedule:
           scenario === "one-shot retry"
@@ -139,31 +140,53 @@ describe("applyJobResult dynamic cadence", () => {
       });
 
       if (scenario === "quiet trigger") {
-        applyTriggerNoFireResult(state, job, {
-          startedAt: endedAt - 1,
-          endedAt,
-          triggerEval: { fired: false, stateChanged: false },
-        });
+        applyTriggerNoFireResult(
+          state,
+          job,
+          {
+            startedAt: endedAt - 1,
+            endedAt,
+            triggerEval: { fired: false, stateChanged: false },
+          },
+          { deferredNotifications },
+        );
       } else {
         const isRetry = scenario === "one-shot retry" || scenario === "recurring retry";
-        applyJobResult(state, job, {
-          status: isRetry ? "error" : "ok",
-          ...(isRetry
-            ? {
-                error: "temporary timeout",
-                errorClassification: { kind: "reason" as const, reason: "timeout" as const },
-                executionStarted: true,
-              }
-            : {}),
-          startedAt: endedAt - 1,
-          endedAt,
-          ...(scenario === "pacing" ? { nextCheck: { delayMs: 2_000 } } : {}),
-        });
+        applyJobResult(
+          state,
+          job,
+          {
+            status: isRetry ? "error" : "ok",
+            ...(isRetry
+              ? {
+                  error: "temporary timeout",
+                  errorClassification: { kind: "reason" as const, reason: "timeout" as const },
+                  executionStarted: true,
+                }
+              : {}),
+            startedAt: endedAt - 1,
+            endedAt,
+            ...(scenario === "pacing" ? { nextCheck: { delayMs: 2_000 } } : {}),
+          },
+          { deferredNotifications },
+        );
       }
 
       expect(job.enabled).toBe(false);
       expect(job.state.nextRunAtMs).toBeUndefined();
       expect(job.state.pacedNextRunAtMs).toBeUndefined();
+      expect(job.state.autoDisabled).toEqual({
+        reason: "schedule-errors",
+        atMs: ENDED_AT,
+        consecutiveErrors: 1,
+      });
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(deferredNotifications).toHaveLength(1);
+
+      deferredNotifications[0]?.();
+      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
     },
   );
 
