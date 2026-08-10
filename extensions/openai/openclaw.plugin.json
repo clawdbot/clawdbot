@@ -306,7 +306,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the shared GPT-5 friendly interaction-style overlay. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
+        "description": "Controls the shared GPT-5 friendly interaction-style overlay for OpenAI-family providers. `friendly` and `on` enable the style overlay; `off` disables only that style layer while the tagged GPT-5 behavior contract stays active."
       }
     }
   }
