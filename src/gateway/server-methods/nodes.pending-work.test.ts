@@ -4,7 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { nodePendingHandlers } from "./nodes-pending.js";
+import { nodePendingWorkHandlers } from "./nodes.pending-work.js";
 
 const mocks = vi.hoisted(() => ({
   captureNodePairingGeneration: vi.fn(),
@@ -109,8 +109,8 @@ describe("node.pending handlers", () => {
     });
 
     await expectDefined(
-      nodePendingHandlers["node.pending.drain"],
-      'nodePendingHandlers["node.pending.drain"] test invariant',
+      nodePendingWorkHandlers["node.pending.drain"],
+      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
     )({
       params: { maxItems: 3 },
       respond: respond as never,
@@ -144,8 +144,8 @@ describe("node.pending handlers", () => {
     const respond = vi.fn();
 
     await expectDefined(
-      nodePendingHandlers["node.pending.drain"],
-      'nodePendingHandlers["node.pending.drain"] test invariant',
+      nodePendingWorkHandlers["node.pending.drain"],
+      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
     )({
       params: {},
       respond: respond as never,
@@ -171,8 +171,8 @@ describe("node.pending handlers", () => {
     });
 
     await expectDefined(
-      nodePendingHandlers["node.pending.drain"],
-      'nodePendingHandlers["node.pending.drain"] test invariant',
+      nodePendingWorkHandlers["node.pending.drain"],
+      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
     )({
       params: {},
       respond: respond as never,
@@ -208,8 +208,8 @@ describe("node.pending handlers", () => {
     });
 
     await expectDefined(
-      nodePendingHandlers["node.pending.drain"],
-      'nodePendingHandlers["node.pending.drain"] test invariant',
+      nodePendingWorkHandlers["node.pending.drain"],
+      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
     )({
       params: {},
       respond: respond as never,
@@ -240,8 +240,8 @@ describe("node.pending handlers", () => {
     });
 
     await expectDefined(
-      nodePendingHandlers["node.pending.drain"],
-      'nodePendingHandlers["node.pending.drain"] test invariant',
+      nodePendingWorkHandlers["node.pending.drain"],
+      'nodePendingWorkHandlers["node.pending.drain"] test invariant',
     )({
       params: {},
       respond: respond as never,
@@ -298,8 +298,8 @@ describe("node.pending handlers", () => {
     const respond = vi.fn();
 
     await expectDefined(
-      nodePendingHandlers["node.pending.enqueue"],
-      'nodePendingHandlers["node.pending.enqueue"] test invariant',
+      nodePendingWorkHandlers["node.pending.enqueue"],
+      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
     )({
       params: {
         nodeId: " ios-node-2 ",
@@ -400,8 +400,8 @@ describe("node.pending handlers", () => {
     const respond = vi.fn();
 
     await expectDefined(
-      nodePendingHandlers["node.pending.enqueue"],
-      'nodePendingHandlers["node.pending.enqueue"] test invariant',
+      nodePendingWorkHandlers["node.pending.enqueue"],
+      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
     )({
       params: { nodeId: " ios-node-invalidated ", type: "location.request" },
       respond: respond as never,
@@ -463,8 +463,8 @@ describe("node.pending handlers", () => {
     const respond = vi.fn();
 
     await expectDefined(
-      nodePendingHandlers["node.pending.enqueue"],
-      'nodePendingHandlers["node.pending.enqueue"] test invariant',
+      nodePendingWorkHandlers["node.pending.enqueue"],
+      'nodePendingWorkHandlers["node.pending.enqueue"] test invariant',
     )({
       params: { nodeId: "node-replacement", type: "location.request", wake: false },
       respond: respond as never,
