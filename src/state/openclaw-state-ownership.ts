@@ -115,25 +115,6 @@ export function inspectOpenClawStateOwnershipFromDatabase(
   return parseExternalOwnership(row.value_json, databasePath);
 }
 
-function hasLiveWal(databasePath: string): boolean {
-  return existsSync(`${databasePath}-wal`);
-}
-
-function inspectOpenClawStateOwnershipAtLocation(
-  databasePath: string,
-  location = databasePath,
-): OpenClawExternalStateOwnership | null {
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
-  try {
-    database.exec(
-      `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
-    );
-    return inspectOpenClawStateOwnershipFromDatabase(database, databasePath);
-  } finally {
-    database.close();
-  }
-}
-
 /** Inspect one resolved state database path without joining the writable lifecycle. */
 export function inspectOpenClawStateOwnershipAtPath(
   databasePath: string,
@@ -142,21 +123,30 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  if (hasLiveWal(resolvedPath)) {
-    return inspectOpenClawStateOwnershipAtLocation(resolvedPath);
-  }
-  try {
-    return inspectOpenClawStateOwnershipAtLocation(
-      resolvedPath,
-      resolveImmutableSqliteFileUri(resolvedPath),
-    );
-  } catch (error) {
-    // External claims checkpoint before returning, so the main file is authoritative.
-    // If a WAL appeared during this open, retry with SQLite's normal WAL-aware reader.
-    if (!isSqliteCorruptionError(error) || !hasLiveWal(resolvedPath)) {
-      throw error;
+  let location = existsSync(`${resolvedPath}-wal`)
+    ? resolvedPath
+    : resolveImmutableSqliteFileUri(resolvedPath);
+  while (true) {
+    const database = openNodeSqliteDatabase(location, { readOnly: true });
+    try {
+      database.exec(
+        `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
+      );
+      return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+    } catch (error) {
+      // External claims checkpoint before returning, so the main file is authoritative.
+      // If a WAL appeared during immutable inspection, retry once with its live reader.
+      if (
+        location === resolvedPath ||
+        !isSqliteCorruptionError(error) ||
+        !existsSync(`${resolvedPath}-wal`)
+      ) {
+        throw error;
+      }
+      location = resolvedPath;
+    } finally {
+      database.close();
     }
-    return inspectOpenClawStateOwnershipAtLocation(resolvedPath);
   }
 }
 
