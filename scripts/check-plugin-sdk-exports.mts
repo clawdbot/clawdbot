@@ -9,7 +9,6 @@
 
 import { spawnSync } from "node:child_process";
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +16,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -64,9 +64,49 @@ let missing = 0;
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-sdk-consumer-"));
   const consumerRoot = join(tempRoot, "consumer");
   try {
-    cpSync(resolve(repoRoot, "test/fixtures/plugin-sdk-package-consumer"), consumerRoot, {
-      recursive: true,
-    });
+    mkdirSync(consumerRoot, { recursive: true });
+    writeFileSync(
+      join(consumerRoot, "index.ts"),
+      `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { z } from "openclaw/plugin-sdk/zod";
+
+const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "package-consumer",
+  errorMessage: "package consumer runtime not initialized",
+});
+export const configSchema = buildChannelConfigSchema(
+  z.object({ dmPolicy: DmPolicySchema.optional() }),
+);
+
+declare const plugin: Parameters<typeof defineChannelPluginEntry>[0]["plugin"];
+export default defineChannelPluginEntry({
+  id: "package-consumer",
+  name: "Package Consumer",
+  description: "Published Plugin SDK declaration compatibility fixture",
+  plugin,
+  setRuntime: runtimeStore.setRuntime,
+});
+`,
+    );
+    writeFileSync(join(consumerRoot, "package.json"), '{"private":true,"type":"module"}\n');
+    writeFileSync(
+      join(consumerRoot, "tsconfig.json"),
+      `{
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "types": []
+  },
+  "include": ["index.ts"]
+}
+`,
+    );
     const openclawPackagePath = join(consumerRoot, "node_modules", "openclaw");
     mkdirSync(dirname(openclawPackagePath), { recursive: true });
     symlinkSync(repoRoot, openclawPackagePath, process.platform === "win32" ? "junction" : "dir");
