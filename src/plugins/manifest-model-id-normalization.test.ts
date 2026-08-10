@@ -1,8 +1,8 @@
 // Verifies model IDs declared by plugin manifests are normalized.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
@@ -14,7 +14,7 @@ import "./plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const testEnvSnapshot = captureEnv([
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_HOME",
@@ -24,12 +24,6 @@ const testEnvSnapshot = captureEnv([
 
 function restoreEnv(): void {
   testEnvSnapshot.restore();
-}
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-id-normalization-"));
-  tempDirs.push(dir);
-  return dir;
 }
 
 function writeInstallIndex(params: { stateDir: string; pluginDir: string }): void {
@@ -106,13 +100,11 @@ describe("manifest model id normalization", () => {
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
     restoreEnv();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    tempDirs.cleanup();
   });
 
   it("reflects manifest edits and state directory changes without a prepared snapshot", () => {
-    const stateDirA = makeTempDir();
+    const stateDirA = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "alpha" });
@@ -127,7 +119,7 @@ describe("manifest model id normalization", () => {
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
     expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
 
-    const stateDirB = makeTempDir();
+    const stateDirB = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDirB = path.join(stateDirB, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirB, pluginDir: pluginDirB });
     writeNormalizerManifest({ pluginDir: pluginDirB, prefix: "charlie" });
@@ -138,7 +130,7 @@ describe("manifest model id normalization", () => {
   });
 
   it("reuses manifest metadata while file fingerprints are unchanged", () => {
-    const stateDir = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDir = path.join(stateDir, "extensions", "normalizer");
     writeInstallIndex({ stateDir, pluginDir });
     writeNormalizerManifest({ pluginDir, prefix: "alpha" });

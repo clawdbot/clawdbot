@@ -205,9 +205,14 @@ export const TalkClientCreateParamsSchema = closedObject({
   transport: Type.Optional(TalkTransportSchema),
   brain: Type.Optional(TalkBrainSchema),
   capabilities: Type.Optional(
-    Type.Array(Type.Union([Type.Literal("camera-frame"), Type.Literal("voice-transcript")]), {
-      uniqueItems: true,
-    }),
+    Type.Array(
+      Type.Union([
+        Type.Literal("camera-frame"),
+        Type.Literal("voice-transcript"),
+        Type.Literal("gateway-control-v1"),
+      ]),
+      { uniqueItems: true },
+    ),
   ),
 });
 
@@ -494,6 +499,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = closedObject({
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   expiresAt: Type.Optional(Type.Number()),
+  clientControl: Type.Optional(closedObject({ owner: Type.Literal("gateway") })),
 });
 
 /** Browser websocket setup payload with JSON/PCM audio contract. */

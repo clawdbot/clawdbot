@@ -44,7 +44,7 @@ type ChatPaneHeaderProps = {
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
-  terminalAction: TemplateResult | typeof nothing;
+  panelActions: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
@@ -431,7 +431,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.terminalAction} ${props.discussionAction}
+        ${props.panelActions} ${props.discussionAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}

@@ -18,6 +18,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
 export type SidebarSessionAttention =
@@ -83,7 +84,7 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   placementState?: SessionPlacementState;
   workspaceConflictCount?: number;
-  cloudWorkerActive: boolean;
+  cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;

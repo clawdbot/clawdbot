@@ -596,6 +596,8 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
+  activeWriterRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

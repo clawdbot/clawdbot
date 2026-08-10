@@ -4,11 +4,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMNS } from "../state/openclaw-state-db-maintenance.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { readClawResumeStateReadOnly } from "./package-resume.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -39,7 +39,8 @@ function createBaseShapeState(params: {
       )`,
     )
     .run(params.packageRoot, join(params.packageRoot, "CLAW.md"), params.workspace);
-  for (const column of CLAW_LAZY_ADDITIVE_STATE_COLUMNS) {
+  for (const column of OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns ??
+    []) {
     const [table, name] = column.split(".");
     database.db.exec(`ALTER TABLE ${table} DROP COLUMN ${name};`);
   }

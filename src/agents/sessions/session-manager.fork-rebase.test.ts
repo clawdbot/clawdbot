@@ -1,8 +1,7 @@
 // Fork-regression coverage split from session-manager.test.ts (max-lines).
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -10,17 +9,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
-const tempPaths: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-manager-"));
-  tempPaths.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SessionManager stale-parent rebase", () => {
   it("rebases a stale active append onto the out-of-band transcript tail", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const target = {
       agentId: "main",
       sessionId: "stale-active-parent",
@@ -70,7 +63,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("preserves a deliberate manager branch from an ancestor", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const target = {
       agentId: "main",
       sessionId: "deliberate-manager-branch",
@@ -101,7 +94,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("honors an explicit active parent when the tail is not its descendant", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const target = {
       agentId: "main",
       sessionId: "unrelated-explicit-parent",

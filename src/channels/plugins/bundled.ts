@@ -5,14 +5,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   BundledChannelLegacySessionSurface,
-  BundledChannelLegacyStateMigrationDetector,
   BundledEntryModuleLoadOptions,
 } from "../../plugin-sdk/channel-entry-contract.types.js";
 import {
@@ -26,7 +24,6 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
-import { shouldIncludeBundledChannelSetupFeatureForConfig } from "./bundled-setup-policy.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -59,14 +56,10 @@ type BundledChannelSetupEntryRuntimeContract = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacyStateMigrationDetector?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacyStateMigrationDetector;
   loadLegacySessionSurface?: (
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
   features?: {
-    legacyStateMigrations?: boolean;
     legacySessionSurfaces?: boolean;
   };
 };
@@ -414,27 +407,6 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function listBundledChannelPluginIdsForSetupFeature(
-  rootScope: BundledChannelRootScope,
-  feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig; pluginIds?: readonly string[] } = {},
-): readonly ChannelId[] {
-  const scopedPluginIds = options.pluginIds ? new Set(options.pluginIds) : null;
-  const eligible = listBundledChannelMetadata(rootScope).filter(
-    (metadata) =>
-      (!scopedPluginIds ||
-        scopedPluginIds.has(metadata.manifest.id) ||
-        metadata.manifest.channels?.some((channelId) => scopedPluginIds.has(channelId))) &&
-      shouldIncludeBundledChannelSetupFeatureForConfig({ metadata, config: options.config }),
-  );
-  const hinted = eligible.filter(
-    (metadata) => metadata.packageManifest?.setupFeatures?.[feature] === true,
-  );
-  return (hinted.length > 0 ? hinted : eligible)
-    .map((metadata) => metadata.manifest.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
 }
@@ -628,59 +600,6 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
     const plugin = getBundledChannelArtifactForRoot("setupPlugin", id, rootScope, loadContext);
     return plugin ? [plugin] : [];
   });
-}
-
-type BundledChannelLegacyArtifact<TArtifact> = {
-  pluginId: ChannelId;
-  artifact: TArtifact;
-};
-
-function listBundledChannelLegacyArtifacts<TArtifact>(
-  feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig; pluginIds?: readonly string[] },
-  loadFromEntry: (entry: BundledChannelSetupEntryRuntimeContract) => TArtifact | undefined,
-  loadFromPlugin: (plugin: ChannelPlugin) => TArtifact | undefined,
-): readonly BundledChannelLegacyArtifact<TArtifact>[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, options).flatMap((id) => {
-    const entry = getBundledChannelArtifactForRoot("setupEntry", id, rootScope, loadContext);
-    const artifact = entry ? loadFromEntry(entry) : undefined;
-    if (artifact) {
-      return [{ pluginId: id, artifact }];
-    }
-    if (entry?.features?.[feature] !== true) {
-      return [];
-    }
-    const plugin = getBundledChannelArtifactForRoot("setupPlugin", id, rootScope, loadContext);
-    const fallback = plugin ? loadFromPlugin(plugin) : undefined;
-    return fallback ? [{ pluginId: id, artifact: fallback }] : [];
-  });
-}
-
-export function listBundledChannelLegacySessionSurfaces(
-  options: { config?: OpenClawConfig } = {},
-): readonly BundledChannelLegacySessionSurface[] {
-  return listBundledChannelLegacyArtifacts(
-    "legacySessionSurfaces",
-    options,
-    (entry) => entry.loadLegacySessionSurface?.(),
-    (plugin) => plugin.messaging,
-  ).map((entry) => entry.artifact);
-}
-
-/** Deprecated setup-entry migrations adapted into the plugin doctor pipeline. */
-export function listBundledChannelLegacyStateMigrationDetectorEntries(
-  options: { config?: OpenClawConfig; pluginIds?: readonly string[] } = {},
-): ReadonlyArray<{
-  pluginId: ChannelId;
-  detector: BundledChannelLegacyStateMigrationDetector;
-}> {
-  return listBundledChannelLegacyArtifacts(
-    "legacyStateMigrations",
-    options,
-    (entry) => entry.loadLegacyStateMigrationDetector?.(),
-    (plugin) => plugin.lifecycle?.detectLegacyStateMigrations,
-  ).map(({ pluginId, artifact }) => ({ pluginId, detector: artifact }));
 }
 
 export function getBundledChannelAccountInspector(

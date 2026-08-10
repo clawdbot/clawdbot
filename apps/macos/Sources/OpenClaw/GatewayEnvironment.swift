@@ -108,17 +108,42 @@ enum GatewayEnvironment {
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let profilePortReservation: ProfileGatewayPortReservation = .acquire(
+        profile: .current,
+        port: GatewayEnvironment.selectedGatewayPort())
 
     static func gatewayPort() -> Int {
-        if let raw = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_PORT"] {
+        guard AppProfile.current.isActive else { return self.selectedGatewayPort() }
+        return self.profilePortReservation.port
+    }
+
+    static func profileGatewayPortConflict() -> String? {
+        guard AppProfile.current.isActive else { return nil }
+        return self.profilePortReservation.conflict
+    }
+
+    private static func selectedGatewayPort() -> Int {
+        self.resolvedGatewayPort(
+            environment: ProcessInfo.processInfo.environment,
+            configPort: OpenClawConfigFile.gatewayPort(),
+            storedPort: AppDefaults.standard.integer(forKey: "gatewayPort"),
+            profile: .current)
+    }
+
+    static func resolvedGatewayPort(
+        environment: [String: String],
+        configPort: Int?,
+        storedPort: Int,
+        profile: AppProfile) -> Int
+    {
+        if let raw = environment["OPENCLAW_GATEWAY_PORT"] {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if let parsed = Int(trimmed), parsed > 0 { return parsed }
         }
-        if let configPort = OpenClawConfigFile.gatewayPort(), configPort > 0 {
+        if let configPort, configPort > 0 {
             return configPort
         }
-        let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
-        return stored > 0 ? stored : 18789
+        return storedPort > 0 ? storedPort : profile.defaultGatewayPort
     }
 
     static func expectedGatewayVersion() -> Semver? {
@@ -238,6 +263,7 @@ enum GatewayEnvironment {
     }
 
     static func resolveGatewayCommand(
+        profile: AppProfile = .current,
         searchPathsProvider: @Sendable () async -> [String] = CommandResolver.preferredPathsAsync) async
         -> GatewayCommandResolution
     {
@@ -261,14 +287,24 @@ enum GatewayEnvironment {
         let bind = self.preferredGatewayBind() ?? "loopback"
         switch environment.commandSource {
         case let .executable(gatewayBin):
-            let cmd = [gatewayBin, "gateway", "--port", "\(port)", "--bind", bind]
+            let cmd = self.gatewayCommand(prefix: [gatewayBin], port: port, bind: bind, profile: profile)
             return GatewayCommandResolution(status: environment.status, command: cmd)
         case let .project(runtime, entrypoint):
-            let cmd = [runtime.path, entrypoint, "gateway", "--port", "\(port)", "--bind", bind]
+            let cmd = self.gatewayCommand(
+                prefix: [runtime.path, entrypoint],
+                port: port,
+                bind: bind,
+                profile: profile)
             return GatewayCommandResolution(status: environment.status, command: cmd)
         case nil:
             return GatewayCommandResolution(status: environment.status, command: nil)
         }
+    }
+
+    static func gatewayCommand(prefix: [String], port: Int, bind: String, profile: AppProfile) -> [String] {
+        profile.localCLICommand(
+            prefix: prefix,
+            arguments: ["gateway", "--port", "\(port)", "--bind", bind])
     }
 
     private static func preferredGatewayBind() -> String? {

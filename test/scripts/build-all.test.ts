@@ -22,7 +22,11 @@ import {
   resolveBuildAllSteps,
   restoreBuildAllStepCacheOutputs,
   writeBuildAllStepCacheStamp,
-} from "../../scripts/build-all.mjs";
+} from "../../scripts/build-all.mts";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mts";
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -58,6 +62,7 @@ function withBuildCacheFixture(
               recursive?: boolean;
             }
         >;
+        requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
         restore?: "always";
         runOnHit?: {
           env?: NodeJS.ProcessEnv;
@@ -262,7 +267,7 @@ describe("resolveBuildAllStep", () => {
 
     expect(result).toEqual({
       command: "/custom/node",
-      args: ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
+      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
       options: {
         stdio: "inherit",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
@@ -300,24 +305,32 @@ describe("resolveBuildAllSteps", () => {
 
   it("prints CLI help without starting build steps", () => {
     for (const args of [["--help"], ["cliStartup", "--help"]]) {
-      const result = spawnSync(process.execPath, ["scripts/build-all.mjs", ...args], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/build-all.mts", ...args],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("Usage: node scripts/build-all.mjs [profile]");
+      expect(result.stdout).toContain("Usage: node --import tsx scripts/build-all.mts [profile]");
       expect(result.stdout).toContain("cliStartup");
       expect(result.stdout).not.toContain("[build-all]");
     }
   });
 
   it("rejects unknown CLI args without starting build steps", () => {
-    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup", "--bogus"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/build-all.mts", "cliStartup", "--bogus"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
@@ -354,7 +367,13 @@ describe("resolveBuildAllSteps", () => {
     const packages = getBuildAllStep("tsdown-packages");
     const unified = getBuildAllStep("tsdown-unified");
 
-    expect(ai.args).toEqual(["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"]);
+    expect(ai.args).toEqual([
+      "--import",
+      "tsx",
+      "scripts/tsdown-build.mts",
+      "--config",
+      "tsdown.ai.config.ts",
+    ]);
     expect(packages.args).toEqual(
       expect.arrayContaining(["--config", "tsdown.config.ts", "--filter", "openclaw-packages"]),
     );
@@ -383,6 +402,18 @@ describe("resolveBuildAllSteps", () => {
         }),
       ]),
     );
+    const requiredOutputs = unified.cache?.requiredOutputs;
+    if (typeof requiredOutputs !== "function") {
+      throw new Error("Missing tsdown-unified required output resolver");
+    }
+    const productionOutputs = requiredOutputs({});
+    const privateQaOutputs = requiredOutputs({ OPENCLAW_BUILD_PRIVATE_QA: "1" });
+    expect(productionOutputs).toEqual(listPluginSdkDeclarationOutputs());
+    expect(privateQaOutputs).toEqual(listPluginSdkDeclarationOutputs(pluginSdkEntrypoints));
+    expect(productionOutputs).toContain("dist/plugin-sdk/core.d.ts");
+    expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
+    expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
   });
 
   it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
@@ -863,6 +894,67 @@ describe("resolveBuildAllStepCacheState", () => {
         signature: fresh.signature,
         stampedOutputs: ["dist/output.js"],
         stampPath: fresh.stampPath,
+      });
+    });
+  });
+
+  it("rejects a matching legacy stamp that omits a required output", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const legacyState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, legacyState, { rootDir });
+      const legacyStamp = JSON.parse(fs.readFileSync(legacyState.stampPath!, "utf8"));
+      expect(legacyStamp).toMatchObject({
+        version: 4,
+        signature: legacyState.signature,
+        outputs: ["dist/output.js"],
+      });
+      fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
+
+      const completeStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          requiredOutputs: ["dist/output.js", "dist/plugin-sdk/core.d.ts"],
+          restore: "always" as const,
+        },
+      };
+      const stale = resolveBuildAllStepCacheState(completeStep, { rootDir });
+
+      expect(stale).toMatchObject({
+        fresh: false,
+        reason: "stale",
+        restorable: false,
+        signature: legacyState.signature,
+        stampedOutputs: ["dist/output.js"],
+      });
+      expect(restoreBuildAllStepCacheOutputs(stale, { rootDir })).toBe(false);
+    });
+  });
+
+  it("does not replace a cache stamp from incomplete current outputs", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const initialState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, initialState, { rootDir });
+      const stampBefore = fs.readFileSync(initialState.stampPath!, "utf8");
+      const cachedOutputPath = path.join(initialState.outputRoot!, "dist/output.js");
+      expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
+
+      fs.writeFileSync(outputPath, "incomplete refresh");
+      const completeStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          requiredOutputs: ["dist/output.js", "dist/plugin-sdk/core.d.ts"],
+        },
+      };
+      const incompleteState = resolveBuildAllStepCacheState(completeStep, { rootDir });
+      expect(finalizeBuildAllStepCache(completeStep, incompleteState, { rootDir })).toBe(true);
+
+      expect(fs.readFileSync(initialState.stampPath!, "utf8")).toBe(stampBefore);
+      expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
+      expect(resolveBuildAllStepCacheState(completeStep, { rootDir })).toMatchObject({
+        fresh: false,
+        reason: "stale",
       });
     });
   });

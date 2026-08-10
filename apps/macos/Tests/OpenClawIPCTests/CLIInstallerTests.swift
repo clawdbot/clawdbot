@@ -176,6 +176,23 @@ struct CLIInstallerTests {
             "--yes",
             "--no-restart",
         ])
+
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        #expect(CLIInstaller.managedUpdateCommand(
+            executable: "/opt/openclaw",
+            targetVersion: "2026.7.4",
+            profile: profile) == [
+            "/opt/openclaw", "--profile", "work", "update", "--tag", "2026.7.4",
+            "--json", "--timeout", "900",
+        ])
+        #expect(CLIInstaller.managedUpdateCommand(
+            executable: "/opt/openclaw",
+            targetVersion: "2026.7.4",
+            repair: true,
+            profile: profile) == [
+            "/opt/openclaw", "--profile", "work", "update", "repair", "--json",
+            "--timeout", "900", "--yes",
+        ])
     }
 
     @Test func `managed update parses structured updater diagnostics`() throws {

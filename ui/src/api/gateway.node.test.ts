@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
@@ -82,17 +83,6 @@ type HandlerMap = {
 };
 
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 class MockWebSocket {
   static OPEN = 1;
@@ -1058,8 +1048,8 @@ describe("GatewayBrowserClient", () => {
         protocol: 4,
         auth: {
           role: "operator",
-          scopes: [...CONTROL_UI_OPERATOR_SCOPES],
-          deviceToken: "test-token-placeholder",
+          scopes: ["operator.read"],
+          deviceToken: "stored-device-token",
         },
       },
     });
@@ -1067,9 +1057,43 @@ describe("GatewayBrowserClient", () => {
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScopeReady).toBe(true);
     expect(client.recoveryScope).toBe(
-      createHash("sha256").update("test-token-placeholder").digest("hex"),
+      createHash("sha256").update("stored-device-token").digest("hex"),
     );
-    expect(client.recoveryScope).not.toContain("test-token-placeholder");
+    expect(client.recoveryScope).not.toContain("stored-device-token");
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.scopes).toEqual(
+      [...CONTROL_UI_OPERATOR_SCOPES].toSorted(),
+    );
+    client.stop();
+  });
+
+  it("persists hello scopes when the device token rotates", async () => {
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          deviceToken: "rotated-device-token",
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })).toMatchObject({
+        token: "rotated-device-token",
+        scopes: ["operator.read"],
+      });
+    });
     client.stop();
   });
 

@@ -1,5 +1,6 @@
 // Browser tests cover pw tools core ssrf guard plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
@@ -100,16 +101,6 @@ function mockNavigationGuardOnce(
   implementation: (args: NavigationGuardCall) => Promise<unknown>,
 ): void {
   sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(implementation);
-}
-
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 async function withFakeTimers(run: () => Promise<void>): Promise<void> {
@@ -501,8 +492,8 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("keeps the request guard alive until an aborted hover actually settles", async () => {
     const ctrl = new AbortController();
-    const started = createDeferred();
-    const hover = createDeferred();
+    const started = createDeferred<void>();
+    const hover = createDeferred<void>();
     let guardSettled = false;
     installInteractionPage(
       { url: vi.fn(() => "https://example.com") },
@@ -538,9 +529,9 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("lets a request-policy denial observed before abort win", async () => {
     const ctrl = new AbortController();
-    const hover = createDeferred();
-    const observed = createDeferred();
-    const fulfill = createDeferred();
+    const hover = createDeferred<void>();
+    const observed = createDeferred<void>();
+    const fulfill = createDeferred<void>();
     const blocked = new Error("browser navigation blocked by policy");
     blocked.name = "SsrFBlockedError";
     let guardSettled = false;
@@ -595,9 +586,9 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("waits for an in-flight policy decision before returning abort", async () => {
     const ctrl = new AbortController();
-    const hover = createDeferred();
-    const policy = createDeferred();
-    const started = createDeferred();
+    const hover = createDeferred<void>();
+    const policy = createDeferred<void>();
+    const started = createDeferred<void>();
     const blocked = new Error("browser navigation blocked by policy");
     blocked.name = "SsrFBlockedError";
     installInteractionPage(
@@ -653,9 +644,9 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("returns abort once an in-flight policy decision allows the request", async () => {
     const ctrl = new AbortController();
-    const hover = createDeferred();
-    const policy = createDeferred();
-    const started = createDeferred();
+    const hover = createDeferred<void>();
+    const policy = createDeferred<void>();
+    const started = createDeferred<void>();
     installInteractionPage(
       { url: vi.fn(() => "about:blank") },
       {
@@ -693,9 +684,9 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("quarantines immediately when a preserved denied source later becomes unsafe", async () => {
     const ctrl = new AbortController();
-    const hover = createDeferred();
-    const unsafeReported = createDeferred();
-    const detected = createDeferred();
+    const hover = createDeferred<void>();
+    const unsafeReported = createDeferred<void>();
+    const detected = createDeferred<void>();
     const blocked = new Error("browser navigation blocked by policy");
     blocked.name = "SsrFBlockedError";
     installInteractionPage(
@@ -798,8 +789,8 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("quarantines a late unpreserved policy failure after abort already returned", async () => {
     const ctrl = new AbortController();
-    const started = createDeferred();
-    const hover = createDeferred();
+    const started = createDeferred<void>();
+    const hover = createDeferred<void>();
     const blocked = new Error("late browser navigation blocked by policy");
     blocked.name = "SsrFBlockedError";
     installInteractionPage(
@@ -840,7 +831,7 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("preserves SSRF policy when aborting a pending click", async () => {
     const ctrl = new AbortController();
-    const clickStarted = createDeferred();
+    const clickStarted = createDeferred<void>();
     installInteractionPage(
       { url: vi.fn(() => "https://example.com") },
       {
@@ -876,8 +867,8 @@ describe("pw-tools-core browser SSRF guards", () => {
     { label: "click before slow type", slowly: true, firstMethod: "click" as const },
   ])("stops a multi-step type action after aborting $label", async ({ slowly, firstMethod }) => {
     const ctrl = new AbortController();
-    const started = createDeferred();
-    const firstStepPending = createDeferred();
+    const started = createDeferred<void>();
+    const firstStepPending = createDeferred<void>();
     const click = vi.fn(async () => {});
     const fill = vi.fn(async () => {});
     const type = vi.fn(async () => {});

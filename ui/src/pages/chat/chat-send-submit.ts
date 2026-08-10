@@ -10,6 +10,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
   dispatchChatSlashCommand,
   requireChatSessionAction,
@@ -203,7 +204,7 @@ export async function handleSendChat(
   opts?: ChatSendOptions,
 ) {
   const previousDraft = host.chatMessage;
-  const message = (messageOverride ?? host.chatMessage).trim();
+  const userMessage = (messageOverride ?? host.chatMessage).trim();
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
   const expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
@@ -211,6 +212,9 @@ export async function handleSendChat(
     messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
+  // Materialize hidden annotation context before command classification and queue admission.
+  // Delivery and retry consume this snapshot; they must not re-read or recompose attachments.
+  const message = composeBrowserAnnotationContext(userMessage, attachmentsToSend);
 
   if (!message && !hasAttachments) {
     return;
@@ -227,7 +231,7 @@ export async function handleSendChat(
       }
       host.chatRunError = null;
       if (messageOverride == null) {
-        recordNonTranscriptInputHistory(host, message);
+        recordNonTranscriptInputHistory(host, userMessage);
       }
       await handleAbortChat(host);
       return;
@@ -243,7 +247,7 @@ export async function handleSendChat(
       const submitKey = chatSubmitKey(host, "local", message, []);
       await withChatSubmitGuard(host, submitKey, async () => {
         if (messageOverride == null) {
-          recordNonTranscriptInputHistory(host, message);
+          recordNonTranscriptInputHistory(host, userMessage);
           if (host.chatMessage === previousDraft) {
             host.chatMessage = "";
             resetChatInputHistoryNavigation(host);
@@ -265,7 +269,7 @@ export async function handleSendChat(
             ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
             : {};
         if (messageOverride == null) {
-          recordNonTranscriptInputHistory(host, message);
+          recordNonTranscriptInputHistory(host, userMessage);
         }
         const recoveryScope = resolveStoredChatOutboxScope(host, submittedSessionKey);
         await sendDetachedCommandMessage(host, message, {
@@ -292,7 +296,7 @@ export async function handleSendChat(
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
         await withChatSubmitGuard(host, submitKey, async () => {
           if (messageOverride == null) {
-            recordNonTranscriptInputHistory(host, message);
+            recordNonTranscriptInputHistory(host, userMessage);
             host.chatMessage = "";
             resetChatInputHistoryNavigation(host);
           }
@@ -333,7 +337,7 @@ export async function handleSendChat(
         let recoveryComposer: { draft: string; attachments: ChatAttachment[] } | undefined;
         const recoveryScope = resolveStoredChatOutboxScope(host, submittedSessionKey);
         if (messageOverride == null) {
-          recordNonTranscriptInputHistory(host, message);
+          recordNonTranscriptInputHistory(host, userMessage);
           if (waitsForPicker) {
             const cleared = clearSubmittedComposerState(host, previousDraft, attachmentsToSend);
             prevDraft = cleared.previousDraft;
@@ -428,7 +432,7 @@ export async function handleSendChat(
         ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
         : {};
     if (messageOverride == null) {
-      recordNonTranscriptInputHistory(host, message);
+      recordNonTranscriptInputHistory(host, userMessage);
     }
 
     const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);

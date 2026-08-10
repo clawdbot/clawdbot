@@ -27,7 +27,7 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     currentAttemptAssistant: assistant,
     toolMetas: replaySafe ? [] : [{ toolName: "write", replaySafe: false }],
   });
-  const advanceAttemptAuthProfile = vi.fn(async () => true);
+  const advanceAuthProfile = vi.fn(async () => true);
   const maybeMarkAuthProfileFailure = vi.fn(async () => {});
   const traceAttempts: AssistantFailureInput["traceAttempts"] = [];
   const input: AssistantFailureInput = {
@@ -79,15 +79,13 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     emptyErrorRetries: 3,
     overloadProfileRotations: 0,
     overloadProfileRotationLimit: 1,
-    rateLimitProfileRotations: 0,
-    rateLimitProfileRotationLimit: 1,
     sameModelIdleTimeoutRetries: 0,
     previousRetryFailoverReason: null,
     maybeMarkAuthProfileFailure,
-    maybeEscalateRateLimitProfileFallback: vi.fn(),
     maybeRetrySameModelRateLimit: vi.fn(async () => false),
     maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
-    advanceAttemptAuthProfile,
+    advanceAuthProfile,
+    advanceRateLimitAuthProfile: vi.fn(async () => true),
     traceAttempts,
     suspendForFailure: vi.fn(),
     suspensionSessionId: "session:credential-enoent",
@@ -95,7 +93,7 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     isProbeSession: false,
   };
   return {
-    advanceAttemptAuthProfile,
+    advanceAuthProfile,
     input,
     maybeMarkAuthProfileFailure,
     traceAttempts,
@@ -113,7 +111,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       rawError: CREDENTIAL_FILE_ENOENT_MESSAGE,
     });
 
-    expect(fixture.advanceAttemptAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(fixture.input.authProfileStore.usageStats).toEqual({
       "anthropic:p1": { lastUsed: 1 },
@@ -136,7 +134,7 @@ describe("handleEmbeddedAssistantFailure", () => {
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
     expect(outcome.action).toBe("proceed");
-    expect(fixture.advanceAttemptAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });

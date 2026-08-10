@@ -238,8 +238,9 @@ vi.mock("../gateway/session-utils.js", () => ({
     primaryKey: key,
     target: { storeKeys: [key] },
   }),
-  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+  resolveGatewaySessionStoreTargetWithStore: ({ key }: { key: string }) => ({
     canonicalKey: key,
+    storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
@@ -365,14 +366,18 @@ describe("EmbeddedTuiBackend", () => {
     applySessionPatchProjectionMock.mockImplementation(
       async (params: {
         project: (context: {
-          entries: unknown[];
           existingEntry?: unknown;
+          isLabelInUse: (label: string) => boolean;
           primaryKey: string;
+          store: Readonly<Record<string, unknown>>;
         }) => Promise<unknown>;
-        resolveTarget: (snapshot: { entries: unknown[] }) => { primaryKey: string };
+        resolveTarget: (snapshot: { store: Readonly<Record<string, unknown>> }) => {
+          primaryKey: string;
+        };
       }) => {
-        const target = params.resolveTarget({ entries: [] });
-        return await params.project({ ...target, entries: [] });
+        const store = {};
+        const target = params.resolveTarget({ store });
+        return await params.project({ ...target, store, isLabelInUse: () => false });
       },
     );
     projectSessionsPatchEntryMock.mockReset();
@@ -759,6 +764,9 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:main",
     });
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKeys: ["agent:main:main"] }),
+    );
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
@@ -778,6 +786,9 @@ describe("EmbeddedTuiBackend", () => {
       AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
     );
 
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sessionKeys: expect.anything() }),
+    );
     expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({ storeKey: sessionKey, existingEntry: undefined }),
     );
@@ -794,17 +805,23 @@ describe("EmbeddedTuiBackend", () => {
     applySessionPatchProjectionMock.mockImplementationOnce(
       async (params: {
         project: (context: {
-          entries: Array<{ sessionKey: string; entry: typeof existingEntry }>;
           existingEntry?: typeof existingEntry;
+          isLabelInUse: (label: string) => boolean;
           primaryKey: string;
+          store: Readonly<Record<string, typeof existingEntry>>;
         }) => Promise<unknown>;
-        resolveTarget: (snapshot: {
-          entries: Array<{ sessionKey: string; entry: typeof existingEntry }>;
-        }) => { primaryKey: string };
+        resolveTarget: (snapshot: { store: Readonly<Record<string, typeof existingEntry>> }) => {
+          primaryKey: string;
+        };
       }) => {
-        const entries = [{ sessionKey, entry: existingEntry }];
-        const target = params.resolveTarget({ entries });
-        return await params.project({ ...target, entries, existingEntry });
+        const store = { [sessionKey]: existingEntry };
+        const target = params.resolveTarget({ store });
+        return await params.project({
+          ...target,
+          store,
+          existingEntry,
+          isLabelInUse: () => false,
+        });
       },
     );
     projectSessionsPatchEntryMock.mockResolvedValueOnce({

@@ -6,7 +6,12 @@ import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { locked } from "./locked.js";
 import { clearQueuedCronRunReservationMarker, releaseQueuedCronRun } from "./run-admission.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import {
+  ensureLoaded,
+  persistOrRestore,
+  pruneCronJobScratchAfterCommit,
+  snapshotStoreForRollback,
+} from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { applyOutcomeToStoredJob } from "./timer-outcomes.js";
@@ -160,6 +165,10 @@ export async function finalizeCompletedCronRunOutcomes(
       await persistOrRestore(state, rollbackSnapshot, {
         postPersistNotifications,
       });
+      pruneCronJobScratchAfterCommit(
+        state,
+        removedJobs.map((job) => job.id),
+      );
       finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of removedJobs) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });

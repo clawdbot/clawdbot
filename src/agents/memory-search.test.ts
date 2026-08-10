@@ -571,6 +571,7 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.query.maxResults).toBe(8);
     expect(resolved?.query.minScore).toBe(0.2);
+    expect(resolved?.query.hybrid.mmr).toEqual({ enabled: true, lambda: 0.7 });
     expect(resolved?.store.vector.enabled).toBe(true);
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
@@ -579,7 +580,11 @@ describe("memory search config", () => {
     const cfg = asConfig({
       memory: {
         search: {
-          extraPaths: ["/shared/notes", " docs "],
+          extraPaths: [
+            "/shared/notes",
+            " docs ",
+            { path: "../team-notes", pattern: "runbooks/**/*.md" },
+          ],
         },
       },
 
@@ -591,7 +596,11 @@ describe("memory search config", () => {
             default: true,
             memory: {
               search: {
-                extraPaths: ["/shared/notes", "../team-notes"],
+                extraPaths: [
+                  "/shared/notes",
+                  { path: "../team-notes", pattern: "runbooks/**/*.md" },
+                  { path: "../team-notes", pattern: "decisions/**/*.md" },
+                ],
               },
             },
           },
@@ -599,7 +608,12 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
+    expect(resolved?.extraPaths).toEqual([
+      "/shared/notes",
+      "docs",
+      { path: "../team-notes", pattern: "runbooks/**/*.md" },
+      { path: "../team-notes", pattern: "decisions/**/*.md" },
+    ]);
   });
 
   it("normalizes multimodal settings", () => {

@@ -20,9 +20,9 @@ import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
-import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
-import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
+import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
+import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
 import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,

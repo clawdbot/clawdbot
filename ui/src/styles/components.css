@@ -1059,7 +1059,7 @@ openclaw-session-owner-chip {
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   touch-action: manipulation;
 }
 
@@ -1710,7 +1710,7 @@ openclaw-chat-session-rail {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-session-rail__hide,
@@ -2890,7 +2890,7 @@ td.data-table-key-col {
   font-size: 11.5px;
   font-weight: 600;
   line-height: 1;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-queue__steer svg,
@@ -2920,7 +2920,7 @@ td.data-table-key-col {
   border-radius: var(--radius-sm);
   background: none;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-queue__remove:hover {
@@ -3188,7 +3188,7 @@ td.data-table-key-col {
   background: transparent;
   color: var(--text);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .exec-approval-list__item:hover,
@@ -4851,7 +4851,7 @@ td.data-table-key-col {
   background: none;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -4927,7 +4927,7 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .device-pair-setup__access label:has(input:checked) {

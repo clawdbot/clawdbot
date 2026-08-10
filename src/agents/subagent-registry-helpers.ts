@@ -352,44 +352,29 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   return Math.max(1, Math.floor(minutes)) * 60_000;
 }
 
-/** Resolves the archive deadline for one newly registered run. */
-export function resolveSubagentArchiveAtMs(params: {
-  cfg?: OpenClawConfig;
-  now: number;
-  spawnMode: "run" | "session";
-  cleanup: "keep" | "delete";
-  collect?: boolean;
-}): number | undefined {
-  if (params.spawnMode === "session" || params.collect || params.cleanup === "keep") {
-    return undefined;
-  }
-  const archiveAfterMs = resolveArchiveAfterMs(params.cfg);
-  return archiveAfterMs ? params.now + archiveAfterMs : undefined;
-}
-
-/** Backfills the retention deadline added after collector groups first shipped. */
-export function backfillCollectorArchiveAtMs(
-  entry: SubagentRunRecord,
-  cfg?: OpenClawConfig,
-): boolean {
-  if (!entry.collect) {
-    return false;
-  }
+/** Arms retention only after the run or its waitable collector result has completed. */
+export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
       ? entry.execution.endedAt
       : undefined;
-  const capturedAt =
-    endedAt === undefined && !entry.collectorCompletion
+  const completedAt = entry.collect
+    ? endedAt === undefined && !entry.collectorCompletion
       ? undefined
       : typeof entry.completion?.capturedAt === "number" &&
           Number.isFinite(entry.completion.capturedAt)
         ? entry.completion.capturedAt
-        : endedAt;
-  const archiveAfterMs = entry.spawnMode === "session" ? undefined : resolveArchiveAfterMs(cfg);
+        : endedAt
+    : entry.cleanup === "delete" && entry.pauseReason !== "sessions_yield"
+      ? endedAt
+      : undefined;
+  const archiveAfterMs =
+    entry.spawnMode === "session" || completedAt === undefined
+      ? undefined
+      : resolveArchiveAfterMs(cfg);
   const expectedArchiveAt =
-    capturedAt !== undefined && archiveAfterMs !== undefined
-      ? capturedAt + archiveAfterMs
+    completedAt !== undefined && archiveAfterMs !== undefined
+      ? completedAt + archiveAfterMs
       : undefined;
   if (entry.archiveAtMs === expectedArchiveAt) {
     return false;

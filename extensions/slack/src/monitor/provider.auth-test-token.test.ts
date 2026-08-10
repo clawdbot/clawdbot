@@ -314,6 +314,7 @@ describe("auth.test boot call", () => {
           enterpriseOrgInstall: true,
           dmPolicy: "disabled",
           groupPolicy: "open",
+          slashCommand: { enabled: true, name: "openclaw" },
         },
       },
     });
@@ -325,6 +326,14 @@ describe("auth.test boot call", () => {
     const monitor = startSlackMonitor(monitorSlackProvider, {
       appToken: "xapp-1-A1-opaque",
     });
+    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+    expect(getSlackTestState().interactionRegistrations).toEqual([
+      "command",
+      "action",
+      "shortcut",
+      "view",
+      "view",
+    ]);
     await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
   });
 

@@ -128,10 +128,12 @@ export async function startGatewayCoreRuntime(input: {
     sessionEventSubscribers,
     toolEventRecipients,
     broadcastToConnIds,
+    terminalSessions,
     controlUiBasePath,
     workerEnvironmentService,
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
+    workerDesktopObserveAvailable,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
     pluginHostServices,
@@ -207,6 +209,7 @@ export async function startGatewayCoreRuntime(input: {
         sessionMessageSubscribers,
         chatAbortControllers,
         restartRecoveryCandidates,
+        terminalSessions,
       }),
     );
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
@@ -312,7 +315,8 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
+        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerDesktopObserveAvailable || descriptor.name !== "worker.desktop.observe"),
     );
     return createGatewayMethodRegistry(
       [

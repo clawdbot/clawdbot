@@ -693,10 +693,61 @@ openclaw-app {
   }
 }
 
-/* Cursor convention: app chrome (buttons, menus, tabs, rails, controls) uses
-   the default arrow cursor; the pointer hand is reserved for real hyperlinks
-   (UA default on a[href]). Do not add `cursor: pointer` to controls; anchors
-   that act as chrome override to `cursor: default` instead. */
+/* Cursor policy. A browser tab gets the pointer hand, the only hover affordance
+   a page owns; installed/app-like windows are desktop chrome and keep the arrow.
+   Controls consume --cursor-action rather than hardcoding a cursor, and real
+   hyperlinks keep the UA pointer in every mode. */
+:root {
+  --cursor-action: pointer;
+}
+
+/* Separate from the standalone block above, which owns viewport and safe-area
+   insets; widening its condition would change those too. `fullscreen` is absent
+   on purpose: it is a transient presentation state any window can enter, and
+   the manifest installs this UI as `standalone`. */
+@media (display-mode: standalone),
+  (display-mode: minimal-ui),
+  (display-mode: window-controls-overlay) {
+  :root {
+    --cursor-action: default;
+  }
+}
+
+/* Native app hosts are installed desktop windows too, but they embed a plain
+   web view that reports `display-mode: browser`; they announce themselves with
+   these `<html>` markers instead (all three, as layout.css already matches). */
+html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) {
+  --cursor-action: default;
+}
+
+/* Generic actionable controls, at element/attribute specificity only so the
+   component rules that own semantic cursors (not-allowed, disabled, grab,
+   resize, deliberate `default` on non-actionable elements) still win. */
+button,
+summary,
+select,
+[role="button"],
+[role="checkbox"],
+[role="menuitem"],
+[role="menuitemcheckbox"],
+[role="menuitemradio"],
+[role="option"],
+[role="radio"],
+[role="switch"],
+[role="tab"],
+input:is(
+  [type="button"],
+  [type="checkbox"],
+  [type="color"],
+  [type="file"],
+  [type="radio"],
+  [type="range"],
+  [type="reset"],
+  [type="submit"]
+) {
+  cursor: var(--cursor-action);
+}
+
 a {
   color: var(--accent);
   text-decoration: underline;
@@ -708,10 +759,10 @@ a:hover {
 }
 
 /* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
-   Document rules beat `:host`, so restore the chrome arrow here — and re-add
-   the disabled cue this override would otherwise clobber. */
+   Document rules beat `:host`, so route them through the policy here — and
+   re-add the disabled cue this override would otherwise clobber. */
 wa-dropdown-item {
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 wa-dropdown-item[disabled] {

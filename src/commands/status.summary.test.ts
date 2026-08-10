@@ -171,12 +171,18 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
 
-vi.mock("../routing/session-key.js", () => ({
-  LEGACY_IMPLICIT_AGENT_ID: "main",
-  normalizeAgentId: vi.fn((value: string) => value),
-  normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
-  parseAgentSessionKey: vi.fn(() => null),
-}));
+vi.mock("../routing/session-key.js", async () => {
+  const actual = await vi.importActual<typeof import("../routing/session-key.js")>(
+    "../routing/session-key.js",
+  );
+  return {
+    ...actual,
+    LEGACY_IMPLICIT_AGENT_ID: "main",
+    normalizeAgentId: vi.fn((value: string) => value),
+    normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
+    parseAgentSessionKey: vi.fn(() => null),
+  };
+});
 
 vi.mock("../version.js", async () => {
   const actual = await vi.importActual<typeof import("../version.js")>("../version.js");

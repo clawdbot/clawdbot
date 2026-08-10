@@ -110,6 +110,9 @@ back to the prior bounded list search, scanning at most five pages of results.
 It likewise reports an incomplete search instead of guessing when that fallback
 cannot prove uniqueness.
 
+To continue one of these links in the terminal or attach a coding harness, see
+[Session synchronization and attachment](/concepts/session-attachment).
+
 Canonical links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a
 migration aid and immediately rewritten, without adding browser history, to the

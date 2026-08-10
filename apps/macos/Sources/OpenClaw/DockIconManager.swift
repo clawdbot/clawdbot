@@ -28,7 +28,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 return
             }
 
-            let userWantsDockHidden = (UserDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
+            let userWantsDockHidden = (AppDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
             let visibleWindows = NSApp?.windows.filter { window in
                 window.isVisible &&
                     window.frame.width > 1 &&
@@ -107,7 +107,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     @objc
     private func dockPreferenceChanged(_ notification: Notification) {
         guard let userDefaults = notification.object as? UserDefaults,
-              userDefaults == UserDefaults.standard
+              userDefaults == AppDefaults.standard
         else { return }
 
         Task { @MainActor in

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import {
+  BUNDLE_HASH,
   PWD_COMMAND,
   SSH,
   deferred,
@@ -16,6 +17,37 @@ import {
 import { sshArgvPort } from "./worker-ssh-argv.test-support.js";
 
 describe("worker tunnel manager", () => {
+  it("cascades only an epoch-matched environment stop into the desktop tunnel owner", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.desktop.acquire({
+      environmentId: "worker:desktop-cascade",
+      ownerEpoch: 2,
+      ssh: SSH,
+      desktop: { protocol: "rfb", port: 5900 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await starting;
+    const close = vi.fn();
+    manager.desktop.attachObserver("worker:desktop-cascade", {
+      control: false,
+      ownerEpoch: 2,
+      close,
+    });
+
+    await manager.stop("worker:desktop-cascade", 1);
+
+    expect(fake.starts[0]?.process.stopCount).toBe(0);
+    expect(close).not.toHaveBeenCalled();
+
+    await manager.stop("worker:desktop-cascade", 2);
+
+    expect(fake.starts[0]?.process.stopCount).toBe(1);
+    expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed");
+  });
+
   it("establishes a pinned reverse socket with keepalives and a separate workspace connection", async () => {
     const fake = fakeRunner();
     const { manager, handle, start: tunnel } = await startConnectedTunnel(fake, "worker:one", 3);
@@ -67,6 +99,35 @@ describe("worker tunnel manager", () => {
       vi.useRealTimers();
       await handle.stop();
     }
+  });
+
+  it("passes shared-host isolation to initial and renewal quiescence commands", async () => {
+    const nonce = "b".repeat(32);
+    const fake = fakeRunner((argv) => {
+      const remoteCommand = argv.at(-1) ?? "";
+      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+        return success(`quiesced ${nonce}\n`);
+      }
+      if (remoteCommand.includes('process.stdout.write("renewed "')) {
+        return success(`renewed ${nonce}\n`);
+      }
+      return undefined;
+    });
+    const { handle } = await startConnectedTunnel(fake, "worker:shared-quiescence", 3, {
+      sharedHost: true,
+    });
+
+    const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
+    await quiescence.assertActive();
+    const quiescenceCommands = fake.runs.filter((entry) =>
+      entry.argv.at(-1)?.includes("workspace quiescence"),
+    );
+    expect(quiescenceCommands).toHaveLength(2);
+    expect(quiescenceCommands.every((entry) => entry.argv.at(-1)?.includes("shared-host"))).toBe(
+      true,
+    );
+    await quiescence.resume();
+    await handle.stop();
   });
 
   it("reconnects with capped backoff after unexpected exits and failed attempts", async () => {
@@ -137,6 +198,7 @@ describe("worker tunnel manager", () => {
       sleep: async () => {},
     });
     const request = {
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:port-reconnect",
       ownerEpoch: 1,
       ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
@@ -280,6 +342,7 @@ describe("worker tunnel manager", () => {
     await sleepStarted.promise;
 
     const reconnecting = manager.start({
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:drain",
       ownerEpoch: 8,
       ssh: SSH,
@@ -316,6 +379,7 @@ describe("worker tunnel manager", () => {
     const fake = fakeRunner();
     const manager = createWorkerTunnelManager({ runner: fake.runner, sleep: async () => {} });
     const initialRequest = {
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:replacement",
       ownerEpoch: 1,
       ssh: SSH,
@@ -335,6 +399,7 @@ describe("worker tunnel manager", () => {
     const releaseStop = deferred<void>();
     staleReconnect.blockStopUntil(releaseStop.promise);
     const replacement = manager.start({
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:replacement",
       ownerEpoch: 2,
       ssh: SSH,

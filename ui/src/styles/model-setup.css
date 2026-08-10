@@ -171,7 +171,7 @@
 }
 
 .model-setup__more summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   color: var(--muted);
   font-weight: 600;
 }
@@ -226,7 +226,7 @@
   font: inherit;
   outline: none;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 :root[data-theme-mode="light"] .model-setup-provider-select__trigger {

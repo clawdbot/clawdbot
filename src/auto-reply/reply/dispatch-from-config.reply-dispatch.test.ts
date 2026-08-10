@@ -1,5 +1,6 @@
 // Tests dispatch-from-config reply dispatch integration and final payload routing.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
   OutboundDeliveryError,
@@ -54,14 +55,6 @@ function firstReplyDispatchCall() {
         },
       ]
     | undefined;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 function pendingFinalDelivery(
@@ -351,7 +344,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
       });
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const deliver = vi.fn().mockResolvedValue(undefined);
       const dispatcher = createReplyDispatcher({
         deliver,
@@ -406,7 +399,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
       });
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const deliver = vi.fn().mockResolvedValue(undefined);
       let hookCalls = 0;
       const dispatcher = createReplyDispatcher({
@@ -459,7 +452,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
       });
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const deliver = vi.fn().mockResolvedValue(undefined);
       let hookCalls = 0;
       const dispatcher = createReplyDispatcher({
@@ -513,7 +506,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
       });
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       let hookCalls = 0;
       const dispatcher = createReplyDispatcher({
         deliver: vi.fn().mockResolvedValue(undefined),
@@ -563,7 +556,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
       });
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       let hookCalls = 0;
       const dispatcher = createReplyDispatcher({
         deliver: vi.fn().mockResolvedValue(undefined),
@@ -626,7 +619,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
         existing: sessionStoreMocks.currentEntry,
       });
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const dispatcher = createReplyDispatcher({
         deliver: vi.fn().mockResolvedValue(undefined),
         beforeDeliver: () => {
@@ -815,8 +808,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
   it("releases a stalled finalizing dispatch and rejects its late reply", async () => {
     vi.useFakeTimers();
-    const ownerStarted = createDeferred<void>();
-    const releaseOwner = createDeferred<void>();
+    const ownerStarted = createDeferred();
+    const releaseOwner = createDeferred();
     const dispatcher = createDispatcher();
     let successor: ReturnType<typeof createReplyOperation> | undefined;
     hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -864,8 +857,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
   it("keeps bounded TTS fallback work alive past the default finalization lease", async () => {
     vi.useFakeTimers();
-    const ttsStarted = createDeferred<void>();
-    const releaseTts = createDeferred<void>();
+    const ttsStarted = createDeferred();
+    const releaseTts = createDeferred();
     const dispatcher = createDispatcher();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {

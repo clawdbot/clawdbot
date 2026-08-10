@@ -224,7 +224,7 @@ describe("music generation controls QA product proof", () => {
       restoreActivePluginRegistrySnapshot(activeRegistry);
     }
 
-    const stateDir = await fs.realpath(tempDirs.make("openclaw-qa-music-controls-"));
+    const stateDir = tempDirs.make("openclaw-qa-music-controls-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const vocalResult = (await fixture.tool.execute("music-vocal-fallback", {
         prompt: "bright QA chorus",

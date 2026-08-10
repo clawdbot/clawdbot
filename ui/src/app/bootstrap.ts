@@ -25,6 +25,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
+import { createBrowserAnnotationHandoff } from "./browser-annotation-handoff.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
@@ -351,6 +352,7 @@ export function bootstrapApplication(
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
+  const browserAnnotationHandoff = createBrowserAnnotationHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
   let routerStarted = false;
@@ -446,6 +448,7 @@ export function bootstrapApplication(
     webPush,
     skillWorkshopRevision,
     initialUserMessage,
+    browserAnnotationHandoff,
     navigate: (routeId, options) => {
       const location = routeLocation(routeId, options);
       if (!routerStarted) {
@@ -563,6 +566,7 @@ export function bootstrapApplication(
       webPush.dispose();
       skillWorkshopRevision.clear();
       initialUserMessage.clear();
+      browserAnnotationHandoff.dispose();
     },
   };
 }

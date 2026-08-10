@@ -58,6 +58,13 @@ function createTestContext(params?: {
   });
 }
 
+function createEnterpriseEventScope(teamId: string): SlackEventScope {
+  return {
+    teamId,
+    client: {} as SlackEventScope["client"],
+  };
+}
+
 beforeEach(() => setSlackRuntime(null as never));
 afterEach(() => setSlackRuntime(null as never));
 
@@ -142,6 +149,34 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
         senderId: "U_ACTOR",
       }),
     ).toBe("agent:main:slack:group:c0mpdm42");
+  });
+
+  it("partitions enterprise channel system events by workspace", () => {
+    const ctx = createTestContext();
+    const resolveForTeam = (teamId: string) =>
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C_SHARED",
+        channelType: "channel",
+        senderId: "U_ACTOR",
+        eventScope: createEnterpriseEventScope(teamId),
+      });
+
+    expect(resolveForTeam("T111")).toBe("agent:main:slack:channel:team:t111:channel:c_shared");
+    expect(resolveForTeam("T222")).toBe("agent:main:slack:channel:team:t222:channel:c_shared");
+  });
+
+  it("partitions enterprise main DM system events by workspace", () => {
+    const ctx = createTestContext({ dmScope: "main" });
+    const resolveForTeam = (teamId: string) =>
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "D_SHARED",
+        channelType: "im",
+        senderId: "U_SHARED",
+        eventScope: createEnterpriseEventScope(teamId),
+      });
+
+    expect(resolveForTeam("T111")).toBe("agent:main:main:account:default:team:t111");
+    expect(resolveForTeam("T222")).toBe("agent:main:main:account:default:team:t222");
   });
 });
 

@@ -1,8 +1,9 @@
 // Prompt media carrier tests cover collect batching, deferral, and retry identity.
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
-import { createDeferred, createQueueTestRun } from "./queue.test-helpers.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 import { createOverflowSummaryRetrySource } from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
 
@@ -20,7 +21,7 @@ describe("followup prompt media carrier", () => {
     const key = `prompt-media-collect-${Date.now()}`;
     queueKeys.add(key);
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const calls: FollowupRun[] = [];
 
     for (const [prompt, path, contentType] of [

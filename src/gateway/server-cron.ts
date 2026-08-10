@@ -55,10 +55,7 @@ import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import {
-  consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
-} from "../infra/system-events.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type {
@@ -657,17 +654,12 @@ export function buildGatewayCronService(params: {
       if (!sessionKey) {
         throw new Error("Cron system event target did not resolve a session key.");
       }
-      const event = enqueueSystemEventEntry(text, {
+      const remove = enqueueSystemEventWithReceipt(text, {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
       });
-      return event
-        ? {
-            accepted: true,
-            remove: () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0,
-          }
-        : { accepted: false };
+      return remove ? { accepted: true, remove } : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {
       // Resolve the wake target the same way the enqueue/heartbeat deps do,
@@ -813,7 +805,7 @@ export function buildGatewayCronService(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
-          message,
+          payload: { text: message },
           abortSignal: abortSignal ?? new AbortController().signal,
         });
         return {
@@ -939,7 +931,7 @@ export function buildGatewayCronService(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
-          message: notify,
+          payload: { text: notify },
           abortSignal: abortSignal ?? new AbortController().signal,
         });
         return {
@@ -1005,21 +997,14 @@ export function buildGatewayCronService(params: {
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
-    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId, threadId }) =>
+    sendCronFailureAlert: async (alert) =>
       await sendGatewayCronFailureAlert({
+        ...alert,
         deps: params.deps,
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
-        job,
-        text,
-        runAtMs,
-        channel,
-        to,
-        mode,
-        accountId,
-        threadId,
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {

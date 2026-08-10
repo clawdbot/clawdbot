@@ -15,9 +15,6 @@ type ChatQueueProps = {
 };
 
 function sendStateLabel(item: ChatQueueItem): string | null {
-  if (isInflightSteer(item)) {
-    return t("chat.queue.states.steering");
-  }
   switch (item.sendState) {
     case "waiting-model":
       // Persisted state name predates reasoning and speed picker gating.

@@ -627,6 +627,73 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("uses a matching receipt upstream only for the detached installed revision", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-receipt-fallback-" }, async (base) => {
+      const sourceRoot = path.join(base, "source");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(sourceRoot);
+      await fs.writeFile(
+        path.join(sourceRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+      );
+      await runGit(sourceRoot, "add", "package.json");
+      await commitGit(sourceRoot, "base");
+      const baseSha = await runGit(sourceRoot, "rev-parse", "HEAD");
+      await commitGit(sourceRoot, "target");
+      const targetSha = await runGit(sourceRoot, "rev-parse", "HEAD");
+      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
+      await runGit(localRoot, "checkout", "--detach", targetSha);
+      const fallback = { currentSha: targetSha, upstreamRef: "origin/main" };
+      const readStatus = (params: { fetch?: boolean; fallback?: typeof fallback } = {}) =>
+        checkUpdateStatus({
+          root: localRoot,
+          includeRegistry: false,
+          fetchGit: params.fetch ?? false,
+          timeoutMs: 5000,
+          ...(params.fallback ? { gitUpstreamFallback: params.fallback } : {}),
+        });
+
+      const current = await readStatus({ fetch: true, fallback });
+      expect(current.git).toMatchObject({
+        branch: "HEAD",
+        sha: targetSha,
+        upstream: "origin/main",
+        upstreamSource: "receipt",
+        upstreamSha: targetSha,
+        ahead: 0,
+        behind: 0,
+      });
+
+      await commitGit(sourceRoot, "newer");
+      const newerSha = await runGit(sourceRoot, "rev-parse", "HEAD");
+      const behind = await readStatus({ fetch: true, fallback });
+      expect(behind.git).toMatchObject({
+        upstreamSource: "receipt",
+        upstreamSha: newerSha,
+        ahead: 0,
+        behind: 1,
+      });
+
+      for (const fallbackOverride of [undefined, { ...fallback, currentSha: baseSha }]) {
+        const unmanaged = await readStatus({ fallback: fallbackOverride });
+        expect(unmanaged.git).toMatchObject({ branch: "HEAD", upstream: null });
+        expect(unmanaged.git).not.toHaveProperty("upstreamSource");
+      }
+
+      await runGit(localRoot, "checkout", "-b", "receipt-collision", targetSha);
+      const namedBranch = await readStatus({ fallback });
+      expect(namedBranch.git).toMatchObject({
+        branch: "receipt-collision",
+        sha: targetSha,
+        upstream: null,
+        upstreamSha: null,
+        ahead: null,
+        behind: null,
+      });
+      expect(namedBranch.git).not.toHaveProperty("upstreamSource");
+    });
+  });
+
   it("does not treat stale remote refs as current when fetch fails", async () => {
     await withTempDir({ prefix: "openclaw-update-check-fetch-failure-" }, async (base) => {
       const remoteRoot = path.join(base, "remote");

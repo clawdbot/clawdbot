@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { FormatCapabilityProfile } from "./format-capabilities.js";
 import { markdownToIR } from "./ir.js";
 import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
-import { renderMarkdownAsPlainText } from "./render-plain.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
 const ALL_NATIVE = {
@@ -71,17 +70,5 @@ describe("format capability driver plumbing", () => {
     expect(renderMarkdownWithAttributedRanges(ir, options, ALL_NATIVE)).toEqual(
       renderMarkdownWithAttributedRanges(ir, options),
     );
-  });
-
-  it("keeps plain projection byte-identical for an all-native optional profile", () => {
-    expect(renderMarkdownAsPlainText(ir, {}, ALL_NATIVE)).toBe(renderMarkdownAsPlainText(ir));
-  });
-
-  it("keeps explicit label-only link projection above profile fallback", () => {
-    const profile = {
-      ...ALL_NATIVE,
-      constructs: { ...ALL_NATIVE.constructs, linkLabel: "fallback" as const },
-    };
-    expect(renderMarkdownAsPlainText(ir, { linkStyle: "label" }, profile)).toBe("See docs");
   });
 });

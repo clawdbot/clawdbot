@@ -249,6 +249,7 @@ export async function runTelegramDispatchTurn(params: {
             suppressDefaultToolProgressMessages:
               !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
             forceToolResultProgress:
+              Boolean(params.draft.answerLane.stream) &&
               params.streamMode === "progress" &&
               resolveChannelStreamingPreviewToolProgress(
                 params.telegramCfg,

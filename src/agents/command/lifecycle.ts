@@ -9,6 +9,7 @@ import {
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
@@ -86,6 +87,7 @@ export function createAgentCommandLifecycle(params: {
     );
     const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
+    const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
     emitAgentEvent({
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration(),
@@ -106,7 +108,9 @@ export function createAgentCommandLifecycle(params: {
         ...(terminalDelivery ? { terminalDelivery } : {}),
         ...(terminalReceipt ? { terminalReceipt } : {}),
         ...(terminalReply ? { terminalReply } : {}),
-        ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+        ...(stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
+          ? { aborted: true, stopReason }
+          : abortFields),
       },
     });
   };

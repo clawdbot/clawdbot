@@ -20,10 +20,6 @@ type PluginRegistrationContractParams = {
   videoGenerationProviderIds?: string[];
   musicGenerationProviderIds?: string[];
   toolNames?: string[];
-  requireSpeechVoices?: boolean;
-  requireDescribeImages?: boolean;
-  requireGenerateImage?: boolean;
-  requireGenerateVideo?: boolean;
   manifestAuthChoice?: {
     pluginId: string;
     choiceId: string;

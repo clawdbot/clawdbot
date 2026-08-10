@@ -12,9 +12,11 @@ import {
   appendOutput,
   createSessionSlug,
   deleteSession,
+  drainFinishedSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
+  getFinishedSessionForProcess,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
@@ -209,8 +211,27 @@ describe("bash process registry", () => {
         tail: "",
         truncated: false,
         totalOutputChars: 0,
+        unreadOutput: { stdout: "", stderr: "", outputDropped: false },
       },
     ]);
+  });
+
+  it("moves unread output into the exact finished snapshot and consumes it once", () => {
+    const session = createRegistrySession({
+      id: "exact-finished-output",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 100,
+      backgrounded: true,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", "terminal output\n");
+    markExited(session, 0, null, "completed");
+
+    const finished = getFinishedSessionForProcess(session);
+    expect(finished).toBe(getFinishedSession(session.id));
+    expect(finished && drainFinishedSession(finished).stdout).toBe("terminal output\n");
+    expect(finished && drainFinishedSession(finished).stdout).toBe("");
+    expect(drainSession(session).stdout).toBe("");
   });
 
   it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {

@@ -1,19 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { t } from "../../i18n/index.ts";
 import {
   createInitialDevicesState,
   loadNodes,
   type InventoryRemovalRequest,
 } from "../../lib/nodes/index.ts";
+import {
+  installDialogPolyfill,
+  waitForRenderedModalDialog,
+} from "../../test-helpers/modal-dialog.ts";
 import type { DevicesRouteData } from "./devices-page.ts";
 import "./devices-page.ts";
-
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type TestDevicesPage = HTMLElement & {
   context: ApplicationContext;
@@ -39,7 +41,29 @@ type TestDevicesPage = HTMLElement & {
     kind: "entry";
     entry: InventoryRemovalRequest;
   }) => Promise<void>;
+  confirmPairingReject: (target: "device" | "node", requestId: string) => Promise<void>;
+  confirmTokenRevoke: (deviceId: string, role: string) => Promise<void>;
 };
+
+function clickDialogButton(label: string) {
+  const button = [...document.body.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected ${label} button`);
+  }
+  button.click();
+}
+
+function createConnectedPage(client: GatewayBrowserClient) {
+  const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+  page.context = {
+    gateway: { connection: { gatewayUrl: "http://gateway.test" } },
+    runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
+  } as unknown as ApplicationContext;
+  applyGatewaySnapshot(page, gatewaySnapshot(client, true));
+  return page;
+}
 
 function applyGatewaySnapshot(
   page: TestDevicesPage,
@@ -94,6 +118,17 @@ function gateway(client: GatewayBrowserClient | null): ApplicationContext["gatew
 }
 
 describe("DevicesPage gateway lifecycle", () => {
+  let restoreDialogPolyfill: () => void;
+
+  beforeEach(() => {
+    restoreDialogPolyfill = installDialogPolyfill();
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    restoreDialogPolyfill();
+  });
+
   it("preserves matching initial route data, then resets it on provider replacement", () => {
     const client = null;
     const currentGateway = gateway(client);
@@ -250,25 +285,70 @@ describe("DevicesPage gateway lifecycle", () => {
   it("cancels a pending removal confirmation when the connection resets", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
-    const confirmation = deferred<boolean>();
-    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-    page.pageState = createInitialDevicesState({ client, connected: true });
-    page.context = {
-      runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
-    } as unknown as ApplicationContext;
+    const page = createConnectedPage(client);
+
     const pending = page.confirmInventoryRemoval({
       kind: "entry",
       entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
     });
-    await Promise.resolve();
-    const signal = vi.mocked(showConfirmDialog).mock.calls[0]?.[0].signal;
+    await waitForRenderedModalDialog(document.body);
 
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
-    confirmation.resolve(true);
     await pending;
 
-    expect(signal?.aborted).toBe(true);
     expect(request).not.toHaveBeenCalled();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("rejects a device pairing request after the in-app dialog is confirmed", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = createConnectedPage(client);
+
+    const pending = page.confirmPairingReject("device", "request-1");
+    const { dialog } = await waitForRenderedModalDialog(document.body);
+    expect(dialog.getAttribute("aria-label")).toBe(t("devices.inventory.rejectDevicePromptTitle"));
+
+    clickDialogButton(t("devices.inventory.reject"));
+    await pending;
+
+    expect(request).toHaveBeenCalledWith("device.pair.reject", { requestId: "request-1" });
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+  });
+
+  it("issues no node pairing request when the dialog is cancelled", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = createConnectedPage(client);
+
+    const pending = page.confirmPairingReject("node", "request-2");
+    await waitForRenderedModalDialog(document.body);
+
+    clickDialogButton(t("common.cancel"));
+    await pending;
+
+    expect(request).not.toHaveBeenCalled();
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+  });
+
+  it("drops a confirmed token revoke when the request generation moved on", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = createConnectedPage(client);
+
+    const pending = page.confirmTokenRevoke("device-1", "operator");
+    const { dialog } = await waitForRenderedModalDialog(document.body);
+    expect(dialog.getAttribute("aria-label")).toBe(
+      t("devices.inventory.revokePromptTitle", { role: "operator" }),
+    );
+    // The awaited dialog is a real suspension point: a generation bump during it means the
+    // captured scope no longer owns the connection, so the revoke must not reach the server.
+    page.pageState.requestGeneration += 1;
+
+    clickDialogButton(t("devices.inventory.revoke"));
+    await pending;
+
+    expect(request).not.toHaveBeenCalled();
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 });

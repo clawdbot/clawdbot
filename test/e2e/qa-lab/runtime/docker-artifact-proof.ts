@@ -171,9 +171,9 @@ async function runDockerArtifactProofProducer(
       codeRefs: [
         SOURCE_PATH,
         "scripts/test-docker-all.mjs",
-        "scripts/lib/docker-e2e-plan.mjs",
-        "scripts/lib/docker-e2e-scenarios.mjs",
-        "scripts/package-openclaw-for-docker.mjs",
+        "scripts/lib/docker-e2e-plan.mts",
+        "scripts/lib/docker-e2e-scenarios.mts",
+        "scripts/package-openclaw-for-docker.mts",
       ],
       docsRefs: ["docs/install/docker.md", "docs/help/testing.md"],
       id: options.lane,

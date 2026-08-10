@@ -9,6 +9,11 @@ export type TelegramCallbackButton = {
   style?: "danger" | "success" | "primary";
 };
 
+type TelegramCallbackReplyParams = Omit<
+  NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
+  "direct_messages_topic_id" | "message_thread_id"
+>;
+
 export interface TelegramCallbackMessageActions {
   editCallbackMessage: (
     text: string,
@@ -25,14 +30,13 @@ export interface TelegramCallbackMessageActions {
   >;
   replyToCallbackChat: (
     text: string,
-    replyParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2],
+    replyParams?: TelegramCallbackReplyParams,
   ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>;
 }
 
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
-  isGroup: boolean;
   isForum: boolean;
 }): TelegramCallbackMessageActions {
   const { bot, callbackMessage, isForum } = params;
@@ -77,21 +81,13 @@ export function createTelegramCallbackMessageActions(params: {
     return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
   };
 
-  const replyToCallbackChat = async (
-    text: string,
-    replyParams?: Parameters<typeof bot.api.sendMessage>[2],
-  ) => {
+  const replyToCallbackChat = async (text: string, replyParams?: TelegramCallbackReplyParams) => {
     const threadParams = buildTelegramThreadParams(
       resolveTelegramMessageThreadSpec(callbackMessage, isForum),
     );
-    const {
-      message_thread_id: _messageThreadId,
-      direct_messages_topic_id: _directMessagesTopicId,
-      ...ordinaryReplyParams
-    } = replyParams ?? {};
     const mergedParams =
       callbackBusinessParams || threadParams || replyParams
-        ? { ...ordinaryReplyParams, ...callbackBusinessParams, ...threadParams }
+        ? { ...replyParams, ...callbackBusinessParams, ...threadParams }
         : replyParams;
     return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
   };

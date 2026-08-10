@@ -58,7 +58,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "reef",
   "talk-voice",
   "teams-meetings",
-  "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",

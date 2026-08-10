@@ -54,7 +54,7 @@ import {
   replaceSubagentRunAfterSteer,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
+import { terminateAcceptedCollectorRun } from "./subagents/spawn/subagent-spawn-cleanup.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 /** Recent-run default window used by subagent control UI/tools. */

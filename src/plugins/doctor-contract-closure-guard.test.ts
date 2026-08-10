@@ -35,6 +35,15 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
     },
   ],
   [
+    "openclaw/plugin-sdk/runtime-doctor",
+    {
+      reason:
+        "the retired package path exists only for shipped plugin artifacts; " +
+        "current source must use openclaw/plugin-sdk/runtime-doctor-migrations",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
     "openclaw/plugin-sdk/ssrf-runtime",
     {
       reason:
@@ -49,6 +58,34 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
       reason:
         "the provider-model barrel cold-loads replay/endpoint/catalog helpers; " +
         "use openclaw/plugin-sdk/model-ref-parse for provider/model reference parsing",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/acp-runtime",
+    {
+      reason:
+        "the ACP runtime barrel cold-loads the ACP control-plane manager and backend registry; " +
+        "keep legacy-state row shapes in a plugin-local leaf module",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/conversation-runtime",
+    {
+      reason:
+        "the deprecated conversation barrel cold-loads binding-routing and the session-binding registry; " +
+        "keep legacy-state row shapes in a plugin-local leaf module",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/provider-auth",
+    {
+      reason:
+        "the provider-auth barrel cold-loads the auth-profile store, provider runtime, and plugin " +
+        "install graph (execa, kysely, commander); use openclaw/plugin-sdk/secret-provider-alias " +
+        "for the default secret provider alias",
       kinds: new Set(["doctor-contract"]),
     },
   ],

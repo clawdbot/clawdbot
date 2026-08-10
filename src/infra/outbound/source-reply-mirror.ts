@@ -19,6 +19,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
   type RestartRecoveryTerminalDeliveryScope,
 } from "../../config/sessions/restart-recovery-receipt.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
@@ -492,10 +493,15 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
   const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const writerFence = getOwnedSessionTranscriptWriterFence();
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
+    ...(writerFence?.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+      : {}),
+    ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
     text: mirror.text,
     mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
     idempotencyKey: resolveTranscriptMirrorIdempotencyKey({

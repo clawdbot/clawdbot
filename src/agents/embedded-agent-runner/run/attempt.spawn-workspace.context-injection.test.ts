@@ -216,7 +216,14 @@ describe("embedded attempt context injection", () => {
       { role: "user", content: "real question", timestamp: 1 } as AgentMessage,
       { role: "assistant", content: "real answer", timestamp: 2 } as unknown as AgentMessage,
       { role: "user", content: HEARTBEAT_PROMPT, timestamp: 3 } as AgentMessage,
-      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Checking the heartbeat." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+        timestamp: 4,
+      } as unknown as AgentMessage,
     ];
 
     const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(

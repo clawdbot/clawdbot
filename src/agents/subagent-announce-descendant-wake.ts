@@ -14,7 +14,7 @@ import type {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
 } from "./subagent-announce.runtime.js";
-import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
+import { terminateAcceptedCollectorRun } from "./subagents/spawn/subagent-spawn-cleanup.js";
 
 type DescendantWakeDeps = {
   callGateway: typeof callGateway;

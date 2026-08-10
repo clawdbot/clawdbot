@@ -2311,35 +2311,77 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
   it("rejects reconnect operations for commands leased by another gateway", async () => {
     const foreignCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-foreign-operation ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-foreign`;
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({
-        name: "agent:codex:acp:binding:test",
-        agentCommand: foreignCommand,
-      })),
-      save: vi.fn(async () => {}),
+    const handle = {
+      sessionKey: "agent:codex:acp:binding:test",
+      backend: "acpx" as const,
+      runtimeSessionName: "agent:codex:acp:binding:test",
     };
-    const leaseStore = makeLeaseStore();
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
-    const setMode = vi.spyOn(delegate, "setMode").mockResolvedValue(undefined);
-
-    await expect(
-      runtime.setMode({
-        handle: {
-          sessionKey: "agent:codex:acp:binding:test",
-          backend: "acpx",
-          runtimeSessionName: "agent:codex:acp:binding:test",
-        },
-        mode: "plan",
-      }),
-    ).rejects.toMatchObject({
+    const expectedError = {
       code: "ACP_TURN_FAILED",
       message: "ACPX process lease lease-foreign-operation belongs to another gateway",
+    };
+    const createRuntime = () => {
+      const baseStore: TestSessionStore = {
+        load: vi.fn(async () => ({
+          name: handle.sessionKey,
+          agentCommand: foreignCommand,
+        })),
+        save: vi.fn(async () => {}),
+      };
+      const leaseStore = makeLeaseStore();
+      const { runtime } = makeRuntime(baseStore, {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawToolsMcpBridgeEnabled: true,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+        mcpServers: [
+          {
+            name: "openclaw-tools",
+            command: "node",
+            args: ["dist/mcp/openclaw-tools-serve.js"],
+            env: [],
+          },
+        ],
+      });
+      const managedToolsSessionDelegates = (
+        runtime as unknown as {
+          managedToolsSessionDelegates: Map<string, unknown>;
+        }
+      ).managedToolsSessionDelegates;
+      return { runtime, leaseStore, managedToolsSessionDelegates };
+    };
+    const expectRejectedWithoutDelegate = async (
+      operation: (runtime: AcpxRuntime) => Promise<unknown>,
+    ) => {
+      const { runtime, leaseStore, managedToolsSessionDelegates } = createRuntime();
+      await expect(operation(runtime)).rejects.toMatchObject(expectedError);
+      expect(managedToolsSessionDelegates.has(handle.sessionKey)).toBe(false);
+      expect(managedToolsSessionDelegates.size).toBe(0);
+      expect(leaseStore.leases.size).toBe(0);
+    };
+
+    await expectRejectedWithoutDelegate((runtime) =>
+      runtime.setConfigOption({ handle, key: "thinking", value: "minimal" }),
+    );
+    await expectRejectedWithoutDelegate((runtime) => runtime.setMode({ handle, mode: "plan" }));
+    await expectRejectedWithoutDelegate((runtime) => runtime.close({ handle, reason: "done" }));
+
+    const { runtime, leaseStore, managedToolsSessionDelegates } = createRuntime();
+    const turn = runtime.startTurn({
+      handle,
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "foreign-gateway",
     });
-    expect(setMode).not.toHaveBeenCalled();
+    const outcomes = await Promise.allSettled([turn.result, turn.cancel(), turn.closeStream()]);
+    for (const outcome of outcomes) {
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(outcome.reason).toMatchObject(expectedError);
+      }
+    }
+    expect(managedToolsSessionDelegates.has(handle.sessionKey)).toBe(false);
+    expect(managedToolsSessionDelegates.size).toBe(0);
     expect(leaseStore.leases.size).toBe(0);
   });
 
@@ -2723,7 +2765,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(leaseStore.leases.size).toBe(0);
   });
 
-  it("tracks control-operation reconnects without leaving pending leases", async () => {
+  it("loads one wrapper snapshot per handle operation before mutation", async () => {
     const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-control-reconnect ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
@@ -2738,23 +2780,52 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawProcessLeaseStore: leaseStore.store,
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
-    vi.spyOn(delegate, "setMode").mockImplementation(async () => {
+    const expectPendingLease = () => {
       expect(leaseStore.leases.get("lease-control-reconnect")).toMatchObject({
         rootPid: 0,
         sessionKey: "agent:codex:acp:binding:test",
       });
+    };
+    vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
+      expectPendingLease();
+      return {
+        requestId: input.requestId,
+        events: (async function* () {})(),
+        result: Promise.resolve({ status: "completed" }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      };
     });
+    vi.spyOn(delegate, "setMode").mockImplementation(async () => expectPendingLease());
+    const setConfigOption = vi
+      .spyOn(delegate, "setConfigOption")
+      .mockImplementation(async () => expectPendingLease());
+    vi.spyOn(delegate, "close").mockImplementation(async () => expectPendingLease());
+    const handle = {
+      sessionKey: "agent:codex:acp:binding:test",
+      backend: "acpx" as const,
+      runtimeSessionName: "agent:codex:acp:binding:test",
+    };
+    const operations = [
+      async () =>
+        await runtime.startTurn({ handle, text: "OK", mode: "prompt", requestId: "1" }).result,
+      async () => await runtime.setConfigOption({ handle, key: "thinking", value: "minimal" }),
+      async () => await runtime.setMode({ handle, mode: "plan" }),
+      async () => await runtime.close({ handle, reason: "done" }),
+    ];
 
-    await runtime.setMode({
-      handle: {
-        sessionKey: "agent:codex:acp:binding:test",
-        backend: "acpx",
-        runtimeSessionName: "agent:codex:acp:binding:test",
-      },
-      mode: "plan",
+    for (const operation of operations) {
+      vi.mocked(baseStore["load"]).mockClear();
+      await operation();
+      expect(baseStore["load"]).toHaveBeenCalledOnce();
+      expect(leaseStore.leases.size).toBe(0);
+    }
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "reasoning_effort",
+      value: "low",
     });
-
-    expect(leaseStore.leases.size).toBe(0);
   });
 
   it("preserves a promoted PID when the session record save fails", async () => {
