@@ -76,6 +76,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   pane.state = {
     chatError: null,
     chatLoading: false,
+    chatMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,

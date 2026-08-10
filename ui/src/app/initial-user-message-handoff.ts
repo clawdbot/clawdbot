@@ -7,7 +7,7 @@ export type ApplicationInitialUserMessage = {
   __openclaw?: { idempotencyKey?: string; seq?: number };
 };
 
-export type ApplicationInitialUserMessageHandoffEntry = {
+type ApplicationInitialUserMessageHandoffEntry = {
   message: ApplicationInitialUserMessage;
   pendingRunId: string;
   /** Logical Gateway client; per-transport hello objects rotate on reconnect. */

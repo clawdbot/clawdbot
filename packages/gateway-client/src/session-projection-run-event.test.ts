@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { reduceSessionProjectionRunEvent } from "./session-projection-run-event.js";
-import { createSessionProjection, type SessionProjectionScope } from "./session-projection.js";
+import {
+  createSessionProjection,
+  reduceSessionProjectionRunEvent,
+  type SessionProjectionScope,
+} from "./session-projection.js";
 
 const scope: SessionProjectionScope = {
   sessionKey: "agent:main:shared",

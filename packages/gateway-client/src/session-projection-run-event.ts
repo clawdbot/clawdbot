@@ -1,27 +1,17 @@
 import {
   reduceSessionProjection,
   type SessionProjectionEvent,
+  type SessionProjectionGatewayRunEvent,
+  type SessionProjectionRunTransition,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "./session-projection.js";
-
-export type SessionProjectionGatewayRunEvent = {
-  state?: unknown;
-  yielded?: unknown;
-} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
-
-export type SessionProjectionRunTransition = {
-  projection: SessionProjectionState;
-  previousRun: SessionProjectionState["runs"][string] | undefined;
-  currentRun: SessionProjectionState["runs"][string] | undefined;
-};
 
 function readNonemptyString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
 }
 
-/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
-export function reduceSessionProjectionRunEvent(
+export function reduceSessionProjectionRunEventImpl(
   projection: SessionProjectionState,
   event: SessionProjectionGatewayRunEvent,
   scope: SessionProjectionScope = {},
