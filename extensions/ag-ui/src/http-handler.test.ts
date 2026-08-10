@@ -605,6 +605,8 @@ describe("AG-UI HTTP handler", () => {
     );
   });
 
+  // Thread ids keep their case: lowercasing merged ids that differ only by case
+  // into one transcript.
   it("appends thread suffix to session key for thread separation", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
@@ -620,7 +622,7 @@ describe("AG-UI HTTP handler", () => {
 
     const rt = fakeApi.runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call.sessionKey).toBe("agui:test-session:thread:my-thread-42");
+    expect(call.sessionKey).toBe("agui:test-session:thread:My-Thread-42");
   });
 
   it("uses base session key when threadId is absent", async () => {
@@ -644,70 +646,6 @@ describe("AG-UI HTTP handler", () => {
   // -------------------------------------------------------------------------
   // X-OpenClaw-Session-Key — per-user session scoping
   // -------------------------------------------------------------------------
-
-  it("appends user suffix to session key when X-OpenClaw-Session-Key is provided", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: {
-        authorization: `Bearer ${token}`,
-        "x-openclaw-session-key": "alice@example.com",
-      },
-      body: {
-        threadId: "t-user",
-        runId: "r-user",
-        messages: [{ role: "user", content: "Hello" }],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call.sessionKey).toBe("agui:test-session:user:alice@example.com:thread:t-user");
-  });
-
-  it("composes user and thread suffixes together in order", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: {
-        authorization: `Bearer ${token}`,
-        "x-openclaw-session-key": "alice",
-      },
-      body: {
-        threadId: "t-1",
-        runId: "r-1",
-        messages: [{ role: "user", content: "Hello" }],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call.sessionKey).toBe("agui:test-session:user:alice:thread:t-1");
-  });
-
-  it("namespaces header value under route.sessionKey and never replaces it", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: {
-        authorization: `Bearer ${token}`,
-        "x-openclaw-session-key": "totally-different",
-      },
-      body: {
-        threadId: "t-hostile",
-        runId: "r-hostile",
-        messages: [{ role: "user", content: "Hello" }],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    const rt = fakeApi.runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call.sessionKey.startsWith("agui:test-session:")).toBe(true);
-    expect(call.sessionKey).toContain(":user:totally-different");
-  });
 
   it("falls back to route.sessionKey scoping when X-OpenClaw-Session-Key is absent", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
@@ -800,36 +738,6 @@ describe("AG-UI HTTP handler", () => {
 
     expect(res.statusCode).toBe(400);
   });
-
-  it.each([
-    ["email", "alice@example.com"],
-    ["uuid", "12345678-1234-1234-1234-123456789abc"],
-    ["colon-separated", "tenant-1:alice"],
-    ["dot-and-underscore", "user_1.alice"],
-  ])(
-    "accepts well-formed identifier (%s) and composes it under route.sessionKey",
-    async (_label, value) => {
-      const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-      const req = createReq({
-        headers: {
-          authorization: `Bearer ${token}`,
-          "x-openclaw-session-key": value,
-        },
-        body: {
-          threadId: "t-ok",
-          runId: "r-ok",
-          messages: [{ role: "user", content: "Hello" }],
-        },
-      });
-      const res = createRes();
-      await handler(req, res);
-
-      expect(res.statusCode).toBe(200);
-      const rt = fakeApi.runtime;
-      const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-      expect(call.sessionKey).toBe(`agui:test-session:user:${value}:thread:t-ok`);
-    },
-  );
 
   it("does not call resolveAgentRoute or runEmbeddedAgent when X-OpenClaw-Session-Key is invalid", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);

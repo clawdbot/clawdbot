@@ -12,11 +12,12 @@ import {
   findDeclaredToolConflicts,
   parseDeclaredTools,
 } from "./client-tools.js";
-import { applyCorsAndHandlePreflight } from "./cors.js";
+import { handlePreflightAndRequirePost } from "./cors.js";
 import { authenticateAguiDevice } from "./device-auth.js";
 import { observeDisconnect } from "./disconnect.js";
 import { resolveGatewaySecret } from "./gateway-secret.js";
 import { extractImagesFromMessages } from "./images.js";
+import { hasOperatorWriteScope } from "./operator-scope.js";
 import {
   buildBodyFromMessages,
   buildDeltaPrompt,
@@ -29,12 +30,13 @@ import {
 } from "./prompt-builder.js";
 import {
   sendJson,
-  sendMethodNotAllowed,
   readJsonBody,
   getBearerToken,
   validateSessionKeyHeader,
+  composeAguiSessionKey,
+  isEncodableSessionComponent,
 } from "./request-util.js";
-import { beginSseResponse } from "./sse.js";
+import { beginSseResponse, writeEmptyRun } from "./sse.js";
 import {
   claimRun,
   endRun,
@@ -64,12 +66,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
     // forces a preflight, so we have to answer 204 here. The route's
     // gateway-side auth still requires a valid pairing token on the actual
     // POST: CORS only governs which origins can read the response.
-    if (applyCorsAndHandlePreflight(req, res)) {
-      return;
-    }
-    // POST-only
-    if (req.method !== "POST") {
-      sendMethodNotAllowed(res);
+    if (handlePreflightAndRequirePost(req, res)) {
       return;
     }
 
@@ -141,11 +138,20 @@ export function createOperatorAguiHttpHandler(api: OpenClawPluginApi) {
     // an AG-UI runtime proxy. Serving a cross-origin browser directly from this
     // route would need core to exempt OPTIONS from gateway auth; that is a core
     // security-surface change and is deliberately not attempted here.
-    if (applyCorsAndHandlePreflight(req, res)) {
+    if (handlePreflightAndRequirePost(req, res)) {
       return;
     }
-    if (req.method !== "POST") {
-      sendMethodNotAllowed(res);
+    // `write-default` resolves the caller's scopes; it does not gate on them.
+    // A trusted proxy that declares only `operator.read` still reaches this
+    // handler, so the route has to require write itself before starting a run.
+    if (!hasOperatorWriteScope()) {
+      sendJson(res, 403, {
+        error: {
+          message:
+            "This route requires the operator.write scope. The caller presented a read-only operator scope.",
+          type: "forbidden",
+        },
+      });
       return;
     }
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
@@ -244,6 +250,20 @@ async function dispatchAuthenticatedAguiRequest(
       ? req.headers["x-openclaw-session-key"]
       : undefined;
   let userKey: string | undefined;
+  if (sessionKeyHeader !== undefined && !caller.trusted) {
+    // Documented as trusted-proxy-only, and it lands in the PERSISTED session
+    // key: a paired device that picks its own value can address another user's
+    // session scope. The proxy sets this next to the auth check that decides
+    // who the user is; an untrusted caller has no such standing.
+    sendJson(res, 400, {
+      error: {
+        message:
+          "X-OpenClaw-Session-Key is not accepted on this route. A paired device runs in the session its binding selects; set this header on a trusted proxy using the operator route.",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
   if (sessionKeyHeader !== undefined) {
     const validated = validateSessionKeyHeader(sessionKeyHeader);
     if (!validated) {
@@ -256,6 +276,16 @@ async function dispatchAuthenticatedAguiRequest(
       return;
     }
     userKey = validated;
+  }
+
+  // threadId is an arbitrary client string and becomes part of the persisted
+  // session key. Malformed UTF-16 (a lone surrogate) cannot be encoded, so
+  // refuse it here rather than letting the key composer throw mid-request.
+  if (!isEncodableSessionComponent(threadId)) {
+    sendJson(res, 400, {
+      error: { message: "Invalid characters in `threadId`.", type: "invalid_request_error" },
+    });
+    return;
   }
 
   const agentIdHeader =
@@ -359,10 +389,7 @@ async function dispatchAuthenticatedAguiRequest(
   if (!hasUserMessage && !hasToolMessage) {
     // AG-UI protocol allows empty messages (used for session init/sync).
     // Return a valid empty run instead of 400.
-    const encoder = beginSseResponse(res);
-    res.write(encoder.encode({ type: EventType.RUN_STARTED, threadId, runId }));
-    res.write(encoder.encode({ type: EventType.RUN_FINISHED, threadId, runId }));
-    res.end();
+    writeEmptyRun(res, threadId, runId);
     return;
   }
 
@@ -434,13 +461,7 @@ async function dispatchAuthenticatedAguiRequest(
   // Compose the session scope BEFORE committing any response headers. The
   // :user: suffix (from the validated header) and the :thread: suffix both
   // subdivide route.sessionKey and never replace it.
-  let sessionKey = route.sessionKey;
-  if (userKey) {
-    sessionKey += `:user:${userKey}`;
-  }
-  if (threadId) {
-    sessionKey += `:thread:${threadId.toLowerCase()}`;
-  }
+  const sessionKey = composeAguiSessionKey(route.sessionKey, userKey, threadId);
 
   // Identifies THIS request's run inside the shared per-session tool-stream
   // state. Two requests from the same device and thread share `sessionKey`, so

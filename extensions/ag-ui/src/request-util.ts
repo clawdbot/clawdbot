@@ -127,3 +127,46 @@ export function verifyDeviceToken(token: string, secret: string): string | null 
     return null;
   }
 }
+
+/**
+ * Composes the persisted session key from its parts.
+ *
+ * Each component is encoded before joining. Raw concatenation let distinct
+ * pairs collide: a user key may itself contain `:`, and thread ids are
+ * arbitrary client strings, so user `"a:thread:b"` and user `"a"` + thread
+ * `"b"` produced the same key — and therefore shared one transcript.
+ * Lowercasing the thread id additionally merged ids differing only by case.
+ * `encodeURIComponent` escapes `:` and `%`, so parts stay unambiguous and case
+ * is preserved.
+ */
+export function composeAguiSessionKey(
+  routeSessionKey: string,
+  userKey: string | undefined,
+  threadId: string | undefined,
+): string {
+  let key = routeSessionKey;
+  if (userKey) {
+    key += `:user:${encodeURIComponent(userKey)}`;
+  }
+  if (threadId) {
+    key += `:thread:${encodeURIComponent(threadId)}`;
+  }
+  return key;
+}
+
+/**
+ * Whether a string survives URI component encoding.
+ *
+ * `encodeURIComponent` throws `URIError` on malformed UTF-16 (a lone surrogate
+ * such as "\uD800"). Client-supplied thread ids are arbitrary strings, so the
+ * composer must not be the thing that discovers that — the caller checks first
+ * and answers 400.
+ */
+export function isEncodableSessionComponent(value: string): boolean {
+  try {
+    encodeURIComponent(value);
+    return true;
+  } catch {
+    return false;
+  }
+}

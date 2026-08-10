@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { EventType } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 
 /**
@@ -25,4 +26,16 @@ export function beginSseResponse(res: ServerResponse): EventEncoder {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
   return encoder;
+}
+
+/**
+ * Answers a request that carries no user or tool turn with a complete, empty
+ * run. AG-UI clients use this for session init/sync, so it must be a valid
+ * run rather than an error.
+ */
+export function writeEmptyRun(res: ServerResponse, threadId: string, runId: string): void {
+  const encoder = beginSseResponse(res);
+  res.write(encoder.encode({ type: EventType.RUN_STARTED, threadId, runId }));
+  res.write(encoder.encode({ type: EventType.RUN_FINISHED, threadId, runId }));
+  res.end();
 }

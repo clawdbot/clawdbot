@@ -524,6 +524,13 @@ With no header the key is `<route.sessionKey>:thread:<threadId>`. With the heade
 `<route.sessionKey>:user:alice@example.com:thread:t-1`. The header can only
 subdivide an existing route scope — it cannot escape it.
 
+The header is accepted **only on the operator route**. A paired device is
+untrusted and runs in the session its binding selects, so sending the header on
+`/v1/ag-ui` is refused with `400` — otherwise a client could pick another user's
+session scope. Components are URI-encoded before composing the key, so a value
+containing `:` cannot spell out a different user/thread pair, and thread-id case
+is preserved.
+
 ### Trust model — treat this header like `X-Forwarded-For`
 
 `X-OpenClaw-Session-Key` is a **trusted-proxy-only** concern, in the same family
@@ -552,9 +559,10 @@ Non-streaming errors return JSON:
 
 | Status | Type                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; `X-OpenClaw-Agent-Id` or `system`/`developer` messages on the pairing route, or an unknown agent on the operator route; duplicate tool names, or a tool colliding with a declared state-writer; malformed `tools` (not an array, or an entry that is not an object or has no `name`); tool schemas over the size limit |
+| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; `X-OpenClaw-Agent-Id`, `X-OpenClaw-Session-Key`, or `system`/`developer` messages on the pairing route; an unknown agent on the operator route; a `threadId` that cannot be URI-encoded; duplicate tool names, or a tool colliding with a declared state-writer; malformed `tools` (not an array, or an entry that is not an object or has no `name`); tool schemas over the size limit |
 | 401    | `unauthorized`          | Invalid device or gateway token                                                                                                                                                                                                                                                                                                                                                                                           |
 | 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved                                                                                                                                                                                                                                                                                                                               |
+| 403    | `forbidden`             | (`/v1/ag-ui/operator`) The caller's operator scope is read-only — `operator.write` (or `operator.admin`) is required to run a turn |
 | 405    | —                       | Method not allowed (only POST accepted)                                                                                                                                                                                                                                                                                                                                                                                   |
 | 409    | `conflict_error`        | A run is already in progress for this session — retry, or use a distinct session key                                                                                                                                                                                                                                                                                                                                      |
 | 503    | `service_unavailable`   | (`/v1/ag-ui`) The pairing allow-list could not be read — a gateway storage fault, not a pairing state. Retry after checking the gateway logs                                                                                                                                                                                                                                                                              |

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sendMethodNotAllowed } from "./request-util.js";
 
 /**
  * Apply the route's CORS headers and answer a preflight.
@@ -26,6 +27,25 @@ export function applyCorsAndHandlePreflight(req: IncomingMessage, res: ServerRes
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.end();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Answers a CORS preflight, then rejects any non-POST method.
+ *
+ * Returns true when the request is already answered and the caller must stop.
+ * Both route factories need the identical pair, and they must not drift: a
+ * route that skipped the preflight would be unusable from a browser, and one
+ * that skipped the method guard would run a turn off a GET.
+ */
+export function handlePreflightAndRequirePost(req: IncomingMessage, res: ServerResponse): boolean {
+  if (applyCorsAndHandlePreflight(req, res)) {
+    return true;
+  }
+  if (req.method !== "POST") {
+    sendMethodNotAllowed(res);
     return true;
   }
   return false;

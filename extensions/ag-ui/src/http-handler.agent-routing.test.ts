@@ -28,6 +28,16 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   listAgentIds: vi.fn(() => ["main", "auditor"]),
 }));
 
+// The operator route reads the caller's resolved scopes from the ambient
+// gateway request scope. `operatorScopes` lets a test present an entitled or a
+// read-only proxy.
+let operatorScopes: string[] = ["operator.write"];
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: operatorScopes } },
+  }),
+}));
+
 vi.mock("openclaw/plugin-sdk/routing", () => ({
   deriveLastRoutePolicy: vi.fn(({ sessionKey, mainSessionKey }) =>
     sessionKey === mainSessionKey ? "main" : "session",
@@ -60,6 +70,7 @@ describe("privileged request inputs are scoped to the trusted route", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    operatorScopes = ["operator.write"];
     process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_SECRET;
     fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
     // The route a binding would select for this paired device.
@@ -241,6 +252,140 @@ describe("privileged request inputs are scoped to the trusted route", () => {
     const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.extraSystemPrompt).toBeUndefined();
+  });
+
+  // A trusted proxy is authenticated but not necessarily entitled: write-default
+  // resolves its declared scopes rather than granting write.
+  it("refuses a read-scoped proxy on the operator route", async () => {
+    operatorScopes = ["operator.read"];
+    const res = createRes();
+    await operator(createReq({ body: body("t-read") }), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.chunks.join("")).error.type).toBe("forbidden");
+    expect(parseEvents(res.chunks)).toHaveLength(0);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts an admin-only proxy", async () => {
+    // operator.admin satisfies every operator.* scope (docs/gateway/operator-scopes.md);
+    // refusing it would deny a caller strictly more privileged than write.
+    operatorScopes = ["operator.admin"];
+    const res = createRes();
+    await operator(createReq({ body: body("t-admin") }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
+  });
+
+  it("still validates the session header on the trusted route", async () => {
+    // Being allowed to send the header is not the same as sending a valid one.
+    const res = createRes();
+    await operator(
+      createReq({ headers: { "x-openclaw-session-key": "../escape" }, body: body("t-badsk") }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when no scopes are present at all", async () => {
+    operatorScopes = [];
+    const res = createRes();
+    await operator(createReq({ body: body("t-noscope") }), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  // X-OpenClaw-Session-Key lands in the PERSISTED session key, so an untrusted
+  // caller choosing its own value could address another user's scope.
+  it("refuses X-OpenClaw-Session-Key from a paired device", async () => {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await paired(
+      createReq({
+        headers: { authorization: `Bearer ${token}`, "x-openclaw-session-key": "someone-else" },
+        body: body("t-sk"),
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.chunks.join("")).error.message).toContain("X-OpenClaw-Session-Key");
+    expect(parseEvents(res.chunks)).toHaveLength(0);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("composes the session key under the route key for a trusted proxy", async () => {
+    await operator(
+      createReq({ headers: { "x-openclaw-session-key": "alice@example.com" }, body: body("t-ok") }),
+      createRes(),
+    );
+
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call.sessionKey).toContain("agui:bound-session");
+    expect(call.sessionKey).toContain("alice%40example.com");
+  });
+
+  // The collision the encoding exists to prevent: a user key containing `:`
+  // must not be able to spell out another user+thread pair.
+  it("keeps distinct user/thread pairs in distinct sessions", async () => {
+    await operator(
+      createReq({
+        headers: { "x-openclaw-session-key": "tenant-1:thread:alice" },
+        body: { threadId: "t", runId: "r1", messages: [{ role: "user", content: "hi" }] },
+      }),
+      createRes(),
+    );
+    const first = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0].sessionKey;
+
+    fakeApi.runtime.agent.runEmbeddedAgent.mockClear();
+    await operator(
+      createReq({
+        headers: { "x-openclaw-session-key": "tenant-1" },
+        body: {
+          threadId: "alice:thread:t",
+          runId: "r2",
+          messages: [{ role: "user", content: "hi" }],
+        },
+      }),
+      createRes(),
+    );
+    const second = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0].sessionKey;
+
+    // Under raw concatenation both spelled `…:user:tenant-1:thread:alice:thread:t`.
+    expect(first).not.toBe(second);
+    // And the delimiter inside the user key is escaped rather than structural.
+    expect(first).toContain("%3A");
+  });
+
+  it("refuses a threadId that cannot be encoded", async () => {
+    // A lone surrogate is not encodable; it must fail as a 400 rather than
+    // throwing inside session-key composition.
+    const res = createRes();
+    await operator(
+      createReq({
+        body: { threadId: "\uD800", runId: "r", messages: [{ role: "user", content: "hi" }] },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("preserves thread id case", async () => {
+    await operator(
+      createReq({
+        body: { threadId: "My-Thread-42", runId: "r", messages: [{ role: "user", content: "hi" }] },
+      }),
+      createRes(),
+    );
+
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call.sessionKey).toContain("My-Thread-42");
   });
 
   it("never forwards the agent header as accountId", async () => {
