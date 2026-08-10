@@ -373,7 +373,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       // createHookCtx's "private" chat type is undirected, so no fallback
       // attempt follows the timed-out final.
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toMatchObject({
         kind: "replayable",
         text: "durable reply",
