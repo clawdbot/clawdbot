@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
+  fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
@@ -464,6 +465,33 @@ export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProv
     ...(apiKey ? { apiKey } : {}),
     models: OPENCODE_ZEN_MODELS,
   };
+}
+
+export async function resolveOpencodeZenStarterModel(params: {
+  apiKey: string;
+  preferredModelRef: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const liveModelIds = await fetchLiveProviderModelIds({
+    providerId: PROVIDER_ID,
+    endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
+    discoveryApiKey: params.apiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
+    auditContext: "opencode-zen-onboarding-model-discovery",
+  });
+  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
+  const advertisedModelIds = new Set(liveModelIds);
+  const selectedModel =
+    OPENCODE_ZEN_MODELS.find(
+      (model) => model.id === preferredModelId && advertisedModelIds.has(model.id),
+    ) ?? OPENCODE_ZEN_MODELS.find((model) => advertisedModelIds.has(model.id));
+  if (!selectedModel) {
+    throw new Error("OpenCode Zen did not return a supported model for this API key.");
+  }
+  return `${PROVIDER_ID}/${selectedModel.id}`;
 }
 
 function readLiveModelId(row: unknown): string | undefined {

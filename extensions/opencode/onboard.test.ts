@@ -6,7 +6,7 @@ import {
 import { describe, it } from "vitest";
 import { applyOpencodeZenConfig, applyOpencodeZenProviderConfig } from "./onboard.js";
 
-const MODEL_REF = "opencode/claude-opus-4-6";
+const MODEL_REF = "opencode/claude-opus-5";
 
 describe("opencode onboard", () => {
   it("adds allowlist entry and preserves alias", () => {

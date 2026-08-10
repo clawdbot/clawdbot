@@ -15,6 +15,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
+  resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
@@ -485,6 +486,22 @@ describe("opencode-go provider plugin", () => {
     });
 
     expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
+  });
+
+  it("selects an enabled key-scoped onboarding model when the preferred model is unavailable", async () => {
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(JSON.stringify({ data: [{ id: "glm-5.1", object: "model" }] })),
+      finalUrl: "https://opencode.ai/zen/go/v1/models",
+      release: vi.fn(async () => undefined),
+    }));
+
+    await expect(
+      resolveOpencodeGoStarterModel({
+        apiKey: "resolved-opencode-key",
+        preferredModelRef: "opencode-go/deepseek-v4-pro",
+        fetchGuard,
+      }),
+    ).resolves.toBe("opencode-go/glm-5.1");
   });
 
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {

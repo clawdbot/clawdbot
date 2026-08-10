@@ -3,7 +3,7 @@ import { expectProviderOnboardPrimaryAndFallbacks } from "openclaw/plugin-sdk/pr
 import { describe, expect, it } from "vitest";
 import { applyOpencodeGoConfig, applyOpencodeGoProviderConfig } from "./onboard.js";
 
-const MODEL_REF = "opencode-go/kimi-k2.6";
+const MODEL_REF = "opencode-go/deepseek-v4-pro";
 
 describe("opencode-go onboard", () => {
   it("leaves model aliases to the OpenClaw catalog", () => {
@@ -11,7 +11,7 @@ describe("opencode-go onboard", () => {
       agents: {
         defaults: {
           models: {
-            [MODEL_REF]: { alias: "Kimi" },
+            [MODEL_REF]: { alias: "DeepSeek" },
           },
         },
       },

@@ -32,4 +32,87 @@ describe("createProviderApiKeyAuthMethod", () => {
       envVar: "EXAMPLE_API_KEY",
     });
   });
+
+  it("applies a key-scoped default model during non-interactive auth", async () => {
+    const resolveDefaultModel = vi.fn(async () => "example/enabled-model");
+    const method = createProviderApiKeyAuthMethod({
+      providerId: "example",
+      methodId: "api-key",
+      label: "Example",
+      optionKey: "exampleApiKey",
+      flagName: "--example-api-key",
+      envVar: "EXAMPLE_API_KEY",
+      promptMessage: "Example API key",
+      defaultModel: "example/static-model",
+      resolveDefaultModel,
+    });
+
+    const config = await method.runNonInteractive?.({
+      authChoice: "example-api-key",
+      config: {},
+      baseConfig: {},
+      opts: { exampleApiKey: "test-token" },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "profile" as const })),
+      toApiKeyCredential: vi.fn(() => null),
+    });
+
+    expect(resolveDefaultModel).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
+    expect(config?.agents?.defaults?.model).toEqual({ primary: "example/enabled-model" });
+  });
+
+  it("falls back to the static model when key-scoped discovery fails", async () => {
+    const method = createProviderApiKeyAuthMethod({
+      providerId: "example",
+      methodId: "api-key",
+      label: "Example",
+      optionKey: "exampleApiKey",
+      flagName: "--example-api-key",
+      envVar: "EXAMPLE_API_KEY",
+      promptMessage: "Example API key",
+      defaultModel: "example/static-model",
+      resolveDefaultModel: async () => {
+        throw new Error("catalog unavailable");
+      },
+    });
+
+    const config = await method.runNonInteractive?.({
+      authChoice: "example-api-key",
+      config: {},
+      baseConfig: {},
+      opts: { exampleApiKey: "test-token" },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "profile" as const })),
+      toApiKeyCredential: vi.fn(() => null),
+    });
+
+    expect(config?.agents?.defaults?.model).toEqual({ primary: "example/static-model" });
+  });
+
+  it("returns a key-scoped default model during interactive auth", async () => {
+    const resolveDefaultModel = vi.fn(async () => "example/enabled-model");
+    const method = createProviderApiKeyAuthMethod({
+      providerId: "example",
+      methodId: "api-key",
+      label: "Example",
+      optionKey: "exampleApiKey",
+      flagName: "--example-api-key",
+      envVar: "EXAMPLE_API_KEY",
+      promptMessage: "Example API key",
+      defaultModel: "example/static-model",
+      resolveDefaultModel,
+    });
+
+    const result = await method.run({
+      config: {},
+      env: {},
+      opts: { exampleApiKey: "test-token" },
+      prompter: { note: vi.fn() },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      secretInputMode: "plaintext",
+    } as never);
+
+    expect(resolveDefaultModel).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
+    expect(result.defaultModel).toBe("example/enabled-model");
+  });
 });

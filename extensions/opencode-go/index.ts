@@ -1,7 +1,7 @@
 // Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
+import { applyOpencodeGoProviderConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -11,13 +11,12 @@ import {
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
   resolveOpencodeGoModel,
+  resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
-const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
-const OPENCODE_SHARED_HINT = "Shared API key infrastructure for Zen + Go";
 type OpencodeGoCatalogAuth = {
   apiKey?: string;
   discoveryApiKey?: string;
@@ -48,12 +47,18 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/models",
     envVars: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
     manifestAuth: {
-      hint: OPENCODE_SHARED_HINT,
+      hint: "Shared API key infrastructure for Zen + Go",
       promptMessage: "Enter OpenCode API key",
-      profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
+      profileIds: ["opencode:default", "opencode-go:default"],
       defaultModel: OPENCODE_GO_DEFAULT_MODEL_REF,
-      applyConfig: applyOpencodeGoConfig,
+      resolveDefaultModel: async ({ apiKey, signal }) =>
+        await resolveOpencodeGoStarterModel({
+          apiKey,
+          preferredModelRef: OPENCODE_GO_DEFAULT_MODEL_REF,
+          ...(signal ? { signal } : {}),
+        }),
       expectedProviders: ["opencode", "opencode-go"],
+      applyConfig: applyOpencodeGoProviderConfig,
       noteMessage: [
         "OpenCode Go is a separate paid subscription that uses the shared OpenCode API key.",
         "Go focuses on Kimi, GLM, and MiniMax coding models.",
