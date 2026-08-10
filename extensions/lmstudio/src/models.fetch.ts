@@ -4,10 +4,10 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
-  readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
+import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
@@ -340,7 +340,15 @@ export async function ensureLmstudioModelLoaded(params: {
     });
     try {
       if (!response.ok) {
-        const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
+        const bodyRead = await readResponseTextPrefix(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES, {
+          chunkTimeoutMs: 10_000,
+        });
+        if (bodyRead.truncated) {
+          // A reflected credential split across the byte cap cannot be reliably
+          // redacted, so keep only the status in the operator-visible error.
+          throw new Error(`LM Studio model load failed (${response.status})`);
+        }
+        const body = bodyRead.text;
         throw new Error(
           `LM Studio model load failed (${response.status})${body ? `: ${redactLmstudioErrorBody(body, { apiKey: params.apiKey, headers: params.headers })}` : ""}`,
         );
