@@ -832,6 +832,35 @@ describe("renderChatComposer controls", () => {
 });
 
 describe("renderChatComposer status", () => {
+  it.each([
+    {
+      actors: [{ id: "ayaan", label: "Ayaan" }],
+      expectedText: "Ayaan is typing…",
+      expectedAvatars: 1,
+    },
+    {
+      actors: [
+        { id: "ayaan", label: "Ayaan" },
+        { id: "liam", label: "Liam" },
+        { id: "maya", label: "Maya" },
+        { id: "zoe", label: "Zoe" },
+      ],
+      expectedText: "Ayaan, Liam, Maya, Zoe are typing…",
+      expectedAvatars: 3,
+    },
+  ])(
+    "keeps $expectedText in the permanent composer footer",
+    ({ actors, expectedText, expectedAvatars }) => {
+      const { container } = renderComposer({ typingActors: actors });
+
+      const indicator = container.querySelector(".agent-chat__typing-indicator");
+      expect(indicator?.closest(".agent-chat__composer-footer")).not.toBeNull();
+      expect(indicator?.closest(".agent-chat__input")?.firstElementChild).not.toBe(indicator);
+      expect(indicator?.querySelectorAll(".chat-author-avatar")).toHaveLength(expectedAvatars);
+      expect(indicator?.textContent).toContain(expectedText);
+    },
+  );
+
   it("swaps the expanded question with the composer and restores its draft and focus", async () => {
     const container = document.createElement("div");
     document.body.append(container);
