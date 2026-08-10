@@ -15,12 +15,12 @@ import {
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
-import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../../agents/admitted-run-context.js";
+import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
