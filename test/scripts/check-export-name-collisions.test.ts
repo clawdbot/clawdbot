@@ -1,10 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectModuleExportNames,
+  collectRepositoryCollisions,
   compareExportNameCollisionDebt,
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 describe("export name collision guard", () => {
   it.each([
@@ -12,11 +16,12 @@ describe("export name collision guard", () => {
     ["src/example.e2e.test.ts", true],
     ["src/example.test-support.ts", true],
     ["src/example.test-helpers.ts", true],
+    ["src/example.test-utils.ts", true],
+    ["src/example.test-harness.ts", true],
+    ["src/example.e2e-harness.ts", true],
     ["src/example.d.ts", true],
     ["src/test/example.ts", true],
     ["src/nested/__fixtures__/example.mts", true],
-    ["src/example.test-utils.ts", false],
-    ["src/example.test-harness.ts", false],
     ["src/example.ts", false],
     ["src/example.mts", false],
   ])("classifies source exclusion %s", (filePath, expected) => {
@@ -59,13 +64,28 @@ describe("export name collision guard", () => {
     expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
   });
 
-  it("exempts exact static and lazy same-name forwarders", () => {
+  it("exempts exact function and const same-name forwarders", () => {
     const forwarders = [
       `
         import { resolveThing as resolveThingImpl } from "./thing.js";
         export function resolveThing(first: string, second?: number) {
           return resolveThingImpl(first, second);
         }
+      `,
+      `
+        import { resolveThing as resolveThingImpl } from "./thing.js";
+        export const resolveThing = resolveThingImpl;
+      `,
+      `
+        import { resolveThing as resolveThingImpl } from "./thing.js";
+        export const resolveThing = (first: string, second?: number) =>
+          resolveThingImpl(first, second);
+      `,
+      `
+        export const runThing = async (...args: unknown[]) => {
+          const runtime = await loadRuntime();
+          return runtime.runThing(...args);
+        };
       `,
       `
         export async function runThing(...args: unknown[]) {
@@ -118,6 +138,28 @@ describe("export name collision guard", () => {
       }
     `);
     expect([...result.definitions]).toEqual(["resolveThing"]);
+  });
+
+  it("keeps const arrows that add arguments as real definitions", () => {
+    const result = collectModuleExportNames(`
+      import { resolveThing as resolveThingImpl } from "./thing.js";
+      export const resolveThing = (...args: unknown[]) => resolveThingImpl(...args, fallback);
+    `);
+    expect([...result.definitions]).toEqual(["resolveThing"]);
+  });
+
+  it("discovers JavaScript source collisions", async () => {
+    await withTempDir("openclaw-export-collisions-", async (repoRoot) => {
+      const sourceRoot = path.join(repoRoot, "src");
+      await fs.mkdir(sourceRoot);
+      await Promise.all([
+        fs.writeFile(path.join(sourceRoot, "alpha.js"), "export const sharedValue = 1;\n"),
+        fs.writeFile(path.join(sourceRoot, "beta.mjs"), "export const sharedValue = 2;\n"),
+      ]);
+      expect(await collectRepositoryCollisions(repoRoot)).toEqual([
+        { name: "sharedValue", files: ["src/alpha.js", "src/beta.mjs"] },
+      ]);
+    });
   });
 
   it("deduplicates overloads inside one module", () => {

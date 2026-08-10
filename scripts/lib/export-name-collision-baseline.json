@@ -45,13 +45,6 @@
     "sdk": true
   },
   {
-    "name": "autoMigrateLegacyStateDir",
-    "files": [
-      "src/commands/doctor.e2e-harness.ts",
-      "src/infra/state-migrations.state-dir.ts"
-    ]
-  },
-  {
     "name": "buildApprovalPresentation",
     "files": [
       "src/infra/approval-presentation.ts",
@@ -71,13 +64,6 @@
     "files": [
       "src/channels/account-summary.ts",
       "src/channels/plugins/status.ts"
-    ]
-  },
-  {
-    "name": "buildConfigSchema",
-    "files": [
-      "src/config/doc-baseline.runtime.ts",
-      "src/config/schema.ts"
     ]
   },
   {
@@ -128,7 +114,6 @@
     "name": "callGateway",
     "files": [
       "src/cli/program.test-mocks.ts",
-      "src/commands/doctor.e2e-harness.ts",
       "src/gateway/call.ts"
     ]
   },
@@ -137,13 +122,6 @@
     "files": [
       "src/cli/nodes-cli/rpc.ts",
       "src/gateway/call.ts"
-    ]
-  },
-  {
-    "name": "callGatewayMock",
-    "files": [
-      "src/agents/openclaw-tools.subagents.test-harness.ts",
-      "src/cron/isolated-agent/run.test-harness.ts"
     ]
   },
   {
@@ -166,13 +144,6 @@
     "files": [
       "src/agents/tools/sessions-helpers.ts",
       "src/sessions/classify-session-kind.ts"
-    ]
-  },
-  {
-    "name": "clearMcpOAuthCredentials",
-    "files": [
-      "src/agents/mcp-oauth.ts",
-      "src/cli/mcp-cli.test-harness.ts"
     ]
   },
   {
@@ -214,27 +185,6 @@
     "sdk": true
   },
   {
-    "name": "collectBundledChannelConfigs",
-    "files": [
-      "src/config/doc-baseline.runtime.ts",
-      "src/plugins/bundled-channel-config-metadata.ts"
-    ]
-  },
-  {
-    "name": "collectChannelSchemaMetadata",
-    "files": [
-      "src/config/channel-config-metadata.ts",
-      "src/config/doc-baseline.runtime.ts"
-    ]
-  },
-  {
-    "name": "collectPluginSchemaMetadata",
-    "files": [
-      "src/config/channel-config-metadata.ts",
-      "src/config/doc-baseline.runtime.ts"
-    ]
-  },
-  {
     "name": "compactEmbeddedAgentSessionDirect",
     "files": [
       "src/agents/embedded-agent-runner/compact.runtime.ts",
@@ -246,13 +196,6 @@
     "files": [
       "src/tasks/detached-task-runtime.ts",
       "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "confirm",
-    "files": [
-      "src/commands/configure.shared.ts",
-      "src/commands/doctor.e2e-harness.ts"
     ]
   },
   {
@@ -277,14 +220,6 @@
     ]
   },
   {
-    "name": "createChannelPluginBase",
-    "files": [
-      "src/plugin-sdk/channel-core.ts",
-      "src/plugin-sdk/core.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "createCompactionDiagId",
     "files": [
       "src/agents/embedded-agent-runner/compaction-diagnostics.ts",
@@ -304,20 +239,6 @@
     "files": [
       "src/cli/startup-trace.ts",
       "src/gateway/server-startup-trace.ts"
-    ]
-  },
-  {
-    "name": "createHarness",
-    "files": [
-      "src/gateway/session-observer.test-utils.ts",
-      "src/gateway/worker-environments/placement-dispatch-test-harness.ts"
-    ]
-  },
-  {
-    "name": "createHookCtx",
-    "files": [
-      "src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts",
-      "src/auto-reply/reply/dispatch-from-config.test-harness.ts"
     ]
   },
   {
@@ -371,14 +292,6 @@
     "sdk": true
   },
   {
-    "name": "DEFAULT_PROGRESS_DRAFT_LABELS",
-    "files": [
-      "src/channels/streaming.ts",
-      "src/shared/progress-labels.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "DEFAULT_TIMEOUT_MS",
     "files": [
       "src/infra/provider-usage.shared.ts",
@@ -400,13 +313,6 @@
       "src/plugin-sdk/channel-outbound.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "describe1BeforeEach0",
-    "files": [
-      "src/auto-reply/reply/dispatch-from-config.test-harness.ts",
-      "src/gateway/server-methods/agent.test-harness.ts"
-    ]
   },
   {
     "name": "describeImagesWithModel",
@@ -497,21 +403,6 @@
     "sdk": true
   },
   {
-    "name": "ensureAuthProfileStore",
-    "files": [
-      "src/agents/auth-profiles/store.ts",
-      "src/commands/doctor.e2e-harness.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "ensureBinary",
-    "files": [
-      "src/infra/binaries.ts",
-      "src/library.ts"
-    ]
-  },
-  {
     "name": "ensureConfigReady",
     "files": [
       "src/cli/program.test-mocks.ts",
@@ -531,14 +422,6 @@
     "files": [
       "src/commands/doctor/shared/legacy-config-record-shared.ts",
       "src/config/legacy.shared.ts"
-    ]
-  },
-  {
-    "name": "expectRecordFields",
-    "files": [
-      "src/agents/openai-transport-stream.test-harness.ts",
-      "src/gateway/server-methods/agent.test-harness.ts",
-      "src/gateway/test-helpers.assertions.ts"
     ]
   },
   {
@@ -656,14 +539,6 @@
     "sdk": true
   },
   {
-    "name": "getEmbeddingProvider",
-    "files": [
-      "src/plugins/embedding-provider-runtime.ts",
-      "src/plugins/loader.test-harness.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "getFreeGatewayPort",
     "files": [
       "src/gateway/gateway-cli-backend.live-helpers.ts",
@@ -688,8 +563,7 @@
     "name": "getReplyFromConfig",
     "files": [
       "src/auto-reply/reply/get-reply.ts",
-      "src/gateway/test-helpers.runtime-state.ts",
-      "src/library.ts"
+      "src/gateway/test-helpers.runtime-state.ts"
     ],
     "sdk": true
   },
@@ -700,13 +574,6 @@
       "src/plugins/runtime/runtime-model-auth.runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "hasExplicitPluginConfig",
-    "files": [
-      "src/plugins/config-normalization-shared.ts",
-      "src/plugins/config-state.ts"
-    ]
   },
   {
     "name": "hasOwnProperty",
@@ -803,13 +670,6 @@
     ]
   },
   {
-    "name": "isBundledChannelEnabledByChannelConfig",
-    "files": [
-      "src/plugins/config-normalization-shared.ts",
-      "src/plugins/config-state.ts"
-    ]
-  },
-  {
     "name": "isClaudeCliProvider",
     "files": [
       "src/agents/cli-runner/helpers.ts",
@@ -846,14 +706,6 @@
       "src/agents/subagent-registry-read.ts",
       "src/agents/subagent-registry.ts"
     ]
-  },
-  {
-    "name": "listEmbeddingProviders",
-    "files": [
-      "src/plugins/embedding-provider-runtime.ts",
-      "src/plugins/loader.test-harness.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "listManagedPluginNpmRoots",
@@ -941,17 +793,9 @@
     "sdk": true
   },
   {
-    "name": "loadModelCatalogMock",
-    "files": [
-      "src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts",
-      "src/cron/isolated-agent/run.test-harness.ts"
-    ]
-  },
-  {
     "name": "loadPluginManifestRegistry",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
-      "src/config/doc-baseline.runtime.ts",
       "src/plugins/manifest-registry.ts"
     ],
     "sdk": true
@@ -1041,13 +885,6 @@
     "files": [
       "src/config/sessions/types.ts",
       "src/infra/state-migrations.session-store.ts"
-    ]
-  },
-  {
-    "name": "monitorWebChannel",
-    "files": [
-      "src/library.ts",
-      "src/plugins/runtime/runtime-web-channel-plugin.ts"
     ]
   },
   {
@@ -1246,8 +1083,7 @@
     "name": "promptYesNo",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/prompt.ts",
-      "src/library.ts"
+      "src/cli/prompt.ts"
     ]
   },
   {
@@ -1266,18 +1102,9 @@
     ]
   },
   {
-    "name": "readBooleanParam",
-    "files": [
-      "src/infra/outbound/message-action-params.ts",
-      "src/plugin-sdk/boolean-param.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "readConfigFileSnapshot",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
-      "src/commands/doctor.e2e-harness.ts",
       "src/config/io.runtime.ts"
     ],
     "sdk": true
@@ -1295,13 +1122,6 @@
     "files": [
       "src/gateway/session-transcript-readers.ts",
       "src/gateway/session-utils.fs.ts"
-    ]
-  },
-  {
-    "name": "readMcpOAuthCredentialsStatus",
-    "files": [
-      "src/agents/mcp-oauth.ts",
-      "src/cli/mcp-cli.test-harness.ts"
     ]
   },
   {
@@ -1631,13 +1451,6 @@
     ]
   },
   {
-    "name": "resolveOpenClawPackageRoot",
-    "files": [
-      "src/commands/doctor.e2e-harness.ts",
-      "src/infra/openclaw-root.ts"
-    ]
-  },
-  {
     "name": "resolveProviderThinkingProfile",
     "files": [
       "src/plugins/provider-runtime.ts",
@@ -1674,13 +1487,6 @@
       "src/secrets/target-registry-query.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "resolveSessionAuthProfileOverrideMock",
-    "files": [
-      "src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts",
-      "src/cron/isolated-agent/run.test-harness.ts"
-    ]
   },
   {
     "name": "resolveSessionCatalogCreateTarget",
@@ -1743,49 +1549,18 @@
     "sdk": true
   },
   {
-    "name": "runCommandWithTimeout",
-    "files": [
-      "src/commands/doctor.e2e-harness.ts",
-      "src/library.ts",
-      "src/process/exec-runner.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "runEmbeddedAgentMock",
-    "files": [
-      "src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts",
-      "src/cron/isolated-agent/run.test-harness.ts"
-    ]
-  },
-  {
     "name": "runExec",
     "files": [
       "src/agents/code-mode-execution.ts",
-      "src/library.ts",
       "src/process/exec.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "runGatewayUpdate",
-    "files": [
-      "src/commands/doctor.e2e-harness.ts",
-      "src/infra/update-runner.ts"
-    ]
   },
   {
     "name": "runGitUpdate",
     "files": [
       "src/cli/update-cli/update-command-git.ts",
       "src/infra/update-runner-git.ts"
-    ]
-  },
-  {
-    "name": "runMcpOAuthLogin",
-    "files": [
-      "src/agents/mcp-oauth.ts",
-      "src/cli/mcp-cli.test-harness.ts"
     ]
   },
   {
@@ -1800,8 +1575,7 @@
     "name": "runPreparedInboundReply",
     "files": [
       "src/channels/message/inbound-reply-dispatch.ts",
-      "src/channels/turn/execution.ts",
-      "src/channels/turn/kernel.ts"
+      "src/channels/turn/execution.ts"
     ],
     "sdk": true
   },
@@ -1843,26 +1617,12 @@
     "sdk": true
   },
   {
-    "name": "seedSessionStore",
-    "files": [
-      "src/agents/embedded-agent-subscribe.compaction-test-helpers.ts",
-      "src/infra/heartbeat-runner.test-utils.ts"
-    ]
-  },
-  {
     "name": "sendDurableMessageBatch",
     "files": [
       "src/channels/message/send.ts",
       "src/plugin-sdk/channel-outbound.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "serveOpenClawChannelMcp",
-    "files": [
-      "src/cli/mcp-cli.test-harness.ts",
-      "src/mcp/channel-server.ts"
-    ]
   },
   {
     "name": "setDetachedTaskDeliveryStatusByRunId",
@@ -2023,13 +1783,6 @@
     "sdk": true
   },
   {
-    "name": "withGatewayServer",
-    "files": [
-      "src/gateway/server-http.test-harness.ts",
-      "src/gateway/test-helpers.server.ts"
-    ]
-  },
-  {
     "name": "withServer",
     "files": [
       "src/gateway/test-with-server.ts",
@@ -2049,7 +1802,6 @@
   {
     "name": "withTempHome",
     "files": [
-      "src/config/home-env.test-harness.ts",
       "src/config/test-helpers.ts",
       "src/plugin-sdk/test-helpers/temp-home.ts"
     ],
@@ -2075,7 +1827,6 @@
     "name": "writeConfigFile",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
-      "src/commands/doctor.e2e-harness.ts",
       "src/config/io.runtime.ts"
     ],
     "sdk": true
@@ -2085,13 +1836,6 @@
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/installed-plugin-index-records.ts"
-    ]
-  },
-  {
-    "name": "writeSessionStore",
-    "files": [
-      "src/cron/isolated-agent.test-harness.ts",
-      "src/gateway/test-helpers.server.ts"
     ]
   },
   {

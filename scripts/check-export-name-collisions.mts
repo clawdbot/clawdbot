@@ -7,6 +7,7 @@ import { z } from "zod";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
+  isTestLikeTypeScriptFile,
   resolveSourceRoots,
   runAsScript,
   unwrapExpression,
@@ -42,13 +43,7 @@ const exportNameCollisionBaselineSchema = z.array(exportNameCollisionSchema);
 const baselineRelativePath = "scripts/lib/export-name-collision-baseline.json";
 const baselineRegenCommand = "pnpm lint:tmp:export-name-collisions:gen";
 const failurePrefix = "check-export-name-collisions";
-const excludedFileSuffixes = [
-  ".test.ts",
-  ".e2e.test.ts",
-  ".test-support.ts",
-  ".test-helpers.ts",
-  ".d.ts",
-];
+const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -60,7 +55,7 @@ export function isExcludedExportCollisionSource(filePath: string) {
   return (
     segments.includes("test") ||
     segments.includes("__fixtures__") ||
-    excludedFileSuffixes.some((suffix) => normalized.endsWith(suffix))
+    isTestLikeTypeScriptFile(normalized, extraExcludedFileSuffixes)
   );
 }
 
@@ -157,13 +152,23 @@ function isLazyModuleForwarderCall(
 }
 
 function isForwardingOnlyFunction(
-  declaration: ts.FunctionDeclaration,
+  declaration: ts.FunctionDeclaration | ts.ArrowFunction,
   functionName: string,
   importedNamesByLocalName: ReadonlyMap<string, string>,
 ) {
   const body = declaration.body;
   if (!body) {
     return false;
+  }
+
+  if (!ts.isBlock(body)) {
+    const expression = unwrapExpression(body);
+    return (
+      ts.isCallExpression(expression) &&
+      parametersAreForwarded(declaration.parameters, expression.arguments) &&
+      (isStaticImportForwarder(expression, functionName, importedNamesByLocalName) ||
+        isLazyModuleForwarderCall(expression, functionName))
+    );
   }
 
   if (body.statements.length === 1) {
@@ -211,11 +216,29 @@ function isForwardingOnlyFunction(
   );
 }
 
+function isForwardingOnlyConst(
+  declaration: ts.VariableDeclaration,
+  exportName: string,
+  importedNamesByLocalName: ReadonlyMap<string, string>,
+) {
+  if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
+    return false;
+  }
+  const initializer = unwrapExpression(declaration.initializer);
+  if (ts.isIdentifier(initializer)) {
+    return importedNamesByLocalName.get(initializer.text) === exportName;
+  }
+  return (
+    ts.isArrowFunction(initializer) &&
+    isForwardingOnlyFunction(initializer, exportName, importedNamesByLocalName)
+  );
+}
+
 /** Collects value exports and locally defined exported functions/consts from one module. */
 export function collectModuleExportNames(content: string, fileName = "source.ts"): ModuleExports {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const importedNamesByLocalName = new Map<string, string>();
-  const localConstNames = new Set<string>();
+  const localConstDeclarations = new Map<string, ts.VariableDeclaration[]>();
   const localFunctions = new Map<string, ts.FunctionDeclaration[]>();
   const directlyExportedNames = new Set<string>();
   const locallyExportedNames = new Set<string>();
@@ -227,7 +250,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       const bindings = statement.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
-          if (!specifier.isTypeOnly) {
+          if (!statement.importClause?.isTypeOnly && !specifier.isTypeOnly) {
             importedNamesByLocalName.set(
               specifier.name.text,
               specifier.propertyName?.text ?? specifier.name.text,
@@ -260,10 +283,16 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       }
       const statementNames = new Set<string>();
       for (const declaration of statement.declarationList.declarations) {
-        collectBindingNames(declaration.name, statementNames);
+        const declarationNames = new Set<string>();
+        collectBindingNames(declaration.name, declarationNames);
+        for (const name of declarationNames) {
+          statementNames.add(name);
+          const declarations = localConstDeclarations.get(name) ?? [];
+          declarations.push(declaration);
+          localConstDeclarations.set(name, declarations);
+        }
       }
       for (const name of statementNames) {
-        localConstNames.add(name);
         if (hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
           directlyExportedNames.add(name);
           exportedNames.add(name);
@@ -310,7 +339,16 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
 
   const definitions = new Set<string>();
   for (const name of new Set([...directlyExportedNames, ...locallyExportedNames])) {
-    if (localConstNames.has(name)) {
+    const constDeclarations = localConstDeclarations.get(name);
+    if (constDeclarations) {
+      const [constDeclaration] = constDeclarations;
+      if (
+        constDeclarations.length === 1 &&
+        constDeclaration &&
+        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName)
+      ) {
+        continue;
+      }
       definitions.add(name);
       continue;
     }
@@ -348,8 +386,12 @@ function resolveStarExportPath(
   const candidates = [
     `${extensionless}.ts`,
     `${extensionless}.mts`,
+    `${extensionless}.js`,
+    `${extensionless}.mjs`,
     `${extensionless}/index.ts`,
     `${extensionless}/index.mts`,
+    `${extensionless}/index.js`,
+    `${extensionless}/index.mjs`,
   ];
   return candidates.find((candidate) => modulesByPath.has(candidate)) ?? null;
 }
@@ -475,17 +517,24 @@ function resolveBaselinePath(repoRoot: string) {
   return path.join(repoRoot, ...baselineRelativePath.split("/"));
 }
 
-async function collectRepositoryCollisions(repoRoot: string) {
-  const collectOptions = {
-    fileExtensions: [".ts", ".mts"],
+export async function collectRepositoryCollisions(repoRoot: string) {
+  const sourceCollectOptions = {
+    fileExtensions: [".ts", ".mts", ".js", ".mjs"],
     includeTests: true,
     skipDirectories: ["test", "__fixtures__"],
   };
+  const supportCollectOptions = {
+    ...sourceCollectOptions,
+    fileExtensions: [".ts", ".mts"],
+  };
   const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), collectOptions),
+    collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), sourceCollectOptions),
     // Package modules are resolution-only: Plugin SDK barrels can export their
     // names, but the collision rule itself remains scoped to src/ definitions.
-    collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["packages"]), collectOptions),
+    collectTypeScriptFilesFromRoots(
+      resolveSourceRoots(repoRoot, ["packages"]),
+      supportCollectOptions,
+    ),
   ]);
   const files = collectedFiles.filter((filePath) => !isExcludedExportCollisionSource(filePath));
   const supportFiles = collectedSupportFiles.filter(
