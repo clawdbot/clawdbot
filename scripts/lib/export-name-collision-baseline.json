@@ -262,13 +262,6 @@
     ]
   },
   {
-    "name": "createSessionSlug",
-    "files": [
-      "src/agents/bash-process-registry.ts",
-      "src/agents/session-slug.ts"
-    ]
-  },
-  {
     "name": "createSuiteTempRootTracker",
     "files": [
       "src/plugins/test-helpers/fs-fixtures.ts",
@@ -1530,14 +1523,6 @@
     "files": [
       "src/infra/crypto-digest.ts",
       "src/logging/redact-identifier.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "sleep",
-    "files": [
-      "src/tui/tui-pty-test-support.ts",
-      "src/utils/sleep.ts"
     ],
     "sdk": true
   },
