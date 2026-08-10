@@ -379,7 +379,18 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
-    /** Aborted when a foreground turn needs deferred maintenance to yield. */
+    /**
+     * Optional host-owned abort signal, aborted when a foreground turn needs a
+     * deferred maintenance run to yield (and also on gateway shutdown); a
+     * separate bounded grace timeout then decides quarantine and stamps the task
+     * `timed_out` if the run has not settled. This is an additive, optional host
+     * parameter, so existing engines remain compatible without changes:
+     * declaring it is opt-in, and honoring it is a cooperative optimization, not
+     * a correctness obligation. If an engine ignores the signal (or never
+     * declares awareness of it), the host still bounds the run and recovers on
+     * the fallback engine, so no engine is required to change. Engines that do
+     * honor it SHOULD stop work and reject/return promptly once it aborts.
+     */
     abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
