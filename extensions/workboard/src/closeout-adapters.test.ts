@@ -220,5 +220,34 @@ describe("closeout tracker plugin adapters", () => {
       }),
     );
     expect(JSON.stringify(respond.mock.calls)).not.toContain("verified Telegram message 789");
+
+    for (const deviceId of ["control-ui-device-one", "control-ui-device-two"]) {
+      await handler({
+        params: {
+          agentId: "main",
+          closeoutId: "NAC-78",
+          evidence: "verified Telegram message 789",
+        },
+        client: {
+          pairedClientId: "openclaw-control-ui",
+          connect: { device: { id: deviceId } },
+        },
+        respond,
+      });
+    }
+    expect(tracker.confirm).toHaveBeenNthCalledWith(
+      2,
+      "main",
+      "NAC-78",
+      "verified Telegram message 789",
+      "device:control-ui-device-one",
+    );
+    expect(tracker.confirm).toHaveBeenNthCalledWith(
+      3,
+      "main",
+      "NAC-78",
+      "verified Telegram message 789",
+      "device:control-ui-device-two",
+    );
   });
 });

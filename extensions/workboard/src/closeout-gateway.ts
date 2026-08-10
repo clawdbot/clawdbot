@@ -22,13 +22,15 @@ function resolveConfirmer(
   client: {
     authenticatedUserId?: string;
     pairedClientId?: string;
+    connect?: { device?: { id?: string } };
   } | null,
 ): string {
   if (client?.authenticatedUserId?.trim()) {
     return `user:${client.authenticatedUserId.trim()}`;
   }
-  if (client?.pairedClientId?.trim()) {
-    return `device:${client.pairedClientId.trim()}`;
+  const deviceId = client?.connect?.device?.id?.trim();
+  if (client?.pairedClientId?.trim() && deviceId) {
+    return `device:${deviceId}`;
   }
   throw new Error("authenticated operator identity is required");
 }
