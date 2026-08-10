@@ -31,6 +31,15 @@ describe("OpenClaw profile schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts a full profile only with a bounded allowlist", () => {
+    expect(
+      parseClawOpenClawProfile({
+        schemaVersion: 1,
+        agent: { tools: { profile: "full", allow: ["read", "write"] } },
+      }).ok,
+    ).toBe(true);
+  });
+
   it("rejects disabled host filesystem confinement", () => {
     const result = parseClawOpenClawProfile({
       schemaVersion: 1,
@@ -61,6 +70,13 @@ describe("OpenClaw profile schema", () => {
   it("rejects invalid profile policy", () => {
     for (const agent of [
       { tools: { profile: "future-profile" } },
+      { tools: { profile: "full" } },
+      { tools: { allow: ["*"] } },
+      { tools: { profile: "coding", allow: ["tts"] } },
+      { tools: { profile: "coding", allow: ["read", "tts"] } },
+      { tools: { alsoAllow: ["read"] } },
+      { tools: { alsoAllow: ["group:plugins"] } },
+      { tools: { alsoAllow: ["GROUP:PLUGINS"] } },
       { tools: { allow: ["read"], alsoAllow: ["write"] } },
       { memory: { search: { provider: "openai" } } },
       { memory: { search: { sources: ["sessions"] } } },

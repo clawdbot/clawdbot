@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
   cronCapabilityChange,
   mcpCapabilityChange,
@@ -264,6 +265,45 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       }),
     );
     expect(removed).not.toContainEqual(expect.objectContaining({ path: "agent.tools.profile" }));
+  });
+
+  it("classifies growth in a frozen profile allowlist as an escalation", () => {
+    const changes = collectChanges({
+      currentAgent: {
+        id: "worker",
+        tools: { allow: ["read", "write"] },
+      },
+      desiredAgent: {
+        id: "worker",
+        tools: { allow: ["read", "write", "apply_patch"] },
+      },
+    });
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.allow",
+        classification: "escalation",
+        requiresDistinctConsent: true,
+      }),
+    );
+  });
+
+  it("does not escalate the one-time migration from a profile to its frozen allowlist", () => {
+    const desiredTools = materializeClawToolProfile({
+      tools: { profile: "coding", alsoAllow: ["cron"], deny: ["exec"] },
+    }).tools;
+    const changes = collectChanges({
+      currentAgent: {
+        id: "worker",
+        tools: { profile: "coding", alsoAllow: ["cron"], deny: ["exec"] },
+      },
+      desiredAgent: {
+        id: "worker",
+        tools: desiredTools,
+      },
+    });
+
+    expect(changes.filter((change) => change.path.startsWith("agent.tools."))).toEqual([]);
   });
 
   it("classifies inherited profiles and wildcard reductions by effective capabilities", () => {

@@ -287,10 +287,7 @@ describe("exportClawAgent", () => {
         schemaVersion: 1,
         agent: {
           tools: {
-            profile: "coding",
-            alsoAllow: ["cron"],
-            deny: ["exec"],
-            fs: { workspaceOnly: true },
+            ...fixture.plan.agent.config.tools,
           },
           memory: {
             search: {
@@ -320,11 +317,12 @@ describe("exportClawAgent", () => {
     expect(exported.manifest.metadata).toEqual({});
     expect(exported.openClawProfile).toMatchObject({
       schemaVersion: 1,
-      agent: { tools: { profile: "coding" } },
+      agent: { tools: fixture.plan.agent.config.tools },
     });
+    expect(exported.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
     expect(exported.manifest.workspace.bootstrapFiles).not.toHaveProperty("SOUL.md");
     await expect(readFile(join(out, "profiles", "openclaw.yml"), "utf8")).resolves.toContain(
-      "profile: coding",
+      "profile: full",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
   });
