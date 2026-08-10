@@ -78,7 +78,7 @@ function ownsTranscriptSession(
     }
     // Persisted ingress ownership remains authoritative if provider discovery
     // later changes; only the channel-less local main agent may recover it.
-    return isLocalMainOperator;
+    return typeof ownerAgentId === "string" ? !channel : isLocalMainOperator;
   }
   const sourceAccountId = session.source.accountId?.trim();
   if (!provider) {

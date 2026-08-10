@@ -699,4 +699,49 @@ describe("transcripts tool account ownership", () => {
       ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
     }
   });
+
+  it("keeps partial legacy ownership recoverable by its recorded agent only off-channel", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-account-");
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accountBindingChannels: ["discord"],
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+    });
+    const session = {
+      sessionId: "partial-research-owner",
+      source: { providerId: "discord-voice", accountId: "account-a" },
+      startedAt: "2026-08-01T14:00:00.000Z",
+      stoppedAt: "2026-08-01T14:05:00.000Z",
+      metadata: { agentId: "research", ownerChannel: "discord" },
+    };
+    const store = storeFor(stateDir);
+    await store.writeSession(session);
+    await store.appendUtteranceForSession(session, { text: "partial owner notes" });
+
+    await expect(
+      createTool(stateDir, "research").execute(
+        "call-local-recorded-agent",
+        { action: "summarize", sessionId: session.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: session.sessionId } });
+    await expect(
+      createTool(stateDir, "research", { channel: "discord", accountId: "account-a" }).execute(
+        "call-channel-recorded-agent",
+        { action: "summarize", sessionId: session.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+    await expect(
+      createTool(stateDir, "main").execute(
+        "call-local-main",
+        { action: "summarize", sessionId: session.sessionId },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(`transcripts session not found: ${session.sessionId}`);
+  });
 });
