@@ -404,6 +404,8 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
+    // Focused transcript tests consume the configurable factory; production uses its bound wrapper.
+    "src/agents/tools/transcripts-tool.ts": ["exports"],
     // Transitional public failover predicates stay available until their remaining callers
     // migrate in later consolidation PRs; focused tests audit the retained behavior.
     "src/agents/failover/classify.ts": ["exports"],
