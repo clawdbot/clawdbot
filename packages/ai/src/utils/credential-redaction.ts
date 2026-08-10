@@ -1,3 +1,4 @@
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
@@ -17,6 +18,7 @@ const MEDIA_DATA_URL_RE =
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
 const MAX_DIAGNOSTIC_DEPTH = 8;
 const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z][A-Za-z0-9 _-]*\](?:\s+[^{}[\]":,]*)?\s*$/u;
+const DIAGNOSTIC_MEDIA_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/iu;
 
 export function isCredentialFieldName(key: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(key.replaceAll(/[^a-z0-9]/gi, ""));
@@ -45,29 +47,22 @@ export function redactCredentialText(value: string): string {
 
 type ProjectionState = { changed: boolean };
 
-export function diagnosticBinaryView(value: unknown): Uint8Array | undefined {
+export function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | undefined {
   return value instanceof ArrayBuffer
     ? new Uint8Array(value)
     : ArrayBuffer.isView(value)
       ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-      : undefined;
-}
-
-export function diagnosticMediaBytes(value: unknown): Uint8Array | undefined {
-  const binary = diagnosticBinaryView(value);
-  return (
-    binary ??
-    (Array.isArray(value) &&
-    value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
-      ? Uint8Array.from(value)
-      : undefined)
-  );
+      : numericArrays &&
+          Array.isArray(value) &&
+          value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+        ? Uint8Array.from(value)
+        : undefined;
 }
 
 export function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
   const type = descriptors.type?.value;
   return (
-    (typeof type === "string" && /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/iu.test(type)) ||
+    (typeof type === "string" && DIAGNOSTIC_MEDIA_NAME_RE.test(type)) ||
     ["mimeType", "mime_type", "mediaType", "media_type", "contentType", "content_type"].some(
       (key) => {
         const mime = descriptors[key]?.value;
@@ -75,6 +70,22 @@ export function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): bo
       },
     )
   );
+}
+
+export function extractDiagnosticMediaField(key: string, value: unknown, parentMedia: boolean) {
+  const mediaName = DIAGNOSTIC_MEDIA_NAME_RE.test(key);
+  const alwaysPrivate = key === "videoBytes" || key === "b64_json";
+  const contextual = parentMedia && (key === "data" || key === "blob");
+  if (!alwaysPrivate && !mediaName && !contextual) {
+    return parentMedia ? false : undefined;
+  }
+  const encoded = diagnosticBytes(value, true) ?? (typeof value === "string" ? value : undefined);
+  if (encoded === undefined) {
+    return alwaysPrivate;
+  }
+  const bytes =
+    typeof encoded === "string" ? estimateBase64DecodedBytes(encoded) : encoded.byteLength;
+  return [{ redacted: "<redacted>", bytes }, encoded] as const;
 }
 
 export function projectDiagnosticValue(
@@ -95,7 +106,7 @@ export function projectDiagnosticValue(
     if (!value || typeof value !== "object") {
       return value;
     }
-    const binary = diagnosticBinaryView(value);
+    const binary = diagnosticBytes(value);
     if (binary) {
       state.changed = true;
       return { redacted: "<redacted>", bytes: binary.byteLength };
@@ -137,18 +148,13 @@ export function projectDiagnosticValue(
         state.changed = true;
         continue;
       }
-      const alwaysPrivateMedia = key === "videoBytes" || key === "b64_json";
-      const privateMediaField =
-        alwaysPrivateMedia || (redactMedia && (key === "data" || key === "blob"));
-      const childBytes = privateMediaField ? diagnosticMediaBytes(child) : undefined;
-      if (privateMediaField && (alwaysPrivateMedia || typeof child === "string" || childBytes)) {
-        out[key] = childBytes
-          ? { redacted: "<redacted>", bytes: childBytes.byteLength }
-          : "<redacted>";
+      const media = extractDiagnosticMediaField(key, child, redactMedia);
+      if (media) {
+        out[key] = media === true ? "<redacted>" : media[0];
         state.changed = true;
         continue;
       }
-      out[key] = projectDiagnosticValue(child, seen, depth + 1, redactMedia, state);
+      out[key] = projectDiagnosticValue(child, seen, depth + 1, media === false, state);
     }
     return out;
   } catch {

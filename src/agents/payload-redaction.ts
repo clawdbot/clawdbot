@@ -5,13 +5,12 @@
  */
 import crypto from "node:crypto";
 import {
-  diagnosticBinaryView,
-  diagnosticMediaBytes,
+  diagnosticBytes,
+  extractDiagnosticMediaField,
   isCredentialFieldName,
   isDiagnosticMediaPayload,
   redactDiagnosticText,
 } from "@openclaw/ai/internal/shared";
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 
 const REDACTED_MEDIA_DATA = "<redacted>";
 
@@ -20,7 +19,7 @@ export function sanitizeDiagnosticPayload(value: unknown): unknown {
   const seen = new WeakSet<object>();
 
   const visit = (input: unknown, mediaPayload = false): unknown => {
-    const binary = diagnosticBinaryView(input);
+    const binary = diagnosticBytes(input);
     if (binary) {
       return {
         redacted: REDACTED_MEDIA_DATA,
@@ -46,7 +45,7 @@ export function sanitizeDiagnosticPayload(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
-    const redactValueField = typeof rawName === "string" && isCredentialFieldName(rawName);
+    const redactValue = typeof rawName === "string" && isCredentialFieldName(rawName);
     const redactMedia = mediaPayload || isDiagnosticMediaPayload(descriptors);
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (!descriptor.enumerable || !("value" in descriptor)) {
@@ -55,22 +54,17 @@ export function sanitizeDiagnosticPayload(value: unknown): unknown {
       if (key === "providerReplay" || isCredentialFieldName(key)) {
         continue;
       }
-      const alwaysPrivateMedia = key === "videoBytes" || key === "b64_json";
-      const privateMediaField =
-        alwaysPrivateMedia || (redactMedia && (key === "data" || key === "blob"));
-      const encoded = privateMediaField
-        ? (diagnosticMediaBytes(descriptor.value) ??
-          (typeof descriptor.value === "string" ? descriptor.value : undefined))
-        : undefined;
-      if (encoded !== undefined) {
-        out[key] = REDACTED_MEDIA_DATA;
-        out.bytes =
-          typeof encoded === "string" ? estimateBase64DecodedBytes(encoded) : encoded.byteLength;
-        out.sha256 = crypto.createHash("sha256").update(encoded).digest("hex");
+      const child = descriptor.value;
+      const media = extractDiagnosticMediaField(key, child, redactMedia);
+      if (media) {
+        out[key] = media === true ? REDACTED_MEDIA_DATA : media[0].redacted;
+        if (media !== true) {
+          out.bytes = media[0].bytes;
+          out.sha256 = crypto.createHash("sha256").update(media[1]).digest("hex");
+        }
         continue;
       }
-      out[key] =
-        redactValueField && key === "value" ? "<redacted>" : visit(descriptor.value, redactMedia);
+      out[key] = redactValue && key === "value" ? "<redacted>" : visit(child, media === false);
     }
     return out;
   };

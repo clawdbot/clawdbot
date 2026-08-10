@@ -77,10 +77,20 @@ describe("projectProviderError", () => {
         status: 415,
         body: { type: "video", data: "QUJDRA==" },
       }),
-      expected: '415: {"data":"<redacted>","type":"video"}',
+      expected: '415: {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
     },
   ])("redacts media from $name", ({ error, expected }) => {
     expect(projectProviderError(error).errorMessage).toBe(expected);
+  });
+
+  it.each([
+    { name: "audio string", key: "audio", value: "QUJDRA==" },
+    { name: "image numeric bytes", key: "image", value: [65, 66, 67, 68] },
+    { name: "video typed bytes", key: "video", value: new Uint8Array([65, 66, 67, 68]) },
+  ])("redacts a direct $name field", ({ key, value }) => {
+    expect(projectProviderError({ status: 500, body: { [key]: value } }).errorBody).toBe(
+      `{"${key}":{"bytes":4,"redacted":"<redacted>"}}`,
+    );
   });
 
   it.each([
@@ -99,6 +109,13 @@ describe("projectProviderError", () => {
       name: "typed numeric video data",
       body: '{"type":"video","data":[65,66,67,68]}',
       leaked: "[65,66,67,68]",
+    },
+    { name: "audio wrapper data", body: '{"audio":{"data":"QUJDRA=="}}', leaked: "QUJDRA==" },
+    { name: "video wrapper blob", body: '{"video":{"blob":"QUJDRA=="}}', leaked: "QUJDRA==" },
+    {
+      name: "output audio wrapper data",
+      body: '{"output_audio":{"data":"QUJDRA=="}}',
+      leaked: "QUJDRA==",
     },
     {
       name: "array following a JSON literal",

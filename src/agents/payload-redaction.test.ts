@@ -23,7 +23,12 @@ describe("sanitizeDiagnosticPayload", () => {
           { type: "image", source: { data: MEDIA_DATA } },
           { type: "video", data: MEDIA_BYTES },
         ],
-        ordinary: { data: MEDIA_BYTES, blob: MEDIA_DATA },
+        wrappers: [
+          { audio: { data: MEDIA_DATA } },
+          { video: { blob: MEDIA_DATA } },
+          { output_audio: { data: MEDIA_DATA } },
+        ],
+        ordinary: { audioCodec: { data: MEDIA_BYTES }, data: MEDIA_BYTES, blob: MEDIA_DATA },
       }),
     ).toEqual({
       media: [
@@ -32,7 +37,29 @@ describe("sanitizeDiagnosticPayload", () => {
         { type: "image", source: { data: "<redacted>", ...MEDIA_SUMMARY } },
         { type: "video", data: "<redacted>", ...BYTE_MEDIA_SUMMARY },
       ],
-      ordinary: { data: MEDIA_BYTES, blob: MEDIA_DATA },
+      wrappers: [
+        { audio: { data: "<redacted>", ...MEDIA_SUMMARY } },
+        { video: { blob: "<redacted>", ...MEDIA_SUMMARY } },
+        { output_audio: { data: "<redacted>", ...MEDIA_SUMMARY } },
+      ],
+      ordinary: { audioCodec: { data: MEDIA_BYTES }, data: MEDIA_BYTES, blob: MEDIA_DATA },
+    });
+  });
+
+  it.each([
+    { name: "audio string", key: "audio", value: MEDIA_DATA, summary: MEDIA_SUMMARY },
+    { name: "image numeric bytes", key: "image", value: MEDIA_BYTES, summary: BYTE_MEDIA_SUMMARY },
+    {
+      name: "video typed bytes",
+      key: "video",
+      value: new Uint8Array(MEDIA_BYTES),
+      summary: BYTE_MEDIA_SUMMARY,
+    },
+  ])("redacts a direct $name field", ({ key, value, summary }) => {
+    expect(sanitizeDiagnosticPayload({ [key]: value, audioCodec: MEDIA_DATA })).toEqual({
+      [key]: "<redacted>",
+      audioCodec: MEDIA_DATA,
+      ...summary,
     });
   });
 
