@@ -2798,15 +2798,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         sessionRailBody: LONG_SESSION_RAIL_BODY,
       });
       try {
-        const panel = await page.locator(".chat-session-rail").evaluate((node) => {
-          const element = node as HTMLElement;
+        const panel = await page.evaluate(() => {
+          const element = document.querySelector(".chat-session-rail") as HTMLElement;
+          const pane = document.querySelector(".chat-main") as HTMLElement;
           return {
             clientHeight: element.clientHeight,
+            paneHeight: pane.clientHeight,
             position: getComputedStyle(element).position,
           };
         });
         expect(panel.position).toBe("absolute");
-        expect(panel.clientHeight).toBeLessThanOrEqual(680);
+        // The rail fills its pane and no more; growth past the container is what
+        // the old floating card was capped against, and the sheet must not
+        // reintroduce it. Long threads scroll internally instead — asserted below.
+        expect(panel.clientHeight).toBeLessThanOrEqual(panel.paneHeight);
 
         const body = await page.locator(".chat-session-rail__thread").evaluate((node) => {
           const style = getComputedStyle(node as HTMLElement);
@@ -2845,7 +2850,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
       expect(panel.position).toBe("fixed");
-      expect(panel.clientHeight).toBeLessThanOrEqual(460);
+      // Full-screen sheet at this width: bounded by the viewport, never beyond.
+      expect(panel.clientHeight).toBeLessThanOrEqual(568);
 
       const scroll = await page.locator(".chat-session-rail__thread").evaluate((node) => {
         const element = node as HTMLElement;
