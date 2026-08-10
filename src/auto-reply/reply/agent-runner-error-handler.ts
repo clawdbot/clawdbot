@@ -453,9 +453,20 @@ export async function handleAgentExecutionError(params: {
         )
       : undefined;
   const fallbackText = isBilling
-    ? renderBillingReplyCopy(err)
+    ? renderBillingReplyCopy({
+        attempts: fallbackAttempts,
+        ...(isFailoverError(err)
+          ? { provider: err.provider, model: err.model, authMode: err.authMode }
+          : {}),
+      })
     : isRateLimit && !isOverloaded
-      ? renderRateLimitReplyCopy(err)
+      ? renderRateLimitReplyCopy({
+          message,
+          reason: failoverReason,
+          attempts: fallbackAttempts,
+          provider: isFailoverError(err) ? err.provider : undefined,
+          cooldownExpiry: isFailoverError(err) ? err.soonestCooldownExpiry : undefined,
+        })
       : rateLimitOrOverloadedCopy
         ? rateLimitOrOverloadedCopy
         : isContextOverflow

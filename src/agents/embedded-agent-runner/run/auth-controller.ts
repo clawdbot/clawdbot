@@ -408,7 +408,9 @@ export function createEmbeddedRunAuthController(params: {
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        cause: failoverParams.error,
+        causeText: failoverParams.error
+          ? formatErrorMessage(failoverParams.error).trim()
+          : undefined,
         recoveryHint: buildProviderAuthRecoveryHint({
           provider,
           config: params.config,

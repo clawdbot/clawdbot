@@ -1,7 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -13,13 +12,7 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import {
-  describeFailoverError,
-  findCliTimeoutError,
-  isFailoverError,
-  type FallbackAttemptRecord,
-} from "../failover-error.js";
-import { isProviderAuthError } from "../model-auth-runtime-shared.js";
+import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
 import {
   classifyFailoverReason,
   isPeriodicUsageLimitErrorMessage,
@@ -415,13 +408,7 @@ export function resolveProviderRequestFailureCopy(params: {
   };
 }
 
-type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
-
-function readFallbackAttempts(error: unknown): readonly ReplyFallbackAttempt[] {
-  return isFailoverError(error) && Array.isArray(error.attempts)
-    ? (error.attempts as readonly ReplyFallbackAttempt[])
-    : [];
-}
+export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
 function extractCodexUsageLimitErrorMessage(
   attempts: readonly ReplyFallbackAttempt[],
@@ -453,30 +440,36 @@ function extractCodexUsageLimitErrorMessage(
 }
 
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
-export function renderRateLimitReplyCopy(error: unknown, nowMs = Date.now()): string {
-  const message = formatErrorMessage(error);
-  const described = describeFailoverError(error);
-  const attempts = readFallbackAttempts(error);
+export function renderRateLimitReplyCopy(params: {
+  message: string;
+  reason?: FailoverReason;
+  provider?: string;
+  attempts?: readonly ReplyFallbackAttempt[];
+  cooldownExpiry?: number | null;
+  nowMs?: number;
+}): string {
+  const attempts = params.attempts ?? [];
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,
-    message,
-    described.reason,
-    isFailoverError(error) ? error.provider : undefined,
+    params.message,
+    params.reason,
+    params.provider,
   );
   if (usageLimit) {
     return usageLimit;
   }
-  if (attempts.some((attempt) => attempt.reason === "billing") || described.reason === "billing") {
+  if (attempts.some((attempt) => attempt.reason === "billing") || params.reason === "billing") {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (attempts.length === 0) {
-    if (described.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(message)) {
-      const providerMessage = renderUserFacingText(message, { errorContext: true });
+    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(params.message)) {
+      const providerMessage = renderUserFacingText(params.message, { errorContext: true });
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
     return RATE_LIMIT_RETRY_MESSAGE;
   }
-  const expiry = isFailoverError(error) ? error.soonestCooldownExpiry : undefined;
+  const expiry = params.cooldownExpiry;
+  const nowMs = params.nowMs ?? Date.now();
   if (typeof expiry === "number" && expiry > nowMs) {
     const secsLeft = Math.max(1, Math.ceil((expiry - nowMs) / 1000));
     return secsLeft <= 60
@@ -492,8 +485,13 @@ export function renderRateLimitReplyCopy(error: unknown, nowMs = Date.now()): st
     : RATE_LIMIT_RETRY_MESSAGE;
 }
 
-export function renderBillingReplyCopy(error: unknown): string {
-  const attempts = readFallbackAttempts(error);
+export function renderBillingReplyCopy(params: {
+  provider?: string;
+  model?: string;
+  authMode?: string;
+  attempts?: readonly ReplyFallbackAttempt[];
+}): string {
+  const attempts = params.attempts ?? [];
   const billingFailure =
     attempts.length > 0
       ? attempts.find(
@@ -501,8 +499,8 @@ export function renderBillingReplyCopy(error: unknown): string {
             attempt.reason === "billing" &&
             (attempt.authMode === "oauth" || attempt.authMode === "token"),
         )
-      : isFailoverError(error) && error.reason === "billing"
-        ? error
+      : params.authMode === "oauth" || params.authMode === "token"
+        ? params
         : undefined;
   return billingFailure &&
     (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
@@ -516,13 +514,15 @@ export function renderBillingReplyCopy(error: unknown): string {
 
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 
-export function renderMissingApiKeyReplyCopy(error: unknown): string | null {
-  const authError = isProviderAuthError(error) ? error : undefined;
-  const provider = authError?.provider.trim().toLowerCase();
+export function renderMissingApiKeyReplyCopy(params?: {
+  provider: string;
+  providerGuidance?: boolean;
+}): string | null {
+  const provider = params?.provider.trim().toLowerCase();
   if (!provider) {
     return null;
   }
-  if (provider === "openai" && authError?.providerGuidance) {
+  if (provider === "openai" && params?.providerGuidance) {
     return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
@@ -541,13 +541,13 @@ const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*
 
 export function renderCliTimeoutReplyCopy(params: {
   message: string;
-  error?: unknown;
+  cliTimeout?: CliTimeoutContext;
+  provider?: string;
   replayPrevented?: boolean;
 }): string | null {
-  const cliTimeoutError = findCliTimeoutError(params.error);
   const stall = params.message.match(CLI_BACKEND_NO_OUTPUT_STALL_RE);
   const overall = params.message.match(CLI_BACKEND_OVERALL_TIMEOUT_RE);
-  const timeout = cliTimeoutError?.cliTimeout;
+  const timeout = params.cliTimeout;
   const seconds = timeout?.timeoutSeconds ?? Number((stall ?? overall)?.[1]);
   if (!Number.isFinite(seconds)) {
     return null;
@@ -572,7 +572,7 @@ export function renderCliTimeoutReplyCopy(params: {
         : "";
   if (params.replayPrevented) workStatus += " OpenClaw did not replay this turn automatically.";
   return mode === "no-output"
-    ? `⚠️ CLI subprocess${routingSuffix}: no output for ${seconds}s, so the no-output watchdog stopped it. This is separate from the overall agent timeout; the gateway is unaffected.${workStatus} Check for an interactive prompt. The CLI backend ${cliTimeoutError?.provider ?? "<id>"} produced no output before its watchdog expired.`
+    ? `⚠️ CLI subprocess${routingSuffix}: no output for ${seconds}s, so the no-output watchdog stopped it. This is separate from the overall agent timeout; the gateway is unaffected.${workStatus} Check for an interactive prompt. The CLI backend ${params.provider ?? "<id>"} produced no output before its watchdog expired.`
     : `⚠️ CLI turn${routingSuffix}: timed out after ${seconds}s (overall turn limit). The gateway is unaffected.${workStatus} For long work, use a detached OpenClaw sub-agent (no run timeout by default), or raise \`agents.defaults.timeoutSeconds\`.`;
 }
 
@@ -580,7 +580,7 @@ type AuthProfileFailureCopyParams = {
   reason: FailoverReason;
   provider: string;
   allInCooldown: boolean;
-  cause?: unknown;
+  causeText?: string;
   recoveryHint?: string;
 };
 
@@ -646,13 +646,13 @@ export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyPara
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
     : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
   if (!description) {
-    return params.cause
-      ? formatErrorMessage(params.cause).trim() ||
+    return params.causeText
+      ? params.causeText.trim() ||
           `Couldn't reach ${params.provider} with any of your saved logins right now.`
       : `Couldn't reach ${params.provider} with any of your saved logins right now.`;
   }
   const hint = authProfileRecoveryApplies(params.reason) ? params.recoveryHint : null;
-  const causeText = params.cause ? formatErrorMessage(params.cause).trim() : "";
+  const causeText = params.causeText?.trim() ?? "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;
 }

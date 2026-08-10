@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { FailoverError } from "../failover-error.js";
-import { ProviderAuthError } from "../model-auth-runtime-shared.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   renderBillingReplyCopy,
@@ -33,26 +31,24 @@ describe("failover user copy", () => {
   it("renders structured cooldown durations and exhausted model sets", () => {
     const now = 1_000_000;
     expect(
-      renderRateLimitReplyCopy(
-        new FailoverError("limited", {
-          reason: "rate_limit",
-          attempts: [{ provider: "openai", model: "gpt-a", reason: "rate_limit" }],
-          soonestCooldownExpiry: now + 45_000,
-        }),
-        now,
-      ),
+      renderRateLimitReplyCopy({
+        message: "limited",
+        reason: "rate_limit",
+        attempts: [{ provider: "openai", model: "gpt-a", reason: "rate_limit" }],
+        cooldownExpiry: now + 45_000,
+        nowMs: now,
+      }),
     ).toBe("⚠️ Rate-limited — ready in ~45s. Please wait a moment.");
     expect(
-      renderRateLimitReplyCopy(
-        new FailoverError("limited", {
-          reason: "rate_limit",
-          attempts: [
-            { provider: "openai", model: "gpt-a", reason: "rate_limit" },
-            { provider: "anthropic", model: "claude-b", reason: "overloaded" },
-          ],
-        }),
-        now,
-      ),
+      renderRateLimitReplyCopy({
+        message: "limited",
+        reason: "rate_limit",
+        attempts: [
+          { provider: "openai", model: "gpt-a", reason: "rate_limit" },
+          { provider: "anthropic", model: "claude-b", reason: "overloaded" },
+        ],
+        nowMs: now,
+      }),
     ).toBe(
       "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.",
     );
@@ -60,33 +56,22 @@ describe("failover user copy", () => {
 
   it("uses neutral billing copy for subscription credentials", () => {
     expect(
-      renderBillingReplyCopy(
-        new FailoverError("billing", {
-          reason: "billing",
-          provider: "Anthropic",
-          model: "claude",
-          authMode: "oauth",
-        }),
-      ),
+      renderBillingReplyCopy({
+        provider: "Anthropic",
+        model: "claude",
+        authMode: "oauth",
+      }),
     ).toBe(
       "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
     );
-    expect(renderBillingReplyCopy(new Error("billing"))).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(renderBillingReplyCopy({})).toBe(BILLING_ERROR_USER_MESSAGE);
   });
 
   it("renders provider-safe missing-key guidance", () => {
-    expect(
-      renderMissingApiKeyReplyCopy(
-        new ProviderAuthError("missing-api-key", "openai", "missing", {
-          providerGuidance: true,
-        }),
-      ),
-    ).toContain("Missing API key for OpenAI on the gateway");
-    expect(
-      renderMissingApiKeyReplyCopy(
-        new ProviderAuthError("missing-api-key", "provider-with-secret-name", "missing"),
-      ),
-    ).toBe(
+    expect(renderMissingApiKeyReplyCopy({ provider: "openai", providerGuidance: true })).toContain(
+      "Missing API key for OpenAI on the gateway",
+    );
+    expect(renderMissingApiKeyReplyCopy({ provider: "provider-with-secret-name" })).toBe(
       "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.",
     );
   });
@@ -95,17 +80,14 @@ describe("failover user copy", () => {
     expect(
       renderCliTimeoutReplyCopy({
         message: "openai/gpt-5.6-sol: CLI exceeded timeout (90s) and was terminated",
-        error: new FailoverError("timeout", {
-          reason: "timeout",
-          provider: "codex-cli",
-          cliTimeout: {
-            mode: "overall",
-            timeoutSeconds: 90,
-            observedActivity: true,
-            activeToolCount: 1,
-            backgroundTaskCount: 2,
-          },
-        }),
+        provider: "codex-cli",
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 90,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 2,
+        },
         replayPrevented: true,
       }),
     ).toBe(

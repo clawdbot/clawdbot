@@ -86,14 +86,14 @@ describe("renderAuthProfileFailoverCopy", () => {
 
   describe("cause handling", () => {
     it("returns the cause text verbatim when the reason has no actionable copy", () => {
-      const cause = new Error("upstream provider returned 502");
+      const causeText = "upstream provider returned 502";
       const message = formatAuthProfileFailureMessage({
         reason: "unknown",
         provider: PROVIDER,
         allInCooldown: false,
-        cause,
+        causeText,
       });
-      expect(message).toBe(cause.message);
+      expect(message).toBe(causeText);
     });
 
     it("appends a diagnostic suffix when the cause adds detail beyond the description", () => {
@@ -101,7 +101,7 @@ describe("renderAuthProfileFailoverCopy", () => {
         reason: "auth",
         provider: PROVIDER,
         allInCooldown: false,
-        cause: new Error("invalid_grant"),
+        causeText: "invalid_grant",
       });
       expect(message).toContain("(invalid_grant)");
     });
@@ -121,7 +121,7 @@ describe("renderAuthProfileFailoverCopy", () => {
         reason: "auth",
         provider: PROVIDER,
         allInCooldown: false,
-        cause: new Error(description),
+        causeText: description,
       });
       expect(withDuplicateCause).toBe(withoutCause);
     });

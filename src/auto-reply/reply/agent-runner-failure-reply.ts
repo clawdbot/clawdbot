@@ -9,6 +9,7 @@ import {
 import {
   describeFailoverError,
   findCliMaxTurnsError,
+  findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
 import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
@@ -23,7 +24,9 @@ import {
   renderRateLimitReplyCopy,
   renderUserFacingText,
   resolveProviderRequestFailureCopy,
+  type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
+import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -54,6 +57,12 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
 }
 
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
+
+function readFallbackAttempts(error: unknown): readonly ReplyFallbackAttempt[] {
+  return isFailoverError(error) && Array.isArray(error.attempts)
+    ? (error.attempts as readonly ReplyFallbackAttempt[])
+    : [];
+}
 
 function collapseRepeatedFailureDetail(message: string): string {
   const parts = message
@@ -163,7 +172,7 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     reason: error.reason,
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
-    cause: error.cause,
+    causeText: error.cause ? formatErrorMessage(error.cause).trim() : undefined,
     recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
   });
 }
@@ -243,9 +252,11 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
+  const cliTimeoutError = findCliTimeoutError(error);
   const cliBackendTimeoutFailure = renderCliTimeoutReplyCopy({
     message: normalizedMessage,
-    error,
+    cliTimeout: cliTimeoutError?.cliTimeout,
+    provider: cliTimeoutError?.provider,
     replayPrevented: options?.replayPrevented,
   });
   if (cliBackendTimeoutFailure) {
@@ -255,7 +266,12 @@ export function buildExternalRunFailureReply(
   if (providerRequestError) {
     return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
   }
-  const missingApiKeyFailure = renderMissingApiKeyReplyCopy(error);
+  const authError = isProviderAuthError(error) ? error : undefined;
+  const missingApiKeyFailure = renderMissingApiKeyReplyCopy(
+    authError
+      ? { provider: authError.provider, providerGuidance: authError.providerGuidance }
+      : undefined,
+  );
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
@@ -348,8 +364,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
 }): ReplyPayload | undefined {
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
-  const fallbackAttempts =
-    isFailoverError(params.err) && Array.isArray(params.err.attempts) ? params.err.attempts : [];
+  const fallbackAttempts = readFallbackAttempts(params.err);
   const hasFallbackAttempts = fallbackAttempts.length > 0;
   const isBilling = hasFallbackAttempts
     ? fallbackAttempts.some((attempt) => attempt.reason === "billing")
@@ -357,7 +372,16 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   if (isBilling) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
-        text: renderBillingReplyCopy(params.err),
+        text: renderBillingReplyCopy({
+          attempts: fallbackAttempts,
+          ...(isFailoverError(params.err)
+            ? {
+                provider: params.err.provider,
+                model: params.err.model,
+                authMode: params.err.authMode,
+              }
+            : {}),
+        }),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
         cfg: params.cfg,
@@ -404,7 +428,15 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   if (isRateLimit && !isOverloaded) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
-        text: renderRateLimitReplyCopy(params.err),
+        text: renderRateLimitReplyCopy({
+          message,
+          reason: failoverReason,
+          attempts: fallbackAttempts,
+          provider: isFailoverError(params.err) ? params.err.provider : undefined,
+          cooldownExpiry: isFailoverError(params.err)
+            ? params.err.soonestCooldownExpiry
+            : undefined,
+        }),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
         cfg: params.cfg,
