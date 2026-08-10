@@ -817,6 +817,7 @@ export const en: TranslationMap = {
     approvalNeeded: "Approval needed",
     queuedMessage: "{count} message queued to send",
     queuedMessages: "{count} messages queued to send",
+    unsentDraft: "Unsent draft",
     noSessions: "No sessions found.",
     noActiveSessions: "No active sessions.",
     noArchivedSessions: "No archived sessions.",

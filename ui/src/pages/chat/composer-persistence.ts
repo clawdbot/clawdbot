@@ -399,6 +399,7 @@ function persistChatComposerStateResult(
       options.agentId,
     ).session;
     if (persisted?.draftRevision === draftRevision && (persisted.draft ?? "") === draft) {
+      notifyStoredChatOutboxChanges();
       return "persisted";
     }
     // Retention limits can make a successful storage write omit this draft.

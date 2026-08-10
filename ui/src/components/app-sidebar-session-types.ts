@@ -87,6 +87,7 @@ export type SidebarRecentSession = {
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;
+  hasComposerDraft?: boolean;
   unread: boolean;
   lastReadAt?: number;
   attention: SidebarSessionAttention;

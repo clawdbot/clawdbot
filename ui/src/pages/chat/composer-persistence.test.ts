@@ -82,7 +82,7 @@ describe("chat composer persistence", () => {
     });
   });
 
-  it("notifies durable outbox subscribers on writes until they unsubscribe", () => {
+  it("notifies stored outbox subscribers on successful draft and queue writes", () => {
     const state = createState();
     const original = reconnectItem("notify", 1);
     const updated = { ...original, text: "updated message" };
@@ -91,9 +91,9 @@ describe("chat composer persistence", () => {
 
     try {
       expect(persistChatComposerState({ ...state, chatMessage: "draft only" })).toBe(true);
-      expect(listener).not.toHaveBeenCalled();
-      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
+      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
       expect(
         updateStoredChatComposerQueueItem(
           state,
@@ -103,7 +103,7 @@ describe("chat composer persistence", () => {
           original.agentId,
         ),
       ).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener).toHaveBeenCalledTimes(3);
     } finally {
       unsubscribe();
     }
@@ -117,7 +117,7 @@ describe("chat composer persistence", () => {
         updated.agentId,
       ),
     ).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it("flushes a debounced draft before its owner releases state", () => {

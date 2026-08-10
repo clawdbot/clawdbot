@@ -51,6 +51,7 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   offline: boolean;
   outboxCountForSession: (sessionKey: string) => number;
+  hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
