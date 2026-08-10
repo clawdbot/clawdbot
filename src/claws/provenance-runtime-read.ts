@@ -14,7 +14,7 @@ export function readExistingClawInstallRecordSync(
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
-    db.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+    db.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;"); // sqlite-allow-raw -- Harden one read-only runtime ownership connection.
     const hasInstallTable = db /* sqlite-allow-raw: read-only runtime ownership probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
       .get();
