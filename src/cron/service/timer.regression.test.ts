@@ -33,7 +33,7 @@ import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
-import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { stop } from "./ops-lifecycle.js";
 import { run as runManualCronJob } from "./ops-run.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
@@ -2147,6 +2147,74 @@ describe("cron service timer regressions", () => {
         error: expect.stringContaining("setup timed out before runner start"),
         timeoutMs: 60_000,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not release a running sibling when setup-timeout recovery clears queued jobs", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:06:21.000Z");
+      const stalled = createDueIsolatedJob({
+        id: "setup-timeout-stalled",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      const running = createDueIsolatedJob({
+        id: "setup-timeout-running-sibling",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      stalled.payload = { kind: "agentTurn", message: "stall", timeoutSeconds: 120 };
+      running.payload = { kind: "agentTurn", message: "run", timeoutSeconds: 120 };
+      await saveCronStore(store.storePath, { version: 1, jobs: [stalled, running] });
+
+      let now = dueAt;
+      const runningStarted = createDeferred();
+      const finishRunning = createDeferred<{ status: "ok"; summary: string }>();
+      const timeoutNotified = createDeferred();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        testAdmissionLimit: 2,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        onIsolatedAgentSetupTimeout: () => timeoutNotified.resolve(),
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            job,
+            onExecutionStarted,
+          }: Parameters<CronStateParams["runIsolatedAgentJob"]>[0]) => {
+            if (job.id === stalled.id) {
+              return await new Promise<never>(() => {});
+            }
+            onExecutionStarted?.({ jobId: job.id, phase: "model_call_started" });
+            runningStarted.resolve();
+            return await finishRunning.promise;
+          },
+        ),
+      });
+
+      const timerPromise = onTimer(state);
+      await runningStarted.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      await timeoutNotified.promise;
+
+      const runningAtMsAfterRecovery = requireJob(state, running.id).state.runningAtMs;
+      const reservationHeldAfterRecovery = state.queuedRunReservationsByJobId.has(running.id);
+      finishRunning.resolve({ status: "ok", summary: "finished" });
+      await timerPromise;
+
+      expect({ runningAtMsAfterRecovery, reservationHeldAfterRecovery }).toEqual({
+        runningAtMsAfterRecovery: dueAt,
+        reservationHeldAfterRecovery: true,
+      });
+      expect(requireJob(state, running.id).state.lastStatus).toBe("ok");
     } finally {
       vi.useRealTimers();
     }

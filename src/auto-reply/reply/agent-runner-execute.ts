@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";

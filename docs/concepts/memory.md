@@ -144,17 +144,6 @@ Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
 and recurring work. Memory can still summarize the durable context around that
 work.
 
-## Retired inferred commitments
-
-Some future follow-ups are not durable facts. If a future event should trigger
-an action, use a [standing intent](/concepts/standing-intents). If a clock time
-should trigger it, use a [scheduled task](/automation/cron-jobs).
-
-The inferred commitments experiment is retired. OpenClaw no longer extracts or
-delivers those follow-ups. Use [scheduled tasks](/automation/cron-jobs) for
-future actions; the legacy `openclaw commitments` command remains available to
-inspect or dismiss existing stored rows.
-
 ## Memory tools
 
 The agent has three tools for working with memory:

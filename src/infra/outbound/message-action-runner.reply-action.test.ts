@@ -106,38 +106,10 @@ async function runReplyAction(params: {
   });
 }
 
-async function runPollAction(params: { to: string }) {
-  const toolContext = {
-    currentChannelProvider: "testchat" as const,
-    currentChannelId: "direct:user-1",
-    currentMessageId: "1783",
-  };
-  return await runMessageAction({
-    cfg: testchatConfig,
-    action: "poll",
-    params: {
-      channel: "testchat",
-      to: params.to,
-      pollQuestion: "Preferred default?",
-      pollOption: ["Tell me right away", "Only important"],
-    },
-    toolContext,
-    messageActionAuthorization: {
-      requesterAccountId: "default",
-      toolContext,
-    },
-    sessionKey: "agent:main:testchat:direct:user-1",
-    defaultAccountId: "default",
-    sourceReplyDeliveryMode: "message_tool_only",
-    dryRun: false,
-  });
-}
-
 describe("runMessageAction reply-type plugin actions", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
   });
-
   it("strips citation control markers from reply text before plugin dispatch", async () => {
     const handleAction = registerReplyPlugin();
 
@@ -148,73 +120,5 @@ describe("runMessageAction reply-type plugin actions", () => {
 
     const handledParams = readHandledParams(handleAction);
     expect(handledParams.message).toBe("Ayutthaya Thai is my pick.");
-  });
-
-  it("marks replies to the run's inbound message as current-source deliveries", async () => {
-    registerReplyPlugin();
-
-    const result = await runReplyAction({
-      actionParams: { message: "visible reply", messageId: "1783" },
-      currentMessageId: "1783",
-    });
-
-    expect(result.kind).toBe("action");
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-    const details = "toolResult" in result ? result.toolResult?.details : undefined;
-    expect(details).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
-
-  it("matches numeric replied-to message ids against string tool-context ids", async () => {
-    registerReplyPlugin();
-
-    const result = await runReplyAction({
-      actionParams: { message: "visible reply", messageId: 1783 },
-      currentMessageId: "1783",
-    });
-
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
-
-  it("leaves replies to other messages unmarked", async () => {
-    registerReplyPlugin();
-
-    const result = await runReplyAction({
-      actionParams: { message: "visible reply", messageId: "999" },
-      currentMessageId: "1783",
-    });
-
-    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
-  });
-
-  it("leaves explicitly targeted replies unmarked", async () => {
-    registerReplyPlugin();
-
-    const result = await runReplyAction({
-      actionParams: {
-        message: "visible reply",
-        messageId: "1783",
-        to: "direct:someone-else",
-      },
-      currentMessageId: "1783",
-    });
-
-    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
-  });
-
-  it("marks polls sent to the current conversation as current-source deliveries", async () => {
-    registerReplyPlugin();
-
-    const result = await runPollAction({ to: "direct:user-1" });
-
-    expect(result.kind).toBe("poll");
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
-
-  it("leaves polls sent to other conversations unmarked", async () => {
-    registerReplyPlugin();
-
-    const result = await runPollAction({ to: "direct:someone-else" });
-
-    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
   });
 });

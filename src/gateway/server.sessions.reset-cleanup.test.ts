@@ -1046,7 +1046,6 @@ test("sessions.reset preserves explicit responseUsage preference across session 
       main: sessionStoreEntry("sess-main", {
         responseUsage: "tokens",
         pinnedAt: 123,
-        icon: "name:spark",
       }),
     },
   });
@@ -1054,11 +1053,10 @@ test("sessions.reset preserves explicit responseUsage preference across session 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number; icon?: string };
+    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number };
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.responseUsage).toBe("tokens");
   expect(reset.payload?.entry.pinnedAt).toBe(123);
-  expect(reset.payload?.entry.icon).toBe("name:spark");
 });

@@ -367,9 +367,14 @@ describe("Gateway startup SecretRef owner isolation", () => {
             sessionKey: "agent:cold:main",
           }),
         ).rejects.toMatchObject({
-          code: "SECRET_SURFACE_UNAVAILABLE",
-          ownerKind: "capability",
-          ownerId: "agent-sandbox:cold",
+          code: "sandbox_provisioning",
+          backendId: "ssh",
+          message: expect.stringContaining("openclaw secrets reload"),
+          cause: {
+            code: "SECRET_SURFACE_UNAVAILABLE",
+            ownerKind: "capability",
+            ownerId: "agent-sandbox:cold",
+          },
         });
       },
     );

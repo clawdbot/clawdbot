@@ -14,9 +14,17 @@ const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
 const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
-async function assertPrepublishRequests(baseUrl, requestedPackage, version) {
+async function assertPrepublishRequests(
+  baseUrl,
+  requestedPackage,
+  version,
+  securityMode = "required",
+) {
   if (!baseUrl || !requestedPackage || !version) {
     throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
+  }
+  if (securityMode !== "required" && securityMode !== "absent") {
+    throw new Error("assert-prepublish-requests security mode must be required or absent");
   }
   const response = await fetch(new URL("/__fixture__/requests", baseUrl));
   if (!response.ok) {
@@ -31,7 +39,7 @@ async function assertPrepublishRequests(baseUrl, requestedPackage, version) {
   const expected = [
     `GET ${packagePath}`,
     `GET ${versionPath}/artifact`,
-    `GET ${versionPath}/security`,
+    ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
   ];
   if (JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
@@ -703,7 +711,7 @@ profiles["catalog-search"] = {
 };
 
 if (profile === "assert-prepublish-requests") {
-  assertPrepublishRequests(portFile, artifactManifestFile, process.argv[5]).catch(
+  assertPrepublishRequests(portFile, artifactManifestFile, process.argv[5], process.argv[6]).catch(
     /** @param {unknown} error */ (error) => {
       console.error(error);
       process.exit(1);

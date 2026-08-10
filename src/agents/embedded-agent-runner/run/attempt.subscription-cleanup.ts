@@ -3,7 +3,7 @@
  */
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
 /** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
 const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();

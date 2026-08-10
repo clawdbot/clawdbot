@@ -53,6 +53,24 @@ function isFailedPlacement(
   return placement.state === "failed";
 }
 
+function workerDisappearanceError(
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+): Error | undefined {
+  if (!environment) {
+    return new Error("cloud worker disappeared: environment record missing");
+  }
+  if (
+    environment.state !== "destroyed" &&
+    environment.state !== "failed" &&
+    environment.state !== "orphaned"
+  ) {
+    return undefined;
+  }
+  return new Error(
+    `cloud worker disappeared: ${environment.error ?? `environment state ${environment.state}`}`,
+  );
+}
+
 function blockingWorkspaceJournalSessions(
   placements: PlacementRecoveryDeps["placements"],
 ): Set<string> {
@@ -87,15 +105,16 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     const environment = placement.environmentId
       ? environments.get(placement.environmentId)
       : undefined;
-    if (!environment || isUnavailableEnvironment(environment)) {
+    const disappearance = workerDisappearanceError(environment);
+    if (disappearance || (environment && isUnavailableEnvironment(environment))) {
       await failure.reclaimActive(
         placement,
         environment,
-        new Error("Active worker disappeared during restart reconciliation"),
+        disappearance ?? new Error(`Active worker environment is ${environment?.state}`),
       );
       return;
     }
-    if (!sameActiveEnvironment(placement, environment)) {
+    if (!environment || !sameActiveEnvironment(placement, environment)) {
       await failure.reclaimActive(
         placement,
         environment,
@@ -248,11 +267,12 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       const environment = environments.get(placement.environmentId);
-      if (!environment || isUnavailableEnvironment(environment)) {
+      const disappearance = workerDisappearanceError(environment);
+      if (disappearance || (environment && isUnavailableEnvironment(environment))) {
         await failure.reclaimActive(
           placement,
           environment,
-          new Error("Active worker disappeared during an admitted turn"),
+          disappearance ?? new Error(`Active worker environment is ${environment?.state}`),
         );
         continue;
       }

@@ -149,7 +149,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-07-19",
     source: "systemAgent; crestodian; marketplaces; cli.banner.taglineMode; commitments",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.ts",
-    replacement: "built-in rescue, marketplace, banner, and disabled commitments behavior",
+    replacement: "built-in rescue, marketplace, banner, and retired commitments behavior",
     docsPath: "/gateway/doctor",
     tests: [
       "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts",

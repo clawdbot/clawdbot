@@ -864,7 +864,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
     ...host.chatStreamSegments,
     {
       text: progress.text,
-      ts: Date.now(),
+      ts: payload.ts,
       runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },

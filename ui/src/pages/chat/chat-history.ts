@@ -13,7 +13,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/context.ts";
+import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -59,7 +59,6 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -1651,19 +1650,19 @@ async function loadChatHistoryUncached(
         messages: authoritativeMessages,
         options: { shouldIncludeMessage: (message) => !shouldHideHistoryMessage(message) },
       },
-      { scope, messages: retainsTranscriptIdentity ? state.chatMessages : [] },
+      {
+        scope,
+        messages: retainsTranscriptIdentity ? state.chatMessages : [],
+        runActive:
+          res.sessionInfo &&
+          (typeof res.sessionInfo.hasActiveRun === "boolean" ||
+            res.sessionInfo.status !== undefined)
+            ? isSessionRunActive(res.sessionInfo)
+            : undefined,
+      },
     );
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
-    }
-    if (state.initialUserMessage) {
-      reconcileInitialUserMessageHandoff(
-        state.initialUserMessage,
-        state,
-        sessionKey,
-        authoritativeMessages,
-        isSessionRunActive(res.sessionInfo ?? {}),
-      );
     }
     retireHistoryProvenSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;

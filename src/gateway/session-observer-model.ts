@@ -6,6 +6,7 @@ import {
   type SessionObserverHealth,
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
@@ -332,6 +333,13 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
   }
   const sessionId =
     params.source.state?.sessionId ?? params.dormant?.sessionId ?? session?.sessionId;
+  const terminalReply = params.source.event
+    ? normalizeAgentRunTerminalReplySnapshot(params.source.event.data.terminalReply)
+    : params.source.state?.terminalReply;
+  const terminalHeadline =
+    terminalReply?.disposition === "visible"
+      ? sanitizeSessionObserverModelText(terminalReply.text, HEADLINE_MAX_CHARS)
+      : undefined;
   const persistBounded = async (candidate: SessionObserverDigest): Promise<boolean> => {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -369,6 +377,7 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
     agentId,
     runId,
     health,
+    ...(terminalHeadline ? { headline: terminalHeadline } : {}),
     revision: previous.revision + 1,
     updatedAt: params.now(),
   };

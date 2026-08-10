@@ -324,18 +324,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
     sessionKey: checkpointEntry.sessionKey,
   });
 
-  const checkpoint = await rpcReq<{
-    ok: true;
-    key: string;
-    checkpoint: { checkpointId: string; preCompaction: { sessionFile?: string } };
-  }>(ws, "sessions.compaction.get", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
-  expect(checkpoint.ok).toBe(true);
-  expect(checkpoint.payload?.checkpoint.checkpointId).toBe("checkpoint-1");
-  expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
-
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
   let branched: Awaited<
     ReturnType<
@@ -553,18 +541,6 @@ test("sessions.compaction list/get scopes selected global checkpoints to the req
     summary: "work checkpoint",
   });
 
-  const got = await directSessionReq<{
-    checkpoint?: { checkpointId?: string; summary?: string };
-  }>(
-    "sessions.compaction.get",
-    { key: "global", agentId: "work", checkpointId: "checkpoint-work" },
-    { context: { getRuntimeConfig: () => runtimeConfig } },
-  );
-  expect(got.ok).toBe(true);
-  expect(got.payload?.checkpoint).toMatchObject({
-    checkpointId: "checkpoint-work",
-    summary: "work checkpoint",
-  });
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath })
       ?.sessionId,

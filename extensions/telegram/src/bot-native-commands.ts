@@ -819,10 +819,14 @@ async function resolveTelegramCommandAuth(params: {
   });
   if (!baseAccess.allowed) {
     if (baseAccess.reason === "group-disabled") {
-      return await sendAuthMessage("This group is disabled.");
+      logVerbose(`Blocked telegram command in group ${chatId} (group disabled)`);
+      return null;
     }
     if (baseAccess.reason === "topic-disabled") {
-      return await sendAuthMessage("This topic is disabled.");
+      logVerbose(
+        `Blocked telegram command in topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+      );
+      return null;
     }
     return await rejectNotAuthorized();
   }
@@ -839,7 +843,6 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     resolveGroupPolicy,
     enforcePolicy: true,
-    useTopicAndGroupOverrides: false,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
@@ -847,7 +850,8 @@ async function resolveTelegramCommandAuth(params: {
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {
-      return await sendAuthMessage("Telegram group commands are disabled.");
+      logVerbose("Blocked telegram command (groupPolicy: disabled)");
+      return null;
     }
     if (
       policyAccess.reason === "group-policy-allowlist-no-sender" ||
@@ -856,7 +860,8 @@ async function resolveTelegramCommandAuth(params: {
       return await rejectNotAuthorized();
     }
     if (policyAccess.reason === "group-chat-not-allowed") {
-      return await sendAuthMessage("This group is not allowed.");
+      logVerbose(`Blocked telegram command in group ${chatId} (group not allowed)`);
+      return null;
     }
   }
 

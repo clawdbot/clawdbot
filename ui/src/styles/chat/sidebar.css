@@ -225,7 +225,7 @@ openclaw-chat-sidebar-region,
   min-width: 260px;
   min-height: 0;
   overflow: hidden;
-  background: var(--panel);
+  background: transparent;
   flex-direction: column;
   animation: chat-sidebar-fade-in 160ms ease-out;
 }

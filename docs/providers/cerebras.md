@@ -89,7 +89,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
 
 ```json5
 {
-  env: { CEREBRAS_API_KEY: "csk-..." },
+  env: { vars: { CEREBRAS_API_KEY: "csk-..." } },
   agents: {
     defaults: {
       model: { primary: "cerebras/gemma-4-31b" },

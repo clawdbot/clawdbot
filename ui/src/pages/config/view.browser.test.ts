@@ -1550,6 +1550,14 @@ describe("config view", () => {
     ]) {
       expect(text).toContain(expected);
     }
+    const lobsterPreviews = container.querySelectorAll(".lobsterdex__mini");
+    expect(lobsterPreviews).toHaveLength(42);
+    expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
+      true,
+    );
+    expect(
+      [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
+    ).toBe(true);
     expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
   });
 

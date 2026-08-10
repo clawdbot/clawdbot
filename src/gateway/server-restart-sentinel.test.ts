@@ -15,7 +15,7 @@ type RestartSentinel = NonNullable<
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
-  typeof import("../channels/turn/kernel.js").dispatchAssembledChannelTurn
+  typeof import("../channels/turn/lifecycle.js").dispatchAssembledChannelTurn
 >[0] & {
   deliver: (payload: { text?: string; replyToId?: string | null }) => Promise<void>;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
@@ -260,7 +260,7 @@ vi.mock("../channels/plugins/index.js", async () => {
   };
 });
 
-vi.mock("../channels/turn/kernel.js", () => ({
+vi.mock("../channels/turn/lifecycle.js", () => ({
   dispatchAssembledChannelTurn: async (params: {
     delivery: {
       preparePayload?: (payload: { text?: string; replyToId?: string | null }) => {

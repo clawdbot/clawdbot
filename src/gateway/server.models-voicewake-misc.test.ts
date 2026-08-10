@@ -438,134 +438,25 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("voicewake.routing.get/set persists and broadcasts", { timeout: 60_000 }, async () => {
-    await withTempHome(async (homeDir) => {
-      const initial = await rpcReq<{
-        config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
-      }>(ws, "voicewake.routing.get");
-      expect(initial.ok).toBe(true);
-      expect(initial.payload?.config?.version).toBe(1);
-      expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
-      expect(initial.payload?.config?.routes).toStrictEqual([]);
+  test("voicewake.routing.get returns the default routing", async () => {
+    const result = await rpcReq<{
+      config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
+    }>(ws, "voicewake.routing.get");
 
-      const changedP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: Record<string, unknown> | null;
-      }>(ws, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
-
-      const setRes = await rpcReq<{
-        config?: { routes?: Array<{ trigger?: string; target?: unknown }>; updatedAtMs?: number };
-      }>(ws, "voicewake.routing.set", {
-        config: {
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "  Robot   Wake ", target: { agentId: "main" } }],
-        },
-      });
-      expect(setRes.ok).toBe(true);
-      expect(setRes.payload?.config?.routes).toEqual([
-        { trigger: "robot wake", target: { agentId: "main" } },
-      ]);
-      expect(typeof setRes.payload?.config?.updatedAtMs).toBe("number");
-
-      const changed = await changedP;
-      expect(changed.event).toBe("voicewake.routing.changed");
-      expect(
-        (changed.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
-      ).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
-
-      const after = await rpcReq<{
-        config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
-      }>(ws, "voicewake.routing.get");
-      expect(after.ok).toBe(true);
-      expect(after.payload?.config?.routes).toEqual([
-        { trigger: "robot wake", target: { agentId: "main" } },
-      ]);
-
-      await expect(
-        fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"), "utf8"),
-      ).rejects.toThrow(/ENOENT/u);
-
-      const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
-      expect(invalid.ok).toBe(false);
-      expect(invalid.error?.message ?? "").toMatch(
-        /voicewake\.routing\.set requires config: object/i,
-      );
-
-      const badRoutes = await rpcReq(ws, "voicewake.routing.set", {
-        config: { routes: "oops" },
-      });
-      expect(badRoutes.ok).toBe(false);
-      expect(badRoutes.error?.message ?? "").toMatch(/config\.routes must be an array/i);
-
-      const badTarget = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          routes: [
-            { trigger: "robot wake", target: { agentId: "main", sessionKey: "agent:main:main" } },
-          ],
-        },
-      });
-      expect(badTarget.ok).toBe(false);
-      expect(badTarget.error?.message ?? "").toMatch(
-        /config\.routes\[0\]\.target cannot include both agentId and sessionKey/i,
-      );
-
-      const badAgentId = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          routes: [{ trigger: "robot wake", target: { agentId: "!!!" } }],
-        },
-      });
-      expect(badAgentId.ok).toBe(false);
-      expect(badAgentId.error?.message ?? "").toMatch(
-        /config\.routes\[0\]\.target\.agentId must be a valid agent id/i,
-      );
-
-      const badSessionKey = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          routes: [{ trigger: "robot wake", target: { sessionKey: "agent::main" } }],
-        },
-      });
-      expect(badSessionKey.ok).toBe(false);
-      expect(badSessionKey.error?.message ?? "").toMatch(
-        /config\.routes\[0\]\.target\.sessionKey must be a canonical agent session key/i,
-      );
-
-      const stillStored = await rpcReq<{
-        config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
-      }>(ws, "voicewake.routing.get");
-      expect(stillStored.ok).toBe(true);
-      expect(stillStored.payload?.config?.routes).toEqual([
-        { trigger: "robot wake", target: { agentId: "main" } },
-      ]);
+    expect(result.ok).toBe(true);
+    expect(result.payload?.config).toMatchObject({
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [],
     });
   });
 
-  test("pushes voicewake.routing.changed to nodes on connect and on updates", async () => {
-    await withConnectedNodeEvent("voicewake.routing.changed", async (nodeWs, first) => {
+  test("pushes voicewake.routing.changed to nodes on connect", async () => {
+    await withConnectedNodeEvent("voicewake.routing.changed", async (_nodeWs, first) => {
       expect(first.event).toBe("voicewake.routing.changed");
       expect(
         (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
       ).toStrictEqual([]);
-
-      const broadcastP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: Record<string, unknown> | null;
-      }>(nodeWs, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
-
-      const setRes = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "hello", target: { sessionKey: "agent:main:main" } }],
-        },
-      });
-      expect(setRes.ok).toBe(true);
-
-      const broadcast = await broadcastP;
-      expect(broadcast.event).toBe("voicewake.routing.changed");
-      expect(
-        (broadcast.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
-      ).toEqual([{ trigger: "hello", target: { sessionKey: "agent:main:main" } }]);
     });
   });
 

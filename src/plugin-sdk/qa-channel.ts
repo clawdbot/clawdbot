@@ -55,6 +55,7 @@ type FacadeModule = {
     baseUrl: string;
     accountId: string;
     cursor: number;
+    acknowledgedCursor: number;
     timeoutMs: number;
     signal?: AbortSignal;
   }) => Promise<QaBusPollResult>;

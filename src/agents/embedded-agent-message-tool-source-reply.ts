@@ -33,6 +33,11 @@ const PARTIAL_DELIVERY_ENVELOPE_KEYS = [...RESULT_ENVELOPE_KEYS, "error", "cause
 const SESSIONS_SEND_DELIVERY_STATUSES = new Set(["accepted", "ok"]);
 const BARE_OK_DELIVERY_STATUS = "ok";
 
+/** Omission preserves the established one-shot send behavior. */
+export function resolveMessageToolSourceReplyFinal(args: unknown): boolean {
+  return (asOptionalRecord(args) ?? {}).final !== false;
+}
+
 function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
   return (
     (asOptionalRecord(asOptionalRecord(value)?.details) ?? {}).sourceReplyRoute === "current-source"

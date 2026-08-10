@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  normalizeSessionIconInput,
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -291,19 +290,6 @@ export async function projectSessionsPatchEntry(params: {
 
   if ("boardFace" in patch && patch.boardFace !== undefined) {
     next.boardFace = patch.boardFace;
-  }
-
-  if ("icon" in patch) {
-    const raw = patch.icon;
-    if (raw === null) {
-      delete next.icon;
-    } else if (raw !== undefined) {
-      const normalized = normalizeSessionIconInput(raw);
-      if (!normalized.ok) {
-        return invalid(`invalid icon: ${normalized.reason}`);
-      }
-      next.icon = normalized.value;
-    }
   }
 
   if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {

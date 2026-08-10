@@ -114,7 +114,7 @@ export function createCodexAttemptServerRequestController(
           armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return userInputBridgeRef.current?.handleRequest({
+        return await userInputBridgeRef.current?.handleRequest({
           id: request.id,
           params: request.params,
         });
@@ -125,7 +125,7 @@ export function createCodexAttemptServerRequestController(
             armCompletionWatchOnResponse = true;
             markCurrentTurnRequestProgress();
           }
-          return handleCodexAppServerApprovalRequest({
+          return await handleCodexAppServerApprovalRequest({
             method: request.method,
             requestParams: request.params,
             paramsForRun: params,

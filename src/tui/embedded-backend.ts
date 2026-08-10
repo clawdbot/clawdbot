@@ -33,7 +33,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
+import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import {
   DEFAULT_QUEUE_CAP,
   DEFAULT_QUEUE_DEBOUNCE_MS,
@@ -77,7 +77,7 @@ import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
@@ -494,7 +494,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
       const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
-      let queueSettings = resolveQueueSettings({
+      let queueSettings = resolveQueueSettingsCore({
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
@@ -508,6 +508,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             {
               steeringMode: "all",
               debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
+              isInboundUserMessage: true,
             },
           ).catch(() => undefined);
           if (outcome?.queued) {
@@ -752,12 +753,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
   ): Promise<SessionsPatchResult> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key: opts.key,
       agentId: opts.agentId,
+      exactRead: true,
     });
     const applied = await applySessionPatchProjection({
+      ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
       storePath: target.storePath,
       resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({

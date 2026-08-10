@@ -265,7 +265,7 @@ for the full example.
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
+      env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
       agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
     }
     ```
@@ -279,7 +279,7 @@ for the full example.
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
+      env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
       agents: { defaults: { model: { primary: "openai/chat-latest" } } },
     }
     ```
@@ -690,7 +690,7 @@ generation through the same `openai/gpt-image-2` model ref.
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-2" },
+      mediaModels: { image: { primary: "openai/gpt-image-2" } },
     },
   },
 }
@@ -786,7 +786,7 @@ uploaded video in the `video` field.
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "openai/sora-2" },
+      mediaModels: { video: { primary: "openai/sora-2" } },
     },
   },
 }
@@ -806,12 +806,9 @@ request reaches the provider, so aspect-ratio requests generally still work.
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family models on
-the `openai` provider (including legacy pre-repair Codex refs that normalize
-to `openai/*`). Other providers that also serve GPT-5-family model ids, such
-as OpenRouter or opencode routes, do not receive this overlay; it is gated on
-provider id `openai`, not on model id alone. Older GPT-4.x models never
-receive it.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
+OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
+friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
@@ -842,10 +839,10 @@ separate and configurable.
   <Tab title="Config">
     ```json5
     {
-      agents: {
-        defaults: {
-          promptOverlays: {
-            gpt5: { personality: "friendly" },
+      plugins: {
+        entries: {
+          openai: {
+            config: { personality: "friendly" },
           },
         },
       },
@@ -854,7 +851,7 @@ separate and configurable.
   </Tab>
   <Tab title="CLI">
     ```bash
-    openclaw config set agents.defaults.promptOverlays.gpt5.personality off
+    openclaw config set plugins.entries.openai.config.personality off
     ```
   </Tab>
 </Tabs>
@@ -865,9 +862,9 @@ friendly style layer.
 </Tip>
 
 <Note>
-Legacy `plugins.entries.openai.config.personality` is still read as a
-compatibility fallback when the shared
-`agents.defaults.promptOverlays.gpt5.personality` setting is unset.
+The retired `agents.defaults.promptOverlays` key is no longer read; config
+validation rejects it, and `openclaw doctor --fix` migrates its personality
+value into `plugins.entries.openai.config.personality` when that key is unset.
 </Note>
 
 ## Voice and speech
@@ -935,14 +932,16 @@ compatibility fallback when the shared
     {
       tools: {
         media: {
+          models: [
+            {
+              type: "provider",
+              provider: "openai",
+              model: "gpt-4o-transcribe",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
-            models: [
-              {
-                type: "provider",
-                provider: "openai",
-                model: "gpt-4o-transcribe",
-              },
-            ],
+            enabled: true,
           },
         },
       },

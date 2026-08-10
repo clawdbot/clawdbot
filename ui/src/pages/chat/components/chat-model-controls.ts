@@ -24,7 +24,7 @@ import {
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
-export type ChatModelControlsProps = {
+type ChatModelControlsProps = {
   activeRunId: string | null;
   agentDefaultModel?: string;
   connected: boolean;

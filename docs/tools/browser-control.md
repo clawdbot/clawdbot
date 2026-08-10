@@ -474,8 +474,7 @@ Strict-mode example (block private/internal destinations by default):
   browser: {
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.example.com", "example.com"],
-      allowedHostnames: ["localhost"], // optional exact allow
+      allowedHostnames: ["*.example.com", "example.com", "localhost"],
     },
   },
 }

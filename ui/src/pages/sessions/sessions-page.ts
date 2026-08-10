@@ -19,12 +19,9 @@ import {
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
+import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type {
-  SessionMenuAction,
-  SessionMenuActionKind,
-  SessionMenuWork,
-} from "../../components/session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
@@ -449,47 +446,6 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     }
     return undefined;
-  }
-
-  private sessionMenuActionDisabledReasons(
-    row: GatewaySessionRow,
-  ): Partial<Record<SessionMenuActionKind, string>> {
-    const patchReason = this.mutationDisabledReason({
-      method: "sessions.patch",
-      params: { key: row.key, label: null },
-    });
-    const groupReason = this.mutationDisabledReason({
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    });
-    const forkReason = this.mutationDisabledReason({
-      method: "sessions.create",
-      params: { parentSessionKey: row.key, fork: true },
-    });
-    const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
-    const cloudWorkerStopReason = cloudWorkerStopAction
-      ? this.mutationDisabledReason(cloudWorkerStopAction)
-      : undefined;
-    const deleteReason = this.mutationDisabledReason({
-      method: "sessions.delete",
-      params: { key: row.key, ...(row.archived === true ? { archivedOnly: true } : {}) },
-    });
-    return {
-      ...(patchReason
-        ? {
-            "toggle-pin": patchReason,
-            "set-icon": patchReason,
-            "toggle-unread": patchReason,
-            rename: patchReason,
-            "move-to-group": patchReason,
-            "toggle-archived": patchReason,
-          }
-        : {}),
-      ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
-      ...(forkReason ? { fork: forkReason } : {}),
-      ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
-      ...(deleteReason ? { delete: deleteReason } : {}),
-    };
   }
 
   private applyRouteData() {
@@ -1420,7 +1376,6 @@ class SessionsPage extends OpenClawLightDomElement {
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
-          icon: row.icon,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
@@ -1429,13 +1384,16 @@ class SessionsPage extends OpenClawLightDomElement {
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
-        .actionDisabledReasons=${this.sessionMenuActionDisabledReasons(row)}
+        .actionDisabledReasons=${sessionMenuReasons({
+          snapshot: gateway,
+          session: row,
+          cloudWorkerStopAction,
+        })}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
-        .canOpenChat=${row.kind !== "global"}
         .work=${this.sessionMenuWork}
         .workboard=${canCapture && row.kind !== "global"
           ? {
@@ -1446,17 +1404,6 @@ class SessionsPage extends OpenClawLightDomElement {
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
-            case "open-chat":
-              context.navigate("chat", {
-                ...sessionNavigationTarget({
-                  context,
-                  face: "chat",
-                  sessionKey: row.key,
-                  agentId: this.sessionPathAgentId(row.key, context),
-                }).options,
-                hash: "",
-              });
-              break;
             case "open-pr":
               openExternalUrlSafe(action.url);
               break;
@@ -1465,9 +1412,6 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });
-              break;
-            case "set-icon":
-              void this.patchSession(row.key, { icon: action.icon });
               break;
             case "toggle-unread":
               void this.patchSession(row.key, { unread: row.unread !== true });

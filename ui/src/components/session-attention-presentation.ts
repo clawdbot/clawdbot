@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { resolveSessionAttentionIcon } from "./session-icon-registry.ts";
+import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
 
 export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
   if (attention.kind === "none") {

@@ -980,6 +980,89 @@ describe("worker turn launcher", () => {
     expect(persistedCurrentUsers).toHaveLength(1);
   });
 
+  it("retains a cloud result when reconciliation fails after worker finishing", async () => {
+    seedActivePlacement();
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const tunnelFailure = new Error("worker tunnel disconnected before workspace reconcile");
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      remoteSocketPath: "/worker/gateway.sock",
+      quiesceWorkspace: vi.fn(async () => ({
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {}),
+      })),
+      runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
+        const completed = openSessionManager();
+        const leafId = completed.appendMessage(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Remote work completed" }],
+            timestamp: 21,
+          }),
+        );
+        createWorkerSessionPlacementGate(placements).updateAckCursors({
+          sessionId: SESSION_ID,
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: OWNER_EPOCH,
+          runId: "run-reconcile-tunnel-loss",
+          transcriptSeq: 2,
+          workspaceResultPending: true,
+        });
+        return {
+          stdout: JSON.stringify({
+            status: "completed",
+            transcriptLeafId: leafId,
+            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }),
+      syncWorkspace: vi.fn(async () => {
+        throw new Error("unexpected workspace sync");
+      }),
+      reconcileWorkspace: vi.fn(async () => {
+        throw tunnelFailure;
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery: vi.fn(() => true),
+      startTunnel: vi.fn(async () => tunnel),
+      destroy,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-reconcile-tunnel-loss",
+        },
+        turn("run-reconcile-tunnel-loss"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toMatchObject({
+      message:
+        "Cloud worker finished, but its workspace result could not be reconciled: worker tunnel disconnected before workspace reconcile",
+    });
+
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "active",
+      turnClaim: { runId: "run-reconcile-tunnel-loss" },
+    });
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
   it("reports canonical multi-call usage and the terminal provider model", async () => {
     seedActivePlacement();
     const environments: WorkerTurnEnvironmentService = {
@@ -1836,8 +1919,30 @@ describe("worker turn launcher", () => {
           const descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
           turnIds.push(descriptor.assignment.turnId);
           if (launchCount === 1) {
+            const completed = openSessionManager();
+            const leafId = completed.appendMessage(
+              makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Remote model failed" }],
+                stopReason: "error",
+                errorMessage: "Cloud worker turn failed",
+                timestamp: 31,
+              }),
+            );
+            createWorkerSessionPlacementGate(placements).updateAckCursors({
+              sessionId: SESSION_ID,
+              environmentId: ENVIRONMENT_ID,
+              ownerEpoch: OWNER_EPOCH,
+              runId: "run-model-failed",
+              transcriptSeq: 2,
+              workspaceResultPending: true,
+            });
             return {
-              stdout: JSON.stringify({ status: "failed", reason: "turn-failed" }),
+              stdout: JSON.stringify({
+                status: "failed",
+                reason: "turn-failed",
+                transcriptLeafId: leafId,
+                transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+              }),
               stderr: "",
               code: 0,
               signal: null,
@@ -1905,6 +2010,7 @@ describe("worker turn launcher", () => {
       ),
     ).rejects.toThrow("Cloud worker turn failed");
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
 
     await expect(
       provider.executeTurn(

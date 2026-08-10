@@ -1009,10 +1009,19 @@ export const sendHandlers: GatewayRequestHandlers = {
               ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
               : {}),
           };
-          const terminalDeliveryReceipt =
+          const terminalDeliveryStart =
             trustedContext.sourceReplyFinal === true
               ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
               : undefined;
+          if (terminalDeliveryStart && "outcome" in terminalDeliveryStart) {
+            return createGatewayInflightSuccess({
+              context,
+              dedupeKey,
+              payload: terminalDeliveryStart.result,
+              channel,
+            });
+          }
+          const terminalDeliveryReceipt = terminalDeliveryStart;
           const gatewayClientScopes = client?.connect?.scopes ?? [];
           const handled = await dispatchChannelMessageAction({
             channel,

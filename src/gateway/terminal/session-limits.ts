@@ -1,7 +1,7 @@
 /** Bounds concurrent shells so a client cannot exhaust host processes. */
 export const DEFAULT_MAX_SESSIONS = 24;
 /**
- * Rolling output retained per session for reattach replay and terminal.text,
+ * Rolling output retained per session for reattach replay and agent tool reads,
  * in UTF-16 code units. The session cap keeps worst-case memory bounded.
  */
 export const DEFAULT_SCROLLBACK_CHARS = 256 * 1024;

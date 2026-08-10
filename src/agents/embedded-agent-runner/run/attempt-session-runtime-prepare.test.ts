@@ -20,7 +20,7 @@ vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrac
 vi.mock("../session-prompt-state.js", () => ({
   getEmbeddedSessionPromptState: mocks.getSessionPromptState,
 }));
-vi.mock("./attempt-context-guards.js", () => ({
+vi.mock("./attempt-setup.js", () => ({
   installEmbeddedAttemptContextGuards: mocks.installContextGuards,
 }));
 vi.mock("./attempt-session-prepare.js", () => ({

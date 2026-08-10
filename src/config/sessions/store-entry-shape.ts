@@ -39,6 +39,7 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
   const {
+    icon: _retiredIcon,
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     pendingFinalDeliveryCreatedAt,

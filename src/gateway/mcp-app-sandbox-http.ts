@@ -12,6 +12,7 @@ import {
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 
 const MCP_APP_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), clipboard-write=()";
 
@@ -20,13 +21,11 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   try {
     url = new URL(req.url ?? "/", "http://localhost");
   } catch {
-    res.statusCode = 400;
-    res.end("Bad Request");
+    respondPlainText(res, 400, "Bad Request");
     return;
   }
   if (url.pathname !== SANDBOX_HOST_PATH || (req.method !== "GET" && req.method !== "HEAD")) {
-    res.statusCode = 404;
-    res.end("Not Found");
+    respondPlainText(res, 404, "Not Found");
     return;
   }
 
@@ -34,9 +33,7 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   try {
     csp = decodeSandboxHostCsp(url.searchParams.get("csp"));
   } catch {
-    res.statusCode = 400;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("invalid MCP App sandbox policy");
+    respondPlainText(res, 400, "invalid MCP App sandbox policy");
     return;
   }
 
@@ -49,7 +46,10 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   res.setHeader("Origin-Agent-Cluster", "?1");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.end(req.method === "HEAD" ? undefined : buildSandboxHostProxyHtml(csp));
+  const html = buildSandboxHostProxyHtml(csp);
+  // Keep GET and HEAD representation metadata aligned while suppressing the HEAD body.
+  res.setHeader("Content-Length", String(Buffer.byteLength(html)));
+  res.end(req.method === "HEAD" ? undefined : html);
 }
 
 /** Dedicated listener: this origin must never serve Control UI or authenticated Gateway data. */

@@ -115,7 +115,9 @@ const CORE_GATEWAY_HANDLER_MODULES = {
       (module) => module.nativeHookRelayHandlers,
     ),
   "nodes-pending": () =>
-    import("./server-methods/nodes-pending.js").then((module) => module.nodePendingHandlers),
+    import("./server-methods/nodes.pending-work.js").then(
+      (module) => module.nodePendingWorkHandlers,
+    ),
   nodes: () => import("./server-methods/nodes.js").then((module) => module.nodeHandlers),
   "plugin-host-hooks": () =>
     import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),

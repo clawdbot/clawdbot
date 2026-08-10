@@ -1403,14 +1403,13 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    const heartbeatPrompt =
-      isSideQuestion || params.bootstrapContextRunKind === "commitment-only"
-        ? undefined
-        : resolveHeartbeatPromptForSystemPrompt({
-            config: params.config,
-            agentId: sessionAgentId,
-            defaultAgentId,
-          });
+    const heartbeatPrompt = isSideQuestion
+      ? undefined
+      : resolveHeartbeatPromptForSystemPrompt({
+          config: params.config,
+          agentId: sessionAgentId,
+          defaultAgentId,
+        });
     const openClawReferences = isSideQuestion
       ? { docsPath: null, sourcePath: null }
       : await prepareDeps.resolveOpenClawReferencePaths({

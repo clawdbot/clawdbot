@@ -1,5 +1,5 @@
 // Shared Vitest child process-group signal forwarding helpers.
-import type { ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 
 type VitestProcessSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
 type KillProcess = (pid: number, signal?: VitestProcessSignal | 0) => boolean;
@@ -79,6 +79,7 @@ export function forceKillVitestProcessGroup(
 }
 
 const PROCESS_GROUP_JOIN_TIMEOUT_MS = 1_000;
+const PROCESS_GROUP_INSPECT_TIMEOUT_MS = 1_000;
 
 function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -100,6 +101,39 @@ function isVitestProcessGroupAlive(target: number, kill: KillProcess) {
   }
 }
 
+export function parseVitestProcessGroupMembers(output: string, processGroupId: number): string {
+  const members: string[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (!match || Number(match[3]) !== processGroupId) {
+      continue;
+    }
+    members.push(
+      `pid=${match[1]} ppid=${match[2]} state=${match[4]} comm=${match[5]?.slice(0, 80)}`,
+    );
+    if (members.length >= 20) {
+      break;
+    }
+  }
+  return members.length > 0 ? members.join("; ") : "none";
+}
+
+function inspectVitestProcessGroup(processGroupId: number, platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    return "unavailable";
+  }
+  try {
+    const output = execFileSync("ps", ["-axo", "pid=,ppid=,pgid=,stat=,comm="], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: PROCESS_GROUP_INSPECT_TIMEOUT_MS,
+    });
+    return parseVitestProcessGroupMembers(output, processGroupId);
+  } catch {
+    return "unavailable";
+  }
+}
+
 async function joinVitestProcessGroup(
   child: VitestChild,
   platform: NodeJS.Platform,
@@ -114,8 +148,9 @@ async function joinVitestProcessGroup(
   while (isVitestProcessGroupAlive(target, kill)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
+      const members = inspectVitestProcessGroup(child.pid!, platform);
       throw new Error(
-        `[vitest] process group ${child.pid ?? "unknown"} remained alive ${PROCESS_GROUP_JOIN_TIMEOUT_MS}ms after SIGKILL; inspect its descendants before starting another shard.`,
+        `[vitest] process group ${child.pid ?? "unknown"} remained alive ${PROCESS_GROUP_JOIN_TIMEOUT_MS}ms after SIGKILL; members: ${members}.`,
       );
     }
     await new Promise((resolve) => {
@@ -125,10 +160,12 @@ async function joinVitestProcessGroup(
 }
 
 function waitForChildCompletionEvent(child: ChildProcess, event: "exit" | "close") {
-  return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    child.once(event, (code, signal) => resolve({ code, signal }));
-    child.once("error", reject);
-  });
+  return new Promise<{ code: number | null; signal: ChildProcess["signalCode"] }>(
+    (resolve, reject) => {
+      child.once(event, (code, signal) => resolve({ code, signal }));
+      child.once("error", reject);
+    },
+  );
 }
 
 /**
