@@ -12,7 +12,7 @@ import {
   type ChatMediaResource,
 } from "./chat-message-media.ts";
 
-export type AssistantAttachmentAvailability =
+type AssistantAttachmentAvailability =
   | { status: "checking" }
   | {
       status: "available";
@@ -40,7 +40,7 @@ export type ManagedAttachmentAvailability =
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 export const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
-export const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
+const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 
@@ -240,7 +240,7 @@ export function resolveAssistantAttachmentAvailability(
   return refreshingAvailability ?? { status: "checking" };
 }
 
-export function createUnavailableAssistantAttachment(
+function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,
 ): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
@@ -261,12 +261,12 @@ export function bumpAssistantAttachmentAvailabilityRenderVersion(): void {
     (assistantAttachmentAvailabilityRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
 }
 
-export function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
+function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 
-export function setAssistantAttachmentAvailability(
+function setAssistantAttachmentAvailability(
   resource: ChatMediaResource<AssistantAttachmentAvailability>,
   availability: AssistantAttachmentAvailability,
 ): void {
@@ -278,7 +278,7 @@ export function setAssistantAttachmentAvailability(
   scheduleAssistantAttachmentRefresh(resource, availability);
 }
 
-export function scheduleAssistantAttachmentRefresh(
+function scheduleAssistantAttachmentRefresh(
   resource: ChatMediaResource<AssistantAttachmentAvailability>,
   availability: AssistantAttachmentAvailability,
 ): void {
