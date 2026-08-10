@@ -136,10 +136,9 @@ function renderIdentityCrumbs(
   copyPathLabel: string,
   copyBranchLabel: string,
 ) {
-  const segments = [
-    renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel),
-    renderSessionCrumb(props),
-  ].filter((segment): segment is TemplateResult => segment !== nothing);
+  const projectCrumb = renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel);
+  const segments: TemplateResult[] = projectCrumb ? [projectCrumb] : [];
+  segments.push(renderSessionCrumb(props));
   return html`
     <div class="chat-pane__crumbs">
       ${segments.map(
@@ -193,9 +192,9 @@ function renderProjectCrumb(
   copied: boolean,
   copyPathLabel: string,
   copyBranchLabel: string,
-) {
+): TemplateResult | null {
   if (props.catalog || !props.workspaceLabel) {
-    return nothing;
+    return null;
   }
   return html`
     <wa-dropdown
