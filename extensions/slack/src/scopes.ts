@@ -6,8 +6,8 @@ import {
   normalizeOptionalString,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatSlackErrorWithAuthRemediation } from "./auth-error.js";
 import { createSlackReadClient } from "./client.js";
-import { formatSlackError } from "./errors.js";
 
 export type SlackScopesResult = {
   ok: boolean;
@@ -85,9 +85,15 @@ async function callSlack(
     const result = await client.apiCall(method);
     return isRecord(result) ? result : null;
   } catch (err) {
+    // Surface an invalid/expired/revoked token as a clear, actionable
+    // config error rather than the SDK's generic "An API error occurred: ..."
+    // message, so the workspace owner knows to regenerate the token instead
+    // of assuming it's a transient network issue. This is the diagnostic
+    // path that inspects the *user* token (SLACK_USER_TOKEN), so a revoked
+    // personal token gets a clear message here too, not just the bot token.
     return {
       ok: false,
-      error: formatSlackError(err),
+      error: formatSlackErrorWithAuthRemediation(err),
     };
   }
 }
