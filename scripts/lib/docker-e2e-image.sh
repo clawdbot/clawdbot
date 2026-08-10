@@ -167,11 +167,7 @@ docker_e2e_test_state_entrypoint() {
 docker_e2e_run_test_state() {
   local entrypoint
   entrypoint="$(docker_e2e_test_state_entrypoint)" || return
-  if [[ "$entrypoint" == *.mts ]]; then
-    node --import tsx "$entrypoint" "$@"
-  else
-    node "$entrypoint" "$@"
-  fi
+  node "$entrypoint" "$@"
 }
 
 docker_e2e_test_state_shell_b64() {

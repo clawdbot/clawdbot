@@ -271,7 +271,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(script).toContain("OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB");
     expect(script).toContain("docker_e2e_sample_stats_until_exit");
     expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
-    expect(script).toContain("node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts");
+    expect(script).toContain(
+      "openclaw_e2e_run_script_entrypoint scripts/e2e/kitchen-sink-rpc-walk",
+    );
     expect(walkScript).toContain("commands.list");
     expect(walkScript).toContain("tools.invoke");
     expect(walkScript).toContain("tts.providers");
