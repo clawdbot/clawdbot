@@ -4,6 +4,7 @@ import {
   peekAdjustedParamsForToolCall,
   peekPreExecutionBlockedToolCall,
 } from "./agent-tools.before-tool-call.state.js";
+import { extractApplyPatchTargets } from "./apply-patch-targets.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
@@ -14,17 +15,14 @@ function extractPatchFileTargets(
   toolName: string,
   args: Record<string, unknown> | undefined,
 ): FileTarget[] | undefined {
-  const input = args?.input;
-  if (
-    toolName.trim().toLowerCase() !== "apply_patch" ||
-    typeof input !== "string" ||
-    /^\*\*\* (?:Delete File|Move to):/m.test(input)
-  ) {
+  if (toolName.trim().toLowerCase() !== "apply_patch") {
     return undefined;
   }
-  const paths = [...input.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)]
-    .map((match) => match[1]?.trim().toLowerCase())
-    .filter((path): path is string => Boolean(path));
+  const targets = extractApplyPatchTargets(args);
+  if (targets.some((target) => target.kind === "delete" || target.kind === "move")) {
+    return undefined;
+  }
+  const paths = targets.map((target) => target.path.trim().toLowerCase()).filter(Boolean);
   const uniquePaths = [...new Set(paths)];
   return uniquePaths.length > 0 ? uniquePaths.map<FileTarget>((path) => ({ path })) : undefined;
 }
