@@ -40,7 +40,7 @@ export function resolveSlackListenerEventScope(
   return resolved.scope;
 }
 
-function resolveSlackEventScope(params: {
+export function resolveSlackEventScope(params: {
   identity: SlackInstallationIdentity;
   body: unknown;
   context?: {
