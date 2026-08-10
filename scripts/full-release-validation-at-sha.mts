@@ -465,10 +465,10 @@ export function assertTrustedWorkflowHarness(
     );
   }
   if (
-    !isRecord(workflow) ||
-    !isRecord(workflow.on) ||
-    !isRecord(workflow.on.workflow_dispatch) ||
-    !isRecord(workflow.on.workflow_dispatch.inputs) ||
+    !isJsonRecord(workflow) ||
+    !isJsonRecord(workflow.on) ||
+    !isJsonRecord(workflow.on.workflow_dispatch) ||
+    !isJsonRecord(workflow.on.workflow_dispatch.inputs) ||
     !Object.hasOwn(workflow.on.workflow_dispatch.inputs, "expected_sha")
   ) {
     throw new Error(
