@@ -54,6 +54,7 @@ export type SessionListOptions = {
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };

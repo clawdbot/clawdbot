@@ -168,6 +168,7 @@ export function buildSidebarSessionNavigationState(input: {
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxCount: input.outboxCountForSessionKey(row.key),
       unread: row.archived !== true && row.unread === true,
+      lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
       lastReadAt: row.lastReadAt,
       attention: row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : input.resolveAttention(row),
       agentStatusNote: input.resolveAgentStatusNote(row),

@@ -88,6 +88,7 @@ export type SidebarRecentSession = {
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;
   unread: boolean;
+  lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
   agentStatusNote?: string;

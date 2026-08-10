@@ -1,7 +1,10 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
+  captureUiProofEnabled,
   captureSessionAccessibilityProof,
   chatSessionListResponse,
   controlUiSessionPath,
@@ -15,6 +18,12 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const terminalMetadataProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "remote-session-sidebar-metadata",
+);
 
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
@@ -908,6 +917,107 @@ suite.define(() => {
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
       await captureSessionAccessibilityProof(page, "after-patch-refresh");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("replaces an intermediate running subtitle with the durable final reply", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(terminalMetadataProofDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: terminalMetadataProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const key = "agent:main:session-a";
+    const runId = "run-sidebar-metadata";
+    const running = chatSessionListResponse([
+      {
+        key,
+        kind: "direct",
+        label: "Sidebar metadata repair",
+        updatedAt: Date.now(),
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        status: "running",
+        observerDigest: {
+          agentId: "main",
+          runId,
+          headline: "Implementing the repair",
+          health: "on-track",
+          updatedAt: Date.now(),
+          revision: 1,
+        },
+      },
+    ]);
+    const completed = chatSessionListResponse([
+      {
+        key,
+        kind: "direct",
+        label: "Sidebar metadata repair",
+        updatedAt: Date.now() + 1,
+        activeRunIds: [],
+        hasActiveRun: false,
+        status: "done",
+        lastMessagePreview: "The repaired sidebar now shows the final reply.",
+        observerDigest: {
+          agentId: "main",
+          runId,
+          headline: "Implementing the repair",
+          health: "done",
+          updatedAt: Date.now() + 1,
+          revision: 2,
+        },
+      },
+    ]);
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "sessions.list": running },
+      sessionKey: key,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await row.getByText("Implementing the repair").waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(terminalMetadataProofDir, "01-running-subtitle.png"),
+        });
+      }
+      await gateway.setMethodResponse("sessions.list", completed);
+      const listCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        hasActiveRun: false,
+        message: {
+          content: [{ type: "text", text: "The repaired sidebar now shows the final reply." }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        messageId: "terminal-sidebar-reply",
+        messageSeq: 2,
+        sessionKey: key,
+        status: "done",
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(listCount);
+      await row.getByText("The repaired sidebar now shows the final reply.").waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(terminalMetadataProofDir, "02-final-reply-subtitle.png"),
+        });
+      }
+      const listRequests = await gateway.getRequests("sessions.list");
+      expect(listRequests.at(-1)?.params).toMatchObject({ includeLastMessage: true });
     } finally {
       await suite.closeBrowserContext(context);
     }
