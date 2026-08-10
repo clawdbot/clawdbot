@@ -298,8 +298,9 @@ vi.mock("./bot/delivery.replies.js", () => ({
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let clearPluginCommands: typeof import("openclaw/plugin-sdk/plugin-runtime").clearPluginCommands;
 let registerPluginCommand: typeof import("openclaw/plugin-sdk/plugin-runtime").registerPluginCommand;
-let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").createEmptyPluginRegistry;
-let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").setActivePluginRegistry;
+let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createEmptyPluginRegistry;
+let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
 type TelegramPluginCommandSpecs = Array<{
@@ -694,6 +695,7 @@ function resetSessionMetaMocks() {
   sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
   sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
   pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearPluginCommands();
   replyMocks.dispatchReplyWithBufferedBlockDispatcher
@@ -709,8 +711,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
     ({ clearPluginCommands, registerPluginCommand } =
       await import("openclaw/plugin-sdk/plugin-runtime"));
-    ({ createEmptyPluginRegistry, setActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/plugin-test-runtime"));
+    ({ createEmptyPluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+      await import("openclaw/plugin-sdk/channel-test-helpers"));
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     const commandModule = await import("./bot-native-commands.js");
     registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
     await import("./bot-native-commands.runtime.js");
@@ -1978,7 +1982,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        authProfileId: "openai:owner@example.com",
         messageThreadId: 42,
       },
       "plugin command params",

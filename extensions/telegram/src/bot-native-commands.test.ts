@@ -21,8 +21,9 @@ let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").re
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
 let clearPluginCommands: typeof import("openclaw/plugin-sdk/plugin-runtime").clearPluginCommands;
 let registerPluginCommand: typeof import("openclaw/plugin-sdk/plugin-runtime").registerPluginCommand;
-let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").createEmptyPluginRegistry;
-let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").setActivePluginRegistry;
+let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createEmptyPluginRegistry;
+let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
@@ -145,8 +146,10 @@ describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
     ({ clearPluginCommands, registerPluginCommand } =
       await import("openclaw/plugin-sdk/plugin-runtime"));
-    ({ createEmptyPluginRegistry, setActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/plugin-test-runtime"));
+    ({ createEmptyPluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+      await import("openclaw/plugin-sdk/channel-test-helpers"));
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
       await import("./bot-native-commands.js"));
   });
@@ -154,6 +157,7 @@ describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginCommands();
     pluginCommandHandler.mockClear();

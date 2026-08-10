@@ -5,9 +5,9 @@ import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
-let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").setActivePluginRegistry;
-let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").createEmptyPluginRegistry;
-let getActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").getActivePluginRegistry;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
+let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createEmptyPluginRegistry;
+let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
 let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
@@ -50,6 +50,8 @@ function createTelegramPluginRegistry() {
   } as never);
   return registry;
 }
+
+let activePluginRegistry: ReturnType<typeof createTelegramPluginRegistry>;
 
 function registerPairPluginCommand(params?: {
   nativeNames?: { telegram?: string; discord?: string };
@@ -130,8 +132,11 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index: number): unknow
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
-    ({ setActivePluginRegistry, createEmptyPluginRegistry, getActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/plugin-test-runtime"));
+    ({ setActivePluginRegistry, createEmptyPluginRegistry, resetPluginRuntimeStateForTest } =
+      await import("openclaw/plugin-sdk/channel-test-helpers"));
+    resetPluginRuntimeStateForTest();
+    activePluginRegistry = createTelegramPluginRegistry();
+    setActivePluginRegistry(activePluginRegistry as never);
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     ({
       createCommandBot,
@@ -145,7 +150,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   });
 
   beforeEach(() => {
-    setActivePluginRegistry(createTelegramPluginRegistry() as never);
+    resetPluginRuntimeStateForTest();
+    activePluginRegistry = createTelegramPluginRegistry();
+    setActivePluginRegistry(activePluginRegistry as never);
     clearPluginCommands();
     resetNativeCommandMenuMocks();
   });
@@ -284,7 +291,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
   it("carries a built-in catalog winner through the handler", async () => {
     const pluginHandler = vi.fn(async () => ({ text: "wrong plugin" }));
-    getActivePluginRegistry()!.commands.push({
+    activePluginRegistry.commands.push({
       pluginId: "shadow-plugin",
       source: "test",
       command: {
