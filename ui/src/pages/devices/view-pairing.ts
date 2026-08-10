@@ -1,22 +1,24 @@
 // Devices page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { property } from "lit/decorators.js";
+import { handleCopyButton, renderCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { DevicePairSetup, DevicePairSetupAccess } from "../../lib/device-pair-setup.ts";
+import { formatCountdown } from "../../lib/format.ts";
+import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 
 const MOBILE_PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
 const NODE_PAIRING_DOCS_URL = "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing";
+const PAIRING_ACCESS_OPTIONS = [
+  ["full", "devices.pairing.fullAccess", "devices.pairing.fullAccessHint"],
+  ["limited", "devices.pairing.limitedAccess", "devices.pairing.limitedAccessHint"],
+  ["node", "devices.pairing.nodeAccess", "devices.pairing.nodeAccessHint"],
+] as const satisfies ReadonlyArray<readonly [DevicePairSetupAccess, string, string]>;
 
-function formatPairingSetupCountdown(expiresAtMs: number, nowMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
-}
-
-type DevicePairSetupProps = {
+export type DevicePairSetupProps = {
   open: boolean;
   loading: boolean;
   error: string | null;
@@ -31,6 +33,14 @@ type DevicePairSetupProps = {
   onGetApps: () => void;
 };
 
+export class OpenClawDevicePairSetup extends OpenClawLightDomContentsElement {
+  @property({ attribute: false }) props: DevicePairSetupProps | null = null;
+
+  override render() {
+    return this.props ? renderDevicePairSetup(this.props) : nothing;
+  }
+}
+
 export function renderDevicePairSetup(props: DevicePairSetupProps) {
   if (!props.open) {
     return nothing;
@@ -43,8 +53,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
   const isNodeSetup = props.access === "node";
   const pairingDocsUrl = isNodeSetup ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL;
-  const pairUrl = setup ? `oc-pair://${setup.setupCode}` : "";
-  const nodeCommand = pairUrl ? `openclaw node run --pair "${pairUrl}"` : "";
+  const nodeCommand = setup ? `openclaw node run --pair "oc-pair://${setup.setupCode}"` : "";
   const setupExpired = typeof setup?.expiresAtMs === "number" && setup.expiresAtMs <= props.nowMs;
 
   return html`
@@ -79,42 +88,20 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
         <div class="device-pair-setup__body">
           <fieldset class="device-pair-setup__access" ?disabled=${props.loading || setup !== null}>
             <legend>${t("devices.pairing.accessTitle")}</legend>
-            <label>
-              <input
-                type="radio"
-                name="device-pair-access"
-                .checked=${props.access === "full"}
-                @change=${() => props.onAccessChange("full")}
-              />
-              <span>
-                <strong>${t("devices.pairing.fullAccess")}</strong>
-                <small>${t("devices.pairing.fullAccessHint")}</small>
-              </span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="device-pair-access"
-                .checked=${props.access === "limited"}
-                @change=${() => props.onAccessChange("limited")}
-              />
-              <span>
-                <strong>${t("devices.pairing.limitedAccess")}</strong>
-                <small>${t("devices.pairing.limitedAccessHint")}</small>
-              </span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="device-pair-access"
-                .checked=${props.access === "node"}
-                @change=${() => props.onAccessChange("node")}
-              />
-              <span>
-                <strong>${t("devices.pairing.nodeAccess")}</strong>
-                <small>${t("devices.pairing.nodeAccessHint")}</small>
-              </span>
-            </label>
+            ${PAIRING_ACCESS_OPTIONS.map(
+              ([access, label, hint]) => html`<label>
+                <input
+                  type="radio"
+                  name="device-pair-access"
+                  .checked=${props.access === access}
+                  @change=${() => props.onAccessChange(access)}
+                />
+                <span>
+                  <strong>${t(label)}</strong>
+                  <small>${t(hint)}</small>
+                </span>
+              </label>`,
+            )}
           </fieldset>
           ${!setup && !props.loading && !props.error
             ? html`
@@ -151,13 +138,18 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
             ? html`
                 ${isNodeSetup
                   ? html`<div class="device-pair-setup__command">
-                      <code>${nodeCommand}</code>
+                      ${setupExpired
+                        ? nothing
+                        : html`<div class="login-gate__command">
+                            <code>${nodeCommand}</code>
+                            ${renderCopyButton(nodeCommand, t("connection.help.copyCommand"))}
+                          </div>`}
                       ${setup.expiresAtMs
-                        ? html`<p role="timer" aria-live="off">
+                        ? html`<p class="device-pair-setup__waiting" role="timer" aria-live="off">
                             ${setupExpired
                               ? t("devices.pairing.nodeExpired")
                               : t("devices.pairing.nodeExpiresIn", {
-                                  time: formatPairingSetupCountdown(setup.expiresAtMs, props.nowMs),
+                                  time: formatCountdown(setup.expiresAtMs, props.nowMs),
                                 })}
                           </p>`
                         : nothing}
@@ -201,22 +193,16 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                   : nothing}
 
                 <div class="device-pair-setup__actions">
-                  <button
-                    class="btn primary"
-                    type="button"
-                    @click=${(event: Event) =>
-                      void handleCopyButton(
-                        event,
-                        isNodeSetup ? nodeCommand : setup.setupCode,
-                        isNodeSetup ? t("devices.pairing.copyNodeCommand") : copyLabel,
-                      )}
-                    ?disabled=${setupExpired}
-                  >
-                    ${icons.copy}
-                    <span data-copy-label
-                      >${isNodeSetup ? t("devices.pairing.copyNodeCommand") : copyLabel}</span
-                    >
-                  </button>
+                  ${isNodeSetup
+                    ? nothing
+                    : html`<button
+                        class="btn primary"
+                        type="button"
+                        @click=${(event: Event) =>
+                          void handleCopyButton(event, setup.setupCode, copyLabel)}
+                      >
+                        ${icons.copy} <span data-copy-label>${copyLabel}</span>
+                      </button>`}
                   <button
                     class="btn"
                     type="button"
@@ -262,4 +248,8 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
       </section>
     </openclaw-modal-dialog>
   `;
+}
+
+if (!customElements.get("openclaw-device-pair-setup")) {
+  customElements.define("openclaw-device-pair-setup", OpenClawDevicePairSetup);
 }

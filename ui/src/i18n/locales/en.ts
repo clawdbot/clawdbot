@@ -528,7 +528,6 @@ export const en: TranslationMap = {
       qrAlt: "OpenClaw mobile pairing QR code",
       qrUnavailable: "QR unavailable. Copy the setup code instead.",
       copySetupCode: "Copy setup code",
-      copyNodeCommand: "Copy command",
       nodeExpiresIn: "This setup link expires in {time}.",
       nodeExpired: "This setup link has expired. Create a new one.",
       newCode: "New code",

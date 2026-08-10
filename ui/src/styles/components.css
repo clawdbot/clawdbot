@@ -4631,7 +4631,7 @@ td.data-table-key-col {
 .agent-tool-summary__facts {
   display: grid;
   gap: 8px 12px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
   min-width: 0;
 }
@@ -5282,24 +5282,6 @@ td.data-table-key-col {
   display: grid;
   width: min(540px, 100%);
   gap: 10px;
-}
-
-.device-pair-setup__command code {
-  padding: 14px;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.device-pair-setup__command p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
 }
 
 .device-pair-setup__meta {

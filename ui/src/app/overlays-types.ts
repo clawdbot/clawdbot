@@ -21,7 +21,6 @@ export type ApplicationOverlaySnapshot = {
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
   devicePairSetupAccess: DevicePairSetupAccess;
-  devicePairSetupNowMs: number;
   devicePairPendingCount: number;
   deviceAuthMigration: DeviceAuthMigrationSnapshot;
 };

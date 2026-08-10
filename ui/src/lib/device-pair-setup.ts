@@ -16,7 +16,6 @@ type DevicePairSetupState = {
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
   devicePairSetupAccess: DevicePairSetupAccess;
-  devicePairSetupNowMs: number;
   devicePairSetupTimer: ReturnType<typeof setInterval> | null;
 };
 
@@ -33,7 +32,6 @@ export function createDevicePairSetupState(params: {
     devicePairSetupError: null,
     devicePairSetup: null,
     devicePairSetupAccess: "full",
-    devicePairSetupNowMs: Date.now(),
     devicePairSetupTimer: null,
     pendingCount: 0,
   };
@@ -46,7 +44,6 @@ export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) 
     devicePairSetupError: state.devicePairSetupError,
     devicePairSetup: state.devicePairSetup,
     devicePairSetupAccess: state.devicePairSetupAccess,
-    devicePairSetupNowMs: state.devicePairSetupNowMs,
     devicePairPendingCount: state.pendingCount,
   };
 }
@@ -70,8 +67,7 @@ export function syncDevicePairSetupCountdown(state: DevicePairSetupState, onTick
     return;
   }
   state.devicePairSetupTimer = setInterval(() => {
-    state.devicePairSetupNowMs = Date.now();
-    if (!state.devicePairSetupOpen || expiresAtMs <= state.devicePairSetupNowMs) {
+    if (!state.devicePairSetupOpen || expiresAtMs <= Date.now()) {
       stopDevicePairSetupCountdown(state);
     }
     onTick();
@@ -114,7 +110,6 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       state.devicePairSetupAccess = result.access;
     }
     state.devicePairSetup = result;
-    state.devicePairSetupNowMs = Date.now();
   } catch (err) {
     if (
       devicePairSetupRequests.get(state) === requestToken &&
@@ -157,5 +152,4 @@ export function closeDevicePairSetup(state: DevicePairSetupState) {
   state.devicePairSetupError = null;
   state.devicePairSetup = null;
   state.devicePairSetupAccess = "full";
-  state.devicePairSetupNowMs = Date.now();
 }

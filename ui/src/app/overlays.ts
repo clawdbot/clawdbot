@@ -93,7 +93,6 @@ export function createApplicationOverlays(
     devicePairSetupError: null,
     devicePairSetup: null,
     devicePairSetupAccess: "full",
-    devicePairSetupNowMs: Date.now(),
     devicePairPendingCount: 0,
     deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
   };
