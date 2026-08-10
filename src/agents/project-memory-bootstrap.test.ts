@@ -127,7 +127,9 @@ describe("project memory bootstrap", () => {
   it("renders budgeted curated candidates through the selected active runtime", async () => {
     const rendered = await prepareEntries(entries);
 
-    expect(getSelectedMemoryRuntime()?.getMemorySearchManager).toBe(runtimeMocks.getManager);
+    expect(getSelectedMemoryRuntime()).toEqual(
+      expect.objectContaining({ getMemorySearchManager: runtimeMocks.getManager }),
+    );
     expect(runtimeMocks.getManager).toHaveBeenCalledOnce();
     expect(runtimeMocks.listCurated).toHaveBeenCalledWith({
       activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],

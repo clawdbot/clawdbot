@@ -570,7 +570,9 @@ export function createMemoryAuthorizationConformanceScenarios(): MemoryAuthoriza
     ...staleMount,
     plan: {
       ...staleMount.plan,
-      mounts: staleMount.plan.mounts.map((mount) => ({ ...mount, storeId: "store-b" })),
+      mounts: staleMount.plan.mounts.map((mount) =>
+        Object.assign({}, mount, { storeId: "store-b" }),
+      ),
     },
   });
 
@@ -579,10 +581,9 @@ export function createMemoryAuthorizationConformanceScenarios(): MemoryAuthoriza
     ...staleMountCapabilities,
     plan: {
       ...staleMountCapabilities.plan,
-      mounts: staleMountCapabilities.plan.mounts.map((mount) => ({
-        ...mount,
-        capabilities: ["retrieve"],
-      })),
+      mounts: staleMountCapabilities.plan.mounts.map((mount) =>
+        Object.assign({}, mount, { capabilities: ["retrieve"] }),
+      ),
     },
   });
 
@@ -591,7 +592,9 @@ export function createMemoryAuthorizationConformanceScenarios(): MemoryAuthoriza
     ...staleMountAgent,
     plan: {
       ...staleMountAgent.plan,
-      mounts: staleMountAgent.plan.mounts.map((mount) => ({ ...mount, agentId: "agent-b" })),
+      mounts: staleMountAgent.plan.mounts.map((mount) =>
+        Object.assign({}, mount, { agentId: "agent-b" }),
+      ),
     },
   });
 
@@ -600,10 +603,9 @@ export function createMemoryAuthorizationConformanceScenarios(): MemoryAuthoriza
     ...staleMountAudience,
     plan: {
       ...staleMountAudience.plan,
-      mounts: staleMountAudience.plan.mounts.map((mount) => ({
-        ...mount,
-        audienceRevision: "audience-revision-2",
-      })),
+      mounts: staleMountAudience.plan.mounts.map((mount) =>
+        Object.assign({}, mount, { audienceRevision: "audience-revision-2" }),
+      ),
     },
   });
 

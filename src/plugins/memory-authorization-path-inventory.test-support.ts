@@ -423,6 +423,7 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "extensions/memory-core/src/session-backfill-gateway.runtime.ts",
     "extensions/memory-core/src/session-backfill.ts",
     "extensions/memory-core/src/session-ingestion.ts",
+    "ui/src/pages/memory-import/memory-import-page.ts",
   ),
   entry(
     "session-backfill-derived-memory-write",
@@ -444,6 +445,7 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "extensions/memory-core/src/short-term-promotion-record.ts",
     "extensions/memory-core/src/short-term-promotion-artifacts.ts",
     "extensions/memory-core/src/dreaming-narrative.ts",
+    "ui/src/pages/memory-import/memory-import-page.ts",
   ),
   entry(
     "dreaming-session-transcript-ingestion",
@@ -500,6 +502,8 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "src/wizard/setup.post-install-migration.ts",
     "src/wizard/setup.memory-import.ts",
     "src/plugin-sdk/migration-runtime.ts",
+    "ui/src/components/onboarding-memory-import.ts",
+    "ui/src/pages/memory-import/memory-import-page.ts",
   ),
   entry(
     "memory-export",

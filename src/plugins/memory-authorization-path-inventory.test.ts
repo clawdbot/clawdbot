@@ -141,6 +141,8 @@ const MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES = [
   "src/wizard/setup.post-install-migration.ts",
   "src/wizard/setup.memory-import.ts",
   "src/plugin-sdk/migration-runtime.ts",
+  "ui/src/components/onboarding-memory-import.ts",
+  "ui/src/pages/memory-import/memory-import-page.ts",
 ] as const;
 
 const MEMORY_MIGRATION_IMPORT_ROOTS = [
@@ -152,7 +154,21 @@ const MEMORY_MIGRATION_IMPORT_ROOTS = [
   "src/gateway/server-methods",
   "src/wizard",
   "src/plugin-sdk",
+  "ui/src",
 ] as const;
+
+const SESSION_BACKFILL_INGRESS_ROOTS = ["extensions/memory-core/src", "ui/src"] as const;
+
+const MEMORY_MIGRATION_IMPORT_REQUEST_METHODS = new Set([
+  "migrations.memory.plan",
+  "migrations.memory.apply",
+]);
+
+const SESSION_BACKFILL_REQUEST_METHODS = new Set([
+  "memory.sessionBackfill.preview",
+  "memory.sessionBackfill.apply",
+  "memory.sessionBackfill.rollback",
+]);
 
 const MEMORY_CORE_DOCTOR_STATE_MIGRATION_REGISTRATION_SURFACES = [
   "extensions/memory-core/doctor-contract-api.ts",
@@ -279,6 +295,19 @@ function isMigrationProviderApplyCall(expression: ts.LeftHandSideExpression): bo
   );
 }
 
+function directClientRequestMethod(node: ts.CallExpression): string | null {
+  if (
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !ts.isIdentifier(node.expression.expression) ||
+    node.expression.expression.text !== "client" ||
+    node.expression.name.text !== "request"
+  ) {
+    return null;
+  }
+  const method = node.arguments[0];
+  return method && ts.isStringLiteral(method) ? method.text : null;
+}
+
 function containsMemoryStringLiteral(node: ts.Node): boolean {
   let found = false;
   const visit = (child: ts.Node) => {
@@ -330,6 +359,10 @@ function listMemoryMigrationIngressMarkers(file: string, sourceText: string): st
       markers.push(node.getText(source));
     }
     if (ts.isCallExpression(node)) {
+      const requestMethod = directClientRequestMethod(node);
+      if (requestMethod && MEMORY_MIGRATION_IMPORT_REQUEST_METHODS.has(requestMethod)) {
+        markers.push(requestMethod);
+      }
       if (isNamedCall(node.expression, copyMemoryBindings)) {
         markers.push(node.getText(source));
       }
@@ -349,6 +382,22 @@ function listMemoryMigrationIngressMarkers(file: string, sourceText: string): st
       }
       if (isMigrationProviderApplyCall(node.expression)) {
         markers.push("migration-provider-apply");
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return markers;
+}
+
+function listSessionBackfillIngressMarkers(file: string, sourceText: string): string[] {
+  const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+  const markers: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      const requestMethod = directClientRequestMethod(node);
+      if (requestMethod && SESSION_BACKFILL_REQUEST_METHODS.has(requestMethod)) {
+        markers.push(requestMethod);
       }
     }
     ts.forEachChild(node, visit);
@@ -658,6 +707,7 @@ describe("memory authorization path inventory", () => {
         "extensions/memory-core/src/session-backfill-gateway.ts",
         "extensions/memory-core/src/session-backfill-gateway.runtime.ts",
         "extensions/memory-core/src/session-backfill.ts",
+        "ui/src/pages/memory-import/memory-import-page.ts",
       ]),
     });
     expect(entriesById.get("session-backfill-derived-memory-write")).toMatchObject({
@@ -678,6 +728,7 @@ describe("memory authorization path inventory", () => {
         "extensions/memory-core/src/session-ingestion.ts",
         "extensions/memory-core/src/short-term-promotion-record.ts",
         "extensions/memory-core/src/short-term-promotion-artifacts.ts",
+        "ui/src/pages/memory-import/memory-import-page.ts",
       ]),
     });
     expect(entriesById.get("dreaming-session-transcript-ingestion")).toMatchObject({
@@ -797,6 +848,32 @@ describe("memory authorization path inventory", () => {
     ).toEqual(["provider-memory-import-apply"]);
   });
 
+  it("finds direct Control UI migration and session-backfill requests", () => {
+    const source = `
+      async function importMemory(
+        client: { request: Function },
+        unrelated: { request: Function },
+      ) {
+        await client.request("migrations.memory.plan", {});
+        await client.request("migrations.memory.apply", {});
+        await client.request("memory.sessionBackfill.preview", {});
+        await client.request("memory.sessionBackfill.apply", {});
+        await client.request("memory.sessionBackfill.rollback", {});
+        await unrelated.request("migrations.memory.plan", {});
+      }
+    `;
+
+    expect(listMemoryMigrationIngressMarkers("fixture.ts", source)).toEqual([
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+    ]);
+    expect(listSessionBackfillIngressMarkers("fixture.ts", source)).toEqual([
+      "memory.sessionBackfill.preview",
+      "memory.sessionBackfill.apply",
+      "memory.sessionBackfill.rollback",
+    ]);
+  });
+
   it("finds direct and aliased short-term recall recorders without matching properties", () => {
     expect(
       listImportedShortTermRecallRecordingCalls(
@@ -883,9 +960,9 @@ describe("memory authorization path inventory", () => {
     expect(missing).toEqual([]);
   });
 
-  it("does not allow an unrecorded production session transcript ingestion route", () => {
+  it("does not allow an unrecorded production session transcript or Control UI backfill route", () => {
     const scanned = listRepoFilesSync(REPO_ROOT, {
-      roots: ["extensions/memory-core/src"],
+      roots: SESSION_BACKFILL_INGRESS_ROOTS,
       includeFile: isProductionTypeScript,
     });
     const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
@@ -893,6 +970,10 @@ describe("memory authorization path inventory", () => {
       .filter(
         (file) =>
           listSessionTranscriptIngestionCalls(
+            file,
+            fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
+          ).length > 0 ||
+          listSessionBackfillIngressMarkers(
             file,
             fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
           ).length > 0,
