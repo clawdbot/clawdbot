@@ -10,6 +10,7 @@ import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-au
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
+import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -18,8 +19,6 @@ import {
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
-
-let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 
 vi.mock("./bot-native-commands.runtime.js", () => ({
   ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
@@ -96,10 +95,9 @@ function registerLoginCommand(params: {
 }
 
 describe("registerTelegramNativeCommands /login", () => {
-  beforeAll(async () => {
+  beforeAll(() => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
-    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {
