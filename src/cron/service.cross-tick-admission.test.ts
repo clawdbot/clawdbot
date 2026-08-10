@@ -1,11 +1,11 @@
 // Cross-tick admission must stay concurrent without retaining saturated timer work (#119083).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
