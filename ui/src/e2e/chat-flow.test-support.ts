@@ -184,7 +184,7 @@ export async function captureSessionAccessibilityProof(page: Page, name: string)
 }
 
 export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
-  return page.locator(".chat-thread").evaluate((element) => {
+  return page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
     const thread = element as HTMLElement;
     const viewport = thread.getBoundingClientRect();
     return Array.from(thread.querySelectorAll(".chat-bubble"))
