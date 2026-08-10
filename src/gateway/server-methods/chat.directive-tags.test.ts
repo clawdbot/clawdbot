@@ -1395,7 +1395,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    const response = lastRespondCall(respond);
+    const response = expectDefined(
+      lastRespondCall(respond),
+      "active ancestor response test invariant",
+    );
     expect(response[0]).toBe(accepted);
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
