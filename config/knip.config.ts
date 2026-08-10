@@ -415,6 +415,9 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // Collection reconcile behavior is asserted by the focused review tests;
+    // production wires only the scheduled review loop.
+    "src/skills/workshop/collection-review.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
