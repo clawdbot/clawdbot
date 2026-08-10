@@ -52,7 +52,7 @@ media understanding (Voxtral batch transcription), realtime STT for Voice Call
   <Step title="Set a default model">
     ```json5
     {
-      env: { MISTRAL_API_KEY: "sk-..." },
+      env: { vars: { MISTRAL_API_KEY: "sk-..." } },
       agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
     }
     ```

@@ -168,6 +168,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               allowFrom: ["123456789", "987654321"],
             },
           },
@@ -183,6 +186,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               allowedRoles: ["moderator", "vip"],
             },
           },
@@ -200,6 +206,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               requireMention: false,
             },
           },

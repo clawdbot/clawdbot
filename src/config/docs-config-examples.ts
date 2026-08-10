@@ -64,24 +64,27 @@ function extractMarkdownFences(markdown: string): MarkdownFence[] {
   const lines = markdown.split(/\r?\n/u);
   const fences: MarkdownFence[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const opening = lines[index]?.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+    // MDX component-nested fences (Accordion/Tabs) are commonly indented 4+ spaces;
+    // CommonMark's indented-code rule does not apply inside these docs components.
+    const opening = lines[index]?.match(/^([ \t]*)(`{3,}|~{3,})(.*)$/u);
     if (!opening) {
       continue;
     }
-    const marker = opening[1];
-    if (!marker) {
+    const indent = opening[1];
+    const marker = opening[2];
+    if (indent === undefined || !marker) {
       continue;
     }
     const body: string[] = [];
     const startLine = index + 1;
-    const closing = new RegExp(`^ {0,3}${marker}[ \\t]*$`, "u");
+    const closing = new RegExp(`^[ \\t]*${marker.charAt(0)}{${marker.length},}[ \\t]*$`, "u");
     index += 1;
     while (index < lines.length && !closing.test(lines[index] ?? "")) {
       body.push(lines[index] ?? "");
       index += 1;
     }
     fences.push({
-      info: opening[2]?.trim() ?? "",
+      info: opening[3]?.trim() ?? "",
       body: body.join("\n"),
       startLine,
     });

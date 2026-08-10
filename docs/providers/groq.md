@@ -61,7 +61,7 @@ export GROQ_API_KEY=gsk_...
 
 ```json5
 {
-  env: { GROQ_API_KEY: "gsk_..." },
+  env: { vars: { GROQ_API_KEY: "gsk_..." } },
   agents: {
     defaults: {
       model: { primary: "groq/openai/gpt-oss-120b" },

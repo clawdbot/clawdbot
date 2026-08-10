@@ -29,6 +29,19 @@ describe("docs config examples", () => {
       issuePath: "agents.defaults",
     },
     {
+      name: "reports a retired key in an indented MDX component fence",
+      markdown: [
+        '<Accordion title="Legacy roster">',
+        "    ```json5",
+        '    { agents: { list: [{ id: "main" }] } }',
+        "    ````",
+        "</Accordion>",
+      ].join("\n"),
+      findings: 1,
+      skipped: undefined,
+      issuePath: "agents",
+    },
+    {
       name: "skips a fragment without a recognized-key majority",
       markdown: "```json5\n{ agents: {}, payloads: [] }\n```",
       findings: 0,
