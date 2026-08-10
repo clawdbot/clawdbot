@@ -11,7 +11,8 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import {
@@ -46,7 +47,6 @@ describe("pending final delivery restart proof", () => {
   });
 
   afterEach(async () => {
-    setActivePluginRegistry(createTestRegistry([]));
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -335,114 +335,122 @@ describe("pending final delivery restart proof", () => {
         messageId: `msg-${ctx.payload.text ?? ""}`,
       }),
     };
-    setActivePluginRegistry(
-      createTestRegistry([
+    // Snapshot the process-global registry before installing the fixture adapter so
+    // later tests in the suite inherit the registry their setup established, not an
+    // empty one. Restore in finally so an assertion failure cannot leak the fixture.
+    const priorRegistry = getActivePluginRegistry();
+    try {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: durablePluginId,
+            source: "test",
+            plugin: createOutboundTestPlugin({ id: durablePluginId, outbound: adapter }),
+          },
+        ]),
+      );
+
+      const payloadA = setReplyPayloadMetadata(
+        { text: "reply A" },
+        { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry A" },
+      );
+      const payloadB = setReplyPayloadMetadata(
+        { text: failingText },
+        { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry B" },
+      );
+      const payloadC = setReplyPayloadMetadata(
+        { text: "reply C" },
+        { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry C" },
+      );
+
+      // Real lifecycle deliver callback (lifecycle.ts:501-522): drive the real durable
+      // producer, rethrow failed deliveries, and return the settled delivery otherwise.
+      const deliver = async (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => {
+        const durable = await deliverInboundReplyWithMessageSendContext({
+          cfg: {},
+          channel: durablePluginId,
+          to: "!room:example",
+          agentId: "main",
+          info,
+          payload,
+          ctxPayload: durableCtxPayload(),
+        });
+        throwIfDurableInboundReplyDeliveryFailed(durable);
+        if (isDurableInboundReplyDeliveryHandled(durable)) {
+          return durable.delivery;
+        }
+        return undefined;
+      };
+
+      // Drive A through the real transport client -> real "delivered" outcome.
+      const outcomeA = captureReplyDispatchDeliveryOutcome(payloadA);
+      const dispatcherA = createReplyDispatcher({ deliver });
+      dispatcherA.sendFinalReply(payloadA);
+      dispatcherA.markComplete();
+      await dispatcherA.waitForIdle();
+      const realOutcomeA = await outcomeA.promise;
+
+      // Drive B through the real transport client (adapter throws) -> real
+      // "failed-before-deliver" outcome, classified by the real dispatcher.
+      const outcomeB = captureReplyDispatchDeliveryOutcome(payloadB);
+      const dispatcherB = createReplyDispatcher({ deliver });
+      dispatcherB.sendFinalReply(payloadB);
+      dispatcherB.markComplete();
+      await dispatcherB.waitForIdle();
+      const realOutcomeB = await outcomeB.promise;
+
+      // Real classification: A delivered, B proven-not-sent before deliver.
+      expect(realOutcomeA).toBe("delivered");
+      expect(realOutcomeB).toBe("failed-before-deliver");
+
+      await replaceSessionEntry(
+        { storePath, sessionKey },
         {
-          pluginId: durablePluginId,
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: durablePluginId, outbound: adapter }),
+          sessionId: "session",
+          status: "running",
+          startedAt: 10,
+          updatedAt: Date.now(),
+          pendingFinalDelivery: {
+            kind: "replayable",
+            text: "retry A\n\nretry B\n\nretry C",
+            createdAt: 1,
+            intentId: "intent-1",
+          },
         },
-      ]),
-    );
-
-    const payloadA = setReplyPayloadMetadata(
-      { text: "reply A" },
-      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry A" },
-    );
-    const payloadB = setReplyPayloadMetadata(
-      { text: failingText },
-      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry B" },
-    );
-    const payloadC = setReplyPayloadMetadata(
-      { text: "reply C" },
-      { pendingFinalDeliveryIntentId: "intent-1", pendingFinalDeliveryRetryText: "retry C" },
-    );
-
-    // Real lifecycle deliver callback (lifecycle.ts:501-522): drive the real durable
-    // producer, rethrow failed deliveries, and return the settled delivery otherwise.
-    const deliver = async (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => {
-      const durable = await deliverInboundReplyWithMessageSendContext({
-        cfg: {},
-        channel: durablePluginId,
-        to: "!room:example",
-        agentId: "main",
-        info,
-        payload,
-        ctxPayload: durableCtxPayload(),
+      );
+      const identity = capturePendingFinalDeliveryIdentity({
+        intentId: "intent-1",
+        sessionKey,
+        storePath,
       });
-      throwIfDurableInboundReplyDeliveryFailed(durable);
-      if (isDurableInboundReplyDeliveryHandled(durable)) {
-        return durable.delivery;
-      }
-      return undefined;
-    };
 
-    // Drive A through the real transport client -> real "delivered" outcome.
-    const outcomeA = captureReplyDispatchDeliveryOutcome(payloadA);
-    const dispatcherA = createReplyDispatcher({ deliver });
-    dispatcherA.sendFinalReply(payloadA);
-    dispatcherA.markComplete();
-    await dispatcherA.waitForIdle();
-    const realOutcomeA = await outcomeA.promise;
+      // Feed the REAL outcomes (not injected) to settlement. C is omitted from
+      // deliveries — block-deduped payloads have no delivery record at settlement,
+      // matching the finalization caller contract (dispatch-from-config.finalize.ts).
+      await reconcilePendingFinalDeliveryAfterSettlement({
+        deliveries: [
+          { outcome: realOutcomeA, payload: payloadA },
+          { outcome: realOutcomeB, payload: payloadB },
+        ],
+        identity,
+        replies: [payloadA, payloadB, payloadC],
+        sessionKey,
+        storePath,
+      });
 
-    // Drive B through the real transport client (adapter throws) -> real
-    // "failed-before-deliver" outcome, classified by the real dispatcher.
-    const outcomeB = captureReplyDispatchDeliveryOutcome(payloadB);
-    const dispatcherB = createReplyDispatcher({ deliver });
-    dispatcherB.sendFinalReply(payloadB);
-    dispatcherB.markComplete();
-    await dispatcherB.waitForIdle();
-    const realOutcomeB = await outcomeB.promise;
-
-    // Real classification: A delivered, B proven-not-sent before deliver.
-    expect(realOutcomeA).toBe("delivered");
-    expect(realOutcomeB).toBe("failed-before-deliver");
-
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      {
-        sessionId: "session",
-        status: "running",
-        startedAt: 10,
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "retry A\n\nretry B\n\nretry C",
-          createdAt: 1,
-          intentId: "intent-1",
-        },
-      },
-    );
-    const identity = capturePendingFinalDeliveryIdentity({
-      intentId: "intent-1",
-      sessionKey,
-      storePath,
-    });
-
-    // Feed the REAL outcomes (not injected) to settlement. C is omitted from
-    // deliveries — block-deduped payloads have no delivery record at settlement,
-    // matching the finalization caller contract (dispatch-from-config.finalize.ts).
-    await reconcilePendingFinalDeliveryAfterSettlement({
-      deliveries: [
-        { outcome: realOutcomeA, payload: payloadA },
-        { outcome: realOutcomeB, payload: payloadB },
-      ],
-      identity,
-      replies: [payloadA, payloadB, payloadC],
-      sessionKey,
-      storePath,
-    });
-
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
-    const retryText =
-      entry?.pendingFinalDelivery?.kind === "replayable"
-        ? entry.pendingFinalDelivery.text
-        : undefined;
-    // Retained narrowed to B (the real transport-failed payload), not cleared and
-    // not widened to the block-deduped C.
-    expect(retryText).toContain("retry B");
-    expect(retryText).not.toContain("retry A");
-    expect(retryText).not.toContain("retry C");
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      expect(entry?.pendingFinalDelivery?.kind).toBe("replayable");
+      const retryText =
+        entry?.pendingFinalDelivery?.kind === "replayable"
+          ? entry.pendingFinalDelivery.text
+          : undefined;
+      // Retained narrowed to B (the real transport-failed payload), not cleared and
+      // not widened to the block-deduped C.
+      expect(retryText).toContain("retry B");
+      expect(retryText).not.toContain("retry A");
+      expect(retryText).not.toContain("retry C");
+    } finally {
+      setActivePluginRegistry(priorRegistry ?? createEmptyPluginRegistry());
+    }
   });
 });

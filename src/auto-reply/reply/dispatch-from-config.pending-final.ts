@@ -245,7 +245,7 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
       // already-delivered siblings on recovery. Only retain when every relevant
       // delivery failed before send — the all-failed case is safe because no
       // sibling was delivered. Mixed or partial cases clear the marker, matching
-      // the pre-fix cleanup behavior. (#119162)
+      // the pre-fix cleanup behavior.
       if (
         relevantDeliveries.length > 0 &&
         failedBeforeDeliver.length === relevantDeliveries.length
