@@ -26,7 +26,11 @@ import {
   releaseNodeWakeLifecycle,
 } from "../node-wake-state.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
-import { maybeSendNodeWakeNudge, maybeWakeNodeWithApns, waitForNodeReconnect } from "./nodes.js";
+import {
+  maybeSendNodeWakeNudge,
+  maybeWakeNodeWithApns,
+  waitForNodeReconnect,
+} from "./nodes.wake.js";
 import type { RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
