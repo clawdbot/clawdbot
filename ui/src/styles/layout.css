@@ -1952,6 +1952,8 @@ html.openclaw-native-macos
 /* Every sidebar session source renders a thread. Keep density and text styling
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
+  --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
+
   display: flex;
   align-items: center;
   min-width: 0;
@@ -2010,9 +2012,9 @@ html.openclaw-native-macos
   align-items: center;
   justify-content: center;
   gap: 1px;
-  width: 31px;
+  width: var(--sidebar-child-session-toggle-width, 31px);
   height: 30px;
-  flex: 0 0 31px;
+  flex: 0 0 var(--sidebar-child-session-toggle-width, 31px);
   padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -2292,7 +2294,7 @@ html.openclaw-native-macos
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: 35px;
+  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
 /* State-bearing rows reserve the larger state/action maximum throughout the
@@ -3464,6 +3466,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   color: inherit;
   font: inherit;
   font-size: var(--control-ui-text-sm);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .sidebar-agent-menu__filter input {
+    font-size: max(16px, var(--control-ui-text-sm));
+  }
 }
 
 .sidebar-agent-menu__empty {

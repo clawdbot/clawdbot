@@ -387,6 +387,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <input value="query" />
               <span class="file-view__search-counter">1/2</span>
             </div>
+            <div class="sidebar-recent-session">
+              <button class="sidebar-child-session-toggle">
+                <span class="sidebar-child-session-toggle__count">100</span>
+              </button>
+            </div>
             <span class="file-view__save-notice">Unsaved changes</span>
             <article class="sidebar-markdown"><pre><code>const scaled = true;</code></pre></article>
             <article class="md-preview-dialog__reader sidebar-markdown">
@@ -453,6 +458,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
       expect(baselineInput).toBe(12);
       expect(scaledInput).toBeCloseTo(12 * 1.4, 1);
       for (const selector of [
+        ".sidebar-child-session-toggle",
         ".sidebar-session-catalog-host__count",
         ".sidebar-session-catalog-project__count",
       ]) {
@@ -478,6 +484,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <div class="shell shell--mobile-nav">
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
+              <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
                 <span class="session-row-trail">3m</span>
@@ -500,6 +507,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
             childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
             childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
+            agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
           };
@@ -510,6 +518,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         childName: 12,
         childTrail: 10,
         coarsePointer: true,
+        agentFilter: 16,
         fileSearch: 16,
         navItem: 12,
       });
@@ -518,6 +527,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
       });
       const scaled = await readSizes();
+      expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
