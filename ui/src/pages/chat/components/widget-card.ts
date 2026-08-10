@@ -41,32 +41,45 @@ type WidgetCardOptions = {
   boardProvider?: BoardProvider;
 };
 
+async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.disabled = true;
+  const pendingLabel = t("chat.toolCards.pinToDashboardPending");
+  button.title = pendingLabel;
+  button.setAttribute("aria-label", pendingLabel);
+  try {
+    await pin();
+    const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
+    button.title = pinnedLabel;
+    button.setAttribute("aria-label", pinnedLabel);
+    button.dataset.pinned = "true";
+  } catch (error) {
+    button.disabled = false;
+    button.setAttribute("aria-label", t("chat.toolCards.pinToDashboard"));
+    button.title = error instanceof Error ? error.message : String(error);
+  }
+}
+
 async function pinCanvasWidget(
   event: Event,
   preview: ToolPreview,
   provider: BoardProvider,
   name: string,
 ): Promise<void> {
-  const button = event.currentTarget;
   const docId = preview.viewId?.trim();
-  if (!(button instanceof HTMLButtonElement) || !docId) {
+  if (!docId) {
     return;
   }
-  button.disabled = true;
-  button.textContent = t("chat.toolCards.pinToDashboardPending");
-  try {
-    await provider.pinWidget({
+  return pinWidget(event, () =>
+    provider.pinWidget({
       docId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    });
-    button.textContent = t("chat.toolCards.pinnedToDashboard");
-    button.dataset.pinned = "true";
-  } catch (error) {
-    button.disabled = false;
-    button.textContent = t("chat.toolCards.pinToDashboard");
-    button.title = error instanceof Error ? error.message : String(error);
-  }
+    }),
+  );
 }
 
 async function pinMcpAppWidget(
@@ -76,25 +89,13 @@ async function pinMcpAppWidget(
   name: string,
   viewId: string,
 ): Promise<void> {
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement)) {
-    return;
-  }
-  button.disabled = true;
-  button.textContent = t("chat.toolCards.pinToDashboardPending");
-  try {
-    await provider.pinMcpApp({
+  return pinWidget(event, () =>
+    provider.pinMcpApp({
       viewId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    });
-    button.textContent = t("chat.toolCards.pinnedToDashboard");
-    button.dataset.pinned = "true";
-  } catch (error) {
-    button.disabled = false;
-    button.textContent = t("chat.toolCards.pinToDashboard");
-    button.title = error instanceof Error ? error.message : String(error);
-  }
+    }),
+  );
 }
 
 function canvasWidgetName(preview: ToolPreview): string | undefined {
@@ -518,7 +519,7 @@ function renderWidgetCard(
       isManagedCanvasDocumentPreview(preview)) ||
       (contentKind === "mcp-app" && mcpAppViewId))
       ? html`<button
-          class="chat-tool-card__widget-action"
+          class="btn btn--ghost btn--icon chat-tool-card__widget-action"
           type="button"
           data-pin-widget
           ?disabled=${pinned}
@@ -532,7 +533,7 @@ function renderWidgetCard(
               ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
               : void pinCanvasWidget(event, preview, provider, pinName)}
         >
-          ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
+          ${icons.pin}
         </button>`
       : nothing;
   return html`
