@@ -77,8 +77,7 @@ describe("Workboard Skill Workshop proposal observer", () => {
         status: "todo",
         labels: ["skill-workshop", "proposal-review"],
         agentId: "main",
-        taskId: "github-pr-workflow-20260810-abcdef1234",
-        notes: expect.not.stringContaining("Revision:"),
+        notes: expect.stringContaining("Proposal: github-pr-workflow-20260810-abcdef1234"),
         metadata: {
           automation: {
             idempotencyKey: expect.stringMatching(/^skill-workshop-proposal-v1:[a-f0-9]{32}$/),
@@ -86,6 +85,9 @@ describe("Workboard Skill Workshop proposal observer", () => {
         },
       }),
     ]);
+    const [card] = await store.list();
+    expect(card).not.toHaveProperty("taskId");
+    expect(card?.notes).not.toContain("Revision:");
     expect(logger.info).toHaveBeenCalledTimes(3);
     expect(logger.warn).not.toHaveBeenCalled();
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain("github-pr-workflow");

@@ -68,7 +68,9 @@ openclaw gateway restart
 When Workboard is enabled, it automatically creates a `todo` review card for
 each committed, pending [Skill Workshop proposal](/tools/skill-workshop). The
 card is created after a `created`, `revised`, or `evaluation_completed`
-proposal event and links back to the proposal.
+proposal event and records the proposal identifier in its notes for review in
+Skill Workshop. It does not use the card's Gateway-task field, because proposal
+identifiers are not Gateway task IDs.
 
 Repeated events for the same proposal reuse one card. That card is labeled
 `skill-workshop` and `proposal-review`; it records the proposal kind and source

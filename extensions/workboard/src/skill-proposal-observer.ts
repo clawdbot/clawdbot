@@ -52,7 +52,6 @@ async function captureSkillProposalFollowup(params: {
     status: "todo",
     labels: ["skill-workshop", "proposal-review"],
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-    taskId: params.event.proposal.id,
     idempotencyKey: buildSkillProposalFollowupIdempotencyKey(params.event.proposal.id),
   });
   return { cardId: card.id };
