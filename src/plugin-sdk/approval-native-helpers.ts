@@ -670,9 +670,6 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     ((left: TTarget, right: TTarget) =>
       nativeApprovalTargetsMatch({ channel: params.channel, left, right }));
 
-  const listEligibleAccountIds = (cfg: OpenClawConfig) =>
-    params.listAccountIds(cfg).filter((accountId) => params.isTransportEnabled({ cfg, accountId }));
-
   const targetAccountMatchesChannelAccount = (input: {
     cfg: OpenClawConfig;
     targetAccountId?: string | null;
@@ -688,11 +685,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     }
     const normalizedAccountId = normalizeAccountId(accountId);
     const defaultAccountId = normalizeAccountId(params.resolveDefaultAccountId(input.cfg));
-    if (normalizedAccountId === defaultAccountId) {
-      return true;
-    }
-    const eligibleAccountIds = listEligibleAccountIds(input.cfg).map(normalizeAccountId);
-    return eligibleAccountIds.length === 1 && eligibleAccountIds[0] === normalizedAccountId;
+    return normalizedAccountId === defaultAccountId;
   };
 
   const hasMatchingChannelTarget = (input: {
@@ -780,9 +773,12 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     approvalKind: ApprovalKind;
     request: ApprovalRequest;
   }): boolean => {
-    // accountId names the evaluating runtime, not request ownership. Use the full enabled set so
-    // an unbound request cannot appear uniquely owned inside every per-account evaluator.
-    const eligibleAccountIds = listEligibleAccountIds(input.cfg);
+    // Per-account runtimes report raw candidates here. The route coordinator rejects
+    // unbound multi-account groups as ambiguous before any runtime can deliver.
+    const accountId = input.accountId ?? params.resolveDefaultAccountId(input.cfg);
+    const eligibleAccountIds = params.isTransportEnabled({ cfg: input.cfg, accountId })
+      ? [accountId]
+      : [];
     if (
       !doesApprovalRequestSelectChannelAccount({
         cfg: input.cfg,
