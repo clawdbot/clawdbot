@@ -118,9 +118,12 @@ describe("handleChatScroll", () => {
   it("sets chatUserNearBottom=false when scrolled well above threshold", () => {
     const { host } = createScrollHost({});
     // distanceFromBottom = 2000 - 500 - 400 = 1100 → way above threshold
+    host.chatLastScrollTop = 1600;
     const event = createScrollEvent(2000, 500, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatHasAutoScrolled).toBe(true);
   });
 
   it("shows the scroll-to-bottom affordance only beyond the shared end boundary", () => {

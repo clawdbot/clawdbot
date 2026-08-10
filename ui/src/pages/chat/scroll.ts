@@ -288,6 +288,9 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+    // Taking control before initial history settles must retire its queued
+    // force-scroll. Otherwise that delayed commit can overwrite the viewport.
+    host.chatHasAutoScrolled = true;
     host.chatFollowLocked = true;
   } else if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
     host.chatFollowLocked = false;
