@@ -1556,6 +1556,7 @@
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/pixverse",
+                  "providers/poolside",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
