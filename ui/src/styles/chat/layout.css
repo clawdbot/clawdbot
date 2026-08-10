@@ -993,7 +993,6 @@ openclaw-chat-page {
   color: #fff;
   background: rgb(12 16 24 / 78%);
   backdrop-filter: blur(8px);
-  cursor: pointer;
 }
 
 .chat-image-action:hover {
