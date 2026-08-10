@@ -167,12 +167,19 @@ describe("chat task suggestions", () => {
     expect(item?.getAttribute("title")).toBe("No cloud environment configured");
   });
 
-  it("renders nothing when no task actions are permitted", () => {
-    const { container } = renderSuggestion({
+  it("keeps copy prompt available when acceptance and dismissal are unavailable", () => {
+    const { container, onCopyPrompt } = renderSuggestion({
       canAcceptTaskSuggestions: false,
       canDismissTaskSuggestions: false,
     });
-    expect(container.querySelector(".task-suggestions")).toBeNull();
+    expect(container.querySelector(".task-suggestion__dismiss")).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.disabled).toBe(
+      true,
+    );
+    const copy = container.querySelector('wa-dropdown-item[value="copy-prompt"]');
+    expect(copy).not.toBeNull();
+    selectMenuItem(container, copy!);
+    expect(onCopyPrompt).toHaveBeenCalledWith(suggestion);
   });
 
   it("allows dismissal while requiring admin access to start", () => {

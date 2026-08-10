@@ -64,7 +64,7 @@ function renderChatTaskSuggestions(props: {
   copiedIds: ReadonlySet<string>;
   canAcceptModes: boolean;
 }) {
-  if (props.suggestions.length === 0 || (!props.canAccept && !props.canDismiss)) {
+  if (props.suggestions.length === 0) {
     return nothing;
   }
   return html`
