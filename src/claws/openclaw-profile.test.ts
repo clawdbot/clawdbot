@@ -74,6 +74,7 @@ describe("OpenClaw profile schema", () => {
       { tools: { profile: "coding" } },
       { tools: { profile: "messaging" } },
       { tools: { profile: "coding", allow: ["bundle-mcp"] } },
+      { tools: { allow: ["bundle-mcp"] } },
       { tools: { allow: ["*"] } },
       { tools: { profile: "coding", allow: ["tts"] } },
       { tools: { profile: "coding", allow: ["read", "tts"] } },

@@ -43,7 +43,11 @@ const optionalString = nonEmptyString.optional();
 
 function isBoundedClawToolGrant(value: string): boolean {
   const normalized = normalizeToolName(value);
-  if (/[*?[\]{}]/u.test(normalized) || normalized === "group:plugins") {
+  if (
+    /[*?[\]{}]/u.test(normalized) ||
+    normalized === "group:plugins" ||
+    normalized === "bundle-mcp"
+  ) {
     return false;
   }
   return !normalized.startsWith("group:") || expandToolGroups([normalized])[0] !== normalized;
