@@ -15,6 +15,7 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
+import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
@@ -642,6 +643,10 @@ export async function checkUpdateStatus(params: {
     detectGitRoot(root),
   ]);
   const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+  const globalInstallManager =
+    !isGit && detectedPackageManager === "unknown"
+      ? await detectGlobalInstallManagerForRoot(runCommandWithTimeout, root, timeoutMs)
+      : null;
   const packageManager =
     !isGit &&
     (await isLocklessOpenClawNpmInstall({
@@ -649,7 +654,7 @@ export async function checkUpdateStatus(params: {
       manager: detectedPackageManager,
     }))
       ? "npm"
-      : detectedPackageManager;
+      : (globalInstallManager ?? detectedPackageManager);
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([
