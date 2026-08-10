@@ -81,6 +81,27 @@ export class SessionOrganizerController implements ReactiveController {
 
   hostConnected(): void {}
 
+  hostDisconnected(): void {
+    // Dialogs mount on document.body, so the sidebar going away would otherwise
+    // leave one over the destination, still submitting against a dead host.
+    this.dialogLifecycle?.abort();
+  }
+
+  /** Only one dialog is open at a time; disconnect closes whichever it is. */
+  private dialogLifecycle: AbortController | null = null;
+
+  private async withDialogLifecycle<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const lifecycle = new AbortController();
+    this.dialogLifecycle = lifecycle;
+    try {
+      return await run(lifecycle.signal);
+    } finally {
+      if (this.dialogLifecycle === lifecycle) {
+        this.dialogLifecycle = null;
+      }
+    }
+  }
+
   private async loadOperations(
     scope: SidebarSessionMutationScope,
   ): Promise<SessionOrganizerOperations | null> {
@@ -394,10 +415,13 @@ export class SessionOrganizerController implements ReactiveController {
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
     const { showInputDialog } = await import("./input-dialog.ts");
-    const nextLabel = await showInputDialog({
-      title: t("sessionsView.renameSessionPrompt"),
-      defaultValue: session.label,
-    });
+    const nextLabel = await this.withDialogLifecycle((signal) =>
+      showInputDialog({
+        signal,
+        title: t("sessionsView.renameSessionPrompt"),
+        defaultValue: session.label,
+      }),
+    );
     if (nextLabel === null) {
       return;
     }
@@ -411,13 +435,16 @@ export class SessionOrganizerController implements ReactiveController {
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
     const { showInputDialog } = await import("./input-dialog.ts");
-    await showInputDialog({
-      title: t("sessionsView.newGroupTitle"),
-      label: t("sessionsView.newGroupPrompt"),
-      submitLabel: t("sessionsView.newGroupCreate"),
-      requireValue: true,
-      submit: (name) => this.writeSessionGroup(name, sessions),
-    });
+    await this.withDialogLifecycle((signal) =>
+      showInputDialog({
+        signal,
+        title: t("sessionsView.newGroupTitle"),
+        label: t("sessionsView.newGroupPrompt"),
+        submitLabel: t("sessionsView.newGroupCreate"),
+        requireValue: true,
+        submit: (name) => this.writeSessionGroup(name, sessions),
+      }),
+    );
   }
 
   /**

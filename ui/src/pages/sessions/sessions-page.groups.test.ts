@@ -69,6 +69,31 @@ describe("sessions page new group", () => {
     );
   });
 
+  it("closes the dialog when the operator navigates away from the page", async () => {
+    const { page, sessions } = await mountGroupsPage(async () => "completed");
+    let dialogSignal: AbortSignal | undefined;
+    vi.mocked(showInputDialog).mockImplementation(async (options) => {
+      dialogSignal = options.signal;
+      // Sit open the way a dialog waiting on the operator does.
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return null;
+    });
+
+    const opened = page.requestNewCategory(SESSION_KEY);
+    await vi.waitFor(() => expect(dialogSignal).toBeDefined());
+    expect(dialogSignal?.aborted).toBe(false);
+
+    // The dialog mounts on document.body, so detaching the page has to close it
+    // rather than leave it over wherever the operator landed.
+    page.remove();
+    await opened;
+
+    expect(dialogSignal?.aborted).toBe(true);
+    expect(sessions.groupsPut).not.toHaveBeenCalled();
+  });
+
   it("skips the assignment when its catalog write outlived the connection", async () => {
     let landCatalogWrite!: () => void;
     const pending = new Promise<SessionGroupMutationResult>((resolve) => {

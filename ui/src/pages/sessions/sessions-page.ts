@@ -309,6 +309,9 @@ class SessionsPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.invalidatePageWork();
+    // Dialogs mount on document.body, so navigating away would otherwise leave
+    // one over the destination, still submitting against this detached page.
+    this.dialogLifecycle?.abort();
     this.gatewayClient = null;
     this.gatewayConnected = false;
     super.disconnectedCallback();
@@ -1026,15 +1029,33 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.patchSession(key, { category });
   }
 
+  /** Only one dialog is open at a time; disconnect closes whichever it is. */
+  private dialogLifecycle: AbortController | null = null;
+
+  private async withDialogLifecycle<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const lifecycle = new AbortController();
+    this.dialogLifecycle = lifecycle;
+    try {
+      return await run(lifecycle.signal);
+    } finally {
+      if (this.dialogLifecycle === lifecycle) {
+        this.dialogLifecycle = null;
+      }
+    }
+  }
+
   private async requestNewCategory(sessionKey?: string) {
     const { showInputDialog } = await import("../../components/input-dialog.ts");
-    await showInputDialog({
-      title: t("sessionsView.newGroupTitle"),
-      label: t("sessionsView.newGroupPrompt"),
-      submitLabel: t("sessionsView.newGroupCreate"),
-      requireValue: true,
-      submit: (name) => this.writeNewCategory(name, sessionKey),
-    });
+    await this.withDialogLifecycle((signal) =>
+      showInputDialog({
+        signal,
+        title: t("sessionsView.newGroupTitle"),
+        label: t("sessionsView.newGroupPrompt"),
+        submitLabel: t("sessionsView.newGroupCreate"),
+        requireValue: true,
+        submit: (name) => this.writeNewCategory(name, sessionKey),
+      }),
+    );
   }
 
   /**
@@ -1072,10 +1093,13 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async renameSession(row: GatewaySessionRow) {
     const { showInputDialog } = await import("../../components/input-dialog.ts");
-    const value = await showInputDialog({
-      title: t("sessionsView.renameSessionPrompt"),
-      defaultValue: normalizeOptionalString(row.label) ?? "",
-    });
+    const value = await this.withDialogLifecycle((signal) =>
+      showInputDialog({
+        signal,
+        title: t("sessionsView.renameSessionPrompt"),
+        defaultValue: normalizeOptionalString(row.label) ?? "",
+      }),
+    );
     if (value === null) {
       return;
     }
