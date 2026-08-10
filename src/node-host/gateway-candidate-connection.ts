@@ -58,6 +58,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
   let currentCandidateIndex = 0;
   let stopped = false;
   let winnerSelected = params.candidates.length === 1;
+  let latestManifest: { caps: string[]; commands: string[] } | undefined;
   let currentClient = createCandidateClient(currentCandidateIndex);
 
   function createCandidateClient(candidateIndex: number): GatewayClient {
@@ -68,6 +69,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     const url = formatGatewayCandidateUrl(candidate);
     const candidateClient = new GatewayClient({
       ...params.clientOptions,
+      ...(latestManifest ?? {}),
       url,
       tlsFingerprint: candidate.tlsFingerprint,
       onEvent: (event) => {
@@ -103,6 +105,9 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         const nextCandidateIndex = candidateIndex + 1;
         if (
           stopped ||
+          // A successful hello redeems setup credentials and promotes this
+          // endpoint. Its own reconnect path owns durable device auth from here.
+          winnerSelected ||
           nextCandidateIndex >= params.candidates.length ||
           !canTryNextGatewayCandidate(info)
         ) {
@@ -136,6 +141,9 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
       return currentClient.request<T>(...requestArgs);
     },
     updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+      // Availability may change before the first hello. Every later candidate
+      // must start with the newest manifest rather than the constructor snapshot.
+      latestManifest = manifest;
       currentClient.updateNodeManifest(manifest);
     },
   };

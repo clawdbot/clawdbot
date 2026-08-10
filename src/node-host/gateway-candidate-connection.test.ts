@@ -126,4 +126,54 @@ describe("gateway candidate connection", () => {
 
     expect(mocks.clients).toHaveLength(1);
   });
+
+  it("promotes a candidate after hello instead of replaying setup auth on another endpoint", async () => {
+    const { callbacks } = createConnection();
+
+    mocks.options[0]?.onHelloOk?.({} as never);
+    mocks.options[0]?.onClose?.(1006, "later reconnect transport failure", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    await Promise.resolve();
+
+    expect(callbacks.onWinningCandidate).toHaveBeenCalledWith(candidates[0]);
+    expect(mocks.clients).toHaveLength(1);
+  });
+
+  it("carries a pre-hello manifest update into the next candidate", async () => {
+    const { connection } = createConnection();
+    const manifest = { caps: ["mcp"], commands: ["mcp.tools.call.v1"] };
+
+    connection.updateNodeManifest(manifest);
+    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
+
+    expect(mocks.options[1]).toMatchObject(manifest);
+  });
+
+  it("does not create the queued candidate after stop", async () => {
+    const { connection } = createConnection();
+
+    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    connection.stop();
+    await Promise.resolve();
+
+    expect(mocks.clients).toHaveLength(1);
+  });
 });

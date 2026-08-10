@@ -997,4 +997,20 @@ describe("pairing setup code", () => {
     expect(direct.ok && direct.payload.tlsFingerprint).toBe("sha256:direct-leaf");
     expect(proxied.ok && proxied.payload.tlsFingerprint).toBeUndefined();
   });
+
+  it("omits a configured remote TLS pin from a cleartext setup URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = {
+      ...config.gateway,
+      remote: {
+        url: "ws://127.0.0.1:18789",
+        tlsFingerprint: "sha256:stale-remote-leaf",
+      },
+    };
+
+    const resolved = await resolvePairingSetupFromConfig(config, { preferRemoteUrl: true });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.ok && resolved.payload.tlsFingerprint).toBeUndefined();
+  });
 });

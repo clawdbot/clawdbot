@@ -564,7 +564,7 @@ export async function resolvePairingSetupFromConfig(
     urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
       ? (normalizeOptionalString(options.localTlsFingerprint) ??
         (await options.loadLocalTlsFingerprint?.()))
-      : urlResult.source === "gateway.remote.url"
+      : urlResult.url.startsWith("wss://") && urlResult.source === "gateway.remote.url"
         ? normalizeOptionalString(cfgForAuth.gateway?.remote?.tlsFingerprint)
         : undefined;
 
