@@ -274,8 +274,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     // would run mode()'s once-per-run critical bookkeeping a second time.
     if (this.renderedMode === "expanded") {
       this.railState.collapse();
-      // No visibility report: collapsing to the pill keeps observer digests
-      // flowing, and claiming false here would stop the gateway generating them.
+      // Collapsing is not hiding: only the explicit hide reports false. The
+      // gateway stops producing digests when visibility goes false, and a
+      // collapsed rail still shows the next one as a pill.
       return;
     }
     this.railState.openExplicitly();
