@@ -139,6 +139,43 @@ describe("meta provider", () => {
     }
   });
 
+  it("wraps projected direct completions from a Responses source API", () => {
+    const captured = capturePluginRegistration(plugin);
+    const [provider] = captured.providers;
+    if (!provider?.wrapSimpleCompletionStreamFn) {
+      throw new Error("Expected Meta direct completion stream wrapper");
+    }
+    const model = {
+      ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
+      api: "openclaw-provider-stream:meta:muse-spark-1.2",
+    } as Model;
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (streamModel, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, streamModel);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = provider.wrapSimpleCompletionStreamFn({
+      provider: "meta",
+      modelId: model.id,
+      model,
+      sourceApi: "openai-responses",
+      streamFn: baseStreamFn,
+    });
+    if (!wrapped) {
+      throw new Error("Expected projected Meta Responses stream wrapper");
+    }
+
+    void wrapped(model, { messages: [] }, { maxTokens: 0 });
+
+    expect(capturedPayload).toMatchObject({
+      include: ["reasoning.encrypted_content"],
+      max_output_tokens: 131072,
+      store: false,
+    });
+  });
+
   it("builds the muse-spark-1.1 catalog entry over openai-responses", () => {
     const providerConfig = buildMetaProvider();
     expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");

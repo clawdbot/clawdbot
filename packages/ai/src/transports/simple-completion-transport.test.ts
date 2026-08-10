@@ -287,6 +287,47 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(pluginStreamFn).toHaveBeenCalledOnce();
   });
 
+  it("carries the source API into wrappers after provider stream projection", () => {
+    const builtInStream = vi.fn(() => createAssistantMessageEventStream());
+    apiRegistry.registerApiProvider(
+      {
+        api: "openai-responses",
+        stream: builtInStream,
+        streamSimple: builtInStream,
+      },
+      SIMPLE_COMPLETION_SOURCE_ID,
+    );
+    const model: Model<"openai-responses"> = {
+      id: "muse-spark-1.2",
+      name: "Muse Spark 1.2",
+      api: "openai-responses",
+      provider: "meta",
+      baseUrl: "https://api.meta.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    };
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    createTransportAwareStreamFnForModel.mockReturnValueOnce(pluginStreamFn);
+    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(({ context }) => context.streamFn);
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          model: expect.objectContaining({
+            api: expect.stringMatching(/^openclaw-provider-stream:/),
+          }),
+          sourceApi: "openai-responses",
+        }),
+      }),
+    );
+    expect(result.api).toMatch(/^openclaw-provider-simple:/);
+  });
+
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {
     const model: Model<"anthropic-messages"> = {
       id: "claude-sonnet",
