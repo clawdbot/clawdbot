@@ -15,6 +15,7 @@ import {
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import {
+  assignTransportErrorDetails,
   coerceTransportToolCallArguments,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
@@ -35,7 +36,6 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -450,7 +450,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
-    Object.assign(output, projectProviderError(failure, options?.signal));
+    assignTransportErrorDetails(output, failure, options?.signal);
     stream.push({
       type: "error",
       reason: output.stopReason === "aborted" ? "aborted" : "error",

@@ -25,7 +25,7 @@ const modelBase = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 4096,
-} as const;
+} satisfies Omit<Model, "api">;
 
 function createJwt(): string {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -105,7 +105,7 @@ describe("OpenClaw AI transport host diagnostics", () => {
     if (!provider) {
       throw new Error(`missing registered provider: ${fixture.api}`);
     }
-    const model = { ...modelBase, api: fixture.api, baseUrl: fixture.baseUrl } as Model;
+    const model: Model = { ...modelBase, api: fixture.api, baseUrl: fixture.baseUrl };
 
     const result = await provider
       .stream(model, context, {

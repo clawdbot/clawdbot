@@ -225,7 +225,7 @@ describe("Mistral provider", () => {
     expect((mistralMockState.payloads[0] as { stop?: unknown }).stop).toEqual(["STOP"]);
   });
 
-  it("keeps projected Mistral error bodies UTF-16 safe and bounded", async () => {
+  it("preserves Mistral messages while keeping error bodies UTF-16 safe and bounded", async () => {
     const prefix = "a".repeat(3_999);
     mistralMockState.streamError = Object.assign(new Error("invalid request"), {
       statusCode: 400,
@@ -234,7 +234,7 @@ describe("Mistral provider", () => {
 
     const result = await runMistralFixture();
 
-    expect(result.errorMessage).toBe(`400: ${prefix}... [truncated]`);
+    expect(result.errorMessage).toBe("invalid request");
     expect(result.errorBody).toBe(`${prefix.slice(0, 500)}... [truncated]`);
   });
 

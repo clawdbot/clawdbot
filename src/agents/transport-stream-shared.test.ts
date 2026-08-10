@@ -3,7 +3,6 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
-  projectProviderError,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "@openclaw/ai/transports";
@@ -21,6 +20,13 @@ function projectFailure(output: { stopReason: string }, error: unknown): void {
     error,
   });
 }
+
+type TransportFailureFixture = { error: Error; signal?: AbortSignal };
+type TransportFailureOutput = {
+  stopReason: "error" | "aborted";
+  errorMessage: string;
+  errorCode?: string;
+};
 
 describe("transport stream shared helpers", () => {
   it("sanitizes unpaired surrogate code units", () => {
@@ -215,10 +221,15 @@ describe("transport stream shared helpers", () => {
     expect(output.errorCode).toBeUndefined();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    setup: () => TransportFailureFixture;
+    expected: TransportFailureOutput;
+  }>([
     {
       name: "provider failure",
       setup: () => ({ error: Object.assign(new Error("busy"), { status: 503 }) }),
+      expected: { stopReason: "error", errorMessage: "503: busy", errorCode: "503" },
     },
     {
       name: "coded abort",
@@ -228,13 +239,18 @@ describe("transport stream shared helpers", () => {
         controller.abort(error);
         return { error, signal: controller.signal };
       },
+      expected: {
+        stopReason: "aborted",
+        errorMessage: "restarted",
+        errorCode: "OPENCLAW_RESTART_ABORT",
+      },
     },
-  ])("keeps the deprecated public wrapper equivalent for $name", ({ setup }) => {
+  ])("keeps the deprecated public wrapper terminal fields for $name", ({ setup, expected }) => {
     const { error, signal } = setup();
     const output: { stopReason: string } = { stopReason: "stop" };
 
     assignTransportErrorDetails(output, error, signal);
 
-    expect(output).toEqual(projectProviderError(error, signal));
+    expect(output).toEqual(expected);
   });
 });

@@ -42,6 +42,18 @@ describe("projectProviderError", () => {
     expect(projectProviderError(error).errorMessage).toBe(body);
   });
 
+  it("preserves a meaningful SDK message alongside its structured body", () => {
+    const error = Object.assign(new Error("400 Param Incorrect"), {
+      status: 400,
+      error: { code: "invalid_parameter", message: "parameter detail" },
+    });
+
+    expect(projectProviderError(error)).toMatchObject({
+      errorMessage: "400 Param Incorrect",
+      errorBody: '{"code":"invalid_parameter","message":"parameter detail"}',
+    });
+  });
+
   it("preserves diagnostic fields when serializing a circular error object", () => {
     const error: Record<string, unknown> = { code: "ECONNRESET" };
     error.self = error;
@@ -354,6 +366,29 @@ describe("projectProviderError", () => {
     expect(serialized).toContain("Bearer <redacted>");
     expect(serialized).toContain("<redacted-jwt>");
     expect(serialized).toContain("session=<redacted>");
+  });
+
+  it("preserves ordinary key-value diagnostics", () => {
+    const value = "provider=openai api=openai-completions model=some-long-model-name";
+
+    expect(projectProviderError(value).errorMessage).toBe(value);
+  });
+
+  it.each(["JSESSIONID=0123456789abcdef", "api_key=sk-0123456789012345"])(
+    "redacts isolated credential pair %s",
+    (pair) => {
+      expect(projectProviderError(pair).errorMessage).toMatch(/^[^=]+=<redacted>$/u);
+    },
+  );
+
+  it.each([
+    "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
+    "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
+  ])("redacts arbitrary credential names inside cookie headers", (header) => {
+    const projected = projectProviderError(header).errorMessage;
+
+    expect(projected).not.toMatch(/0123456789abcdef|abcdefghijklmnop/u);
+    expect(projected).toContain("=<redacted>");
   });
 
   it.each([

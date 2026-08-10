@@ -21,7 +21,10 @@ const MEDIA_PAYLOAD_SUFFIX_RE = new RegExp(`^(?:${MEDIA_PAYLOAD_SUFFIXES})$`, "u
 const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/iu;
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
-const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
+const COOKIE_HEADER_RE = /\b((?:set-)?cookie\s*:\s*)([^\r\n]+)/giu;
+const COOKIE_VALUE_RE = /\b([A-Za-z][A-Za-z0-9_.-]{0,64})=([A-Za-z0-9+/._~%=-]{16,})/gu;
+const LOOSE_CREDENTIAL_PAIR_RE =
+  /\b((?!(?:api|endpoint|method|model|provider|status|type)=)[A-Za-z][A-Za-z0-9_.-]{0,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/giu;
 const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
@@ -48,7 +51,12 @@ export function redactCredentialText(value: string): string {
   return value
     .replace(AUTHORIZATION_VALUE_RE, "$1 <redacted>")
     .replace(JWT_VALUE_RE, "<redacted-jwt>")
-    .replace(COOKIE_PAIR_RE, "$1=<redacted>");
+    .replace(
+      COOKIE_HEADER_RE,
+      (_match, prefix: string, header: string) =>
+        `${prefix}${header.replace(COOKIE_VALUE_RE, "$1=<redacted>")}`,
+    )
+    .replace(LOOSE_CREDENTIAL_PAIR_RE, "$1=<redacted>");
 }
 
 export function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | undefined {

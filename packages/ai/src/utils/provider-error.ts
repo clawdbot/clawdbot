@@ -65,8 +65,9 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
     (typeof snapshot === "string" ? snapshot : undefined) ??
     readString(error, "message") ??
     readString(nestedError, "message");
+  const genericMessage = originalMessage === `${status} status code (no body)`;
   let errorMessage =
-    status !== undefined && body && !originalMessage?.includes(body)
+    status !== undefined && body && (!originalMessage || genericMessage)
       ? `${status}: ${body}`
       : (originalMessage ??
         body ??

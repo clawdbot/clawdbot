@@ -120,6 +120,16 @@ describe("sanitizeDiagnosticPayload", () => {
     expect(serialized.includes(value)).toBe(preserved);
   });
 
+  it.each([
+    "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
+    "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
+  ])("redacts arbitrary credential names inside cookie headers", (header) => {
+    const sanitized = sanitizeDiagnosticPayload(header);
+
+    expect(sanitized).not.toMatch(/0123456789abcdef|abcdefghijklmnop/u);
+    expect(sanitized).toContain("=<redacted>");
+  });
+
   it("redacts embedded and folded media data URLs without dropping surrounding text", () => {
     const value = `status before data:video/mp4;charset=utf-8;base64,\nQUJD\nRA== status after`;
 

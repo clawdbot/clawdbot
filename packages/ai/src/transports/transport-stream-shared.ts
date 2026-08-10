@@ -29,8 +29,6 @@ type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">>
   stopReason: string;
 };
 
-export { projectProviderError, type ProviderErrorProjection };
-
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
@@ -208,7 +206,7 @@ export function failTransportStream(params: {
 }): void {
   const { stream, output, signal, error, cleanup } = params;
   cleanup?.();
-  Object.assign(output, projectProviderError(error, signal));
+  assignTransportErrorDetails(output, error, signal);
   stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
   stream.end();
 }
