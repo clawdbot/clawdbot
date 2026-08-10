@@ -2,10 +2,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { SkillProposalRecord } from "./types.js";
 
 export function hashSkillProposalRevision(
-  record: Pick<
-    SkillProposalRecord,
-    "draftHash" | "proposedVersion" | "supportFiles" | "supersedes"
-  >,
+  record: Pick<SkillProposalRecord, "draftHash" | "proposedVersion" | "supportFiles">,
 ): string {
   return sha256Hex(
     JSON.stringify({
@@ -18,9 +15,6 @@ export function hashSkillProposalRevision(
           sizeBytes: file.sizeBytes,
         }))
         .toSorted((left, right) => left.path.localeCompare(right.path)),
-      supersedes: (record.supersedes ?? [])
-        .map((skill) => ({ skillFile: skill.skillFile, treeSha256: skill.treeSha256 }))
-        .toSorted((left, right) => left.skillFile.localeCompare(right.skillFile)),
     }),
   );
 }

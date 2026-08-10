@@ -67,13 +67,11 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and biased toward small, well-evidenced changes. It
+The reviewer is isolated and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
 read or command-invoked, plus a bounded workspace skill list. It prefers a used
 writable skill when that skill governs the learning, then another existing
-skill. When several skills cover one class, it can update one complete survivor
-and recoverably archive the absorbed skills. It creates a new skill only when
-nothing covers the class, and it can abstain when nothing durable was learned.
+skill, and creates a new skill only when nothing covers the class.
 
 Before changing an existing skill, the reviewer must read its complete current
 body. Both targeted patches and full-body rewrites bind the proposal to that
@@ -107,11 +105,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                                                                                                                |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`     | Does not create experience-review captures.                                                                                                                                                     |
-| `propose` | Creates, updates, consolidates, or revises pending proposals. Nothing applies automatically.                                                                                                    |
-| `auto`    | Creates, updates, consolidates, or revises proposals, then applies every autonomous result through the normal scanner-gated Workshop path. No operator review is required. This is the default. |
+| Mode      | Capture behavior                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`     | Does not create experience-review captures.                                                                                                                              |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                     |
+| `auto`    | Creates or revises proposals, then applies every autonomous capture through the normal scanner-gated Workshop path. No operator review is required. This is the default. |
 
 Set the mode with the CLI:
 
@@ -153,18 +151,14 @@ Every learned skill receives these controls:
   in the selected workspace. Bundled, plugin, managed, personal-agent, system,
   and extra-root skills remain outside the write boundary.
 - **Hash binding:** update proposals bind to the current live skill and go stale
-  if that target changes before apply. Consolidation also binds every absorbed
-  skill bundle and goes stale if any source changes.
+  if that target changes before apply.
 - **Read before update:** the reviewer must read the complete current skill
   before either a targeted patch or a full-body rewrite.
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
 - **Curator lifecycle:** learned skills unused for 30 days become stale and after
   90 days become archived. Pin keeps a skill active; restore returns an archived
-  skill to new session snapshots. Consolidation archives only unpinned skills
-  created through Workshop; their files remain unchanged and can be restored.
-  Skills with support files are not absorbed automatically because the isolated
-  reviewer cannot preserve a bundle it has not read in full.
+  skill to new session snapshots.
 - **Authoring standards:** learned skills use class-level names, trigger-first
   descriptions, evidence-backed steps, and token-efficient language.
 - **Bounded failure:** an automatic apply is attempted once. A normal apply
@@ -251,22 +245,19 @@ openclaw skills curator unpin <skill>
 openclaw skills curator restore <skill>
 ```
 
-Use `/learn` when you want an explicit library review from the current
-conversation or named sources:
+Use `/learn` when you want an explicit proposal from the current conversation or
+named sources:
 
 ```text
 /learn
 /learn docs/runbook.md; focus on recovery
 ```
 
-`/learn` improves or consolidates existing skills before creating a new one. It
-can also report that nothing durable was learned. Any mutation stays pending;
-`/learn` never auto-applies it.
+`/learn` always creates a pending proposal and never auto-applies it.
 
 To review older work manually, open **Plugins -> Workshop** in Control UI and
-select **Find skill ideas**. Each click reviews one bounded window, can improve
-or consolidate existing skills, and leaves any result pending regardless of
-autonomous mode.
+select **Find skill ideas**. Each click reviews one bounded window and leaves any
+result pending regardless of autonomous mode.
 
 ## Configuration reference
 

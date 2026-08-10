@@ -67,17 +67,3 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
   });
 });
-
-describe("buildCliMcpGrantContext Skill Workshop authority", () => {
-  it("carries a proposal-only update surface into the loopback grant", () => {
-    expect(
-      buildGrant({
-        skillWorkshopProposalOnly: true,
-        skillWorkshopUpdateProposals: true,
-      }),
-    ).toMatchObject({
-      skillWorkshopProposalOnly: true,
-      skillWorkshopUpdateProposals: true,
-    });
-  });
-});

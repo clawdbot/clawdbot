@@ -14,7 +14,6 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent } from "./plugin-hooks.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
-import { inspectSkillProposalLifecycle } from "./proposal-lifecycle.js";
 import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-sqlite-rollback.js";
 import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
@@ -62,8 +61,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       if (!recovery) {
         return false;
       }
-      const lifecycle = await inspectSkillProposalLifecycle(stored.record, params.store);
-      if (recovery.state === "proposed" && lifecycle.ok) {
+      if (recovery.state === "proposed") {
         const now = new Date().toISOString();
         const applied: SkillProposalRecord = {
           ...stored.record,
@@ -89,13 +87,11 @@ export async function reconcileInterruptedSkillProposalApply(params: {
         bumpSkillsSnapshotVersion({
           workspaceDir: params.workspaceDir,
           reason: "workshop",
-          ...(stored.record.supersedes?.length
-            ? {}
-            : { changedPath: stored.record.target.skillFile }),
+          changedPath: stored.record.target.skillFile,
         });
         return true;
       }
-      if (recovery.state !== "previous") {
+      if (recovery.state === "partial") {
         const config =
           params.config ??
           (await createConfigIO({

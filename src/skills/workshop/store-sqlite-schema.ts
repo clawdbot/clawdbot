@@ -15,7 +15,6 @@ export type SkillWorkshopDatabase = Pick<
   | "skill_workshop_proposal_origin_runs"
   | "skill_workshop_proposal_rollbacks"
   | "skill_workshop_proposals"
-  | "skill_lifecycle"
 >;
 export type SkillProposalRow = Selectable<SkillWorkshopDatabase["skill_workshop_proposals"]>;
 export type SkillWorkshopStoreOptions = {

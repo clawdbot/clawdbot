@@ -6,9 +6,8 @@ import type {
   PluginHookSkillBundleSnapshot,
 } from "../../plugins/hook-types.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import type { SkillProposalReadResult, SkillProposalSupportFile } from "./types.js";
-
-type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
+import type { PreparedSkillProposalSupportFile } from "./store.js";
+import type { SkillProposalReadResult } from "./types.js";
 
 const MAX_EVALUATION_FILES = 256;
 const MAX_EVALUATION_FILE_BYTES = 1024 * 1024;
@@ -70,17 +69,7 @@ export async function buildSkillProposalEvaluationBundles(params: {
 }
 
 export async function readSkillProposalTargetTreeSha256(skillDir: string): Promise<string> {
-  return (await inspectSkillProposalTargetTree(skillDir)).treeSha256;
-}
-
-export async function inspectSkillProposalTargetTree(
-  skillDir: string,
-): Promise<{ filePaths: string[]; treeSha256: string }> {
-  const files = await readSkillTreeFiles(skillDir);
-  return {
-    filePaths: files.map((file) => file.path),
-    treeSha256: hashSkillTree(files),
-  };
+  return hashSkillTree(await readSkillTreeFiles(skillDir));
 }
 
 async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {

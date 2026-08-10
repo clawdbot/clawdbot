@@ -13,12 +13,10 @@ import { hasValidProposalOriginProvenance } from "./proposal-origin-validation.j
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   SKILL_WORKSHOP_SCHEMA,
-  MAX_SKILL_PROPOSAL_SUPERSESSIONS,
   type SkillProposalEvaluation,
   type SkillProposalRecord,
   type SkillProposalRollback,
   type SkillProposalSupportFile,
-  type SkillProposalSupersession,
 } from "./types.js";
 
 export const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
@@ -69,7 +67,6 @@ export function validateSkillProposalRecord(
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
     !hasValidProposalOriginProvenance(record) ||
     !isValidSupportFileList(record.supportFiles) ||
-    !isValidSupersessionList(record.supersedes, record.target?.skillFile) ||
     (record.evaluation !== undefined && !parseSkillProposalEvaluation(record.evaluation)) ||
     !record.target ||
     typeof record.target !== "object" ||
@@ -83,41 +80,6 @@ export function validateSkillProposalRecord(
     return invalidMetadata("proposal");
   }
   return ok(record);
-}
-
-function isValidSupersessionList(value: unknown, targetSkillFile: unknown): boolean {
-  if (value === undefined) {
-    return true;
-  }
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.length > MAX_SKILL_PROPOSAL_SUPERSESSIONS
-  ) {
-    return false;
-  }
-  const seen = new Set<string>();
-  for (const item of value) {
-    if (!isRecord(item)) {
-      return false;
-    }
-    const supersession = item as SkillProposalSupersession;
-    if (
-      typeof supersession.skillName !== "string" ||
-      typeof supersession.skillKey !== "string" ||
-      typeof supersession.skillDir !== "string" ||
-      typeof supersession.skillFile !== "string" ||
-      typeof supersession.source !== "string" ||
-      typeof supersession.treeSha256 !== "string" ||
-      !/^[a-f0-9]{64}$/i.test(supersession.treeSha256) ||
-      supersession.skillFile === targetSkillFile ||
-      seen.has(supersession.skillFile)
-    ) {
-      return false;
-    }
-    seen.add(supersession.skillFile);
-  }
-  return true;
 }
 
 export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {

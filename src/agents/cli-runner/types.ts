@@ -223,8 +223,6 @@ export type RunCliAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
-  skillWorkshopProposalOnly?: boolean;
-  skillWorkshopUpdateProposals?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */

@@ -24,27 +24,6 @@ import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
-  it("passes proposal-only Skill Workshop authority to the embedded tool surface", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.skillWorkshopProposalOnly = true;
-    followupRun.run.skillWorkshopUpdateProposals = true;
-    followupRun.run.toolsAllow = ["read", "web_fetch", "web_search", "skill_workshop"];
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-      }),
-    );
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      skillWorkshopProposalOnly: true,
-      skillWorkshopUpdateProposals: true,
-      toolsAllow: ["read", "web_fetch", "web_search", "skill_workshop"],
-    });
-  });
-
   it("passes the reply abort signal to fallback orchestration and candidates", async () => {
     const { replyOperation } = createMockReplyOperation();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -512,9 +491,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
-    followupRun.run.skillWorkshopProposalOnly = true;
-    followupRun.run.skillWorkshopUpdateProposals = true;
-    followupRun.run.toolsAllow = ["read", "web_fetch", "web_search", "skill_workshop"];
     followupRun.media = [{ path: "/tmp/cli.png", contentType: "image/png" }];
     const typingSignals = createMockTypingSignaler();
 
@@ -533,9 +509,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       model: "gpt-5.4",
       clientCaps: ["tool-events", "inline-widgets"],
       media: followupRun.media,
-      skillWorkshopProposalOnly: true,
-      skillWorkshopUpdateProposals: true,
-      toolsAllow: ["read", "web_fetch", "web_search", "skill_workshop"],
     });
   });
 

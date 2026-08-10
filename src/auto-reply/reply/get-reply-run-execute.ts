@@ -99,7 +99,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     model,
     requestedRouteResolution,
     typing,
-    skillWorkshop,
     opts,
     defaultModel,
     timeoutMs,
@@ -415,13 +414,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           : {}),
       },
       timeoutMs,
-      ...(skillWorkshop
-        ? {
-            skillWorkshopProposalOnly: skillWorkshop.proposalOnly,
-            skillWorkshopUpdateProposals: skillWorkshop.updateProposals,
-            toolsAllow: [...skillWorkshop.toolsAllow],
-          }
-        : {}),
       runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: resolveOwnerPromptNumbers({

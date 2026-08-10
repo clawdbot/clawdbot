@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
-import type { CommandHandlerResult } from "./commands-types.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
@@ -87,7 +86,6 @@ export type RunPreparedReplyParams = {
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
   typing: TypingController;
-  skillWorkshop?: CommandHandlerResult["skillWorkshop"];
   opts?: InternalGetReplyOptions;
   defaultModel: string;
   timeoutMs: number;

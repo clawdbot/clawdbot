@@ -199,12 +199,6 @@ export type FollowupRun = {
       defaultLevel: ElevatedLevel;
     };
     timeoutMs: number;
-    /** Restrict Skill Workshop to pending proposal mutations for this turn. */
-    skillWorkshopProposalOnly?: boolean;
-    /** Allow pending updates to existing skills on a proposal-only turn. */
-    skillWorkshopUpdateProposals?: boolean;
-    /** Exact tool grant carried with a queued restricted turn. */
-    toolsAllow?: string[];
     runTimeoutOverrideMs?: number;
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];

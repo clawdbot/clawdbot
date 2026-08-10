@@ -204,8 +204,6 @@ export class McpLoopbackToolCache {
       // Unset (full scope) must never share a cache row with an empty
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
-      params.skillWorkshopProposalOnly === true ? "workshop-proposal-only" : "",
-      params.skillWorkshopUpdateProposals === true ? "workshop-updates" : "",
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",

@@ -553,13 +553,7 @@ async function runSkillExperienceReviewInner(
     config: candidate.config,
     agentId: candidate.ctx.agentId,
   }).map((skill) =>
-    skill.description
-      ? {
-          name: skill.name,
-          description: skill.description,
-          consolidationEligible: skill.consolidationEligible,
-        }
-      : { name: skill.name, consolidationEligible: skill.consolidationEligible },
+    skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
   );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({

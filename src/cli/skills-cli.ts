@@ -383,6 +383,11 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
         : `${skill.skillKey} (${skill.skillFile})`;
     lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
   }
+  for (const overlap of status.overlaps) {
+    lines.push(
+      `Possible overlap: ${overlap.left} ~ ${overlap.right} — merge via /learn if desired`,
+    );
+  }
   return `${lines.join("\n")}\n`;
 }
 

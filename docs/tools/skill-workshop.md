@@ -27,14 +27,11 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
   are allowed only for writable workspace skills.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
-  `stale` if the live skill changes before apply. Consolidations also bind every
-  absorbed skill bundle.
+  `stale` if the live skill changes before apply.
 - **Scanner gated:** apply reruns the security scanner before writing. Only
   critical findings block apply; warn-level findings remain visible but do not
   block it.
 - **Recoverable:** apply writes rollback metadata before touching live files.
-  Consolidation keeps absorbed skill files unchanged and archives them from new
-  snapshots; restore makes them active again.
 - **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
 ## Lifecycle
@@ -54,7 +51,7 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 ## Lifecycle curation
 
 The Gateway tracks aggregate skill usage in the shared state database. Once a
-day, it reviews applied skills created through Skill Workshop. Skills unused
+day, it reviews applied skills created through agent autocapture. Skills unused
 for more than 30 days become `stale`; after 90 days they become `archived` and
 are left out of new agent skill snapshots. Archived skill files remain
 unchanged on disk. Operator-created skills, including proposals created through
@@ -74,11 +71,8 @@ openclaw skills curator unpin <skill>
 openclaw skills curator restore <skill>
 ```
 
-All curator commands accept `--json`. Automatic experience review improves
-existing skills before creating new ones and can consolidate overlapping skills
-by updating one survivor and recoverably archiving the absorbed skills.
-JSON status retains overlap candidates for API compatibility; automatic review,
-not the CLI hint, owns consolidation.
+All curator commands accept `--json`. Status also reports deterministic overlap
+candidates as suggestions only; it never merges skills or calls a model.
 
 ## Chat
 
@@ -87,8 +81,8 @@ proposal id.
 
 ### Learn from recent work
 
-Use `/learn` to review the current conversation or named sources against the
-existing skill library:
+Use `/learn` to turn the current conversation or named sources into one
+standards-guided skill proposal:
 
 ```text
 /learn
@@ -98,9 +92,8 @@ existing skill library:
 With no request, `/learn` asks the agent to distill the reusable workflow from
 the current conversation. With a request, the agent treats paths, URLs, pasted
 notes, and conversation references as sources while honoring focus, scope, and
-naming requirements. It gathers the sources with its existing tools, then
-improves or consolidates an existing skill when possible, creates only when the
-task class is uncovered, and can report that nothing durable was learned.
+naming requirements. It gathers the sources with its existing tools, then calls
+`skill_workshop` with `action: "create"`.
 
 The resulting proposal stays `pending`; `/learn` never applies it. Review and
 apply it through the normal approval flow or with `openclaw skills workshop`.
@@ -252,21 +245,20 @@ The model uses `skill_workshop` with one required `action`:
 `create | read | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                                          | Notes                                                                   |
-| -------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise    |
-| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                           |
-| `skill_name`               | `read`, `patch`, `update`                                        | Existing skill name or key                                              |
-| `old_string`, `new_string` | `patch`                                                          | Exact current text and its replacement; read the skill first            |
-| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body         |
-| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                            |
-| `supersedes`               | `create`, `update`                                               | Read, self-contained skill names fully absorbed by this survivor; max 8 |
-| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                       |
-| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                         |
-| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                      |
-| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                                  |
-| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                                |
-| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                             |
+| Parameter                  | Used by                                                          | Notes                                                                |
+| -------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise |
+| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                        |
+| `skill_name`               | `read`, `patch`, `update`                                        | Existing skill name or key                                           |
+| `old_string`, `new_string` | `patch`                                                          | Exact current text and its replacement; read the skill first         |
+| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body      |
+| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                         |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                    |
+| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
+| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                   |
+| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                               |
+| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                             |
+| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                          |
 
 Agents must use `skill_workshop` for generated skill work and must not create or
 change skill or proposal files directly. This rule is advisory and
@@ -305,9 +297,8 @@ bar as experience review: a concrete recovery pattern or a stable procedure that
 would remove at least two future model or tool calls. Routine work and one-off
 facts should produce no proposal.
 
-One scan can create, update, consolidate, or revise at most three pending
-proposals. It cannot apply, reject, quarantine, or edit a live skill. The
-Workshop shows cumulative coverage,
+One scan can create or revise at most three pending proposals. It cannot apply,
+reject, quarantine, or edit a live skill. The Workshop shows cumulative coverage,
 for example **20 sessions reviewed · Jun 18–today · 2 ideas found**. Select
 **Scan earlier work** to continue from the persisted oldest-session cursor. After
 the available history is exhausted, the action becomes **Scan new work**.
@@ -418,8 +409,7 @@ proposals.
 
 Default state directory: `~/.openclaw`.
 
-- `state/openclaw.sqlite`: canonical proposal records, lifecycle status,
-  supersession relationships, origin attribution, and apply rollback metadata.
+- `state/openclaw.sqlite`: canonical proposal records, lifecycle status, origin attribution, and apply rollback metadata.
 - `PROPOSAL.md`: pending skill proposal.
 - Support files remain beside `PROPOSAL.md` so operators can review the proposed skill as a normal directory.
 

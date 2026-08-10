@@ -110,8 +110,6 @@ export function resolveGatewayScopedTools(params: {
   groupSpace?: string;
   spawnedBy?: string;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
-  skillWorkshopProposalOnly?: boolean;
-  skillWorkshopUpdateProposals?: boolean;
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const {
@@ -283,14 +281,6 @@ export function resolveGatewayScopedTools(params: {
     modelId: params.modelId,
     clientCaps: params.clientCaps,
     workspaceDir,
-    ...(params.skillWorkshopProposalOnly
-      ? {
-          skillWorkshop: {
-            proposalOnly: true,
-            updateProposals: params.skillWorkshopUpdateProposals === true,
-          },
-        }
-      : {}),
     sandboxed: sandboxRuntime.sandboxed,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

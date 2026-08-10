@@ -110,7 +110,6 @@ export function proposalResult(
       proposedVersion: proposal.record.proposedVersion,
       draftHash: proposal.record.draftHash,
       revisionHash: proposal.revisionHash,
-      ...(proposal.record.supersedes ? { supersedes: proposal.record.supersedes } : {}),
       ...(proposal.record.evaluation ? { evaluation: proposal.record.evaluation } : {}),
       ...(options.includeContent ? { proposalContent: proposal.content } : {}),
       ...(options.includeContent && proposal.supportFiles

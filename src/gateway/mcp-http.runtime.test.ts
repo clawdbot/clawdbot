@@ -85,51 +85,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
     expect(scoped.tools).toEqual([]);
   });
 
-  it("passes proposal-only Skill Workshop authority to loopback tool resolution", () => {
-    resolveMcpLoopbackScopedTools(
-      scopeParams({
-        skillWorkshopProposalOnly: true,
-        skillWorkshopUpdateProposals: true,
-      }),
-    );
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skillWorkshopProposalOnly: true,
-        skillWorkshopUpdateProposals: true,
-      }),
-    );
-  });
-
-  it("restricts proposal-only learning grants to evidence and proposal tools", () => {
-    resolveGatewayScopedTools.mockReturnValue(
-      scopedToolFixture([
-        "read",
-        "web_fetch",
-        "web_search",
-        "skill_workshop",
-        "write",
-        "edit",
-        "exec",
-      ]),
-    );
-
-    const scoped = resolveMcpLoopbackScopedTools(
-      scopeParams({
-        skillWorkshopProposalOnly: true,
-        skillWorkshopUpdateProposals: true,
-        toolsAllow: ["read", "web_fetch", "web_search", "skill_workshop"],
-      }),
-    );
-
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
-      "read",
-      "web_fetch",
-      "web_search",
-      "skill_workshop",
-    ]);
-  });
-
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
 
@@ -244,23 +199,6 @@ describe("McpLoopbackToolCache", () => {
     // Same allowlist reuses the cached row.
     cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not share ordinary tools with a proposal-only Workshop grant", () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    cache.resolve(scopeParams({ cfg }));
-    cache.resolve(
-      scopeParams({
-        cfg,
-        skillWorkshopProposalOnly: true,
-        skillWorkshopUpdateProposals: true,
-      }),
-    );
-    cache.resolve(scopeParams({ cfg }));
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
   it("evicts only the revoked grant's cached tool closures", () => {

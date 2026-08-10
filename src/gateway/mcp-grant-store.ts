@@ -43,8 +43,6 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
-  skillWorkshopProposalOnly?: boolean;
-  skillWorkshopUpdateProposals?: boolean;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */

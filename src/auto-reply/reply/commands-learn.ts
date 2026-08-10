@@ -22,7 +22,6 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 
 const LEARN_COMMAND_PREFIX = "/learn";
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
-const LEARN_TOOL_ALLOWLIST = ["read", "web_fetch", "web_search", SKILL_WORKSHOP_TOOL_NAME];
 const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
   "Skill workshop is not available on this agent. Use a non-sandboxed agent where the skill_workshop tool is available, or use the openclaw skills workshop CLI.";
 
@@ -146,14 +145,6 @@ export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     applyCommandTextToParams(params, buildLearnPrompt(request));
-    const toolsAllow = LEARN_TOOL_ALLOWLIST.filter(
-      (toolName) =>
-        params.opts?.toolsAllow === undefined ||
-        isToolAllowedByPolicyName(toolName, { allow: params.opts.toolsAllow }),
-    );
-    return {
-      shouldContinue: true,
-      skillWorkshop: { proposalOnly: true, toolsAllow, updateProposals: true },
-    };
+    return { shouldContinue: true };
   },
 );
