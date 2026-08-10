@@ -10,12 +10,7 @@ import type {
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
-  CliStreamingDelta,
   CliStreamJsonOutputLimits,
-  CliThinkingDelta,
-  CliThinkingProgress,
-  CliToolResultDelta,
-  CliToolUseStartDelta,
   CliUsage,
 } from "./cli-output-contracts.js";
 import {
@@ -26,8 +21,6 @@ import {
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
   dispatchGeminiCliStreamingToolEvent,
-  emitToolResultOnce,
-  emitToolStartOnce,
   isClaudeToolUseBlockType,
   partitionLeadingTaggedReasoning,
   projectCliBackendEvent,
@@ -164,6 +157,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   const texts: string[] = [];
   let sawCustomJsonlEvent = false;
   let sawGeminiStructuredOutput = false;
+  let sawTerminalResult = false;
   const toolTracker = createToolUseTracker();
   const outputLimits = CLI_STREAM_JSON_OUTPUT_LIMITS;
   // Classification is keyed on consumer presence so reclassified pre-tool text
@@ -259,15 +253,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     currentTaggedReasoningText = "";
   };
 
-  const updateSessionId = (nextSessionId: string | undefined) => {
-    const normalized = nextSessionId?.trim();
-    if (!normalized || normalized === sessionId) {
-      return;
-    }
-    sessionId = normalized;
-    params.onSessionId?.(normalized);
-  };
-
   const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
     const state: CliEventProjectionState = {
       assistantText,
@@ -324,6 +309,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return true;
     }
     for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
+      if (event.kind === "result") {
+        sawTerminalResult = true;
+      }
       handleCustomJsonlEvent(event);
     }
     return true;
@@ -334,6 +322,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
     const parsedSessionId = pickCliSessionId(parsed, params.backend);
+    if (parsed.type === "result" && isStreamJsonDialect(params)) {
+      sawTerminalResult = true;
+    }
     if (parsedSessionId && parsedSessionId !== sessionId) {
       sessionId = parsedSessionId;
       params.onSessionId?.(parsedSessionId);
@@ -651,6 +642,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     },
     getErrorText() {
       return parseErrorText || null;
+    },
+    hasTerminalResult() {
+      return sawTerminalResult;
     },
     getOutput() {
       if (parseErrorText) {

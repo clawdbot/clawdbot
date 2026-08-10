@@ -23,7 +23,7 @@ type PendingToolUse = {
   inputJsonParts: string[];
 };
 
-export type ToolUseTracker = {
+type ToolUseTracker = {
   pendingByIndex: Map<number, PendingToolUse>;
   nameById: Map<string, string>;
   startedIds: Set<string>;
@@ -39,7 +39,7 @@ export function createToolUseTracker(): ToolUseTracker {
   };
 }
 
-export function emitToolStartOnce(
+function emitToolStartOnce(
   tracker: ToolUseTracker,
   toolCallId: string,
   name: string,
@@ -56,7 +56,7 @@ export function emitToolStartOnce(
   onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
-export function emitToolResultOnce(
+function emitToolResultOnce(
   tracker: ToolUseTracker,
   toolCallId: string,
   isError: boolean,
@@ -368,7 +368,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
-export type ThinkingTracker = {
+type ThinkingTracker = {
   currentMessageId?: string;
   // Thinking text already streamed via thinking_delta, keyed by the Anthropic
   // content-block index. Snapshot frames repeat streamed thinking, so each block

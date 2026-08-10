@@ -324,7 +324,7 @@ export async function executeCliProcess(params: {
     nodeRunTruncated &&
     result.exitCode === 0 &&
     !result.timedOut &&
-    !streamingParser?.getOutput()
+    !streamingParser?.hasTerminalResult()
   ) {
     throw new FailoverError(
       "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",
