@@ -39,6 +39,7 @@ import {
   formatConfigOverwriteLogMessage,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
+import { prepareAuthInheritanceOwnerForWrite } from "./io.auth-inheritance-owner.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
@@ -176,6 +177,14 @@ export async function writeConfigFileFromContext(
   );
   nextConfig = workspaceCollapse.config;
 
+  const authInheritanceOwnership = prepareAuthInheritanceOwnerForWrite({
+    currentConfig: snapshot.config,
+    targetConfig: nextConfig,
+    writesOwnershipTopology,
+    explicitSetPaths: options.explicitSetPaths,
+  });
+  nextConfig = authInheritanceOwnership.config;
+
   const sessionStoreOwnership = prepareSessionStoreOwnershipForWrite({
     currentConfig: snapshot.config,
     currentStore: (snapshot.sourceConfigBeforeMigrations ?? snapshot.config).session?.store,
@@ -220,6 +229,7 @@ export async function writeConfigFileFromContext(
       : []),
     ...ownershipMaterialization.insertedPaths,
     ...workspaceCollapse.insertedPaths,
+    ...authInheritanceOwnership.insertedPaths,
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 

@@ -261,4 +261,46 @@ describe("default role materialization authored writes", () => {
     const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
     expect(persisted.agents?.entries?.research?.workspace).toBe("/srv/fleet/research");
   });
+
+  it.each([
+    ["pins the replaced owner", "research", false, "ops"],
+    ["keeps an explicitly authored owner", "research", true, "research"],
+    ["does nothing when the owner is unchanged", "ops", false, undefined],
+  ] as const)(
+    "%s during generic roster writes",
+    async (_label, targetAgentId, explicit, expected) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-owner-transition-"));
+      roots.push(root);
+      const configPath = path.join(root, "openclaw.json");
+      await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
+      const io = createConfigIO({
+        configPath,
+        env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => root,
+        observe: false,
+        logger: { warn: () => {}, error: () => {} },
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      const nextConfig: OpenClawConfig = {
+        ...snapshot.config,
+        agents: {
+          ownership: "explicit",
+          ...(explicit ? { defaults: { authInheritance: { agentId: "research" } } } : {}),
+          entries: { [targetAgentId]: targetAgentId === "ops" ? { model: "openai/test" } : {} },
+        },
+      };
+      await io.writeConfigFile(nextConfig, {
+        baseSnapshot: snapshot,
+        ...(targetAgentId === "research" ? { allowedAgentRosterRemovals: ["ops"] } : {}),
+        explicitSetPaths: [
+          ["agents", "entries"],
+          ...(explicit ? [["agents", "defaults", "authInheritance"]] : []),
+        ],
+        explicitSetValueSource: nextConfig,
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(persisted.agents?.defaults?.authInheritance?.agentId).toBe(expected);
+    },
+  );
 });

@@ -37,6 +37,7 @@ function mergeRegistries(registries: readonly PluginManifestRegistry[]): PluginM
 export function resolveConfigWidePluginManifestRegistry(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
   allowCurrent?: boolean;
   pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
 }): PluginManifestRegistry {
@@ -48,6 +49,7 @@ export function resolveConfigWidePluginManifestRegistry(params: {
         resolvePluginMetadataSnapshot({
           config: params.config,
           ...(workspaceDir ? { workspaceDir } : {}),
+          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
           env,
           allowCurrent: params.allowCurrent,
           allowWorkspaceScopedCurrent: true,
