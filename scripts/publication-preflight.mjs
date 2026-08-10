@@ -172,7 +172,7 @@ export function parseArgs(argv = []) {
   return args;
 }
 
-function runGit(cwd, gitArgs, input = undefined) {
+function runGit(cwd, gitArgs, input) {
   try {
     return execFileSync("git", gitArgs, {
       cwd,
@@ -184,7 +184,7 @@ function runGit(cwd, gitArgs, input = undefined) {
   } catch (error) {
     const stderr = String(error?.stderr ?? "").trim();
     const detail = stderr ? `: ${stderr}` : "";
-    fail(`git ${gitArgs.join(" ")} failed${detail}`);
+    return fail(`git ${gitArgs.join(" ")} failed${detail}`);
   }
 }
 
@@ -197,7 +197,7 @@ function repoRoot(cwd) {
   try {
     return realpathSync(root);
   } catch {
-    fail("repository root cannot be resolved safely");
+    return fail("repository root cannot be resolved safely");
   }
 }
 
@@ -322,7 +322,7 @@ function readJson(filePath) {
   try {
     return JSON.parse(readFileSync(filePath, "utf8"));
   } catch {
-    fail("publication manifest is not valid JSON");
+    return fail("publication manifest is not valid JSON");
   }
 }
 
@@ -631,54 +631,60 @@ function readInventory(args) {
   return null;
 }
 
-function collectOpenPrInventory(repository) {
+function readGhPaginatedArray(exec, args, failureMessage) {
   let raw;
   try {
-    raw = execFileSync(
-      "gh",
-      [
-        "pr",
-        "list",
-        "--repo",
-        repository,
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "number,author,headRefName,title,url",
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024 },
-    );
+    raw = exec("gh", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 32 * 1024 * 1024,
+    });
   } catch {
-    fail("open-PR inventory failed closed; authenticate gh or provide --inventory-file");
+    fail(failureMessage);
   }
-  const pulls = JSON.parse(raw);
+  let pages;
+  try {
+    pages = JSON.parse(raw);
+  } catch {
+    fail(failureMessage);
+  }
+  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+    fail(failureMessage);
+  }
+  return pages.flat();
+}
+
+export function collectOpenPrInventory(repository, { execFileSync: exec = execFileSync } = {}) {
+  const pulls = readGhPaginatedArray(
+    exec,
+    ["api", "--paginate", "--slurp", `repos/${repository}/pulls?state=open&per_page=100`],
+    "open-PR inventory failed closed; authenticate gh or provide --inventory-file",
+  );
   return pulls.map((pull) => {
-    let detail;
-    try {
-      detail = JSON.parse(
-        execFileSync(
-          "gh",
-          ["pr", "view", String(pull.number), "--repo", repository, "--json", "files"],
-          {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-            maxBuffer: 8 * 1024 * 1024,
-          },
-        ),
-      );
-    } catch {
+    if (!Number.isInteger(pull?.number) || pull.number <= 0) {
+      fail("open-PR inventory failed closed because GitHub returned an invalid pull request");
+    }
+    const files = readGhPaginatedArray(
+      exec,
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${repository}/pulls/${pull.number}/files?per_page=100`,
+      ],
+      `open-PR inventory failed closed while reading PR #${pull.number}`,
+    );
+    if (files.some((file) => typeof file?.filename !== "string" || !file.filename.trim())) {
       fail(`open-PR inventory failed closed while reading PR #${pull.number}`);
     }
     return {
       number: pull.number,
       repository,
-      author: pull.author?.login ?? "unknown",
-      branch: pull.headRefName,
+      author: pull.user?.login ?? "unknown",
+      branch: pull.head?.ref,
       title: pull.title,
-      url: pull.url ?? null,
-      paths: (detail.files ?? []).map((file) => normalizePath(file.path)),
+      url: pull.html_url ?? null,
+      paths: files.map((file) => normalizePath(file.filename)),
     };
   });
 }
@@ -694,7 +700,7 @@ function prepare(cwd, args) {
   if (!args.paths.length) {
     fail("prepare requires one or more explicit --path allowlist entries");
   }
-  const files = [...new Set(args.paths)].toSorted();
+  const files = [...new Set(args.paths)].toSorted((left, right) => left.localeCompare(right));
   validateChangedFilePaths(files);
   verifyBase(cwd, args.base, upstream, branch);
   const staged = stagedPaths(cwd);
@@ -774,10 +780,7 @@ function help() {
   ].join("\n");
 }
 
-export function main(
-  argv = process.argv.slice(2),
-  { cwd = process.cwd(), stdin = undefined } = {},
-) {
+export function main(argv = process.argv.slice(2), { cwd = process.cwd(), stdin } = {}) {
   const args = parseArgs(argv);
   if (args.command === "help") {
     console.log(help());

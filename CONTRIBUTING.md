@@ -56,6 +56,17 @@ source checkout, run this command from the repo root:
 node scripts/prepare-git-hooks.mjs --install
 ```
 
+For non-interactive source-checkout setup, the exact-value environment opt-in is
+equivalent:
+
+```bash
+OPENCLAW_INSTALL_GIT_HOOKS=1 node scripts/prepare-git-hooks.mjs
+```
+
+Prefer the explicit `--install` flag for manual setup. Values other than `1` do
+not enable the optional publication preflight; either command still installs the
+maintained hook path.
+
 Verify the installation with `git config --get core.hooksPath`; it must print
 `git-hooks`. Also verify `test -f "$(git rev-parse --git-path
 publication-preflight.enabled)"` succeeds. Package preparation keeps the

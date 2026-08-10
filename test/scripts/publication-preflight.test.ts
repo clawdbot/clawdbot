@@ -10,8 +10,9 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectOpenPrInventory,
   isApprovedNoReplyEmail,
   parseArgs,
   scanSecurityText,
@@ -169,6 +170,78 @@ describe("publication preflight pure gates", () => {
         ["safe.txt"],
       ),
     ).toThrow(/overlap/u);
+  });
+
+  it("collects every open PR and changed file across paginated GitHub responses", () => {
+    const exec = vi
+      .fn()
+      .mockReturnValueOnce(
+        JSON.stringify([
+          [
+            {
+              number: 41,
+              user: { login: "first-author" },
+              head: { ref: "first-branch" },
+              title: "First PR",
+              html_url: "https://github.com/openclaw/openclaw/pull/41",
+            },
+          ],
+          [
+            {
+              number: 142,
+              user: { login: "second-author" },
+              head: { ref: "second-branch" },
+              title: "Second PR",
+              html_url: "https://github.com/openclaw/openclaw/pull/142",
+            },
+          ],
+        ]),
+      )
+      .mockReturnValueOnce(
+        JSON.stringify([[{ filename: "first.txt" }], [{ filename: "next.txt" }]]),
+      )
+      .mockReturnValueOnce(JSON.stringify([[]]));
+
+    expect(collectOpenPrInventory("openclaw/openclaw", { execFileSync: exec })).toEqual([
+      {
+        number: 41,
+        repository: "openclaw/openclaw",
+        author: "first-author",
+        branch: "first-branch",
+        title: "First PR",
+        url: "https://github.com/openclaw/openclaw/pull/41",
+        paths: ["first.txt", "next.txt"],
+      },
+      {
+        number: 142,
+        repository: "openclaw/openclaw",
+        author: "second-author",
+        branch: "second-branch",
+        title: "Second PR",
+        url: "https://github.com/openclaw/openclaw/pull/142",
+        paths: [],
+      },
+    ]);
+    for (const call of exec.mock.calls) {
+      expect(call[0]).toBe("gh");
+      expect(call[1]).toEqual(expect.arrayContaining(["api", "--paginate", "--slurp"]));
+    }
+  });
+
+  it("fails closed when GitHub pagination is malformed or file data is incomplete", () => {
+    expect(() =>
+      collectOpenPrInventory("openclaw/openclaw", {
+        execFileSync: vi.fn().mockReturnValue(JSON.stringify([{ number: 41 }])),
+      }),
+    ).toThrow(/failed closed/u);
+
+    const exec = vi
+      .fn()
+      .mockReturnValueOnce(JSON.stringify([[{ number: 41, head: { ref: "branch" } }]]))
+      .mockReturnValueOnce(JSON.stringify([[{}]]));
+    expect(() => collectOpenPrInventory("openclaw/openclaw", { execFileSync: exec })).toThrow(
+      /reading PR #41/u,
+    );
   });
 });
 

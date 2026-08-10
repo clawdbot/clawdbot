@@ -28,12 +28,31 @@ export function parseArgs(argv?: string[]): {
 };
 
 export function isApprovedNoReplyEmail(email: string): boolean;
+export function collectOpenPrInventory(
+  repository: string,
+  options?: {
+    execFileSync?: (
+      file: string,
+      args: string[],
+      options: {
+        encoding: "utf8";
+        stdio: ["ignore", "pipe", "pipe"];
+        maxBuffer: number;
+      },
+    ) => string;
+  },
+): Array<{
+  number: number;
+  repository: string;
+  author: string;
+  branch: string;
+  title: string;
+  url: string | null;
+  paths: string[];
+}>;
 export function scanSecurityText(
   text: string,
   options?: { privateNames?: string[] },
 ): Array<{ kind: string; line: number }>;
 export function validateInventory(manifest: Record<string, unknown>, changedPaths: string[]): void;
-export function main(
-  argv?: string[],
-  options?: { cwd?: string; stdin?: string },
-): void;
+export function main(argv?: string[], options?: { cwd?: string; stdin?: string }): void;
