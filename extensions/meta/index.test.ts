@@ -104,6 +104,41 @@ describe("meta provider", () => {
     });
   });
 
+  it("does not wrap non-Responses Meta models for either stream hook", () => {
+    const captured = capturePluginRegistration(plugin);
+    const [provider] = captured.providers;
+    if (!provider) {
+      throw new Error("Expected Meta provider");
+    }
+    const model = {
+      ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
+      api: "openai-completions",
+    } as Model<"openai-completions">;
+
+    for (const hook of [provider.wrapStreamFn, provider.wrapSimpleCompletionStreamFn]) {
+      if (!hook) {
+        throw new Error("Expected Meta stream hook");
+      }
+      let capturedPayload: Record<string, unknown> | undefined;
+      const baseStreamFn: StreamFn = (streamModel, _context, options) => {
+        const payload: Record<string, unknown> = {};
+        options?.onPayload?.(payload, streamModel);
+        capturedPayload = payload;
+        return {} as ReturnType<StreamFn>;
+      };
+      const wrapped = hook({
+        provider: "meta",
+        modelId: model.id,
+        model,
+        streamFn: baseStreamFn,
+      });
+
+      expect(wrapped).toBeUndefined();
+      void (wrapped ?? baseStreamFn)(model, { messages: [] }, { maxTokens: 0 });
+      expect(capturedPayload).toEqual({});
+    }
+  });
+
   it("builds the muse-spark-1.1 catalog entry over openai-responses", () => {
     const providerConfig = buildMetaProvider();
     expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
@@ -285,6 +320,12 @@ describe("meta provider", () => {
     {
       label: "a pre-populated payload cap",
       callerMaxTokens: undefined,
+      prepopulatedMaxOutputTokens: 2048,
+      expectedMaxOutputTokens: 2048,
+    },
+    {
+      label: "a pre-populated payload cap with an explicit zero caller cap",
+      callerMaxTokens: 0,
       prepopulatedMaxOutputTokens: 2048,
       expectedMaxOutputTokens: 2048,
     },
