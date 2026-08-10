@@ -1,13 +1,13 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  downloadClawHubSkillArchive,
+  normalizeClawHubSha256Integrity,
+} from "../../infra/clawhub-artifacts.js";
 import type {
   ClawHubRiskAcknowledgementRequest,
   ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
-import {
-  downloadClawHubSkillArchive,
-  normalizeClawHubSha256Integrity,
-} from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
