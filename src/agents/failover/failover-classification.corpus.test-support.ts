@@ -1,5 +1,4 @@
-import type { FailoverClassification, FailoverSignal } from "./errors.js";
-import type { FailoverReason } from "./types.js";
+import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 
 export type FailoverClassificationCorpusRow = {
   id: string;

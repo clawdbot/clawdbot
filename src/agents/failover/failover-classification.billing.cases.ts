@@ -1,4 +1,5 @@
 import {
+  type FailoverClassificationCorpusRow,
   billingSource,
   httpSource,
   matchesSource,
@@ -7,7 +8,6 @@ import {
   reason,
   retrySource,
   structuredSource,
-  type FailoverClassificationCorpusRow,
 } from "./failover-classification.corpus.test-support.js";
 export const billingCases = [
   // Billing and account entitlement.

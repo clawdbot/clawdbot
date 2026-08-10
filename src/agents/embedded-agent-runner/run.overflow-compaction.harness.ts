@@ -20,7 +20,7 @@ import type {
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";

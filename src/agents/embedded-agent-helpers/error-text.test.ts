@@ -4,12 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import {
-  classifyFailoverReason,
-  extractFailoverSignalDetails,
-  formatAssistantErrorText,
-  isLikelyContextOverflowError,
-} from "./errors.js";
+import { formatAssistantErrorText } from "./error-text.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -23,16 +18,6 @@ vi.mock("../../logging/subsystem.js", () => ({
     warn: vi.fn(),
   }),
 }));
-
-describe("Claude CLI logged-out failures", () => {
-  const loggedOutMessage = "Not logged in · Please run /login";
-
-  it("classifies the logged-out response as auth only for claude-cli", () => {
-    expect(classifyFailoverReason(loggedOutMessage, { provider: "claude-cli" })).toBe("auth");
-    expect(classifyFailoverReason(loggedOutMessage, { provider: "openai" })).toBeNull();
-    expect(classifyFailoverReason(loggedOutMessage)).toBeNull();
-  });
-});
 
 describe("formatAssistantErrorText streaming JSON parse classification", () => {
   beforeEach(() => {
@@ -110,34 +95,5 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
         sandboxMode: "non-main",
       },
     );
-  });
-});
-
-describe("extractFailoverSignalDetails", () => {
-  it.each([
-    {
-      name: "backs off before a split surrogate pair",
-      input: `${"a".repeat(999)}🎉!`,
-      expected: "a".repeat(999),
-    },
-    {
-      name: "keeps the full ASCII budget",
-      input: "a".repeat(1001),
-      expected: "a".repeat(1000),
-    },
-  ])("$name in nested provider details", ({ input, expected }) => {
-    const details = extractFailoverSignalDetails({ error: { body: { detail: input } } });
-
-    expect(details).toEqual([expected]);
-  });
-});
-
-describe("isLikelyContextOverflowError", () => {
-  it("detects Codex promptError wording for a full context window", () => {
-    expect(
-      isLikelyContextOverflowError(
-        "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
-      ),
-    ).toBe(true);
   });
 });

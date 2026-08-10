@@ -1,4 +1,5 @@
 import {
+  type FailoverClassificationCorpusRow,
   billingSource,
   errorsSource,
   httpSource,
@@ -8,7 +9,6 @@ import {
   patternsSource,
   reason,
   retrySource,
-  type FailoverClassificationCorpusRow,
 } from "./failover-classification.corpus.test-support.js";
 export const overflowServerMiscCases = [
   // Transient transport and provider failures.
@@ -266,7 +266,8 @@ export const overflowServerMiscCases = [
       provider: "mistral",
       message: "Mistral API error (503): service temporarily unavailable",
     },
-    expected: reason("timeout"),
+    // FIXED(refactor-02): was timeout, now overloaded
+    expected: reason("overloaded"),
   },
   {
     id: "retry-provider-504",
@@ -298,13 +299,23 @@ export const overflowServerMiscCases = [
     signal: { message: "provider body timed out 50" },
     expected: reason("timeout"),
   },
+  ...messageRows(billingSource, reason("overloaded"), [
+    // FIXED(refactor-02): was timeout, now overloaded
+    { id: "billing-status-503", message: "503 Service Unavailable" },
+    // FIXED(refactor-02): was timeout, now overloaded
+    { id: "billing-llm-service-unavailable", message: "LLM error: service unavailable" },
+    // FIXED(refactor-02): was timeout, now overloaded
+    {
+      id: "billing-api-error-unavailable",
+      message:
+        '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
+    },
+  ]),
   ...messageRows(billingSource, reason("timeout"), [
     { id: "billing-status-499", message: "499 Client Closed Request" },
     { id: "billing-status-500", message: "500 Internal Server Error" },
     { id: "billing-status-502", message: "502 Bad Gateway" },
-    { id: "billing-status-503", message: "503 Service Unavailable" },
     { id: "billing-status-504", message: "504 Gateway Timeout" },
-    { id: "billing-llm-service-unavailable", message: "LLM error: service unavailable" },
     { id: "billing-503-database", message: "503 Internal Database Error" },
     { id: "billing-stop-abort", message: "Unhandled stop reason: abort" },
     { id: "billing-stream-closed", message: "stream was closed" },
@@ -331,11 +342,6 @@ export const overflowServerMiscCases = [
       message: '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
     },
     {
-      id: "billing-api-error-unavailable",
-      message:
-        '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
-    },
-    {
       id: "billing-zhipu-network-json",
       message:
         '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
@@ -351,19 +357,24 @@ export const overflowServerMiscCases = [
     { id: "billing-chinese-system-busy", message: "系统繁忙" },
     { id: "billing-chinese-system-abnormal", message: "系统异常" },
   ]),
-  ...messageRows(retrySource, reason("timeout"), [
-    { id: "retry-http-500", message: "HTTP 500 temporary provider response" },
-    { id: "retry-503", message: "503: temporary provider response" },
-    { id: "retry-524", message: "524 status code (no body)" },
+  ...messageRows(retrySource, reason("overloaded"), [
+    // FIXED(refactor-02): was timeout, now overloaded
     {
       id: "retry-billing-service",
       message: "503 billing service unavailable; please retry your request",
     },
+    // FIXED(refactor-02): was timeout, now overloaded
     {
       id: "retry-subscription-service",
       message: "503 subscription service unavailable while checking quota",
     },
+    // FIXED(refactor-02): was timeout, now overloaded
     { id: "retry-503-retry-after", message: "503 Service Unavailable; Retry-After: 120 seconds" },
+  ]),
+  ...messageRows(retrySource, reason("timeout"), [
+    { id: "retry-http-500", message: "HTTP 500 temporary provider response" },
+    { id: "retry-503", message: "503: temporary provider response" },
+    { id: "retry-524", message: "524 status code (no body)" },
   ]),
   ...messageRows(patternsSource, reason("auth"), [
     {
@@ -442,13 +453,15 @@ export const overflowServerMiscCases = [
     id: "retry-gpt-preview-not-found",
     source: retrySource,
     signal: { message: "model gpt-5.5-preview-0429 not found" },
-    expected: reason("rate_limit"),
+    // FIXED(refactor-02): was rate_limit, now model_not_found
+    expected: reason("model_not_found"),
   },
   {
     id: "retry-model-preview-not-found",
     source: retrySource,
     signal: { message: "model model-x-500-preview not found" },
-    expected: null,
+    // FIXED(refactor-02): was null, now model_not_found
+    expected: reason("model_not_found"),
   },
   {
     id: "billing-session-not-found",

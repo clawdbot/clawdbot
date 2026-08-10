@@ -1,4 +1,5 @@
 import {
+  type FailoverClassificationCorpusRow,
   billingSource,
   errorsSource,
   httpSource,
@@ -9,7 +10,6 @@ import {
   reason,
   retrySource,
   structuredSource,
-  type FailoverClassificationCorpusRow,
 } from "./failover-classification.corpus.test-support.js";
 export const authFormatCases = [
   // Authentication and authorization.
