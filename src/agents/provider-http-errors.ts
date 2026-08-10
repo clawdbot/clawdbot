@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Shared provider HTTP error normalization helpers.
  *
