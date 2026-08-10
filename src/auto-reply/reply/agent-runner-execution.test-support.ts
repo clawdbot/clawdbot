@@ -248,7 +248,7 @@ vi.mock("./agent-runner-utils.js", () => ({
   buildEmbeddedRunExecutionParams: (params: {
     provider: string;
     model: string;
-    run: {
+    run: Record<string, unknown> & {
       provider?: string;
       thinkLevel?: string;
       authProfileId?: string;
@@ -265,6 +265,7 @@ vi.mock("./agent-runner-utils.js", () => ({
     sessionCtx: { AccountId?: string; ChatType?: string };
   }) => ({
     embeddedContext: {
+      ...params.run,
       messageProvider: params.replyRoute?.originatingChannel,
       messageTo: params.replyRoute?.originatingTo,
       agentAccountId:

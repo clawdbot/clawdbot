@@ -258,7 +258,7 @@ const mockedPrepareProviderRuntimeAuth = vi.fn<
 >(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-const mockedBuildEmbeddedRunPayloads = vi.fn<
+export const mockedBuildEmbeddedRunPayloads = vi.fn<
   (
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
@@ -728,6 +728,7 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
 
 /** Install module mocks, import the runner, and return the mocked entrypoint. */
 export async function loadRunOverflowCompactionHarness(): Promise<{
+  registerPreparedAgentHarness: typeof import("../harness/registry.js").registerAgentHarness;
   runEmbeddedAgent: TestRunEmbeddedAgent;
 }> {
   resetRunOverflowCompactionHarnessMocks();
@@ -1098,6 +1099,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
     await import("../admitted-run-context.js");
   const { runEmbeddedAgent } = await import("./run.js");
+  const preparedRegistry = await import("../harness/registry.js");
   return {
     runEmbeddedAgent: async (params) => {
       const agentId = params.agentId ?? "main";
@@ -1124,6 +1126,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
         preparedRunAdmission.close();
       }
     },
+    registerPreparedAgentHarness: preparedRegistry.registerAgentHarness,
   };
 }
 
