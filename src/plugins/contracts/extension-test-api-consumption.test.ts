@@ -5,10 +5,8 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const REPO_ROOT = resolve(ROOT_DIR, "..");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const THIS_TEST_FILE = "src/plugins/contracts/extension-test-api-consumption.test.ts";
-const TEST_API_SCAN_TIMEOUT_MS = 240_000;
 
 type ExtensionTestApi = {
   absoluteStem: string;
@@ -26,10 +24,6 @@ function listTrackedFiles(pathspecs: string | readonly string[]): string[] {
   return files;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function stripModuleExtension(value: string): string {
   return value.replace(/\.(?:[cm]?[jt]sx?)$/u, "");
 }
@@ -41,13 +35,14 @@ function listExtensionTestApis(): ExtensionTestApi[] {
       throw new Error(`invalid extension test API path: ${repoPath}`);
     }
     const packageJsonPath = resolve(REPO_ROOT, "extensions", pluginId, "package.json");
-    const parsed: unknown = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-    const packageName =
-      isRecord(parsed) && typeof parsed.name === "string" ? parsed.name : undefined;
-    const packageExportsTestApi =
-      isRecord(parsed) &&
-      isRecord(parsed.exports) &&
-      Object.keys(parsed.exports).some((key) => stripModuleExtension(key) === "./test-api");
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      exports?: Record<string, unknown>;
+      name?: unknown;
+    };
+    const packageName = typeof parsed.name === "string" ? parsed.name : undefined;
+    const packageExportsTestApi = Object.keys(parsed.exports ?? {}).some(
+      (key) => stripModuleExtension(key) === "./test-api",
+    );
     return {
       absoluteStem: stripModuleExtension(resolve(REPO_ROOT, repoPath)),
       packageName,
@@ -195,9 +190,7 @@ describe("extension test API consumption", () => {
 
   it(
     "keeps only consumed extension test APIs",
-    () => {
-      expect(collectOrphanExtensionTestApiFiles()).toStrictEqual([]);
-    },
-    TEST_API_SCAN_TIMEOUT_MS,
+    () => expect(collectOrphanExtensionTestApiFiles()).toStrictEqual([]),
+    240_000,
   );
 });
