@@ -2206,11 +2206,39 @@ describe("talk.session unified handlers", () => {
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
+        agentId: "worker",
         spawnedBy: "agent:main:parent",
         includeGlobal: true,
         includeUnknown: true,
       },
     });
+  });
+
+  it("resolves a bare managed-room session through the persisted fixed-store owner", async () => {
+    const createRespond = vi.fn();
+    const config: OpenClawConfig = {
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+        defaults: { sessionStore: { agentId: "ops" } },
+      },
+    };
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "global",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      respond: createRespond,
+      context: { getRuntimeConfig: () => config },
+    });
+
+    expectRespondOk(createRespond, { transport: "managed-room" });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+      expect.objectContaining({ p: expect.objectContaining({ key: "global", agentId: "ops" }) }),
+    );
   });
 
   it("rejects unscoped managed-room session keys without admin scope", async () => {

@@ -19,6 +19,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import {
   buildGatewaySessionInfo,
@@ -201,7 +202,16 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasKey) {
     // Exact-key lookup follows the proof-of-knowledge read semantics of get/describe/history;
     // only discovery selectors use list visibility. Incognito keys are gated pre-dispatch.
-    const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+    if (!requestedAgent.ok) {
+      return requestedAgent;
+    }
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      clone: false,
+      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+    });
     const store = target.store;
     if (store[target.canonicalKey]) {
       if (

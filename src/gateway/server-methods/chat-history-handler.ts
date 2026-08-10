@@ -196,11 +196,16 @@ async function handleChatHistoryRequest({
   }
   const requestConfig = context.getRuntimeConfig();
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-  const requestedAgentId = resolveRequestedChatAgentId({
+  const requestedAgent = resolveRequestedChatAgentId({
     cfg: requestConfig,
     requestedSessionKey: sessionKey,
     agentId: agentIdOverride,
   });
+  if (!requestedAgent.ok) {
+    respond(false, undefined, requestedAgent.error);
+    return;
+  }
+  const requestedAgentId = requestedAgent.agentId;
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,

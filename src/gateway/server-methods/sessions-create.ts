@@ -78,6 +78,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const explicitlyRequestedKey = normalizeOptionalString(p.key);
+    const explicitlyRequestedAgent =
+      explicitlyRequestedKey && !parseAgentSessionKey(explicitlyRequestedKey)
+        ? resolveRequestedGlobalAgentId(cfg, explicitlyRequestedKey, p.agentId, {
+            allowUnconfiguredExplicitAgent: true,
+          })
+        : undefined;
+    if (explicitlyRequestedAgent && !explicitlyRequestedAgent.ok) {
+      respond(false, undefined, explicitlyRequestedAgent.error);
+      return;
+    }
     const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
     const catalogAgentId = catalogId
       ? normalizeAgentId(
@@ -86,13 +97,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             resolveDefaultAgentId(cfg),
         )
       : undefined;
-    const catalogRequestedAgent = catalogAgentId
-      ? resolveRequestedGlobalAgentId(cfg, catalogRequestedKey, catalogAgentId)
-      : undefined;
-    if (catalogRequestedAgent && !catalogRequestedAgent.ok) {
-      respond(false, undefined, catalogRequestedAgent.error);
-      return;
-    }
     const catalogTarget =
       catalogId && catalogAgentId
         ? resolveRegisteredCatalogCreateTarget(catalogId, catalogAgentId, cfg)
@@ -223,7 +227,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
     }
     let sessionKey = p.key;
-    let sessionAgentId = catalogAgentId ?? p.agentId;
+    let sessionAgentId =
+      catalogAgentId ??
+      explicitlyRequestedAgent?.agentId ??
+      p.agentId ??
+      parseAgentSessionKey(explicitlyRequestedKey)?.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
@@ -271,12 +279,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         respond(false, undefined, requestedAgent.error);
         return;
       }
-      const agentId = normalizeAgentId(
-        requestedAgent.agentId ??
-          normalizeOptionalString(p.agentId) ??
-          parseAgentSessionKey(requestedKey)?.agentId ??
-          resolveDefaultAgentId(cfg),
-      );
+      const agentId = normalizeAgentId(requestedAgent.agentId);
       let targetKey = explicitKey;
       let preservesUnspecifiedKey = false;
       const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
@@ -287,12 +290,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadGatewaySessionEntryReadOnly(
-          parentSessionKey,
-          requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
-        );
+        const parentRequestedAgent = resolveRequestedGlobalAgentId(cfg, parentSessionKey);
+        if (!parentRequestedAgent.ok) {
+          respond(false, undefined, parentRequestedAgent.error);
+          return;
+        }
+        const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+          agentId: parentRequestedAgent.agentId,
+        });
         const parentAgentId = normalizeAgentId(
-          requestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
+          parentRequestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
         );
         if (
           parent.entry?.sessionId &&

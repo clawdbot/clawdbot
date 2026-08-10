@@ -23,11 +23,11 @@ import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
+  classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,
-  resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -41,7 +41,7 @@ import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { listAgentIds } from "../agent-scope.js";
+import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
@@ -199,11 +199,7 @@ function isConfiguredAgentMainSessionKey(params: {
     return false;
   }
   const agentId =
-    params.agentId ??
-    resolveAgentIdFromSessionKey(
-      params.sessionKey,
-      tryResolveLegacyCompatibilityAgentId(params.cfg),
-    );
+    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
   return (
     params.sessionKey === params.mainKey ||
     params.sessionKey ===
@@ -224,11 +220,7 @@ async function createConfiguredAgentMainSession(params: {
   useTrustedInProcessCreation: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const targetAgentId =
-    params.agentId ??
-    resolveAgentIdFromSessionKey(
-      params.sessionKey,
-      tryResolveLegacyCompatibilityAgentId(params.cfg),
-    );
+    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
   try {
     const createParams = {
       key: params.sessionKey,
@@ -476,19 +468,20 @@ export function createSessionsSendTool(opts?: {
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
-      const requesterStoreOwner = resolvePersistedSessionStoreOwnerForKey(
-        cfg,
-        effectiveRequesterKey,
-      );
-      const requesterAgentId = normalizeAgentId(
-        opts?.agentId ??
-          resolveAgentIdFromSessionKey(
-            effectiveRequesterKey,
-            requesterStoreOwner.kind === "configured"
-              ? requesterStoreOwner.agentId
-              : tryResolveLegacyCompatibilityAgentId(cfg),
-          ),
-      );
+      let requesterAgentId: string;
+      try {
+        requesterAgentId = resolveSessionAgentId({
+          config: cfg,
+          sessionKey: effectiveRequesterKey,
+          agentId: opts?.agentId,
+        });
+      } catch (err) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error: formatErrorMessage(err),
+        });
+      }
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
@@ -654,18 +647,20 @@ export function createSessionsSendTool(opts?: {
       const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
       const isLiteralLegacyKeyInput =
         !labelParam && sessionKeyParam !== undefined && !resolvedSession.resolvedViaSessionId;
+      const isLiteralUnscopedTarget =
+        isLiteralLegacyKeyInput && classifySessionKeyShape(resolvedKey) === "legacy_or_alias";
+      const persistedTargetOwner = isLiteralUnscopedTarget
+        ? resolvePersistedSessionStoreOwnerForKey(cfg, resolvedKey)
+        : { kind: "none" as const };
       const compatibilityTargetAgentId =
-        isLiteralLegacyKeyInput && !resolvedKeyAgentId && !isUnscopedSessionKeySentinel(resolvedKey)
+        isLiteralUnscopedTarget && persistedTargetOwner.kind === "none"
           ? tryResolveLegacyCompatibilityAgentId(cfg)
           : undefined;
       const isLiteralUnscopedMainTarget =
-        isLiteralLegacyKeyInput &&
+        isLiteralUnscopedTarget &&
         (isUnscopedSessionKeySentinel(sessionKeyParam.trim()) ||
           sessionKeyParam.trim().toLowerCase() === mainKey);
-      const persistedSentinelOwner = isLiteralUnscopedMainTarget
-        ? resolvePersistedSessionStoreOwnerForKey(cfg, resolvedKey)
-        : { kind: "none" as const };
-      if (persistedSentinelOwner.kind === "retired") {
+      if (persistedTargetOwner.kind === "retired") {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "forbidden",
@@ -673,14 +668,26 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
-      const targetAgentId =
+      const resolvedTargetOwner =
         visibleSession.agentId ??
         resolvedTargetAgentId ??
+        (labelParam && labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined);
+      if (
+        persistedTargetOwner.kind === "configured" &&
+        resolvedTargetOwner &&
+        normalizeAgentId(resolvedTargetOwner) !== persistedTargetOwner.agentId
+      ) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error: `Session belongs to agent "${persistedTargetOwner.agentId}", not "${normalizeAgentId(resolvedTargetOwner)}".`,
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
+      const targetAgentId =
+        (persistedTargetOwner.kind === "configured" ? persistedTargetOwner.agentId : undefined) ??
+        resolvedTargetOwner ??
         resolvedKeyAgentId ??
-        (labelParam && labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined) ??
-        (persistedSentinelOwner.kind === "configured"
-          ? persistedSentinelOwner.agentId
-          : undefined) ??
         (isLiteralUnscopedMainTarget ? requesterAgentId : undefined) ??
         compatibilityTargetAgentId;
       const mayUseRequesterForLiteralSentinel =
@@ -846,6 +853,7 @@ export function createSessionsSendTool(opts?: {
 
       return await runWithScopedSessionAccess({
         cfg,
+        agentId: targetAgentId,
         expectedSessionId,
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,

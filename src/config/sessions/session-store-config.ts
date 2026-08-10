@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
+import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
 import { resolveStorePath } from "./paths.js";
 
 const MAX_SYMLINK_HOPS = 64;
@@ -107,5 +108,18 @@ export function isSameFixedSessionStoreConfig(
   if (!sourceIdentity || !targetIdentity) {
     return true;
   }
-  return sourceIdentity === targetIdentity;
+  if (sourceIdentity === targetIdentity) {
+    return true;
+  }
+  if (sourceIdentity.toLowerCase() !== targetIdentity.toLowerCase()) {
+    return false;
+  }
+  const sourceCaseInsensitive = tryResolvePathCaseInsensitive(sourceIdentity);
+  const targetCaseInsensitive = tryResolvePathCaseInsensitive(targetIdentity);
+  if (sourceCaseInsensitive === false || targetCaseInsensitive === false) {
+    return false;
+  }
+  // Case-equivalent missing paths are owned when the filesystem folds case or
+  // when probing cannot prove that the future paths will remain distinct.
+  return true;
 }

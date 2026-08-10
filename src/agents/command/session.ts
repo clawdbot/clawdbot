@@ -320,24 +320,40 @@ export function resolveStoredSessionKeyForSessionId(opts: {
     return { sessionKey: undefined, sessionStore, storePath };
   }
 
-  const selection = resolveSessionIdMatchSelection(
-    Object.entries(sessionStore).filter(([, entry]) => entry?.sessionId === sessionId),
-    sessionId,
+  const resolveMatchedAgentId = (sessionKey: string): string | undefined => {
+    const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (scopedAgentId) {
+      return normalizeAgentId(scopedAgentId);
+    }
+    const persistedRowOwner = resolvePersistedSessionStoreOwnerForKey(opts.cfg, sessionKey);
+    return persistedRowOwner.kind === "configured"
+      ? persistedRowOwner.agentId
+      : persistedRowOwner.kind === "retired"
+        ? undefined
+        : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
+  };
+  const sessionIdMatches = Object.entries(sessionStore).filter(
+    ([, entry]) => entry?.sessionId === sessionId,
   );
+  const selectionMatches = requestedAgentId
+    ? sessionIdMatches.filter(
+        ([sessionKey]) => resolveMatchedAgentId(sessionKey) === requestedAgentId,
+      )
+    : sessionIdMatches;
+  if (requestedAgentId && selectionMatches.length === 0 && sessionIdMatches.length > 0) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `stored session id "${sessionId}"`,
+      hint: `The matching rows belong to a different agent than agent "${requestedAgentId}".`,
+    });
+  }
+  const selection = resolveSessionIdMatchSelection(selectionMatches, sessionId);
   if (selection.kind !== "selected") {
     return { agentId: requestedAgentId, sessionKey: undefined, sessionStore, storePath };
   }
 
   const sessionKey = selection.sessionKey;
-  const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const persistedRowOwner = resolvePersistedSessionStoreOwnerForKey(opts.cfg, sessionKey);
-  const resolvedAgentId = scopedAgentId
-    ? normalizeAgentId(scopedAgentId)
-    : persistedRowOwner.kind === "configured"
-      ? persistedRowOwner.agentId
-      : persistedRowOwner.kind === "retired"
-        ? undefined
-        : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
+  const resolvedAgentId = resolveMatchedAgentId(sessionKey);
   if (!resolvedAgentId) {
     throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
       surface: `stored session key "${sessionKey}"`,

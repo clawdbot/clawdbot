@@ -8,6 +8,7 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveCanonicalMainSessionKey } from "./main-session-key.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "./session-store-owner.js";
 import type { SessionScope } from "./types.js";
 
 const FALLBACK_DEFAULT_AGENT_ID = "main";
@@ -35,8 +36,20 @@ export function resolveMainSessionKey(cfg: OpenClawConfig): string {
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
 export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
   const scope = cfg?.session?.scope ?? "per-sender";
-  const defaultId = tryResolveLegacyCompatibilityAgentId(cfg) ?? listAgentIds(cfg)[0] ?? "main";
-  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultId)].join("|");
+  // Global keys carry no agent namespace, so their durable fixed-store owner is
+  // part of the routing contract; otherwise stale clients can target a changed row.
+  const persistedOwner =
+    scope === "global"
+      ? resolvePersistedSessionStoreOwnerForKey(cfg, "global")
+      : ({ kind: "none" } as const);
+  const routingOwner =
+    persistedOwner.kind === "configured"
+      ? persistedOwner.agentId
+      : persistedOwner.kind === "retired"
+        ? `retired:${persistedOwner.agentId}`
+        : (tryResolveLegacyCompatibilityAgentId(cfg) ??
+          (cfg.agents?.ownership === "explicit" ? "unowned" : (listAgentIds(cfg)[0] ?? "main")));
+  return [scope, normalizeMainKey(cfg?.session?.mainKey), routingOwner].join("|");
 }
 
 export { resolveAgentIdFromSessionKey };

@@ -28,7 +28,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils-list.js";
 import { getSessionDefaults, resolveGatewayModelSupportsImages } from "./session-utils-model.js";
@@ -1985,14 +1985,47 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("resolveSessionStoreKey falls back to main without a compatibility owner", () => {
+  test("resolveSessionStoreKey rejects ownerless bare keys without a compatibility owner", () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops" }, { id: "review" }] },
     } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:main");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-      "agent:main:discord:group:123",
+    expect(() => resolveSessionStoreKey({ cfg, sessionKey: "main" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+    expect(() => resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+  });
+
+  test("resolveSessionStoreKey uses configured fixed-store ownership for bare keys", () => {
+    const cfg = {
+      session: { mainKey: "main", store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:ops:thread-1");
+    expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
+  });
+
+  test("session-store key ownership rejects a retired fixed-store owner", () => {
+    const cfg = {
+      session: { mainKey: "main", store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "retired" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as OpenClawConfig;
+    expect(() => resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+    expect(() => resolveSessionStoreAgentId(cfg, "global")).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
     );
   });
 

@@ -9,6 +9,10 @@ import {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  type PersistedSessionStoreOwner,
+  resolvePersistedSessionStoreOwnerForKey,
+} from "../config/sessions/session-store-owner.js";
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
@@ -40,6 +44,7 @@ export type HooksConfigResolved = {
 
 type HookAgentPolicyResolved = {
   defaultAgentId?: string;
+  globalSessionStoreOwner: PersistedSessionStoreOwner;
   knownAgentIds: Set<string>;
   allowedAgentIds?: Set<string>;
 };
@@ -69,6 +74,12 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   }
   const mappings = resolveHookMappings(cfg.hooks);
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  // Global hook runs write a literal shared row, whose durable owner must win
+  // over ambient hook defaults after migration sidecar state is gone.
+  const globalSessionStoreOwner =
+    cfg.session?.scope === "global"
+      ? resolvePersistedSessionStoreOwnerForKey(cfg, "global")
+      : { kind: "none" as const };
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
@@ -103,6 +114,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     mappings,
     agentPolicy: {
       defaultAgentId,
+      globalSessionStoreOwner,
       knownAgentIds,
       allowedAgentIds,
     },
@@ -420,7 +432,20 @@ export function resolveEffectiveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
 ): string | undefined {
-  return resolveHookTargetAgentId(hooksConfig, agentId) ?? hooksConfig.agentPolicy.defaultAgentId;
+  const resolvedAgentId =
+    resolveHookTargetAgentId(hooksConfig, agentId) ?? hooksConfig.agentPolicy.defaultAgentId;
+  const persistedOwner = hooksConfig.agentPolicy.globalSessionStoreOwner;
+  if (persistedOwner.kind === "retired") {
+    return undefined;
+  }
+  if (
+    persistedOwner.kind === "configured" &&
+    resolvedAgentId &&
+    resolvedAgentId !== persistedOwner.agentId
+  ) {
+    return undefined;
+  }
+  return persistedOwner.kind === "configured" ? persistedOwner.agentId : resolvedAgentId;
 }
 
 /** Check the hook agent allowlist against the effective target agent. */

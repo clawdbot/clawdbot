@@ -23,6 +23,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
@@ -102,11 +103,30 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       !isIncognitoSessionKey(sessionKey) ||
       canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey });
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const sessionKeys = params.sessionKeys?.map((sessionKey) =>
-      requestedAgentId
-        ? resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
-        : resolveSessionStoreKey({ cfg, sessionKey }),
-    );
+    const sessionKeys: string[] | undefined = params.sessionKeys ? [] : undefined;
+    for (const sessionKey of params.sessionKeys ?? []) {
+      // Retired per-agent stores remain read-compatible when the caller explicitly scopes them.
+      // A durable fixed-store owner still wins, so this exception cannot cross agent ownership.
+      const requestedAgent =
+        requestedAgentId &&
+        !isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
+        resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none"
+          ? ({ ok: true, agentId: requestedAgentId } as const)
+          : resolveRequestedGlobalAgentId(cfg, sessionKey, requestedAgentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      sessionKeys?.push(
+        requestedAgent.agentId
+          ? resolveStoredSessionKeyForAgentStore({
+              cfg,
+              agentId: requestedAgent.agentId,
+              sessionKey,
+            })
+          : resolveSessionStoreKey({ cfg, sessionKey }),
+      );
+    }
     const agentIds = new Set(
       sessionKeys?.map((sessionKey) =>
         requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
@@ -568,10 +588,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const previews: SessionsPreviewEntry[] = [];
 
     for (const key of keys) {
+      const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+      if (!requestedAgent.ok) {
+        previews.push({ key, status: "error", items: [] });
+        continue;
+      }
       try {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
+          agentId: requestedAgent.agentId,
         });
         // Fixed stores share a legacy path but resolve to owner-specific SQLite databases. Keep
         // synthetic misses from poisoning another agent's real store entry in this batch.
@@ -581,6 +607,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key,
+          agentId: requestedAgent.agentId,
           store,
         });
         const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
@@ -620,7 +647,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
+      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+    });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;

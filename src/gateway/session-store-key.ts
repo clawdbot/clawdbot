@@ -3,12 +3,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds } from "../agents/agent-scope.js";
-import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -32,8 +33,27 @@ export function canonicalizeSessionKeyForAgent(agentId: string, key: string): st
   return `agent:${normalizeAgentId(agentId)}:${normalized}`;
 }
 
-function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
-  return normalizeAgentId(resolveSessionStoreCompatibilityAgentId(cfg));
+// Logical unscoped keys must honor the durable fixed-store owner. The physical-store
+// compatibility fallback is intentionally not used here because it can name a retired agent.
+function resolveLogicalSessionStoreAgentId(cfg: OpenClawConfig, sessionKey: string): string {
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
+  if (persistedOwner.kind === "configured") {
+    return persistedOwner.agentId;
+  }
+  if (persistedOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `session key "${sessionKey}"`,
+      hint: `Its recorded owner "${persistedOwner.agentId}" is no longer configured. Select a configured agent explicitly.`,
+    });
+  }
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  if (compatibilityAgentId) {
+    return normalizeAgentId(compatibilityAgentId);
+  }
+  throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+    surface: `session key "${sessionKey}"`,
+    hint: "Use an agent-prefixed session key or select an agent explicitly.",
+  });
 }
 
 function shouldRemapLegacyDefaultMainAlias(
@@ -45,7 +65,7 @@ function shouldRemapLegacyDefaultMainAlias(
   if (agentId !== DEFAULT_AGENT_ID || listAgentIds(cfg).includes(DEFAULT_AGENT_ID)) {
     return false;
   }
-  const defaultAgentId = resolveDefaultStoreAgentId(cfg);
+  const defaultAgentId = resolveLogicalSessionStoreAgentId(cfg, "main");
   if (options?.storeAgentId && normalizeAgentId(options.storeAgentId) !== defaultAgentId) {
     return false;
   }
@@ -66,7 +86,7 @@ function resolveParsedSessionStoreKey(
       sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
-  const agentId = resolveDefaultStoreAgentId(cfg);
+  const agentId = resolveLogicalSessionStoreAgentId(cfg, "main");
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   return { agentId, sessionKey: `agent:${agentId}:${rest}` };
 }
@@ -111,23 +131,23 @@ export function resolveSessionStoreKey(params: {
     }
     return resolveAgentMainSessionKey({
       cfg: params.cfg,
-      agentId: storeAgentId ?? resolveDefaultStoreAgentId(params.cfg),
+      agentId: storeAgentId ?? resolveLogicalSessionStoreAgentId(params.cfg, raw),
     });
   }
-  const agentId = storeAgentId ?? resolveDefaultStoreAgentId(params.cfg);
+  const agentId = storeAgentId ?? resolveLogicalSessionStoreAgentId(params.cfg, raw);
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
 /** Resolve the agent that owns a canonical session-store key. */
 export function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
   if (canonicalKey === "global" || canonicalKey === "unknown") {
-    return resolveDefaultStoreAgentId(cfg);
+    return resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
   }
   const parsed = parseAgentSessionKey(canonicalKey);
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
-  return resolveDefaultStoreAgentId(cfg);
+  return resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
 }
 
 /** Resolve a session key for lookup inside a specific agent's store. */

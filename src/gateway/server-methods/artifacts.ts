@@ -13,7 +13,8 @@ import {
   validateArtifactsGetParams,
   validateArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
@@ -28,6 +29,7 @@ import {
   resolveManagedOutgoingMediaUrlDownload,
 } from "../managed-image-attachments.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -66,6 +68,23 @@ type ResolvedArtifactSession = {
   sessionKey: string;
   agentId?: string;
 };
+
+function admitArtifactQuery<T extends ArtifactQuery>(
+  query: T,
+  cfg: OpenClawConfig | undefined,
+  respond: RespondFn,
+): T | undefined {
+  const sessionKey = asNonEmptyString(query.sessionKey);
+  if (!sessionKey || !cfg) {
+    return query;
+  }
+  const owner = resolveRequestedSessionAgentId(cfg, sessionKey, query.agentId);
+  if (!owner.ok) {
+    respond(false, undefined, owner.error);
+    return undefined;
+  }
+  return { ...query, agentId: owner.agentId };
+}
 
 function artifactError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
@@ -467,7 +486,7 @@ function resolveQuerySession(
     return { sessionKey, ...(query.agentId ? { agentId: query.agentId } : {}) };
   }
   if (query.runId) {
-    const agentId = query.agentId ?? resolveDefaultAgentId(cfg ?? {});
+    const agentId = query.agentId ?? resolveSessionAgentId({ config: cfg });
     const sessionKey = resolveSessionKeyForRun(query.runId, { agentId });
     const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
     return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
@@ -476,12 +495,17 @@ function resolveQuerySession(
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
     const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
+    const persistedRequesterOwner = requesterSessionKey
+      ? resolvePersistedSessionStoreOwnerForKey(cfg ?? {}, requesterSessionKey)
+      : { kind: "none" as const };
     const requesterAgentId =
       asNonEmptyString(task?.requesterAgentId) ??
       ownerAgentId ??
-      (requesterSessionKey === "global"
-        ? undefined
-        : resolveRequesterSessionAgentId(requesterSessionKey, cfg));
+      (persistedRequesterOwner.kind === "configured"
+        ? persistedRequesterOwner.agentId
+        : requesterSessionKey === "global"
+          ? undefined
+          : resolveRequesterSessionAgentId(requesterSessionKey, cfg));
     const taskAgentId = asNonEmptyString(task?.agentId) ?? requesterAgentId;
     if (
       query.agentId &&
@@ -493,7 +517,8 @@ function resolveQuerySession(
     if (requesterSessionKey) {
       // task.agentId identifies the executor. requesterAgentId keeps global
       // requester transcripts in the correct agent store across restarts.
-      const sessionAgentId = requesterAgentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
+      const sessionAgentId =
+        requesterAgentId ?? taskAgentId ?? resolveSessionAgentId({ config: cfg });
       const scopedSessionKey = resolveScopedArtifactSessionKey(
         requesterSessionKey,
         sessionAgentId,
@@ -503,7 +528,7 @@ function resolveQuerySession(
         ? { sessionKey: scopedSessionKey, agentId: sessionAgentId }
         : undefined;
     }
-    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
+    const agentId = query.agentId ?? taskAgentId ?? resolveSessionAgentId({ config: cfg });
     const runId = asNonEmptyString(task?.runId);
     const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
     const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
@@ -523,10 +548,9 @@ async function loadArtifacts(
     return { artifacts: [] };
   }
   const { sessionKey } = resolved;
-  const scopedGlobalAgentId =
-    cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
-  const { storePath, entry } = scopedGlobalAgentId
-    ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: scopedGlobalAgentId })
+  const unscopedAgentId = parseAgentSessionKey(sessionKey) ? undefined : resolved.agentId;
+  const { storePath, entry } = unscopedAgentId
+    ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: unscopedAgentId })
     : loadGatewaySessionEntryReadOnly(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
@@ -609,7 +633,12 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifacts, sessionKey } = await loadArtifacts(params, context.getRuntimeConfig?.(), {
+    const cfg = context.getRuntimeConfig?.();
+    const admittedQuery = admitArtifactQuery(params, cfg, respond);
+    if (!admittedQuery) {
+      return;
+    }
+    const { artifacts, sessionKey } = await loadArtifacts(admittedQuery, cfg, {
       includeDownloadData: false,
     });
     if (!sessionKey && (params.runId || params.taskId)) {
@@ -629,7 +658,12 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
+    const cfg = context.getRuntimeConfig?.();
+    const admittedQuery = admitArtifactQuery(params, cfg, respond);
+    if (!admittedQuery) {
+      return;
+    }
+    const { artifact } = await findArtifact(admittedQuery, cfg, {
       includeDownloadData: false,
     });
     if (!artifact) {
@@ -653,13 +687,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
+    const cfg = context.getRuntimeConfig?.();
+    const admittedQuery = admitArtifactQuery(params, cfg, respond);
+    if (!admittedQuery) {
+      return;
+    }
     if (
-      params.sessionKey &&
-      !params.runId &&
-      !params.taskId &&
+      admittedQuery.sessionKey &&
+      !admittedQuery.runId &&
+      !admittedQuery.taskId &&
       parseManagedOutgoingArtifactId(params.artifactId)
     ) {
-      const resolved = resolveQuerySession(params, context.getRuntimeConfig?.());
+      const resolved = resolveQuerySession(admittedQuery, cfg);
       const managed = resolved
         ? await resolveManagedOutgoingMediaArtifactDownload({
             sessionKey: resolved.sessionKey,
@@ -684,7 +723,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
+    const { artifact } = await findArtifact(admittedQuery, cfg, {
       downloadArtifactId: params.artifactId,
     });
     if (!artifact) {

@@ -108,9 +108,12 @@ function client(profileId: string, displayName: string, admin = false): GatewayC
   };
 }
 
-function context(broadcast = vi.fn()): GatewayRequestContext {
+function context(
+  broadcast = vi.fn(),
+  runtimeConfig: ReturnType<GatewayRequestContext["getRuntimeConfig"]> = {},
+): GatewayRequestContext {
   return {
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => runtimeConfig,
     broadcast,
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
@@ -165,6 +168,52 @@ afterEach(() => {
 });
 
 describe("session suggestion handlers", () => {
+  it("admits bare fixed-store keys only through their persisted owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared-sessions.sqlite");
+      await upsertSessionEntry(
+        { agentId: "ops", sessionKey: "global", storePath },
+        {
+          sessionId: "session-ops-global",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const ownedConfig = {
+        session: { scope: "global", store: storePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+
+      const admitted = await call(
+        "session.suggestions.list",
+        { sessionKey: "global" },
+        client("owner", "Owner"),
+        context(vi.fn(), ownedConfig),
+      );
+      expect(admitted.responses[0]).toMatchObject([true, { role: "owner", suggestions: [] }]);
+
+      const ownerlessConfig = {
+        ...ownedConfig,
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const rejected = await call(
+        "session.suggestions.list",
+        { sessionKey: "global" },
+        client("owner", "Owner"),
+        context(vi.fn(), ownerlessConfig),
+      );
+      expect(rejected.responses[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
+      });
+    });
+  });
+
   it("lets a suggest viewer add and list only their own suggestion", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();

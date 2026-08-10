@@ -85,7 +85,6 @@ import {
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
@@ -300,12 +299,32 @@ export async function createGatewaySession(params: {
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
   const projectId = normalizeOptionalString(params.projectId);
+  const explicitAgentId = normalizeOptionalString(params.agentId);
   const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
-  const parentKeyAgentId = parseAgentSessionKey(parentSessionKey)?.agentId;
+  if (
+    explicitAgentId &&
+    explicitKeyAgentId &&
+    normalizeAgentId(explicitKeyAgentId) !== normalizeAgentId(explicitAgentId)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `sessions.create key agent (${explicitKeyAgentId}) does not match agentId (${normalizeAgentId(explicitAgentId)})`,
+      ),
+    };
+  }
+  const requestedKeyAgent = requestedKey
+    ? resolveRequestedSessionAgentId(params.cfg, requestedKey, explicitAgentId, {
+        allowUnconfiguredExplicitAgent: true,
+      })
+    : undefined;
+  if (requestedKeyAgent && !requestedKeyAgent.ok) {
+    return requestedKeyAgent;
+  }
   const agentId = normalizeAgentId(
-    normalizeOptionalString(params.agentId) ??
-      explicitKeyAgentId ??
-      parentKeyAgentId ??
+    explicitAgentId ??
+      requestedKeyAgent?.agentId ??
       tryResolveLegacyCompatibilityAgentId(params.cfg) ??
       resolveDefaultAgentId(params.cfg),
   );
@@ -337,22 +356,6 @@ export async function createGatewaySession(params: {
         error: errorShape(
           ErrorCodes.INVALID_REQUEST,
           "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
-        ),
-      };
-    }
-  }
-  if (requestedKey) {
-    const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
-    if (
-      requestedAgentId &&
-      requestedAgentId !== agentId &&
-      normalizeOptionalString(params.agentId)
-    ) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `sessions.create key agent (${requestedAgentId}) does not match agentId (${agentId})`,
         ),
       };
     }
@@ -486,25 +489,21 @@ export async function createGatewaySession(params: {
   let parentSelectedAgentId: string | undefined;
   let parentSessionTarget: ReturnType<typeof resolveGatewaySessionStoreTarget> | undefined;
   if (parentSessionKey) {
-    const parentCanonicalKey = resolveSessionStoreKey({
-      cfg: params.cfg,
-      sessionKey: parentSessionKey,
-    });
-    if (parentCanonicalKey === "global") {
-      const parentRequestedAgent = resolveRequestedSessionAgentId(
-        params.cfg,
-        parentSessionKey,
-        params.agentId,
-      );
-      if (!parentRequestedAgent.ok) {
-        return parentRequestedAgent;
-      }
-      parentSelectedAgentId = parentRequestedAgent.agentId;
-    }
-    const parent = loadGatewaySessionEntryReadOnly(
+    const parentRequestedAgent = resolveRequestedSessionAgentId(
+      params.cfg,
       parentSessionKey,
-      parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
+      !parseAgentSessionKey(parentSessionKey) &&
+        ["global", "unknown"].includes(parentSessionKey.toLowerCase())
+        ? explicitAgentId
+        : undefined,
     );
+    if (!parentRequestedAgent.ok) {
+      return parentRequestedAgent;
+    }
+    parentSelectedAgentId = parentRequestedAgent.agentId;
+    const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+      agentId: parentSelectedAgentId,
+    });
     if (!parent.entry?.sessionId) {
       return {
         ok: false,

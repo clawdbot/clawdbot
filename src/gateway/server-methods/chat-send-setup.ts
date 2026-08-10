@@ -34,7 +34,13 @@ export async function prepareAndAdmitChatSend(
     client,
   });
   if (!preparedSession.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, preparedSession.error));
+    respond(
+      false,
+      undefined,
+      typeof preparedSession.error === "string"
+        ? errorShape(ErrorCodes.INVALID_REQUEST, preparedSession.error)
+        : preparedSession.error,
+    );
     return undefined;
   }
   const shouldAdmit = await runChatSendPreAdmission({

@@ -8,21 +8,65 @@ import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import {
+  normalizeAgentId,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 
 type RequestedSessionAgentIdResolution =
-  | { ok: true; agentId?: string }
+  | { ok: true; agentId: string }
   | { ok: false; error: ErrorShape };
 
 export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
   key: string,
   explicitAgentId?: string,
+  options?: { allowUnconfiguredExplicitAgent?: boolean },
 ): RequestedSessionAgentIdResolution {
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
-  const parsed = parseAgentSessionKey(key);
+  const parsed = parseAgentSessionKey(key.trim());
   const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  const configuredAgentIds = listAgentIds(cfg);
+  const normalizedRequestedAgentId = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : undefined;
+  if (
+    normalizedRequestedAgentId &&
+    !options?.allowUnconfiguredExplicitAgent &&
+    !configuredAgentIds.includes(normalizedRequestedAgentId)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+    };
+  }
+  if (parsed?.agentId) {
+    const keyAgentId = normalizeAgentId(parsed.agentId);
+    const keyIsGlobalMainAlias =
+      cfg.session?.scope === "global" &&
+      (parsed.rest === "main" || parsed.rest === normalizeMainKey(cfg.session?.mainKey));
+    if (
+      keyIsGlobalMainAlias &&
+      !options?.allowUnconfiguredExplicitAgent &&
+      !configuredAgentIds.includes(keyAgentId)
+    ) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
+      };
+    }
+    if (normalizedRequestedAgentId && keyAgentId !== normalizedRequestedAgentId) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `agent "${explicitAgentId}" does not match session key agent "${keyAgentId}"`,
+        ),
+      };
+    }
+    return { ok: true, agentId: keyAgentId };
+  }
+
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
   if (persistedStoreOwner.kind === "retired") {
     return {
@@ -33,65 +77,34 @@ export function resolveRequestedSessionAgentId(
       ),
     };
   }
-  if (requestedAgentId) {
-    const agentId = normalizeAgentId(requestedAgentId);
-    if (!listAgentIds(cfg).includes(agentId)) {
+  if (normalizedRequestedAgentId) {
+    if (
+      persistedStoreOwner.kind === "configured" &&
+      persistedStoreOwner.agentId !== normalizedRequestedAgentId
+    ) {
       return {
         ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `agent "${explicitAgentId}" does not match session key agent "${persistedStoreOwner.agentId}"`,
+        ),
       };
     }
-    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
-    }
-    if (persistedStoreOwner.kind === "configured" && persistedStoreOwner.agentId !== agentId) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
-    }
-    if (canonicalKey !== "global") {
-      const keyAgentId = parsed?.agentId
-        ? normalizeAgentId(parsed.agentId)
-        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
-      if (keyAgentId !== agentId) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-        };
-      }
-    }
-    return { ok: true, agentId };
+    return { ok: true, agentId: normalizedRequestedAgentId };
   }
-  if (!parsed?.agentId) {
-    const inferredAgentId =
-      persistedStoreOwner.kind === "configured"
-        ? persistedStoreOwner.agentId
-        : tryResolveLegacyCompatibilityAgentId(cfg);
-    if (inferredAgentId) {
-      return { ok: true, agentId: inferredAgentId };
-    }
-    const selectionError = new AgentSelectionRequiredError(listAgentIds(cfg), {
-      surface: `session key "${key}"`,
-      hint: "Pass agentId or use an agent-prefixed session key.",
-    });
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, selectionError.message),
-    };
+  const inferredAgentId =
+    persistedStoreOwner.kind === "configured"
+      ? persistedStoreOwner.agentId
+      : tryResolveLegacyCompatibilityAgentId(cfg);
+  if (inferredAgentId) {
+    return { ok: true, agentId: inferredAgentId };
   }
-  const inferredAgentId = normalizeAgentId(parsed.agentId);
-  if (canonicalKey === "global" && !listAgentIds(cfg).includes(inferredAgentId)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
-    };
-  }
+  const selectionError = new AgentSelectionRequiredError(configuredAgentIds, {
+    surface: `session key "${key}"`,
+    hint: "Pass agentId or use an agent-prefixed session key.",
+  });
   return {
-    ok: true,
-    agentId: canonicalKey === "global" ? inferredAgentId : undefined,
+    ok: false,
+    error: errorShape(ErrorCodes.INVALID_REQUEST, selectionError.message),
   };
 }

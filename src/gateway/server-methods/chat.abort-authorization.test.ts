@@ -1081,7 +1081,58 @@ describe("chat.abort queued-turn contract", () => {
     });
     expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
       code: "INVALID_REQUEST",
-      message: "agentId is required for global chat.abort when no compatibility owner exists",
+      message: expect.stringContaining("has no explicit owner"),
+    });
+    expect(active.controller.signal.aborted).toBe(false);
+  });
+
+  it("uses the persisted fixed-store owner for a bare global abort", async () => {
+    const active = createActiveRun("global", { agentId: "ops" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-ops", active]]),
+      getRuntimeConfig: () => ({
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      }),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "global", runId: "run-ops" },
+    });
+
+    expect(respond.mock.calls.at(-1)?.[0]).toBe(true);
+    expect(active.controller.signal.aborted).toBe(true);
+  });
+
+  it("rejects a bare global abort owned by a retired fixed-store agent", async () => {
+    const active = createActiveRun("global", { agentId: "research" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-research", active]]),
+      getRuntimeConfig: () => ({
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "retired" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      }),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "global", runId: "run-research" },
+    });
+
+    expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'session key belongs to retired agent "retired"',
     });
     expect(active.controller.signal.aborted).toBe(false);
   });

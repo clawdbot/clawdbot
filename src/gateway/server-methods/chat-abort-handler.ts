@@ -11,6 +11,7 @@ import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.j
 import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
@@ -69,10 +70,16 @@ export async function handleChatAbortRequestWithLifecycle(
     !agentIdOverride && parsedAbortSessionKey
       ? normalizeAgentId(parsedAbortSessionKey.agentId)
       : undefined;
-  const abortAgentId =
-    agentIdOverride ??
-    inferredSessionAgentId ??
-    (!parsedAbortSessionKey ? compatibilityDefaultAgentId : undefined);
+  const bareSessionAgentResolution = !parsedAbortSessionKey
+    ? resolveRequestedSessionAgentId(abortCfg, rawSessionKey, agentIdOverride)
+    : undefined;
+  if (bareSessionAgentResolution && !bareSessionAgentResolution.ok) {
+    respond(false, undefined, bareSessionAgentResolution.error);
+    return;
+  }
+  const abortAgentId = parsedAbortSessionKey
+    ? (agentIdOverride ?? inferredSessionAgentId)
+    : bareSessionAgentResolution?.agentId;
   if (!abortAgentId) {
     respond(
       false,

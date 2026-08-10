@@ -977,6 +977,9 @@ async function agentViaGatewayCommand(
   const deferRemoteSessionId = Boolean(
     remoteGateway && opts.sessionId?.trim() && !explicitSessionKey,
   );
+  const deferRemoteBareSessionKey = Boolean(
+    remoteGateway && explicitSessionKey && classifySessionKeyShape(explicitSessionKey) !== "agent",
+  );
   const deferAgentDefaultSession = Boolean(
     agentId && !explicitSessionKey && !opts.sessionId?.trim() && !opts.to?.trim(),
   );
@@ -985,19 +988,20 @@ async function agentViaGatewayCommand(
     !agentId &&
     (isUnscopedSessionKeySentinel(explicitSessionKey) || hasImplicitGlobalTarget);
 
-  const sessionKey = preserveImplicitCompatibilitySession
-    ? explicitSessionKey
-    : deferAgentDefaultSession || deferExplicitRecipientSession || deferRemoteSessionId
-      ? undefined
-      : classifySessionKeyShape(explicitSessionKey) === "agent"
-        ? explicitSessionKey
-        : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
-            cfg,
-            agentId,
-            to: opts.to,
-            sessionId: opts.sessionId,
-            sessionKey: explicitSessionKey,
-          }).sessionKey;
+  const sessionKey =
+    preserveImplicitCompatibilitySession || deferRemoteBareSessionKey
+      ? explicitSessionKey
+      : deferAgentDefaultSession || deferExplicitRecipientSession || deferRemoteSessionId
+        ? undefined
+        : classifySessionKeyShape(explicitSessionKey) === "agent"
+          ? explicitSessionKey
+          : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+              cfg,
+              agentId,
+              to: opts.to,
+              sessionId: opts.sessionId,
+              sessionKey: explicitSessionKey,
+            }).sessionKey;
   const abortSessionKey = deferRemoteSessionId
     ? undefined
     : deferExplicitRecipientSession

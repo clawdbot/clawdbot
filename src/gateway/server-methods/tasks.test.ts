@@ -82,9 +82,9 @@ function captureRespond() {
   return { calls, respond };
 }
 
-function createContext() {
+function createContext(config: Record<string, unknown> = {}) {
   return {
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => config,
   } as never;
 }
 
@@ -110,6 +110,7 @@ function createSnapshotTask(overrides: Partial<TaskRecord>): TaskRecord {
 async function runTaskHandler(
   method: "tasks.list" | "tasks.get" | "tasks.cancel" | "tasks.retry" | "tasks.dismiss",
   params: Record<string, unknown>,
+  config: Record<string, unknown> = {},
 ) {
   const { calls, respond } = captureRespond();
   await expectDefined(
@@ -119,7 +120,7 @@ async function runTaskHandler(
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,
-    context: createContext(),
+    context: createContext(config),
     client: null,
     isWebchatConnect: () => false,
   });
@@ -188,6 +189,35 @@ describe("tasks gateway handlers", () => {
       sessionKey: "agent:main:main",
     });
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
+  });
+
+  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "global",
+      requesterAgentId: "ops",
+      ownerKey: "global",
+      scopeKind: "session",
+      runId: "run-global",
+      task: "Owned task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const { calls, payload } = await runTaskHandler(
+      "tasks.list",
+      { sessionKey: "global" },
+      {
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      },
+    );
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {

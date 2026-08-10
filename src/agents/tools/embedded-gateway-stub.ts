@@ -264,9 +264,11 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   );
   const agentIds = new Set(
     sessionKeys?.map((sessionKey) =>
-      requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-        ? requestedAgentId
-        : rt.resolveSessionAgentId({ sessionKey, config: cfg }),
+      rt.resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      }),
     ),
   );
   if (

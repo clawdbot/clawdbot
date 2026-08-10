@@ -34,8 +34,8 @@ import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
+  resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -100,10 +100,17 @@ function resolveExplicitAgentCommandSessionKey(params: {
   ) {
     return params.rawExplicitSessionKey;
   }
+  const unscopedOwnerAgentId =
+    classifySessionKeyShape(params.rawExplicitSessionKey) === "legacy_or_alias" &&
+    (params.agentIdOverride || params.shouldScopeDefaultAgentKey)
+      ? resolveSessionAgentIds({
+          config: params.cfg,
+          agentId: params.agentIdOverride,
+          sessionKey: params.rawExplicitSessionKey,
+        }).sessionAgentId
+      : undefined;
   return scopeLegacySessionKeyToAgent({
-    agentId:
-      params.agentIdOverride ??
-      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
+    agentId: unscopedOwnerAgentId ?? params.agentIdOverride,
     sessionKey: params.rawExplicitSessionKey,
     mainKey: params.cfg.session?.mainKey,
   });

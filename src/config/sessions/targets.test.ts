@@ -580,6 +580,25 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
+  it("uses the persisted owner when --store targets the configured fixed store", () => {
+    const storePath = path.resolve("/tmp/restart-shaped-shared.sqlite");
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {}, ops: {} },
+      },
+    };
+
+    expect(resolveSessionStoreTargets(cfg, { store: storePath })).toEqual([
+      { agentId: "ops", storePath },
+    ]);
+    expect(() => resolveSessionStoreTargets(cfg, { agent: "research", store: storePath })).toThrow(
+      'Session store belongs to agent "ops", not requested agent "research"',
+    );
+  });
+
   it("allows an explicit store path with an explicit fleet agent", () => {
     const storePath = path.resolve("/tmp/explicit-fleet-sessions.json");
     const cfg: OpenClawConfig = {

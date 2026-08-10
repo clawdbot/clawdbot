@@ -52,4 +52,36 @@ describe("requested session agent ownership", () => {
       },
     });
   });
+
+  it("returns typed ownership results for arbitrary bare keys before canonicalization", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+
+    expect(resolveRequestedSessionAgentId(cfg, "thread-1")).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+    });
+    expect(resolveRequestedSessionAgentId(cfg, "thread-1", "research")).toEqual({
+      ok: true,
+      agentId: "research",
+    });
+  });
+
+  it("keeps retired agent-qualified history readable outside global scope", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+
+    expect(resolveRequestedSessionAgentId(cfg, "agent:retired:main")).toEqual({
+      ok: true,
+      agentId: "retired",
+    });
+    expect(
+      resolveRequestedSessionAgentId(
+        { ...cfg, session: { scope: "global" } },
+        "agent:retired:main",
+      ),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
 });

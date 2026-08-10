@@ -78,6 +78,7 @@ import { resolveGatewayConversationReadOrigin } from "../conversation-read-origi
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -216,6 +217,7 @@ function resolveTrustedMessageActionToolContext(params: {
       sourceReplySessionKey: string | undefined;
       sourceReplyFinal: boolean | undefined;
       sourceReplyToolCallId: string | undefined;
+      runtimeAgentId: string | undefined;
     }
   | { ok: false; error: ReturnType<typeof errorShape> } {
   // Current-turn metadata can relax channel read policy. It must come from the
@@ -232,6 +234,7 @@ function resolveTrustedMessageActionToolContext(params: {
       sourceReplySessionKey: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
+      runtimeAgentId: undefined,
     };
   }
   if (Date.now() >= messageActionContext.expiresAtMs) {
@@ -260,8 +263,8 @@ function resolveTrustedMessageActionToolContext(params: {
     (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
     (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId) ||
     (sourceReplySessionKey &&
-      (!sourceReplySessionAgentId ||
-        normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId))
+      sourceReplySessionAgentId &&
+      normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId)
   ) {
     return {
       ok: false,
@@ -280,6 +283,7 @@ function resolveTrustedMessageActionToolContext(params: {
     sourceReplySessionKey,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
     sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
+    runtimeAgentId: identityAgentId,
   };
 }
 
@@ -980,9 +984,22 @@ export const sendHandlers: GatewayRequestHandlers = {
       work: async ({ cfg, channel, accountId, dedupeKey, authorize }) => {
         try {
           const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
-          const agentId =
-            normalizeOptionalString(request.agentId) ??
-            (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+          const requestedAgentId =
+            normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
+          const sessionOwner = sessionKey
+            ? resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId)
+            : undefined;
+          if (sessionOwner && !sessionOwner.ok) {
+            return { ok: false, error: sessionOwner.error, meta: { channel } };
+          }
+          const agentId = sessionOwner?.agentId ?? requestedAgentId;
+          const sourceReplySessionKey = trustedContext.sourceReplySessionKey;
+          const sourceReplyOwner = sourceReplySessionKey
+            ? resolveRequestedSessionAgentId(cfg, sourceReplySessionKey, agentId)
+            : undefined;
+          if (sourceReplyOwner && !sourceReplyOwner.ok) {
+            return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
+          }
           if (accountId) {
             request.params.accountId = accountId;
           }
@@ -1028,7 +1045,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             accountId,
             currentAccountId: trustedContext.requesterAccountId,
-            sessionKey: trustedContext.sourceReplySessionKey ?? sessionKey,
+            sessionKey: sourceReplySessionKey ?? sessionKey,
             sessionId: trustedContext.sessionId,
             agentId,
             toolContext: trustedContext.toolContext,
@@ -1227,11 +1244,15 @@ export const sendHandlers: GatewayRequestHandlers = {
           const providedSessionKey =
             normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
           const explicitAgentId = normalizeOptionalString(request.agentId);
-          const sessionAgentId = providedSessionKey
-            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          const sessionOwner = providedSessionKey
+            ? resolveRequestedSessionAgentId(cfg, providedSessionKey, explicitAgentId)
             : undefined;
-          const defaultAgentId = resolveSessionAgentId({ config: cfg });
-          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+          if (sessionOwner && !sessionOwner.ok) {
+            return { ok: false, error: sessionOwner.error, meta: { channel } };
+          }
+          const sessionAgentId = sessionOwner?.agentId;
+          const effectiveAgentId =
+            explicitAgentId ?? sessionAgentId ?? resolveSessionAgentId({ config: cfg });
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
             mediaUrls,

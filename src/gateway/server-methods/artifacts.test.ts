@@ -279,7 +279,10 @@ describe("artifacts RPC handlers", () => {
   it("applies agentId to direct sessionKey aliases", async () => {
     const { calls } = await listArtifacts(
       { sessionKey: "main", agentId: "work" },
-      { id: "session-alias-agent-scope" },
+      {
+        id: "session-alias-agent-scope",
+        context: runtimeContext({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+      },
     );
 
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:main");
@@ -300,6 +303,26 @@ describe("artifacts RPC handlers", () => {
 
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:primary");
     expectFields(expectFirstArtifact(calls), { sessionKey: "agent:work:primary" });
+  });
+
+  it("loads a bare artifact session through the persisted fixed-store owner", async () => {
+    const { calls } = await listArtifacts(
+      { sessionKey: "global" },
+      {
+        id: "session-persisted-owner",
+        context: runtimeContext({
+          session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+            defaults: { sessionStore: { agentId: "ops" } },
+          },
+        }),
+      },
+    );
+
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expectFields(expectFirstArtifact(calls), { sessionKey: "global" });
   });
 
   it("preserves agent scope when loading global-scope run artifacts", async () => {

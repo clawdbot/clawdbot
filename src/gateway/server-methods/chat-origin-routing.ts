@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -22,6 +23,7 @@ import {
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -138,22 +140,20 @@ export function resolveRequestedChatAgentId(params: {
   cfg?: OpenClawConfig;
   requestedSessionKey: string;
   agentId?: string;
-}): string | undefined {
+}): { ok: true; agentId?: string } | { ok: false; error: ErrorShape } {
   const explicitAgentId = normalizeOptionalText(params.agentId);
-  if (explicitAgentId) {
-    return normalizeAgentId(explicitAgentId);
-  }
   if (!params.cfg) {
-    return undefined;
+    return { ok: true, ...(explicitAgentId ? { agentId: normalizeAgentId(explicitAgentId) } : {}) };
   }
-  const parsed = parseAgentSessionKey(params.requestedSessionKey.trim());
-  if (
-    !parsed?.agentId ||
-    resolveSessionStoreKey({ cfg: params.cfg, sessionKey: params.requestedSessionKey }) !== "global"
-  ) {
-    return undefined;
+  const resolved = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.requestedSessionKey,
+    explicitAgentId,
+  );
+  if (!resolved.ok) {
+    return resolved;
   }
-  return normalizeAgentId(parsed.agentId);
+  return { ok: true, ...(resolved.agentId ? { agentId: resolved.agentId } : {}) };
 }
 
 export function resolveChatSendActiveScopeKey(params: {

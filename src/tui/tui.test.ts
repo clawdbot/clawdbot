@@ -383,6 +383,26 @@ describe("resolveInitialTuiAgentId", () => {
       AgentSelectionRequiredError,
     );
   });
+
+  it("uses the persisted fixed-store owner for an unscoped global session", () => {
+    const restartConfig: OpenClawConfig = {
+      session: { scope: "global", store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+
+    expect(
+      resolveInitialTuiAgentId({
+        cfg: restartConfig,
+        initialSessionInput: "global",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
+    expect(resolveInitialTuiAgentId({ cfg: restartConfig, cwd: "/tmp/openclaw" })).toBe("ops");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {

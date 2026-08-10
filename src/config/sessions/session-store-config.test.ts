@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { isSameFixedSessionStoreConfig } from "./session-store-config.js";
 
@@ -33,4 +34,20 @@ describe("fixed session store identity", () => {
       });
     },
   );
+
+  it("treats pre-creation case variants as owned on case-insensitive filesystems", async () => {
+    await withTempDir({ prefix: "openclaw-fixed-store-case-" }, async (root) => {
+      const ownedStore = path.join(root, "Future", "Sessions.sqlite");
+      const caseVariantStore = path.join(root, "future", "sessions.sqlite");
+      await expect(fs.stat(ownedStore)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(caseVariantStore)).rejects.toMatchObject({ code: "ENOENT" });
+      if (tryResolvePathCaseInsensitive(ownedStore) !== true) {
+        return;
+      }
+
+      expect(isSameFixedSessionStoreConfig(ownedStore, caseVariantStore, process.env)).toBe(true);
+      await expect(fs.stat(ownedStore)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(caseVariantStore)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 });

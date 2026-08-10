@@ -629,4 +629,30 @@ describe("sessions_history redaction", () => {
       unregister();
     }
   });
+
+  it("carries the persisted fixed-store owner for a bare history key", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "global",
+      config: {
+        session: { store: path.join(tempDir!, "owned-shared.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("owned-global", { sessionKey: "global" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    });
+  });
 });

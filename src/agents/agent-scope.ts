@@ -321,20 +321,38 @@ export function resolveSessionAgentIds(params: {
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
-  const scopedAgentId =
-    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : fallbackAgentId);
+  const sessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
   const cfg = params.config ?? {};
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
-  if (!scopedAgentId && persistedStoreOwner.kind === "retired") {
+  if (sessionKeyAgentId && explicitAgentId && explicitAgentId !== sessionKeyAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The agent-scoped session key belongs to "${sessionKeyAgentId}", not "${explicitAgentId}".`,
+    });
+  }
+  const requestedUnscopedAgentId = explicitAgentId ?? fallbackAgentId;
+  if (!sessionKeyAgentId && persistedStoreOwner.kind === "retired") {
     throw new AgentSelectionRequiredError(listAgentIds(cfg), {
       surface: "session agent resolution",
       hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
     });
   }
+  if (
+    !sessionKeyAgentId &&
+    persistedStoreOwner.kind === "configured" &&
+    requestedUnscopedAgentId &&
+    requestedUnscopedAgentId !== persistedStoreOwner.agentId
+  ) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The shared fixed-store row belongs to "${persistedStoreOwner.agentId}", not "${requestedUnscopedAgentId}".`,
+    });
+  }
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const sessionAgentId =
-    scopedAgentId ??
+    sessionKeyAgentId ??
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    requestedUnscopedAgentId ??
     compatibilityAgentId ??
     resolveDefaultAgentId(cfg, {
       surface: "session agent resolution",

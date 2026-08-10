@@ -613,6 +613,68 @@ describe("session_status tool", () => {
     );
   });
 
+  it("uses the persisted fixed-store owner for a bare current session", async () => {
+    resetSessionStore({
+      global: {
+        sessionId: "ops-global",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+      tools: { agentToAgent: { enabled: false } },
+    };
+
+    const result = await createSessionStatusTool({
+      agentSessionKey: "global",
+      config: mockConfig as never,
+    }).execute("owned-global", {});
+
+    expect(result.details).toMatchObject({ ok: true, sessionKey: "global" });
+    expect(getSessionStateVersionMock).toHaveBeenCalledWith("global", "ops");
+  });
+
+  it("does not treat another agent's fixed-store bare key as self", async () => {
+    resetSessionStore({
+      global: {
+        sessionId: "ops-global",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+      tools: { agentToAgent: { enabled: false } },
+    };
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: mockConfig as never,
+    });
+
+    await expect(tool.execute("foreign-global", { sessionKey: "global" })).rejects.toThrow(
+      "Agent-to-agent status is disabled",
+    );
+  });
+
   it("returns read-only state changes and the signal-log head", async () => {
     resetSessionStore({
       main: {

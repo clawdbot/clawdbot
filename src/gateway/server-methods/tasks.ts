@@ -11,15 +11,14 @@ import {
   validateTasksListParams,
   validateTasksRecoveryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   dismissSubagentCompletionDelivery,
   retrySubagentCompletionDelivery,
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -81,12 +80,18 @@ export const tasksHandlers: GatewayRequestHandlers = {
     let sessionKey: string | undefined;
     if (requestedSessionKey) {
       const cfg = context.getRuntimeConfig();
+      const sessionOwner = resolveRequestedSessionAgentId(
+        cfg,
+        requestedSessionKey,
+        normalizeOptionalString(params.agentId),
+      );
+      if (!sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
       sessionKey = canonicalizeMainSessionAlias({
         cfg,
-        agentId:
-          parseAgentSessionKey(requestedSessionKey)?.agentId ??
-          normalizeOptionalString(params.agentId) ??
-          resolveDefaultAgentId(cfg),
+        agentId: sessionOwner.agentId,
         sessionKey: requestedSessionKey,
       });
     }

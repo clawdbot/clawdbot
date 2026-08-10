@@ -195,7 +195,7 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     params.entry?.acp ??
     (params.entry && cachedAcpMeta?.has(params.entry)
       ? cachedAcpMeta.get(params.entry)
-      : readAcpSessionMeta({ sessionKey: params.sessionKey }));
+      : readAcpSessionMeta({ sessionKey: params.sessionKey, agentId: params.agentId }));
   const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,

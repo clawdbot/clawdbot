@@ -20,6 +20,7 @@ import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../talk-handoff.js";
 import {
@@ -147,22 +148,27 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const spawnedBy = normalizeOptionalString(params.spawnedBy);
-        if (
-          normalizeOptionalString(params.sessionKey) &&
-          !spawnedBy &&
-          !canCreateUnscopedManagedRoomSession(client)
-        ) {
+        const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+        if (requestedSessionKey && !spawnedBy && !canCreateUnscopedManagedRoomSession(client)) {
           respondInvalidRequest(
             respond,
             `talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
           );
           return;
         }
+        const requestedOwner = requestedSessionKey
+          ? resolveRequestedSessionAgentId(context.getRuntimeConfig(), requestedSessionKey)
+          : undefined;
+        if (requestedOwner && !requestedOwner.ok) {
+          respond(false, undefined, requestedOwner.error);
+          return;
+        }
         const resolvedSession = await resolveSessionKeyFromResolveParams({
           cfg: context.getRuntimeConfig(),
           client,
           p: {
-            key: params.sessionKey,
+            key: requestedSessionKey,
+            ...(requestedOwner?.agentId ? { agentId: requestedOwner.agentId } : {}),
             ...(spawnedBy ? { spawnedBy } : {}),
             includeGlobal: true,
             includeUnknown: true,
@@ -227,7 +233,16 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requested: params,
           defaults: realtimeConfig,
         });
-        const agentId = resolveTalkSessionAgentId(runtimeConfig, params.sessionKey);
+        const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+        const requestedOwner = requestedSessionKey
+          ? resolveRequestedSessionAgentId(runtimeConfig, requestedSessionKey)
+          : undefined;
+        if (requestedOwner && !requestedOwner.ok) {
+          respond(false, undefined, requestedOwner.error);
+          return;
+        }
+        const agentId =
+          requestedOwner?.agentId ?? resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey);
         const resolution = resolveConfiguredRealtimeVoiceProvider({
           configuredProviderId: realtimeConfig.provider,
           providerConfigs: realtimeConfig.providers,

@@ -221,6 +221,49 @@ describe("resolveSessionKeyForRequest", () => {
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
 
+  it("prefers the requested agent's scoped direct match over a newer foreign row", () => {
+    const sharedStore = {
+      "agent:ops:work": { sessionId: "shared-session", updatedAt: 20 },
+      "agent:research:work": { sessionId: "shared-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+
+    expect(
+      resolveStoredSessionKeyForSessionId({
+        cfg: {
+          session: { store: "/stores/shared.sqlite" },
+          agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        },
+        sessionId: "shared-session",
+        agentId: "research",
+      }),
+    ).toMatchObject({
+      agentId: "research",
+      sessionKey: "agent:research:work",
+      sessionStore: sharedStore,
+      storePath: "/stores/shared.sqlite",
+    });
+  });
+
+  it("rejects a direct session-id lookup with only foreign scoped matches", () => {
+    mockSessionStores({
+      "/stores/shared.sqlite": {
+        "agent:ops:work": { sessionId: "ops-session", updatedAt: 20 },
+      },
+    });
+
+    expect(() =>
+      resolveStoredSessionKeyForSessionId({
+        cfg: {
+          session: { store: "/stores/shared.sqlite" },
+          agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        },
+        sessionId: "ops-session",
+        agentId: "research",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
   it("resolves a scoped direct session-id match despite a retired fixed-store owner", () => {
     const researchStore = {
       "agent:research:work": { sessionId: "research-session", updatedAt: 10 },

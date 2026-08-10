@@ -129,6 +129,33 @@ describe("sessions.search gateway method", () => {
     );
   });
 
+  it("rejects a bare fixed-store key scoped to a non-owner before transcript lookup", async () => {
+    cfg = {
+      session: { store: "/stores/shared/sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    const respond = await callSearch({
+      agentId: "research",
+      query: "needle",
+      sessionKeys: ["global"],
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: 'agent "research" does not match session key agent "ops"',
+      }),
+    );
+    expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+  });
+
   it("filters incognito candidates before applying a non-admin result limit", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-newer";
     const durableKey = "agent:main:dashboard:durable";

@@ -2,22 +2,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveExplicitAgentSessionKey,
-} from "../../config/sessions.js";
+import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
-import {
-  classifySessionKeyShape,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   validateExpectedExistingSessionTarget,
   type ExpectedExistingSessionConstraint,
@@ -106,25 +100,17 @@ export async function prepareAgentRequestRouting(params: {
     );
     return undefined;
   }
-  if (!agentId && requestedSessionKeyRaw) {
-    const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
-    const inferredAgentId =
-      parsed &&
-      resolveSessionStoreKey({ cfg: params.cfg, sessionKey: requestedSessionKeyRaw }) === "global"
-        ? normalizeAgentId(parsed.agentId)
-        : undefined;
-    if (inferredAgentId && !knownAgents.includes(inferredAgentId)) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent params: unknown agent id "${parsed?.agentId}"`,
-        ),
-      );
+  if (requestedSessionKeyRaw) {
+    const requestedSessionAgent = resolveRequestedSessionAgentId(
+      params.cfg,
+      requestedSessionKeyRaw,
+      agentId,
+    );
+    if (!requestedSessionAgent.ok) {
+      params.respond(false, undefined, requestedSessionAgent.error);
       return undefined;
     }
-    agentId = inferredAgentId;
+    agentId = requestedSessionAgent.agentId;
   }
   const explicitRecipientChannel = normalizeMessageChannel(params.request.channel);
   const explicitRecipient =
@@ -183,29 +169,6 @@ export async function prepareAgentRequestRouting(params: {
     );
     return undefined;
   }
-  if (agentId && requestedSessionKeyRaw) {
-    const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
-    const canonicalKey = resolveSessionStoreKey({
-      cfg: params.cfg,
-      sessionKey: requestedSessionKeyRaw,
-    });
-    const sessionAgentId = parsed?.agentId
-      ? normalizeAgentId(parsed.agentId)
-      : canonicalKey === "global"
-        ? agentId
-        : resolveAgentIdFromSessionKey(requestedSessionKeyRaw, agentId);
-    if (sessionAgentId !== agentId) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent params: agent "${params.request.agentId}" does not match session key agent "${sessionAgentId}"`,
-        ),
-      );
-      return undefined;
-    }
-  }
   if (
     requestedSessionKey &&
     respondUnavailableAgentSessionForKey({
@@ -229,7 +192,11 @@ export async function prepareAgentRequestRouting(params: {
   }
   const preAcceptedReservedSessionKey =
     requestedSessionKey &&
-    resolveSessionStoreKey({ cfg: params.cfg, sessionKey: requestedSessionKey }) === "global"
+    resolveSessionStoreKey({
+      cfg: params.cfg,
+      sessionKey: requestedSessionKey,
+      storeAgentId: agentId,
+    }) === "global"
       ? "global"
       : requestedSessionKey;
   // Keyless runs still need the run-id reservation before asynchronous preparation,

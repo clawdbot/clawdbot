@@ -32,7 +32,8 @@ vi.mock("./open-path.js", async () => {
   return { ...actual, execOpenPath: hoisted.execOpenPath };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
@@ -103,6 +104,76 @@ describe("sessions.files RPC handlers", () => {
     // every supported platform (open / xdg-open / PowerShell Start-Process).
     expect(hoisted.execOpenPath).toHaveBeenCalledWith(
       resolveOpenPathCommand(listPayload.root as string),
+    );
+  });
+
+  it("uses the persisted fixed-store owner for a bare session workspace", async () => {
+    const cfg = {
+      session: { store: path.join(workspaceRoot, "shared.sqlite"), scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+    hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "ops",
+      canonicalKey: "global",
+      cfg,
+      storePath: cfg.session.store,
+      entry: { sessionId: "sess-owned-global" },
+    });
+    hoisted.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId: string) =>
+      agentId === "ops" ? workspaceRoot : path.join(workspaceRoot, "wrong-research"),
+    );
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.list",
+        { sessionKey: "global" },
+        { getRuntimeConfig: () => cfg },
+      ),
+    );
+
+    expect(payload.root).toBe(workspaceRoot);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.readSessionTranscriptVisibleMessageDelta).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
+    const cfg = {
+      session: { store: path.join(workspaceRoot, "shared.sqlite"), scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+
+    const error = expectError(
+      await invokeSessionFilesHandler(
+        "sessions.files.set",
+        {
+          sessionKey: "global",
+          agentId: "research",
+          path: "ui/chat.ts",
+          content: "foreign write\n",
+          expectedHash: hashContent("export const chat = true;\n"),
+        },
+        { getRuntimeConfig: () => cfg },
+      ),
+    );
+
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'agent "research" does not match session key agent "ops"',
+    });
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(workspaceRoot, "ui/chat.ts"), "utf8")).toBe(
+      "export const chat = true;\n",
     );
   });
 

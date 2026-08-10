@@ -86,6 +86,30 @@ describe("sessions tool", () => {
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
   });
 
+  it("carries the persisted fixed-store owner for a bare patch key", async () => {
+    const callGateway = vi.fn().mockResolvedValue({});
+    const tool = createSessionsTool({
+      agentSessionKey: "global",
+      config: {
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway,
+    });
+
+    await tool.execute("owned-patch", { action: "patch", label: "Ops" });
+
+    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "ops",
+      label: "Ops",
+    });
+  });
+
   it("cannot patch an incognito session through the cross-session tool", async () => {
     const sessionKey = "agent:main:dashboard:incognito-private";
     const callGateway = vi.fn();

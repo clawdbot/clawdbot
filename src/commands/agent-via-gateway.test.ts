@@ -73,6 +73,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
       ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
     },
     session: {
@@ -522,14 +523,27 @@ describe("agentCliCommand", () => {
     "delegates remote bare session key %s ownership to the gateway",
     async (sessionKey) => {
       mockRemoteGatewayRoster("explicit", ["ops", "research"]);
-      await withTempStore(async () => {
-        await agentCliCommand({ message: "hi", sessionKey }, runtime);
+      await withTempStore(
+        async () => {
+          await agentCliCommand({ message: "hi", sessionKey }, runtime);
 
-        expect(callGateway).toHaveBeenCalledOnce();
-        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
-        expect(request.method).toBe("agent");
-        expect(request.params).toMatchObject({ agentId: undefined, sessionKey });
-      }, remoteGatewayConfig);
+          expect(callGateway).toHaveBeenCalledOnce();
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "agent request",
+          );
+          expect(request.method).toBe("agent");
+          expect(request.params).toMatchObject({ agentId: undefined, sessionKey });
+          expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+        },
+        {
+          ...remoteGatewayConfig,
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        },
+      );
     },
   );
 

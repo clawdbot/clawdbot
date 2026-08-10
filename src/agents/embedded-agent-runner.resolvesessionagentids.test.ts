@@ -59,6 +59,84 @@ describe("resolveSessionAgentIds", () => {
     ).toThrow(AgentSelectionRequiredError);
   });
 
+  it("rejects an explicit agent that conflicts with a configured fixed-store owner", () => {
+    expect(() =>
+      resolveSessionAgentIds({
+        agentId: "main",
+        sessionKey: "global",
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "beta" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
+  it("rejects a fallback agent that conflicts with a configured fixed-store owner", () => {
+    expect(() =>
+      resolveSessionAgentIds({
+        fallbackAgentId: "main",
+        sessionKey: "global",
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "beta" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
+  it("rejects an explicit agent when the unscoped fixed-store owner retired", () => {
+    expect(() =>
+      resolveSessionAgentIds({
+        agentId: "beta",
+        sessionKey: "global",
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "retired" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
+  it("keeps an agent-scoped key available when the fixed-store owner retired", () => {
+    expect(
+      resolveSessionAgentIds({
+        agentId: "beta",
+        sessionKey: "agent:beta:main",
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "retired" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }).sessionAgentId,
+    ).toBe("beta");
+  });
+
+  it("rejects an explicit agent that conflicts with an agent-scoped key", () => {
+    expect(() =>
+      resolveSessionAgentIds({
+        agentId: "main",
+        sessionKey: "agent:beta:main",
+        config: cfg,
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
   it("keeps the agent id for provider-qualified agent sessions", () => {
     // Channel-qualified agent session keys still carry the owning agent in the
     // second segment.

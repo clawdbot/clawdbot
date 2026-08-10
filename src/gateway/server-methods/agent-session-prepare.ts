@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
   evaluateSessionFreshness,
@@ -24,6 +23,7 @@ import { isRecoverableTerminalSessionStatus } from "../../config/sessions/termin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,
@@ -61,6 +61,7 @@ type PreparedAgentSession = {
 };
 
 export function prepareAgentSession(params: {
+  cfg: OpenClawConfig;
   requestedSessionKey: string;
   requestedSessionId?: string;
   expectedExistingSessionId?: string;
@@ -73,9 +74,19 @@ export function prepareAgentSession(params: {
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
 }): PreparedAgentSession | undefined {
+  const requestedSessionAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.requestedSessionKey,
+    params.agentId,
+  );
+  if (!requestedSessionAgent.ok) {
+    params.respond(false, undefined, requestedSessionAgent.error);
+    return undefined;
+  }
+  const requestedAgentId = requestedSessionAgent.agentId;
   const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadSessionEntry(
     params.requestedSessionKey,
-    { ...(params.agentId ? { agentId: params.agentId } : {}), clone: false },
+    { agentId: requestedAgentId, clone: false },
   );
   if (params.expectedExistingSessionId && entry?.sessionId !== params.expectedExistingSessionId) {
     params.respond(
@@ -194,9 +205,7 @@ export function prepareAgentSession(params: {
   }
 
   const canonicalSessionAgentId =
-    canonicalKey === "global"
-      ? (params.agentId ?? resolveDefaultAgentId(cfg))
-      : resolveAgentIdFromSessionKey(canonicalKey);
+    canonicalKey === "global" ? requestedAgentId : resolveAgentIdFromSessionKey(canonicalKey);
   const now = Date.now();
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg: cfg.session,

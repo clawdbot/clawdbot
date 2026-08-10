@@ -126,6 +126,36 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
+  it("rejects an exact bare key scoped to a different fixed-store owner", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-owner-conflict-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "shared-sessions.sqlite");
+      const cfg = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } satisfies OpenClawConfig;
+      await seedSessionStore(storePath, {
+        global: { sessionId: "sess-owned-global", updatedAt: freshUpdatedAt() },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: "global", agentId: "research" },
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'agent "research" does not match session key agent "ops"',
+        },
+      });
+    });
+  });
+
   it("preserves cross-agent ambiguity when agentId is absent", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-cross-agent-", async () => {
       const cfg: OpenClawConfig = {

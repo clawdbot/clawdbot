@@ -21,6 +21,7 @@ import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,
@@ -639,9 +640,18 @@ async function handleToolsEffectiveRequest(params: {
   if (requestedAgentId === null) {
     return;
   }
+  const sessionOwner = resolveRequestedSessionAgentId(
+    cfg,
+    params.rawParams.sessionKey,
+    requestedAgentId,
+  );
+  if (!sessionOwner.ok) {
+    params.respond(false, undefined, sessionOwner.error);
+    return;
+  }
   const trustedContext = resolveTrustedToolsEffectiveContext({
     sessionKey: params.rawParams.sessionKey,
-    requestedAgentId,
+    requestedAgentId: sessionOwner.agentId,
     respond: params.respond,
   });
   if (!trustedContext) {

@@ -11,7 +11,7 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 
 /** Config surface that supplied a resolved model runtime policy. */
@@ -153,8 +153,8 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
-  const scoped = Boolean(params.agentId?.trim() || parseAgentSessionKey(params.sessionKey));
-  const sessionAgentId = scoped
+  const hasSessionScope = Boolean(params.agentId?.trim() || params.sessionKey?.trim());
+  const sessionAgentId = hasSessionScope
     ? resolveSessionAgentIds({
         config: params.config,
         agentId: params.agentId,

@@ -116,6 +116,7 @@ export async function handleDirectiveOnly(
   });
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId: activeAgentId,
     cfg: params.cfg,
     ctx: params.ctx,
     sessionKey: params.sessionKey,

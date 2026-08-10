@@ -556,6 +556,45 @@ it("authorizes a custom main alias against its persisted fixed-store owner", asy
   ).toBe("accepted");
 });
 
+it("authorizes an arbitrary bare key against its persisted fixed-store owner", async () => {
+  const config = {
+    session: { store: "/tmp/arbitrary-shared.sqlite" },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string }) =>
+      request.method === "sessions.resolve"
+        ? { key: "incident-42" }
+        : { runId: "arbitrary-bare", acceptedAt: 1 },
+    );
+
+  const result = requireDetails(
+    await createSessionsSendTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config,
+    }).execute("foreign-arbitrary", {
+      sessionKey: "incident-42",
+      message: "status?",
+      timeoutSeconds: 0,
+    }),
+  );
+
+  expect(result).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+  expect(callGatewayMock.mock.calls).not.toContainEqual([
+    expect.objectContaining({ method: "agent" }),
+  ]);
+});
+
 describe("extractStoredAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {
@@ -901,7 +940,7 @@ describe("sessions_list gating", () => {
 
     expect(callGatewayMock).toHaveBeenLastCalledWith({
       method: "chat.history",
-      params: { sessionKey: "current", limit: 1 },
+      params: { sessionKey: "current", agentId: "main", limit: 1 },
     });
   });
 });

@@ -35,7 +35,10 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
       client: null,
       isWebchatConnect: () => false,
       respond: responder.respond,
-      context: context as never,
+      context: {
+        getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+        ...context,
+      } as never,
     });
     return responder.calls;
   };
@@ -113,6 +116,7 @@ export function createSessionEntryFixture(
   storePath = path.join(workspaceRoot, ".sessions.json"),
 ) {
   return {
+    agentId: "main",
     canonicalKey: "agent:main:main",
     cfg: {},
     storePath,
@@ -131,6 +135,7 @@ export function useSqliteSession(
   storePath = path.join(workspaceRoot, `${sessionId}.sqlite`),
 ): string {
   loadSessionEntry.mockReturnValue({
+    agentId: "main",
     canonicalKey: "agent:main:main",
     cfg: {},
     storePath,

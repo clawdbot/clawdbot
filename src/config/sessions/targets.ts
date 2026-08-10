@@ -27,7 +27,10 @@ import {
   resolveSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
-import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
+import {
+  resolvePersistedSessionStoreOwner,
+  resolvePersistedSessionStoreOwnerForTarget,
+} from "./session-store-owner.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
@@ -678,9 +681,30 @@ export function resolveSessionStoreTargets(
     throw new Error("--store cannot be combined with --all-agents");
   }
   if (opts.store) {
-    const defaultAgentId = hasAgent
-      ? normalizeAgentId(opts.agent ?? "")
-      : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
+    const persistedStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+      config: cfg,
+      sessionKey: "main",
+      storePath: opts.store,
+      env,
+    });
+    if (persistedStoreOwner.kind === "retired") {
+      throw new Error(`Session store owner is retired: ${persistedStoreOwner.agentId}`);
+    }
+    const requestedAgentId = hasAgent ? normalizeAgentId(opts.agent ?? "") : undefined;
+    if (
+      requestedAgentId &&
+      persistedStoreOwner.kind === "configured" &&
+      persistedStoreOwner.agentId !== requestedAgentId
+    ) {
+      throw new Error(
+        `Session store belongs to agent "${persistedStoreOwner.agentId}", not requested agent "${requestedAgentId}".`,
+      );
+    }
+    const defaultAgentId =
+      requestedAgentId ??
+      (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+      tryResolveLegacyCompatibilityAgentId(cfg) ??
+      resolveDefaultAgentId(cfg);
     const knownAgentIds = new Set(listAgentIds(cfg).map(normalizeAgentId));
     if (hasAgent && !knownAgentIds.has(defaultAgentId)) {
       throw new Error(

@@ -19,6 +19,7 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
@@ -66,8 +67,20 @@ export function prepareAgentRequestPreflight(params: {
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const requestSessionKey = request.sessionKey?.trim();
+  const parsedRequestSessionKey = requestSessionKey
+    ? parseAgentSessionKey(requestSessionKey)
+    : undefined;
+  const bareSessionAgent =
+    requestSessionKey && !parsedRequestSessionKey
+      ? resolveRequestedSessionAgentId(cfg, requestSessionKey, request.agentId)
+      : undefined;
+  if (bareSessionAgent && !bareSessionAgent.ok) {
+    params.respond(false, undefined, bareSessionAgent.error);
+    return undefined;
+  }
   const selectedAgentId = requestSessionKey
-    ? (parseAgentSessionKey(requestSessionKey)?.agentId ??
+    ? (parsedRequestSessionKey?.agentId ??
+      bareSessionAgent?.agentId ??
       normalizeOptionalString(request.agentId) ??
       tryResolveLegacyCompatibilityAgentId(cfg))
     : (normalizeOptionalString(request.agentId) ?? tryResolveLegacyCompatibilityAgentId(cfg));
