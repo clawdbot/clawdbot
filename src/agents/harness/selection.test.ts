@@ -485,7 +485,10 @@ describe("runAgentHarnessAttempt", () => {
     await expect(
       runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
     ).resolves.toMatchObject({
-      assistant: { content: [{ type: "text", text: "final answer" }] },
+      outcome: "answered",
+      result: {
+        assistant: { content: [{ type: "text", text: "final answer" }] },
+      },
     });
     expect(runAttempt).not.toHaveBeenCalled();
     expect(hostAuthorityActive).toBe(false);
