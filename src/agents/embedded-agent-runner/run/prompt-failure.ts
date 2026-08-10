@@ -125,8 +125,12 @@ export async function handleEmbeddedPromptFailure(input: {
     return { action: "complete", result: blockedResult };
   }
 
-  const promptFailoverReason =
+  const classifiedPromptReason =
     promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider: input.provider });
+  const promptFailoverReason =
+    promptErrorDetails.status === 500 && classifiedPromptReason === "timeout"
+      ? "server_error"
+      : classifiedPromptReason;
   const promptProfileFailureReason = input.resolveAuthProfileFailureReason(promptFailoverReason, {
     providerStarted: input.promptErrorSource === "prompt",
     transientRateLimit:
@@ -268,7 +272,7 @@ export async function handleEmbeddedPromptFailure(input: {
     logFailoverDecision("fallback_model", { status });
     await input.maybeBackoffBeforeOverloadFailover(promptFailoverReason);
     throw (
-      normalizedPromptFailover ??
+      (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
       new FailoverError(errorText, {
         reason: fallbackReason,
         provider: input.provider,

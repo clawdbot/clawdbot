@@ -371,9 +371,8 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       expect(outcome.model).toBe("mock-3");
       expect(outcome.attempts).toMatchObject([
         { provider: "openai", model: "mock-1", reason: expect.stringMatching(/^auth/) },
-        // BUG(refactor-02): prompt-stage HTTP 500 currently records as timeout even though it
-        // takes the intended cross-model failover path.
-        { provider: "groq", model: "mock-2", reason: "timeout" },
+        // FIXED(refactor-02): the prompt-stage HTTP 500 keeps its concrete server-error reason.
+        { provider: "groq", model: "mock-2", reason: "server_error" },
       ]);
       expect(outcome.result.payloads?.[0]?.text).toContain("fallback chain ok");
 
@@ -472,10 +471,10 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         ["groq", "mock-2", "groq:p1"],
         ["groq", "mock-3", "groq:p1"],
       ]);
-      // FIXED(refactor-02): exhaustion retains the exact prose and carries typed candidate attempts.
+      // FIXED(refactor-02): the concrete prompt reason propagates through exhaustion prose and attempts.
       expect(error.message).toMatch(/^All models failed \(3\): /);
       expect(error.message).toMatch(
-        /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(timeout\) \| groq\/mock-3: .* \(billing\)/,
+        /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(server_error\) \| groq\/mock-3: .* \(billing\)/,
       );
       expect(isFailoverError(error)).toBe(true);
       if (!isFailoverError(error)) {
@@ -483,7 +482,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       }
       expect(error.attempts).toMatchObject([
         { provider: "openai", model: "mock-1", reason: "auth" },
-        { provider: "groq", model: "mock-2", reason: "timeout" },
+        { provider: "groq", model: "mock-2", reason: "server_error" },
         { provider: "groq", model: "mock-3", reason: "billing" },
       ]);
       const usageStats = await readUsageStats(agentDir);
