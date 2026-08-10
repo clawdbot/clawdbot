@@ -269,7 +269,9 @@ describe("resolveApprovalOverGateway", () => {
       },
     ) as GatewayNativeApprovalRuntime["request"];
     const runtime = {
-      request: scopedRequest,
+      // A concrete mock implementation can never satisfy the generic <T> request
+      // signature structurally; keep the Mock for assertions and cast here.
+      request: scopedRequest as GatewayNativeApprovalRuntime["request"],
       requestRoute: vi.fn(),
       routeCoordinator: { doesAccountHandleRequest: () => true } as never,
       subscribe: vi.fn(),
