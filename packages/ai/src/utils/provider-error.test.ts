@@ -100,6 +100,11 @@ describe("projectProviderError", () => {
       body: '{"type":"video","data":[65,66,67,68]}',
       leaked: "[65,66,67,68]",
     },
+    {
+      name: "array following a JSON literal",
+      body: '[true,{"b64_json":"QUJDRA=="}]',
+      leaked: "QUJDRA==",
+    },
   ])("redacts $name from a JSON response-body string", ({ body, leaked }) => {
     const projected = projectProviderError({ status: 500, body });
 
@@ -111,6 +116,22 @@ describe("projectProviderError", () => {
 
     expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
   });
+
+  it("preserves plain bracketed diagnostic text", () => {
+    const body = "[ERROR] provider unavailable";
+
+    expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+  });
+
+  it.each(['{"type":"video","data":"QUJDRA=="', '[undefined,{"b64_json":"QUJDRA=="}]'])(
+    "fails closed for malformed JSON response-body strings",
+    (body) => {
+      const projected = projectProviderError({ status: 500, body });
+
+      expect(JSON.stringify(projected)).not.toContain("QUJDRA==");
+      expect(projected.errorBody).toBe("[Malformed diagnostic JSON redacted]");
+    },
+  );
 
   it("retains readable status and body from a hostile non-Error value", () => {
     const error = {

@@ -84,6 +84,13 @@ describe("sanitizeDiagnosticPayload", () => {
     expect(sanitizeDiagnosticPayload(value)).toBe(value);
   });
 
+  it("fails closed for malformed JSON diagnostic strings", () => {
+    const sanitized = sanitizeDiagnosticPayload('{"type":"video","data":"QUJDRA=="');
+
+    expect(sanitized).not.toContain(MEDIA_DATA);
+    expect(sanitized).toBe("[Malformed diagnostic JSON redacted]");
+  });
+
   it("fails closed for hostile diagnostic properties", () => {
     const value = { type: "video", data: MEDIA_DATA };
     Object.defineProperty(value, "hostile", {

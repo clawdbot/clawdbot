@@ -16,6 +16,7 @@ const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
 const MAX_DIAGNOSTIC_DEPTH = 8;
+const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z][A-Za-z0-9 _-]*\](?:\s+[^{}[\]":,]*)?\s*$/u;
 
 export function isCredentialFieldName(key: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(key.replaceAll(/[^a-z0-9]/gi, ""));
@@ -159,8 +160,7 @@ export function projectDiagnosticValue(
 /** Redacts bounded structured JSON while preserving harmless diagnostic text byte-for-byte. */
 export function redactDiagnosticText(value: string): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
-  const first = value.trimStart()[0];
-  if (first !== "{" && first !== "[") {
+  if (!/^\s*[[{]/u.test(value) || PLAIN_BRACKETED_TEXT_RE.test(value)) {
     return text;
   }
   if (value.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
@@ -171,6 +171,6 @@ export function redactDiagnosticText(value: string): string {
     const projected = projectDiagnosticValue(JSON.parse(value), new WeakSet(), 0, false, state);
     return state.changed ? stableStringify(projected) : text;
   } catch {
-    return text;
+    return "[Malformed diagnostic JSON redacted]";
   }
 }
