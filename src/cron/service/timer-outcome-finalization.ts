@@ -2,9 +2,9 @@
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { clearQueuedCronRunReservationMarker, releaseQueuedCronRun } from "./run-admission.js";
+import { releaseQueuedCronRun } from "./run-admission.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import {
   ensureLoaded,
@@ -26,10 +26,6 @@ type CronTaskRunFinalizationOutcome = {
   childSessionKey?: string;
   triggerEval?: { fired: boolean };
   activeJobMarker?: CronActiveJobMarker;
-};
-
-type StartupCatchupReservationPlan = {
-  candidates: readonly { jobId: string; reservedAtMs: number; reservationIdentity: object }[];
 };
 
 type CompletedCronRunOutcomeFinalizationOptions = {
@@ -223,33 +219,4 @@ function finishRetiredCronTaskRuns<T extends CronTaskRunFinalizationOutcome>(
       tryFinishCronTaskRunWithoutHistory(state, outcome);
     }
   }
-}
-
-export function clearUnstartedStartupCatchupReservationMarkers(
-  state: CronServiceState,
-  plan: StartupCatchupReservationPlan,
-  outcomes: readonly CronTaskRunFinalizationOutcome[],
-): Array<{ jobId: string; reservationIdentity: object }> {
-  const pendingReleases: Array<{ jobId: string; reservationIdentity: object }> = [];
-  const startedJobIds = new Set(outcomes.map((outcome) => outcome.jobId));
-  for (const candidate of plan.candidates) {
-    if (startedJobIds.has(candidate.jobId)) {
-      continue;
-    }
-    const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
-    if (
-      job &&
-      clearQueuedCronRunReservationMarker(
-        state,
-        candidate.jobId,
-        candidate.reservationIdentity,
-        job.state,
-      )
-    ) {
-      pendingReleases.push(candidate);
-    } else {
-      releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
-    }
-  }
-  return pendingReleases;
 }

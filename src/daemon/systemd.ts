@@ -26,7 +26,7 @@ import {
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   hasEnvironmentFileSource,
@@ -68,7 +68,7 @@ const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
@@ -523,7 +523,7 @@ async function assertNoSystemGatewayOwnership(env: GatewayServiceEnv): Promise<v
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
   // Support the common unit-specifier used in user services.
-  return input.replaceAll("%h", toPosixPath(resolveHomeDir(env)));
+  return input.replaceAll("%h", toPosixPath(resolveDaemonHomeDir(env)));
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {

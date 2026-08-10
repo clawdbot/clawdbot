@@ -11,18 +11,6 @@ const requestGatewayRestartWithSignalAdmission = vi.hoisted(() => vi.fn());
 const readActiveGatewayLockIdentity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart-coordinator.js", () => ({
-  createSafeGatewayRestartPreflight: vi.fn(() => ({
-    safe: true,
-    counts: {
-      queueSize: 0,
-      pendingReplies: 0,
-      embeddedRuns: 0,
-      activeTasks: 0,
-      totalActive: 0,
-    },
-    blockers: [],
-    summary: "safe to restart now",
-  })),
   requestSafeGatewayRestart: (opts: unknown) => requestSafeGatewayRestart(opts),
 }));
 

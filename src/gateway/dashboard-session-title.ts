@@ -10,6 +10,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -27,6 +29,57 @@ const DASHBOARD_SESSION_TITLE_PROMPT =
 // settle: the label generator aborts internally (TIMEOUT_MS), so a hung model
 // call cannot pin an entry here and block future attempts.
 const sessionTitleRequests = new Map<string, Promise<boolean>>();
+
+function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
+  const mimeType = attachment.mimeType?.trim().toLowerCase();
+  const content = attachment.content;
+  if (!mimeType?.startsWith("text/") || typeof content !== "string" || !content) {
+    return null;
+  }
+  if (!isValidAttachmentBase64(content)) {
+    return null;
+  }
+  // Three UTF-8 bytes per UTF-16 code unit plus one partial code point is sufficient
+  // to fill the title cap without decoding a multi-megabyte pasted attachment.
+  const maxBase64Chars = Math.ceil((maxChars * 3 + 3) / 3) * 4;
+  const truncated = content.length > maxBase64Chars;
+  const prefixLength = truncated ? maxBase64Chars : content.length;
+  const prefix = content.slice(0, prefixLength);
+  const bytes = Buffer.from(prefix, "base64");
+  try {
+    // Streaming mode withholds an incomplete trailing code point while still
+    // rejecting malformed UTF-8 inside the bounded prefix.
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: truncated });
+  } catch {
+    return null;
+  }
+}
+
+/** Builds the bounded model source shared by dashboard and worktree titles. */
+export function buildDashboardSessionTitleSource(params: {
+  message: string;
+  attachments?: readonly ChatAttachment[];
+}): string {
+  const visibleMessage = stripInlineDirectiveTagsForDisplay(params.message).text.trim();
+  const slashCommand = visibleMessage.startsWith("/");
+  let source = slashCommand ? "" : visibleMessage;
+  for (const attachment of params.attachments ?? []) {
+    const separatorLength = source ? 1 : 0;
+    const remaining = DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS - source.length - separatorLength;
+    if (remaining <= 0) {
+      break;
+    }
+    const text = decodeTextAttachmentPrefix(attachment, remaining)?.trim();
+    if (!text) {
+      continue;
+    }
+    source += `${source ? "\n" : ""}${truncateUtf16Safe(text, remaining)}`;
+  }
+  if (!source && slashCommand) {
+    return truncateUtf16Safe(visibleMessage, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
+  }
+  return truncateUtf16Safe(source.trim(), DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
+}
 
 type SessionTitleAttempt =
   | { kind: "persisted" }
@@ -98,8 +151,12 @@ export async function generateDashboardSessionTitle(params: {
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;
   userMessage: string;
+  attachments?: readonly ChatAttachment[];
 }): Promise<string | null> {
-  const sourceText = params.userMessage.trim();
+  const sourceText = buildDashboardSessionTitleSource({
+    message: params.userMessage,
+    attachments: params.attachments,
+  });
   if (!sourceText || sourceText.startsWith("/")) {
     return null;
   }

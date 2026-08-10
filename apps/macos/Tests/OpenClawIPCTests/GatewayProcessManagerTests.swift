@@ -752,7 +752,7 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `clears last failure when health succeeds`() async throws {
+    @Test func `routine readiness preserves an attached gateway and control channel`() async throws {
         let url = try #require(URL(string: "ws://127.0.0.1:9"))
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
             GatewayTestWebSocketTask(
@@ -765,7 +765,10 @@ struct GatewayProcessManagerTests {
         manager.setTestingDesiredActive(true)
         manager.setTestingSkipControlChannelRefresh(true)
         manager.setTestingLastFailureReason("health failed")
-        manager.setTestingStatus(.failed("Gateway did not start in time"))
+        manager.setTestingStatus(.attachedExisting(details: "pid 4343"))
+        manager._testClearControlChannelRefreshForces()
+        manager._testClearLaunchAgentInstallEvidence()
+        manager._testSetLastObservedGatewayPID(4343)
         let readinessPort = GatewayEnvironment.gatewayPort()
         manager._testSetLaunchAgentReadinessFailure(port: readinessPort, pid: 4242)
         let descriptor = self.gatewayDescriptor(pid: 4343)
@@ -775,6 +778,9 @@ struct GatewayProcessManagerTests {
             manager.setTestingDesiredActive(false)
             manager.setTestingSkipControlChannelRefresh(false)
             manager.setTestingLastFailureReason(nil)
+            manager._testClearControlChannelRefreshForces()
+            manager._testClearLaunchAgentInstallEvidence()
+            manager._testSetLastObservedGatewayPID(nil)
             manager._testClearLaunchAgentReadinessFailure()
         }
 
@@ -782,7 +788,9 @@ struct GatewayProcessManagerTests {
         #expect(ready)
         #expect(manager.lastFailureReason == nil)
         #expect(!manager._testHasLaunchAgentReadinessFailure())
-        #expect(manager.status == .running(details: "pid 4343"))
+        #expect(manager.status == .attachedExisting(details: "pid 4343"))
+        #expect(manager._testControlChannelRefreshForces().last == false)
+        await connection.shutdown()
         await PortGuardian.shared.setTestingDescriptor(nil, forPort: readinessPort)
     }
 
@@ -848,7 +856,7 @@ struct GatewayProcessManagerTests {
                 })
         }
         manager.setTestingDesiredActive(true)
-        manager.setTestingStatus(.running(details: "pid 4242"))
+        manager.setTestingStatus(.attachedExisting(details: "pid 4242"))
         manager.setTestingSkipControlChannelRefresh(true)
         manager._testClearControlChannelRefreshForces()
         manager._testClearLaunchAgentReadinessFailure()
@@ -1580,7 +1588,11 @@ struct GatewayProcessManagerTests {
 
     @Test func `replacement readiness timeout records the pid for the next repair`() async throws {
         let port = 19104
-        let manager = GatewayProcessManager.shared
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+        defer { manager.setTestingConnection(nil) }
 
         try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
             manager.setTestingDesiredActive(true)
@@ -1601,7 +1613,7 @@ struct GatewayProcessManagerTests {
                 .filter { $0.first == "install" }.isEmpty)
             #expect(manager._testHasLaunchAgentReadinessCandidate())
 
-            await manager._testFinishGatewayReadinessTimeout()
+            #expect(await manager.waitForGatewayReady(timeout: 0.05) == false)
             #expect(manager._testHasLaunchAgentReadinessFailure())
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
@@ -1611,6 +1623,7 @@ struct GatewayProcessManagerTests {
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.count == 1)
 
+            await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
     }
@@ -1690,6 +1703,7 @@ struct GatewayProcessManagerTests {
                 manager.setTestingLastFailureReason(nil)
                 manager._testClearControlChannelRefreshForces()
                 manager._testSetLastObservedGatewayPID(nil)
+                await connection.shutdown()
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             }
 

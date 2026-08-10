@@ -13,7 +13,7 @@ describe("TerminalSessionManager intro banner", () => {
       if (!operator.ok) {
         throw new Error("expected operator open");
       }
-      const intro = composeTerminalIntroBanner(80);
+      const intro = composeTerminalIntroBanner();
       expect(manager.snapshot(operator.sessionId)).toBe(intro);
 
       await vi.advanceTimersByTimeAsync(4);

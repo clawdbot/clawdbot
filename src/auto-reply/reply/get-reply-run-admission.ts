@@ -68,7 +68,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     workspaceDir,
     isMainSession,
     inboundUserContextPromptJoiner,
-    heartbeatRunScope,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -132,7 +131,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
   const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+    if (!useFastReplyRuntime) {
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
         agentId,

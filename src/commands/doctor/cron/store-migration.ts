@@ -9,7 +9,7 @@ import {
 } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
-import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import {

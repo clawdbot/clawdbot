@@ -26,7 +26,6 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveUserPath } from "../../utils.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { generateDashboardSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
@@ -336,7 +335,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionWorktree = existing;
         } else {
           const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-          if (!requestedWorktreeName && !normalizeOptionalString(p.label) && initialMessage) {
+          if (
+            !requestedWorktreeName &&
+            !normalizeOptionalString(p.label) &&
+            (initialMessage || initialAttachments)
+          ) {
             try {
               const requestedTitleModel =
                 catalogTarget?.target.model ?? normalizeOptionalString(p.model);
@@ -368,7 +371,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                   cfg,
                   agentId: target.agentId,
                   entry: titleModelEntry,
-                  userMessage: stripInlineDirectiveTagsForDisplay(initialMessage).text,
+                  userMessage: initialMessage ?? "",
+                  attachments: initialAttachments,
                 })) ?? undefined;
             } catch (error) {
               sessionLog.warn(`worktree title generation failed: ${formatErrorMessage(error)}`);

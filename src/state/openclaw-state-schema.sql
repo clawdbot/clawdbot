@@ -1942,6 +1942,8 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   state_changed_at_ms INTEGER NOT NULL,
+  terminal_reason TEXT,
+  terminal_at_ms INTEGER,
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL

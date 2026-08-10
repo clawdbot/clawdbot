@@ -1,7 +1,6 @@
 import "../../components/modal-dialog.ts";
 import { html, nothing } from "lit";
 import type {
-  SessionObserverDigest,
   SessionSuggestionEvent,
   SessionTypingEvent,
   TaskSuggestionEvent,
@@ -62,10 +61,8 @@ import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import {
-  admitInitialTurnHandoff,
-  admitInitialUserMessageHandoff as admitInitialMessage,
-} from "./initial-turn-handoff.ts";
+import { admitInitialUserMessageHandoff } from "./history-merge.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
@@ -273,23 +270,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
 
     setChatError(state, null);
     if (preservesBoard) {
-      // Captured before the await: the reset can land and refresh session rows
-      // mid-flight, and invalidating the post-reset id would eat fresh digests.
-      const preResetSessionId = state.sessionsResult?.sessions.find((row) =>
-        areUiSessionKeysEquivalent(row.key, previousSessionKey),
-      )?.sessionId;
       const resetResult = await clearChatHistory(state);
-      if (resetResult !== "failed") {
-        // A reset reuses the session key; prior-run digests must not survive
-        // into the fresh conversation or keep injecting the observer card.
-        this.observerDigestHistory.markReset(
-          this.resolveObserverDigestHistoryKey(previousSessionKey),
-          preResetSessionId,
-        );
-        // Recompute rather than null: the builtin snapshot also carries the
-        // swarm card, which must survive an observer-only invalidation.
-        this.refreshBuiltinBoardSnapshot();
-      }
       return resetResult !== "failed";
     }
     const nextSessionKey = await sessions.create(createParams);
@@ -521,7 +502,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        admitInitialMessage(pageState.initialUserMessage, pageState, initialSessionKey);
+        admitInitialUserMessageHandoff(pageState, initialSessionKey);
       }
     }
     chatState.attach(pageState);
@@ -595,9 +576,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
           if (event.event === "session.typing" && event.payload) {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
-          if (event.event === "session.observer" && event.payload) {
-            this.recordObserverDigest(event.payload as SessionObserverDigest);
-          }
           handlePageGatewayEvent(state, event);
         }
       }),
@@ -635,8 +613,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        const initialUserMessage = this.state.initialUserMessage;
-        const acceptedPrompt = admitInitialMessage(initialUserMessage, this.state, nextSessionKey);
+        const acceptedPrompt = admitInitialUserMessageHandoff(this.state, nextSessionKey);
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

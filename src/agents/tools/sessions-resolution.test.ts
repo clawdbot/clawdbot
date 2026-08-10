@@ -270,6 +270,34 @@ describe("resolved session visibility checks", () => {
       displayKey: "agent:main:subagent:worker-999",
     });
   });
+
+  it("falls back to spawned-session listing when exact resolution is unsupported", async () => {
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        throw new Error("unsupported sessions.resolve shape");
+      }
+      return { sessions: [{ key: "agent:main:subagent:worker" }] };
+    });
+
+    await expect(
+      resolveVisibleSessionReference({
+        action: "history",
+        resolvedSession: {
+          ok: true,
+          key: "agent:main:subagent:worker",
+          displayKey: "agent:main:subagent:worker",
+          resolvedViaSessionId: false,
+        },
+        requesterSessionKey: "agent:main:main",
+        restrictToSpawned: true,
+        visibilitySessionKey: "agent:main:subagent:worker",
+      }),
+    ).resolves.toMatchObject({ ok: true, key: "agent:main:subagent:worker" });
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.resolve",
+      "sessions.list",
+    ]);
+  });
 });
 
 describe("resolveSessionReference", () => {

@@ -76,18 +76,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsResultAgentId = stateValue.agentId;
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
-    for (const row of stateValue.result?.sessions ?? []) {
-      const sessionKey = this.resolveObserverDigestHistoryKey(
-        row.key,
-        row.observerDigest?.agentId ?? stateValue.agentId ?? undefined,
-      );
-      this.observerDigestHistory.sync(sessionKey, row.sessionId);
-      if (row.observerDigest) {
-        this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
-      }
-    }
     this.refreshSwarmRoster();
-    this.refreshBuiltinBoardSnapshot();
     const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
@@ -209,8 +198,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       invalidateChatMetadataCache(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
-      this.builtinBoardSnapshot = null;
-      this.builtinBoardSnapshotBase = null;
       this.taskSuggestionsRequestVersion += 1;
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();

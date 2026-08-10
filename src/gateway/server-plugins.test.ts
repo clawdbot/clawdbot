@@ -902,6 +902,45 @@ describe("loadGatewayPlugins", () => {
     ).rejects.toThrow("gateway request timeout for sessions.delete");
   });
 
+  test("does not dispatch or clean up a pre-aborted in-process request", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("pre-aborted-request"));
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn();
+    controller.abort();
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "conversations.turn",
+        { turnId: "turn-pre-aborted" },
+        { signal: controller.signal, onSignalAbort },
+      ),
+    ).rejects.toThrow();
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(onSignalAbort).not.toHaveBeenCalled();
+  });
+
+  test("runs in-process abort cleanup once without replacing the abort error", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("aborted-request-cleanup"));
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn(async () => {
+      throw new Error("cleanup failed");
+    });
+    handleGatewayRequest.mockImplementationOnce(async () => {
+      await new Promise(() => {});
+    });
+
+    const result = serverPluginsModule.dispatchGatewayMethodInProcess(
+      "conversations.turn",
+      { turnId: "turn-aborted" },
+      { signal: controller.signal, onSignalAbort },
+    );
+    await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("primary aborted"));
+
+    await expect(result).rejects.toThrow("primary aborted");
+    expect(onSignalAbort).toHaveBeenCalledTimes(1);
+  });
+
   test("returns an accepted in-process response without waiting for handler completion", async () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-before-complete"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {

@@ -45,14 +45,6 @@
     "sdk": true
   },
   {
-    "name": "buildApprovalPresentation",
-    "files": [
-      "src/infra/approval-presentation.ts",
-      "src/infra/exec-approval-reply.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "buildBundleMcpToolsFromCatalog",
     "files": [
       "src/agents/agent-bundle-mcp-materialize.ts",
@@ -1317,14 +1309,6 @@
     "files": [
       "src/auto-reply/heartbeat.ts",
       "src/infra/heartbeat-runner-config.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "resolveHomeDir",
-    "files": [
-      "src/daemon/paths.ts",
-      "src/utils.ts"
     ],
     "sdk": true
   },

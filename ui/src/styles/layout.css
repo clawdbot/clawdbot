@@ -2673,6 +2673,12 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   color: var(--danger);
 }
 
+/* Web Awesome renders checkbox marks before the label. Selection state in this
+   menu uses the trailing details rail, so keep the native semantics but hide its visual. */
+.sidebar-session-sort-menu__item::part(checkmark) {
+  display: none;
+}
+
 .session-menu__icon,
 .session-menu__check {
   display: inline-flex;

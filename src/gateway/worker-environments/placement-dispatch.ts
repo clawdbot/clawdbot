@@ -90,6 +90,19 @@ function requireProvisionedEnvironment(
   };
 }
 
+function isExactAttachedEnvironment(
+  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
+  placement: WorkerActiveDispatchPlacement,
+): boolean {
+  return (
+    environment?.environmentId === placement.environmentId &&
+    environment.state === "attached" &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId
+  );
+}
+
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
@@ -250,13 +263,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
         const environment = environments.get(current.environmentId);
-        if (
-          !environment ||
-          environment.state !== "attached" ||
-          environment.ownerEpoch !== current.activeOwnerEpoch ||
-          environment.attachedSessionIds.length !== 1 ||
-          environment.attachedSessionIds[0] !== current.sessionId
-        ) {
+        if (!isExactAttachedEnvironment(environment, current)) {
           throw new Error("Active cloud worker does not match its session placement");
         }
         const journalOwner = {
@@ -432,7 +439,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   },
                 });
               } finally {
-                if (!destroyed) {
+                if (
+                  !destroyed &&
+                  isExactAttachedEnvironment(environments.get(current.environmentId), current)
+                ) {
                   await quiescence.resume();
                 }
               }

@@ -36,7 +36,8 @@ import {
   type ChatComposerDraftRetry,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
-import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialUserMessageHandoff } from "./history-merge.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import {
   cacheChatSessionSnapshot,
@@ -224,7 +225,7 @@ export function resetChatStateForRouteSession(
   // switchPaneSession requests an update only after adopting the new baseline.
   syncVisibleChatQueueProjection(state, { requestUpdate: false });
   const initialTurn = admitInitialTurnHandoff(state, sessionKey);
-  admitInitialUserMessageHandoff(state.initialUserMessage, state, sessionKey);
+  admitInitialUserMessageHandoff(state, sessionKey);
   const { fallback } = resolveChatComposerMemoryFallback(state, sessionKey);
   if (fallback) {
     state.chatMessage = fallback.message;

@@ -473,20 +473,22 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
-- `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
-  org-wide event path. Startup verifies the bot token with `auth.test` and
-  fails when the configured mode does not match Slack's installation identity.
-  Enterprise DMs must be disabled or use `dmPolicy: "open"` with an effective
-  `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
-  mutable names and unsupported channel prefixes fail startup. V1 handles only
-  direct Socket Mode or HTTP `message` and `app_mention` events with immediate
-  replies; relay, commands, interactions, App Home, reaction event listeners,
-  pins, action tools, native approvals, bindings, deferred delivery, and
-  proactive sends are unavailable. Listener-owned acknowledgment, typing, and
-  status reactions remain available with `reactions:write`; inbound reaction
-  notifications and reaction action tools are unavailable. See
+- Slack detects Enterprise Grid org-wide installations automatically from the
+  bot token with `auth.test`; no installation-mode setting is required.
+  Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
+  `pairing`. Channel and user policies must use stable Slack IDs; mutable names
+  and unsupported channel prefixes fail startup. Mention-pattern channel
+  scopes and static route-binding peers use workspace-qualified Slack targets.
+  Direct Socket Mode or HTTP messages, mentions, workspace-qualified actions,
+  deferred delivery, proactive sends, supported event listeners and
+  interactions, static route bindings, and Slack-native approvals from
+  workspace-qualified turns are supported. Relay, channel-ID-change events,
+  App Home, Agent and Assistant lifecycle events, configured ACP bindings, and
+  runtime current-conversation bindings remain unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
+- The retired `enterpriseOrgInstall` key is removed by `openclaw doctor --fix`
+  at the Slack root and account levels.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as

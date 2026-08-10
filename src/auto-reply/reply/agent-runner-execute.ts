@@ -319,15 +319,25 @@ export async function executePreparedReplyAgentRun(
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
+            const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
-              pendingFinalDeliveryIntentId,
-              pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              pendingFinalDeliveryCompletion: {
+                deliveryId: pendingFinalDeliveryDeliveryId,
+                intentId: pendingFinalDeliveryIntentId,
+                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
+                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
+                  : {}),
+                sessionId: replyOperation.sessionId,
+                sessionKey,
+                storePath,
+              },
             });
             hookCheckpoint = {
               state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
               pendingFinalDelivery: {
                 text: hookFinalDeliveryText ?? "",
                 intentId: pendingFinalDeliveryIntentId,
+                deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
                   cfg,
                   sessionCtx,

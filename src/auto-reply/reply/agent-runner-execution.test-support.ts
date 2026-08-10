@@ -5,7 +5,6 @@ import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helper
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -608,7 +607,7 @@ export function expectBlockReplyCall(
 
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
-  opts?: GetReplyOptions & ReplyOptionsWithHeartbeatRunScope;
+  opts?: GetReplyOptions;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
   typingSignals?: TypingSignaler;

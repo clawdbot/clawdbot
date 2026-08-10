@@ -490,6 +490,48 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("returns an ambiguous terminal outcome without remote provider I/O", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat ambiguous source reply test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.beginTerminalSourceReplyDelivery.mockResolvedValue({
+        outcome: "delivery_ambiguous",
+        result: {
+          status: "delivery_ambiguous",
+          delivered: false,
+          message: "The completed reply may already have been delivered. Do not retry it.",
+        },
+      });
+
+      const result = await runMessageAction({
+        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
+        sourceReplyFinal: true,
+        sourceReplyToolCallId: "message-call-1",
+        gateway: {
+          terminalSourceReplyReceiptOwner: "caller",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        dryRun: false,
+      });
+
+      expect(extractToolPayload(result)).toMatchObject({
+        payload: {
+          status: "delivery_ambiguous",
+          delivered: false,
+        },
+      });
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+    });
+
     it("cancels caller receipts after confirmed gateway request rejection", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",

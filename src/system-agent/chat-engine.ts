@@ -1,6 +1,7 @@
 // OpenClaw chat engine: transport-agnostic conversation over typed operations.
 import type {
   SystemAgentChatQuestion,
+  SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
@@ -247,7 +248,6 @@ async function runHostedConfigWizard(params: {
   const committedConfig = await writeWizardConfigFile(result.nextConfig, {
     allowConfigSizeDrop: false,
     baseHash: snapshot.hash,
-    migrationBaseConfig: baseConfig,
     ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
   });
   await result.afterWrite?.(committedConfig);
@@ -796,6 +796,12 @@ export class SystemAgentChatEngine {
     return await turn;
   }
 
+  async cancelWizard(cancel: SystemAgentWizardCancel): Promise<SystemAgentChatReply> {
+    const turn = this.turnQueue.then(() => this.cancelWizardSerialized(cancel));
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
+  }
+
   private async handleSerialized(
     text: string,
     options?: SystemAgentChatTurnOptions,
@@ -829,6 +835,24 @@ export class SystemAgentChatEngine {
       { text, action: "none" },
       formatStructuredWizardAnswerForHistory(step, answer.value),
     );
+  }
+
+  private async cancelWizardSerialized(
+    cancel: SystemAgentWizardCancel,
+  ): Promise<SystemAgentChatReply> {
+    const bridge = this.wizardBridge;
+    const step = bridge?.step;
+    if (!bridge || !step) {
+      throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting cancellation.");
+    }
+    if (cancel.stepId !== step.id) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard cancel targets a stale step.");
+    }
+    if (!bridge.session.cancel()) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard cannot be cancelled right now.");
+    }
+    const text = await this.pumpWizardBridge();
+    return this.completeTurn({ text, action: "none" }, "Cancel");
   }
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {

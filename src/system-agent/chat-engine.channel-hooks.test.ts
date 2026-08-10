@@ -140,7 +140,7 @@ describe("OpenClaw chat channel setup", () => {
     expect(reply.text).toContain("matrix is configured");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       { channels: { matrix: { enabled: true } } },
-      { allowConfigSizeDrop: false, baseHash: "hash", migrationBaseConfig: {} },
+      { allowConfigSizeDrop: false, baseHash: "hash" },
     );
     expect(mocks.setupChannels).toHaveBeenCalledWith(
       {},

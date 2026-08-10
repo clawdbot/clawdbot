@@ -1,4 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asSafeIntegerInRange,
+  MAX_DATE_TIMESTAMP_MS,
+} from "@openclaw/normalization-core/number-coercion";
 /** Resolves deterministic cron stagger windows for recurring schedules. */
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { CronSchedule } from "./types.js";
@@ -53,7 +57,7 @@ export function normalizeCronStaggerMs(raw: unknown): number | undefined {
     return undefined;
   }
   const normalized = Math.max(0, Math.floor(numeric));
-  return Number.isSafeInteger(normalized) ? normalized : undefined;
+  return asSafeIntegerInRange(normalized, { max: MAX_DATE_TIMESTAMP_MS });
 }
 
 /** Returns the default anti-thundering-herd stagger for top-of-hour recurring schedules. */

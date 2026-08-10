@@ -414,7 +414,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
     expect(plan.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
-    expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
     const countLane = (name: string) =>
@@ -1615,7 +1614,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "kitchen-sink-plugin",
         "kitchen-sink-rpc",
         "bundled-plugin-install-uninstall-0",
-        "commitments-safety",
         "multi-node-update",
         "update-channel-switch",
         "skill-install",
@@ -1644,7 +1642,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "kitchen-sink-plugin", stateScenario: "empty" },
       { name: "kitchen-sink-rpc", stateScenario: "empty" },
       { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
-      { name: "commitments-safety", stateScenario: "empty" },
       { name: "multi-node-update", stateScenario: "empty" },
       { name: "update-channel-switch", stateScenario: "update-stable" },
       { name: "skill-install", stateScenario: "empty" },
