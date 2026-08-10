@@ -87,6 +87,16 @@ export async function runCliFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
+  const sessionTarget =
+    sessionKey && turn.storePath
+      ? {
+          agentId: turn.followupRun.run.agentId,
+          sessionId: turn.followupRun.run.sessionId,
+          sessionKey,
+          storePath: turn.storePath,
+        }
+      : undefined;
   const cliSessionBinding = getCliSessionBinding(
     turn.getActiveSessionEntry(),
     params.cliExecutionProvider,
@@ -336,6 +346,7 @@ export async function runCliFallbackCandidate(params: {
           runParams: {
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
+            sessionTarget,
             chatType:
               normalizeChatType(turn.followupRun.originatingChatType) ??
               normalizeChatType(turn.sessionCtx.ChatType) ??

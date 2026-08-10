@@ -695,7 +695,13 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(
       contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
-    ).toHaveBeenCalledWith({ admission, isHeartbeat: false, lease });
+    ).toHaveBeenCalledWith({
+      admission,
+      isHeartbeat: false,
+      lease,
+      recorder: params.userTurnTranscriptRecorder,
+      sessionTarget: undefined,
+    });
     expect(order).toEqual(["drain", "begin", "run"]);
     expect(receivedContextEngines).toEqual([undefined]);
   });

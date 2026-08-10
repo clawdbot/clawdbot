@@ -507,7 +507,7 @@ jobs:
             done
 
             if [[ "$qa_filter_seen" == "true" ]]; then
-              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]}")"
+              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]:-}")"
             fi
 
             if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then

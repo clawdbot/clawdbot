@@ -263,6 +263,7 @@ export {
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {
   resolveConcreteSessionStorePath,
+  resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,

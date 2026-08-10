@@ -294,6 +294,8 @@ export async function runPreparedEmbeddedLoop(
     admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
     isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
     lease: contextEngineLogicalTurnLease,
+    recorder: params.userTurnTranscriptRecorder,
+    sessionTarget: params.sessionTarget,
   });
   const contextEngine = contextEngineLogicalTurnLease.begin().engine;
   const resolveContextEnginePluginId = () =>
