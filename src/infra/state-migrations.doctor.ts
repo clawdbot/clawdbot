@@ -58,10 +58,6 @@ import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
 } from "./state-migrations.channel-pairing.js";
-import {
-  detectRetiredCommitments,
-  discardRetiredCommitments,
-} from "./state-migrations.commitments.js";
 import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
@@ -496,7 +492,6 @@ export async function detectLegacyStateMigrations(params: {
   ): TDetection =>
     detect({ stateDir, doctorOnlyStateMigrations: params.doctorOnlyStateMigrations });
   const tuiLastSessions = detectDoctorOwnedState(detectLegacyTuiLastSessions);
-  const commitments = detectDoctorOwnedState(detectRetiredCommitments);
   const auditLogs = detectDoctorOwnedState(detectLegacyAuditLogs);
   const acpReplayLedger = detectDoctorOwnedState(detectLegacyAcpReplayLedger);
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
@@ -672,7 +667,6 @@ export async function detectLegacyStateMigrations(params: {
       tuiLastSessions.hasLegacy,
       "- TUI last-session pointers: legacy JSON file → shared SQLite state",
     ],
-    [commitments.hasLegacy, "- Retired inferred commitments: stored rows and legacy JSON → remove"],
     ...auditLogs.sources.map((source): readonly [boolean, string] => [
       true,
       `- ${source.label}: legacy JSONL file → shared SQLite state`,
@@ -792,7 +786,6 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasCurrentConversationBindings,
     },
     tuiLastSessions,
-    commitments,
     auditLogs,
     acpReplayLedger,
     managedOutgoingImages,
@@ -1089,7 +1082,6 @@ function buildLegacyStateMigrationSteps(
   const doctorStateSteps: LegacyStateMigrationStep[] = isDoctor
     ? [
         ownerStep(detected.tuiLastSessions, migrateLegacyTuiLastSessions),
-        ownerStep(detected.commitments, discardRetiredCommitments),
         ownerStep(detected.auditLogs, migrateLegacyAuditLogs),
         ownerStep(detected.acpReplayLedger, migrateLegacyAcpReplayLedger),
         ownerStep(detected.managedOutgoingImages, migrateLegacyManagedOutgoingImages),

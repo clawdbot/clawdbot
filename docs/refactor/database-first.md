@@ -151,9 +151,9 @@ without exceptions outside doctor/import/export/debug boundaries.
   does not read or write the retired workspace JSON and `.attested` sidecars;
   Doctor owns their validated import and verified removal.
 - Inferred commitments: retired. Extraction, delivery, runtime storage access,
-  and the CLI are removed. Doctor deletes retained rows and the legacy JSON
-  source. The shared table remains inert until an approved schema-version
-  migration can drop it.
+  and the CLI are removed. Existing rows and legacy JSON stay untouched and
+  inert until an approved retention and schema-version migration can remove
+  them.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -1115,8 +1115,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   copy.
 - The retired `commitments` table remains in the shared schema only until an
   approved schema-version migration can drop it. Runtime no longer reads or
-  writes commitment rows. Explicit Doctor repair deletes retained rows and
-  safely removes the legacy `commitments.json` source.
+  writes commitment rows. Doctor leaves retained rows and the legacy
+  `commitments.json` source untouched.
 - Web Push subscriptions and the generated VAPID identity now use typed shared
   `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
   expiry cleanup, and first-use key generation use row-level SQLite
@@ -1648,8 +1648,8 @@ Move these into the global database:
   `cron/runs/*.jsonl` files
 - Device identity/auth, push, update check, OpenRouter model cache, installed
   plugin index, and app-server bindings
-- Retired commitment rows and the legacy `commitments.json` source are deleted
-  by Doctor; the inert table stays until an approved schema-version migration.
+- Retired commitment rows and the legacy `commitments.json` source stay inert
+  until an approved retention and schema-version migration removes them.
 - Device/node pairing and bootstrap records now use typed SQLite tables
 - Device-pair notification subscribers and delivered-request markers now use the
   shared SQLite plugin-state table instead of `device-pair-notify.json`.

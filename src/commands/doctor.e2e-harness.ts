@@ -303,12 +303,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/tui/last-session.json",
       hasLegacy: false,
     },
-    commitments: {
-      sourcePath: "/tmp/state/commitments/commitments.json",
-      hasLegacyFile: false,
-      rowCount: 0,
-      hasLegacy: false,
-    },
     auditLogs: {
       sources: [],
       hasLegacy: false,
