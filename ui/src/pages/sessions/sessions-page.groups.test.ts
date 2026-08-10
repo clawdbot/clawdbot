@@ -202,7 +202,7 @@ describe("sessions page new group", () => {
     // on the page rather than reading as a clean success.
     expect(submitMessages).toEqual([null]);
     expect(page.error).toBe(
-      "Group created, but the session was not moved into it because it left the current list. Move it from its row menu.",
+      "Group created, but the move was skipped because the list changed. Move from the row menu.",
     );
   });
 

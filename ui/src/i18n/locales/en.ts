@@ -935,9 +935,7 @@ export const en: TranslationMap = {
     newGroupFailed: "Could not create the group.",
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     newGroupMoveSkipped:
-      "Group created, but the session was not moved into it because it left the current list. Move it from its row menu.",
-    newGroupMovesSkipped:
-      "Group created, but the selected sessions were not moved into it because they left the current list. Move them from their row menus.",
+      "Group created, but the move was skipped because the list changed. Move from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",

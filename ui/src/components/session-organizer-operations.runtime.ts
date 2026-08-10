@@ -421,12 +421,7 @@ export async function createSessionGroup(
   // not proof the sessions are gone — say so rather than closing on a silent
   // non-outcome the operator cannot account for.
   if (sessions.length > 0) {
-    showToast({
-      message:
-        sessions.length === 1
-          ? t("sessionsView.newGroupMoveSkipped")
-          : t("sessionsView.newGroupMovesSkipped"),
-    });
+    showToast({ message: t("sessionsView.newGroupMoveSkipped") });
   }
   // Re-render so the new section shows up.
   host.requestUpdate();

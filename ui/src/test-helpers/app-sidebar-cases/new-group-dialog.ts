@@ -97,7 +97,7 @@ describe("AppSidebar new group dialog", () => {
       // The group landed and the moves did not: that partial outcome has to
       // reach the operator instead of closing as a plain success.
       expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
-        "Group created, but the selected sessions were not moved into it because they left the current list. Move them from their row menus.",
+        "Group created, but the move was skipped because the list changed. Move from the row menu.",
       );
     } finally {
       toastHost.remove();
