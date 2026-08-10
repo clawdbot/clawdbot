@@ -1,6 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
@@ -9,7 +8,8 @@ function importedClaudeMessage(
   item: ClaudeTranscriptItem,
   fallbackTimestamp: number,
 ): AgentMessage | undefined {
-  const timestamp = parseDateTimestampMs(item.timestamp) ?? fallbackTimestamp;
+  const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
+  const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : fallbackTimestamp;
   const importedText = item.text?.trim();
   if (!importedText && item.type === "reasoning") {
     return undefined;
