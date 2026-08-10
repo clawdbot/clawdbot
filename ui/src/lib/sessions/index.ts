@@ -703,6 +703,8 @@ export function createSessionCapability(
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,
+    groupsAdd: groups.add,
+    groupsReorder: groups.reorder,
     groupsRename: groups.rename,
     groupsUpdate: groups.update,
     groupsDelete: groups.delete,

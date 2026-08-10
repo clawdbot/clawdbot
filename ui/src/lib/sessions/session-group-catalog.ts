@@ -341,6 +341,27 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
+  const add = async (name: string): Promise<SessionGroupMutationResult> => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return "stale";
+    }
+    const advertised = isGatewayMethodAdvertised(host.snapshot(), "sessions.groups.add");
+    if (advertised === false) {
+      return put([...host.readState().groups, name]);
+    }
+    try {
+      const result = await scope.client.request("sessions.groups.add", { name });
+      if (!host.connection.isCurrent(scope)) {
+        return "stale";
+      }
+      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      return "completed";
+    } catch (error) {
+      return finishMutationFailure(host.connection.isCurrent(scope), error);
+    }
+  };
+
   const update = async (
     name: string,
     defaults: { cwd: string | null; worktree: boolean },
@@ -370,7 +391,35 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
+  const reorder = async (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ): Promise<SessionGroupMutationResult> => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return "stale";
+    }
+    const advertised = isGatewayMethodAdvertised(host.snapshot(), "sessions.groups.reorder");
+    if (advertised === false) {
+      return put(names, sectionOrder);
+    }
+    try {
+      const result = await scope.client.request("sessions.groups.reorder", {
+        names: [...names],
+        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
+      });
+      if (!host.connection.isCurrent(scope)) {
+        return "stale";
+      }
+      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      return "completed";
+    } catch (error) {
+      return finishMutationFailure(host.connection.isCurrent(scope), error);
+    }
+  };
+
   return {
+    add,
     delete: remove,
     dispose,
     generation: () => catalogGeneration,
@@ -378,6 +427,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     load,
     put,
     rename,
+    reorder,
     status: () => defaultsStatus,
     update,
   };

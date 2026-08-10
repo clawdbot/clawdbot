@@ -477,22 +477,26 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
 public struct OpenClawChatSessionGroupsRouteLease: Sendable {
     public typealias ListGroups = @Sendable () async throws -> OpenClawChatSessionGroupsResponse?
     public typealias PutGroups = @Sendable ([String]) async throws -> OpenClawChatSessionGroupsMutationResponse
+    public typealias AddGroup = @Sendable (String) async throws -> OpenClawChatSessionGroupsMutationResponse
     public typealias RenameGroup = @Sendable (String, String) async throws -> OpenClawChatSessionGroupsMutationResponse
     public typealias DeleteGroup = @Sendable (String) async throws -> OpenClawChatSessionGroupsMutationResponse
 
     private let listGroupsImpl: ListGroups
     private let putGroupsImpl: PutGroups
+    private let addGroupImpl: AddGroup
     private let renameGroupImpl: RenameGroup
     private let deleteGroupImpl: DeleteGroup
 
     public init(
         listGroups: @escaping ListGroups,
         putGroups: @escaping PutGroups,
+        addGroup: @escaping AddGroup,
         renameGroup: @escaping RenameGroup,
         deleteGroup: @escaping DeleteGroup)
     {
         self.listGroupsImpl = listGroups
         self.putGroupsImpl = putGroups
+        self.addGroupImpl = addGroup
         self.renameGroupImpl = renameGroup
         self.deleteGroupImpl = deleteGroup
     }
@@ -503,6 +507,10 @@ public struct OpenClawChatSessionGroupsRouteLease: Sendable {
 
     public func putGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse {
         try await self.putGroupsImpl(names)
+    }
+
+    public func addGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        try await self.addGroupImpl(name)
     }
 
     public func renameGroup(name: String, to: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
@@ -846,6 +854,7 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse?
     func putSessionGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse
+    func addSessionGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse
     func renameSessionGroup(name: String, to: String) async throws -> OpenClawChatSessionGroupsMutationResponse
     func deleteSessionGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease?
@@ -1055,6 +1064,7 @@ extension OpenClawChatTransport {
         return OpenClawChatSessionGroupsRouteLease(
             listGroups: { try await transport.listSessionGroups() },
             putGroups: { try await transport.putSessionGroups(names: $0) },
+            addGroup: { try await transport.addSessionGroup(name: $0) },
             renameGroup: { try await transport.renameSessionGroup(name: $0, to: $1) },
             deleteGroup: { try await transport.deleteSessionGroup(name: $0) })
     }
@@ -1210,6 +1220,13 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.groups.put not supported by this transport"])
+    }
+
+    public func addSessionGroup(name _: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.groups.add not supported by this transport"])
     }
 
     public func renameSessionGroup(

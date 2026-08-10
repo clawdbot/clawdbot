@@ -589,6 +589,20 @@ export const SessionsGroupsPutParamsSchema = closedObject({
   sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
 });
 
+/** Adds one group to the catalog if it does not already exist, appended at the end. */
+export const SessionsGroupsAddParamsSchema = closedObject({
+  name: SessionLabelString,
+});
+
+/**
+ * Reorders the listed groups by position; unlisted groups keep their current position.
+ * When sectionOrder is provided, the full sidebar section order is persisted atomically.
+ */
+export const SessionsGroupsReorderParamsSchema = closedObject({
+  names: Type.Array(SessionLabelString, { maxItems: 200 }),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+});
+
 /** Renames a group and repoints every member session's category. */
 export const SessionsGroupsRenameParamsSchema = closedObject({
   name: SessionLabelString,
@@ -856,6 +870,8 @@ export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSch
 export type SessionsGroupsDefaultsParams = Static<typeof SessionsGroupsDefaultsParamsSchema>;
 export type SessionsGroupsDefaultsResult = Static<typeof SessionsGroupsDefaultsResultSchema>;
 export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
+export type SessionsGroupsAddParams = Static<typeof SessionsGroupsAddParamsSchema>;
+export type SessionsGroupsReorderParams = Static<typeof SessionsGroupsReorderParamsSchema>;
 export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
 export type SessionsGroupsUpdateParams = Static<typeof SessionsGroupsUpdateParamsSchema>;
 export type SessionsGroupsUpdateResult = Static<typeof SessionsGroupsUpdateResultSchema>;

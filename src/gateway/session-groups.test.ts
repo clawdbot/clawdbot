@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
+  addSessionGroup,
   deleteSessionGroup,
   ensureSessionGroupRegistered,
   listSessionGroupDefaults,
@@ -24,6 +25,7 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  reorderSessionGroups,
   SessionGroupNotEmptyError,
   updateSessionGroupDefaults,
 } from "./session-groups.js";
@@ -609,5 +611,73 @@ describe("session groups catalog", () => {
 
     expect(result.groups).toEqual([{ name: "B", position: 1 }]);
     expect(result.sectionOrder).toEqual(["category:B", "work"]);
+  });
+
+  it("adds groups idempotently without touching existing rows", () => {
+    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+    expect(addSessionGroup("Personal", env)).toEqual({ name: "Personal", position: 1 });
+    expect(addSessionGroup("Work", env)).toEqual({ name: "Work", position: 0 });
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["Work", "Personal"]);
+  });
+
+  it("preserves concurrent adds through the atomic add path", () => {
+    addSessionGroup("A", env);
+    addSessionGroup("B", env);
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["A", "B"]);
+  });
+
+  it("reorders listed groups and compacts unlisted groups to unique positions", () => {
+    putSessionGroups(["A", "B", "C"], undefined, env);
+    reorderSessionGroups(["C", "B"], undefined, env);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "C", position: 0 },
+      { name: "B", position: 1 },
+      { name: "A", position: 2 },
+    ]);
+  });
+
+  it("preserves unique positions across consecutive partial reorders", () => {
+    putSessionGroups(["A", "B", "C"], undefined, env);
+    reorderSessionGroups(["C", "B"], undefined, env);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "C", position: 0 },
+      { name: "B", position: 1 },
+      { name: "A", position: 2 },
+    ]);
+    reorderSessionGroups(["A"], undefined, env);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "A", position: 0 },
+      { name: "C", position: 1 },
+      { name: "B", position: 2 },
+    ]);
+  });
+
+  it("discards nonexistent names instead of leaving gaps", () => {
+    putSessionGroups(["A", "B", "C"], undefined, env);
+    reorderSessionGroups(["C", "Ghost", "B"], undefined, env);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "C", position: 0 },
+      { name: "B", position: 1 },
+      { name: "A", position: 2 },
+    ]);
+  });
+
+  it("persists the full sidebar section order atomically during reorder", () => {
+    putSessionGroups(["A", "B"], ["ungrouped", "category:A", "work", "category:B"], env);
+    reorderSessionGroups(["B", "A"], ["work", "ungrouped", "category:B", "category:A"], env);
+    expect(listSessionGroups(env).map((group) => group.name)).toEqual(["B", "A"]);
+    expect(listSidebarSectionOrder(env)).toEqual(["work", "ungrouped", "category:B", "category:A"]);
+  });
+
+  it("preserves unlisted group sections during partial reorders", () => {
+    putSessionGroups(["A", "B", "C"], ["work", "category:A", "category:B", "category:C"], env);
+    // Partial reorder that only mentions B and C must not strip A's sidebar slot.
+    reorderSessionGroups(["C", "B"], ["work", "category:C", "category:B", "category:A"], env);
+    expect(listSidebarSectionOrder(env)).toEqual([
+      "work",
+      "category:C",
+      "category:B",
+      "category:A",
+    ]);
   });
 });
