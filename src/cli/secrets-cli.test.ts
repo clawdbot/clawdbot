@@ -240,6 +240,7 @@ describe("secrets CLI", () => {
         plaintextCount: 1,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
+        storeResidueCount: 0,
         legacyResidueCount: 0,
       },
       resolution: {
@@ -271,6 +272,7 @@ describe("secrets CLI", () => {
         plaintextCount: 0,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
+        storeResidueCount: 0,
         legacyResidueCount: 0,
       },
       resolution: {

@@ -37,7 +37,7 @@ type QaAuthProfileCredential =
     };
 
 type QaSecretRef = {
-  source: "env" | "file" | "exec";
+  source: "env" | "file" | "exec" | "store";
   provider?: string;
   id: string;
 };

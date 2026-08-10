@@ -161,7 +161,7 @@ Local mode (default) walks through these steps:
    tool policy strict - weaker or older tiers are easier to prompt-inject.
    For non-interactive runs, `--secret-input-mode ref` stores new credentials
    as env-backed refs; set the provider env var when adding a credential.
-   Existing resolvable named profiles and their `env`, `file`, or `exec` refs
+   Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` refs
    are reused unchanged without a new credential write or additional provider
    env var. Previously stored plaintext is not migrated; see
    [Secrets management](/gateway/secrets). Interactive secret reference mode can
