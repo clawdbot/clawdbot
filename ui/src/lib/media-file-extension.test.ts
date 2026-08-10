@@ -10,6 +10,8 @@ describe("getMediaFileExtension", () => {
     { value: "/media/inbound/photo.png?mediaTicket=signed#preview", expected: "png" },
     { value: "/__openclaw__/media/voice%2Eogg?mediaTicket=signed", expected: "ogg" },
     { value: "/media/inbound/photo.png?preview=.jpg", expected: "png" },
+    { value: "/tmp/recording?download=.mp3", expected: "mp3" },
+    { value: "/tmp/clip#final.mp4", expected: "mp4" },
     { value: "https://cdn.example/bad%ZZ/render%2Emp4", expected: "mp4" },
     { value: "https://cdn.example/archive%2Fclip%2Emp4", expected: "mp4" },
     { value: "https://cdn.example/archive%5Cclip%2Emp4", expected: "mp4" },

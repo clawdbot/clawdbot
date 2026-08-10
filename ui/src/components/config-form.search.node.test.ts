@@ -139,6 +139,29 @@ describe("config form search", () => {
     },
   );
 
+  it("does not search tuple positions forbidden by an allOf branch", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        allOf: [
+          {
+            items: [{ type: "string", description: "Reachable endpoint" }],
+            additionalItems: false,
+          },
+          {
+            items: [{}, { type: "string", description: "Impossible endpoint" }],
+          },
+        ],
+      },
+      value: [],
+      path: ["endpoints"],
+      hints: {},
+      criteria: parseConfigSearchQuery("impossible endpoint"),
+    });
+
+    expect(matched).toBe(false);
+  });
+
   it("searches additional-property schemas before entries exist", () => {
     const matched = matchesNodeSearch({
       schema: {

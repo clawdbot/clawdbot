@@ -52,14 +52,21 @@ export function arrayItemSchema(schema: JsonSchema, index: number): JsonSchema |
 
 export function arrayItemSchemaIndexes(schema: JsonSchema): number[] {
   let count = 0;
+  let closedLength: number | undefined;
   for (const entry of collectAllOfSchemas(schema)) {
     if (Array.isArray(entry.items)) {
       const hasTypedTail =
         entry.additionalItems !== null && typeof entry.additionalItems === "object";
       count = Math.max(count, entry.items.length + (hasTypedTail ? 1 : 0));
+      if (entry.additionalItems === false) {
+        closedLength = Math.min(closedLength ?? Number.POSITIVE_INFINITY, entry.items.length);
+      }
     } else if (entry.items) {
       count = Math.max(count, 1);
     }
+  }
+  if (closedLength !== undefined) {
+    count = Math.min(count, closedLength);
   }
   return Array.from({ length: count }, (_, index) => index);
 }
