@@ -328,6 +328,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       requireExplicitMessageTarget:
         params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      // Same sibling-harness rule as clientCaps above: without this forward,
+      // spawn_task/dismiss_task silently never exist for Codex-harness runs.
+      taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
       disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
       forceMessageTool: shouldForceMessageTool(messagePolicyParams),
       enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
