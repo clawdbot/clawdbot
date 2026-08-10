@@ -1,25 +1,11 @@
 import { recordChannelHistoryEntryWithMedia } from "../../auto-reply/reply/history.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
+import { runPreparedChannelTurn } from "./execution.js";
 import {
   assembleResolvedChannelTurn,
-  dispatchAssembledChannelTurn as dispatchAssembledChannelTurnImpl,
-  dispatchRoutedChannelTurn as dispatchRoutedChannelTurnImpl,
-  runPreparedInboundReply as runPreparedInboundReplyImpl,
+  dispatchAssembledChannelTurn,
+  dispatchRoutedChannelTurn,
 } from "./lifecycle.js";
-
-export { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
-
-export type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
-
-export {
-  deliverInboundReplyWithMessageSendContext,
-  isDurableInboundReplyDeliveryHandled,
-  throwIfDurableInboundReplyDeliveryFailed,
-} from "./durable-delivery.js";
-export type {
-  DurableInboundReplyDeliveryOptions,
-  DurableInboundReplyDeliveryParams,
-} from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,
   ChannelEventClass,
@@ -35,33 +21,6 @@ import type {
   PreparedChannelTurn,
   RunChannelTurnParams,
 } from "./types.js";
-
-export {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
-} from "./dispatch-result.js";
-export type { ChannelTurnResult } from "./types.js";
-
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurn,
-): Promise<ChannelTurnResult> {
-  return dispatchAssembledChannelTurnImpl(params);
-}
-
-export const dispatchChannelInboundReply = dispatchAssembledChannelTurn;
-
-export function dispatchChannelInboundTurn(
-  plan: ChannelTurnPlan<ChannelProviderOwnedMessageSendingDeliveryAdapter>,
-): Promise<ChannelTurnResult>;
-export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult>;
-export function dispatchChannelInboundTurn(
-  plan: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
-): Promise<ChannelTurnResult> {
-  return dispatchRoutedChannelTurnImpl(plan);
-}
-
-export const runPreparedInboundReply = runPreparedInboundReplyImpl;
 
 const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   kind: "message",
@@ -142,7 +101,7 @@ function resolveDroppedHistoryBody(input: NormalizedTurnInput, preflight: Prefli
   );
 }
 
-async function recordDroppedChannelTurnHistory(params: {
+export async function recordDroppedChannelTurnHistory(params: {
   input: NormalizedTurnInput;
   preflight: PreflightFacts;
   admission?: ChannelTurnAdmission;
@@ -181,9 +140,7 @@ async function recordDroppedChannelTurnHistory(params: {
   });
 }
 
-export const recordDroppedChannelInboundHistory = recordDroppedChannelTurnHistory;
-
-async function runChannelTurn<
+export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
@@ -193,11 +150,11 @@ async function runChannelTurn<
     ChannelProviderOwnedMessageSendingDeliveryAdapter
   >,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
-async function runChannelTurn<
+export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: RunChannelTurnParams<TRaw, TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
-async function runChannelTurn<
+export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
@@ -293,14 +250,14 @@ async function runChannelTurn<
     }
     const dispatchResult = (
       "runDispatch" in resolved
-        ? await runPreparedInboundReply({
+        ? await runPreparedChannelTurn({
             ...resolved,
             admission,
             log: params.log,
             messageId: input.id,
           })
         : isRoutedTurn
-          ? await dispatchRoutedChannelTurnImpl({
+          ? await dispatchRoutedChannelTurn({
               ...(unresolved as ChannelTurnPlan<ChannelTurnDeliveryAdapter>),
               admission,
               log: params.log,
@@ -377,5 +334,3 @@ async function runChannelTurn<
 
   return result;
 }
-
-export const runChannelInboundEvent = runChannelTurn;

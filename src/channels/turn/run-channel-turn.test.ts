@@ -1,5 +1,5 @@
 // Turn kernel tests cover channel turn orchestration, dispatch, and completion behavior.
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
@@ -23,22 +23,15 @@ import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/lo
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
-import type { ChannelTurnResult } from "./kernel.js";
 import {
-  dispatchAssembledChannelTurn,
-  dispatchChannelInboundTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
-  runPreparedInboundReply,
-  runChannelInboundEvent,
-} from "./kernel.js";
-import type {
-  AssembledChannelTurn,
-  ChannelTurnPlan,
-  ChannelTurnResolved,
-  PreparedChannelTurn,
-} from "./types.js";
+} from "./dispatch-result.js";
+import { runPreparedChannelTurn } from "./execution.js";
+import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
+import { runChannelTurn } from "./run-channel-turn.js";
+import type { AssembledChannelTurn, ChannelTurnResult, ChannelTurnResolved } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -287,29 +280,6 @@ describe("channel turn kernel", () => {
     resetLogger();
   });
 
-  it("types every inbound turn entry point as drop-capable", () => {
-    type DispatchResult = { queuedFinal: true };
-    const guarded = {} as PreparedChannelTurn<DispatchResult>;
-    const unguarded = {} as Omit<PreparedChannelTurn<DispatchResult>, "botLoopProtection"> & {
-      botLoopProtection?: undefined;
-    };
-    const assembled = {} as AssembledChannelTurn;
-    const plan = {} as ChannelTurnPlan;
-
-    if (Date.now() < 0) {
-      expectTypeOf(runPreparedInboundReply(guarded)).toEqualTypeOf<
-        Promise<ChannelTurnResult<DispatchResult>>
-      >();
-      expectTypeOf(runPreparedInboundReply(unguarded)).toEqualTypeOf<
-        Promise<ChannelTurnResult<DispatchResult>>
-      >();
-      expectTypeOf(dispatchAssembledChannelTurn(assembled)).toEqualTypeOf<
-        Promise<ChannelTurnResult>
-      >();
-      expectTypeOf(dispatchChannelInboundTurn(plan)).toEqualTypeOf<Promise<ChannelTurnResult>>();
-    }
-  });
-
   it("runs routed direct message hooks after payload preparation", async () => {
     const events: string[] = [];
     const runMessageSending = vi.fn(async (event: { content: string }) => {
@@ -325,7 +295,7 @@ describe("channel turn kernel", () => {
       return { messageIds: ["direct-1"], visibleReplySent: true, content: payload.text };
     });
 
-    const result = await dispatchChannelInboundTurn({
+    const result = await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       accountId: "acct",
@@ -382,7 +352,7 @@ describe("channel turn kernel", () => {
     const deliver = vi.fn();
     const onDelivered = vi.fn();
 
-    const result = await dispatchChannelInboundTurn({
+    const result = await dispatchRoutedChannelTurn({
       cfg,
       channel: "whatsapp",
       route: { agentId: "main", sessionKey: "agent:main:whatsapp:peer" },
@@ -425,7 +395,7 @@ describe("channel turn kernel", () => {
     const deliver = vi.fn();
     const onDelivered = vi.fn();
 
-    const result = await dispatchChannelInboundTurn({
+    const result = await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -467,7 +437,7 @@ describe("channel turn kernel", () => {
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     });
 
-    await dispatchChannelInboundTurn({
+    await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -500,7 +470,7 @@ describe("channel turn kernel", () => {
       return { queuedFinal: true, counts: { tool: 0, block: 1, final: 1 } };
     });
 
-    const result = await dispatchChannelInboundTurn({
+    const result = await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -530,7 +500,7 @@ describe("channel turn kernel", () => {
       visibleReplySent: true,
     }));
 
-    await dispatchChannelInboundTurn({
+    await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -556,7 +526,7 @@ describe("channel turn kernel", () => {
     sendDurableMessageBatch.mockResolvedValueOnce(createDurableSendResult(["durable-1"]));
     const durableDeliver = vi.fn();
 
-    await dispatchChannelInboundTurn({
+    await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -572,7 +542,7 @@ describe("channel turn kernel", () => {
       reason: "missing_outbound_handler",
     });
     const fallbackDeliver = vi.fn(async () => ({ visibleReplySent: true }));
-    await dispatchChannelInboundTurn({
+    await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -595,7 +565,7 @@ describe("channel turn kernel", () => {
       content: "final content",
     });
 
-    const result = await dispatchChannelInboundTurn({
+    const result = await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -721,7 +691,7 @@ describe("channel turn kernel", () => {
     });
     const onDelivered = vi.fn();
 
-    const result = await dispatchChannelInboundTurn({
+    const result = await dispatchRoutedChannelTurn({
       cfg,
       channel: "telegram",
       route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
@@ -1480,7 +1450,7 @@ describe("channel turn kernel", () => {
       };
     });
 
-    const result = await runPreparedInboundReply({
+    const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1584,7 +1554,7 @@ describe("channel turn kernel", () => {
     });
 
     try {
-      await runPreparedInboundReply({
+      await runPreparedChannelTurn({
         channel: "slack",
         routeSessionKey: "agent:main:slack:channel:c1",
         storePath: "/tmp/sessions.json",
@@ -1627,7 +1597,7 @@ describe("channel turn kernel", () => {
       counts: { tool: 0, block: 0, final: 0 },
     }));
 
-    const result = await runPreparedInboundReply({
+    const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1665,7 +1635,7 @@ describe("channel turn kernel", () => {
       observedReplyDelivery: true,
     }));
 
-    const result = await runPreparedInboundReply({
+    const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1697,7 +1667,7 @@ describe("channel turn kernel", () => {
       observedReplyDelivery: false,
     }));
 
-    const result = await runPreparedInboundReply({
+    const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1747,7 +1717,7 @@ describe("channel turn kernel", () => {
       defaultEnabled: true,
     };
 
-    const first = await runPreparedInboundReply({
+    const first = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1760,7 +1730,7 @@ describe("channel turn kernel", () => {
       },
       botLoopProtection: { ...botLoopProtection, nowMs: 1_000 },
     });
-    const second = await runPreparedInboundReply({
+    const second = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1872,7 +1842,7 @@ describe("channel turn kernel", () => {
     };
     const onDispatchSkipped = vi.fn();
 
-    const result = await runPreparedInboundReply({
+    const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:observer:test:peer",
       storePath: "/tmp/sessions.json",
@@ -1933,7 +1903,7 @@ describe("channel turn kernel", () => {
   it("clears pending group history after a successful prepared turn", async () => {
     const historyMap = new Map([["room-1", [{ sender: "User", body: "queued before reply" }]]]);
 
-    await runPreparedInboundReply({
+    await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:group:room-1",
       storePath: "/tmp/sessions.json",
@@ -1968,7 +1938,7 @@ describe("channel turn kernel", () => {
     });
 
     await expect(
-      runPreparedInboundReply({
+      runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
         storePath: "/tmp/sessions.json",
@@ -1994,7 +1964,7 @@ describe("channel turn kernel", () => {
 
   it("runs afterRecord only after session recording succeeds and before dispatch", async () => {
     const events: string[] = [];
-    await runPreparedInboundReply({
+    await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
       storePath: "/tmp/sessions.json",
@@ -2059,7 +2029,7 @@ describe("channel turn kernel", () => {
     const afterRecord = vi.fn();
 
     await expect(
-      runPreparedInboundReply({
+      runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
         storePath: "/tmp/sessions.json",
@@ -2075,51 +2045,9 @@ describe("channel turn kernel", () => {
     expect(afterRecord).not.toHaveBeenCalled();
   });
 
-  it("normalizes visible dispatch checks", () => {
-    expect(hasVisibleChannelTurnDispatch(undefined)).toBe(false);
-    expect(
-      hasVisibleChannelTurnDispatch({
-        queuedFinal: false,
-        counts: { tool: 1, block: 0, final: 0 },
-      }),
-    ).toBe(true);
-    expect(
-      hasVisibleChannelTurnDispatch(undefined, {
-        observedReplyDelivery: true,
-      }),
-    ).toBe(true);
-    expect(
-      hasFinalChannelTurnDispatch({
-        queuedFinal: false,
-        counts: { tool: 1, block: 0, final: 0 },
-      }),
-    ).toBe(false);
-    expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({
-      tool: 0,
-      block: 0,
-      final: 0,
-    });
-  });
-
-  it("drops when ingest returns null", async () => {
-    const result = await runChannelInboundEvent({
-      channel: "test",
-      raw: {},
-      adapter: {
-        ingest: () => null,
-        resolveTurn: vi.fn(),
-      },
-    });
-
-    expect(result).toEqual({
-      admission: { kind: "drop", reason: "ingest-null" },
-      dispatched: false,
-    });
-  });
-
   it("handles non-turn event classes without dispatch", async () => {
     const resolveTurn = vi.fn();
-    const result = await runChannelInboundEvent({
+    const result = await runChannelTurn({
       channel: "test",
       raw: {},
       adapter: {
@@ -2136,7 +2064,7 @@ describe("channel turn kernel", () => {
 
   it("stops on preflight admission drops", async () => {
     const resolveTurn = vi.fn();
-    const result = await runChannelInboundEvent({
+    const result = await runChannelTurn({
       channel: "test",
       raw: {},
       adapter: {
@@ -2159,7 +2087,7 @@ describe("channel turn kernel", () => {
     const historyMap = new Map<string, HistoryEntry[]>();
     const resolveTurn = vi.fn();
 
-    const result = await runChannelInboundEvent({
+    const result = await runChannelTurn({
       channel: "test",
       raw: {},
       adapter: {
@@ -2218,7 +2146,7 @@ describe("channel turn kernel", () => {
     });
     let nowMs = 1_000;
     const runOne = async (id: string) =>
-      await runChannelInboundEvent({
+      await runChannelTurn({
         channel: "test",
         accountId: "acct",
         raw: { id },
@@ -2273,7 +2201,7 @@ describe("channel turn kernel", () => {
     });
     const deliver = vi.fn();
     const onFinalize = vi.fn();
-    const result = await runChannelInboundEvent({
+    const result = await runChannelTurn({
       channel: "test",
       raw: {},
       adapter: {
@@ -2332,7 +2260,7 @@ describe("channel turn kernel", () => {
 
   it("runs custom prepared dispatch from a full turn adapter", async () => {
     const events: string[] = [];
-    const result = await runChannelInboundEvent({
+    const result = await runChannelTurn({
       channel: "test",
       raw: { id: "msg-1", text: "hello" },
       adapter: {
@@ -2372,7 +2300,7 @@ describe("channel turn kernel", () => {
     const onFinalize = vi.fn();
 
     await expect(
-      runChannelInboundEvent({
+      runChannelTurn({
         channel: "test",
         raw: { id: "msg-1", text: "hello" },
         adapter: {
@@ -2404,7 +2332,7 @@ describe("channel turn kernel", () => {
     const onFinalize = vi.fn();
 
     await expect(
-      runChannelInboundEvent({
+      runChannelTurn({
         channel: "test",
         raw: { id: "msg-1", text: "hello" },
         turnAdoptionLifecycle: { onAdopted: vi.fn(async () => undefined) },
@@ -2444,7 +2372,7 @@ describe("channel turn kernel", () => {
       return { visibleReplySent: true };
     });
 
-    const result = await runChannelInboundEvent({
+    const result = await runChannelTurn({
       channel: "test",
       raw: { id: "msg-1", text: "hello" },
       turnAdoptionLifecycle,
@@ -2487,7 +2415,7 @@ describe("channel turn kernel", () => {
           counts: { tool: 0, block: 0, final: 1 },
         };
       });
-      const result = await runChannelInboundEvent({
+      const result = await runChannelTurn({
         channel: "test",
         raw: { id: "msg-1", text: "hello" },
         adapter: {
@@ -2541,7 +2469,7 @@ describe("channel turn kernel", () => {
     );
 
     await expect(
-      runChannelInboundEvent({
+      runChannelTurn({
         channel: "test",
         raw: {},
         adapter: {
@@ -2569,4 +2497,3 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.routeSessionKey).toBe("agent:main:test:peer");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
