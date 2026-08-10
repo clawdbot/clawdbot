@@ -221,6 +221,11 @@ export type {
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+export {
+  listAgentIds,
+  readAgentRosterProperty,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope-config.js";
 export { resolveSessionAgentId } from "../agents/agent-scope.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 

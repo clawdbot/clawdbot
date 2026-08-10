@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { referenceMemoryAuthorizationConformanceAdapter } from "../memory-host-sdk/host/authorization-conformance.js";
 import {
   COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
   LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
   MEMORY_AUTHORIZATION_CAPABILITY_NAMES,
 } from "../memory-host-sdk/host/authorization.js";
-import { inspectMemoryAuthorizationCapability } from "./memory-authorization-runtime.js";
+import {
+  admitMemoryAuthorizationReadRuntime,
+  inspectMemoryAuthorizationCapability,
+} from "./memory-authorization-runtime.js";
 import { observeMemoryAuthorizationShadowSurface } from "./memory-authorization-shadow.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
@@ -97,6 +101,24 @@ describe("memory authorization capability inspection", () => {
     expect(Object.isFrozen(inspection.missingMethods)).toBe(true);
     expect(runtime.authorize).not.toHaveBeenCalled();
     expect(runtime.legacyManager.search).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an enforced nonconforming alternate without calling legacy search", async () => {
+    const legacySearch = vi.fn();
+    const rejected = await admitMemoryAuthorizationReadRuntime({
+      authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+      authorizationConformance: referenceMemoryAuthorizationConformanceAdapter,
+      runtime: { ...createRuntime(), legacySearch },
+    });
+    expect(rejected).toEqual({ ok: false, reasonCode: "backend-nonconforming" });
+    expect(legacySearch).not.toHaveBeenCalled();
+
+    const admitted = await admitMemoryAuthorizationReadRuntime({
+      authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+      authorizationConformance: referenceMemoryAuthorizationConformanceAdapter,
+      runtime: createRuntime(),
+    });
+    expect(admitted.ok).toBe(true);
   });
 
   it("reports all-false and incomplete declarations as nonconforming", () => {

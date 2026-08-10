@@ -3,6 +3,7 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import type { MemoryAuthorizationConformanceAdapter } from "../memory-host-sdk/host/authorization-conformance.js";
 import type {
   AuthorizedMemoryRuntime,
   MemoryAuthorizationCapabilities,
@@ -316,6 +317,8 @@ export type MemoryPluginPublicArtifactsProvider = {
 export type MemoryPluginCapability = {
   /** Declares the selected backend's authorization support even when it has no runtime. */
   authorization?: MemoryAuthorizationCapabilities;
+  /** Plugin-owned pure evaluator; core verifies it before an enforced read admission. */
+  authorizationConformance?: MemoryAuthorizationConformanceAdapter;
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;

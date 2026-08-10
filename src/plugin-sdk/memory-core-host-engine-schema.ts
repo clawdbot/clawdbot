@@ -1,4 +1,5 @@
 // Focused memory host schema helpers for doctor and migration control-plane paths.
+export { ensureOpenClawAgentScopedMemorySchema } from "../state/openclaw-agent-scoped-memory-schema.js";
 export {
   ensureMemoryIndexSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,
