@@ -12,10 +12,9 @@ export function deduplicateBlockSentMedia<
   if (remainingMedia.length === 0 && !payload.text) {
     return undefined;
   }
-  const mediaUrl = payload.mediaUrl;
   return {
     ...payload,
     mediaUrls: remainingMedia,
-    mediaUrl: mediaUrl && sentBlockMediaUrls.has(mediaUrl.trim()) ? undefined : mediaUrl,
+    mediaUrl: sentBlockMediaUrls.has(payload.mediaUrl?.trim() ?? "") ? undefined : payload.mediaUrl,
   };
 }
