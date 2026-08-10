@@ -61,7 +61,6 @@ function makeNativeApprovalCapability(
   } & ApprovalNativeRuntimeAdapterStubParams = {},
 ): ApprovalCapability {
   const preferredSurface = params.preferredSurface ?? "origin";
-  const nativeRuntime = createApprovalNativeRuntimeAdapterStubs(params);
   return {
     native: {
       describeDeliveryCapabilities: vi.fn().mockReturnValue({
@@ -76,7 +75,7 @@ function makeNativeApprovalCapability(
         ? { resolveApproverDmTargets: params.resolveApproverDmTargets }
         : {}),
     },
-    nativeRuntime: { ...nativeRuntime, eventKinds: ["exec", "plugin"] },
+    nativeRuntime: createApprovalNativeRuntimeAdapterStubs(params),
   };
 }
 
