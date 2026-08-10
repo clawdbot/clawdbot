@@ -406,11 +406,19 @@ export async function createSessionGroup(
     const current = host.findSidebarSessionByKey(session.key);
     return current ? [current] : [];
   });
-  if (targets.length === 1) {
-    return patchSession(host, targets[0]!, { category: name }, scope);
-  }
-  if (targets.length > 1) {
-    return patchSessions(host, targets, { category: name }, scope);
+  if (targets.length > 0) {
+    const moved =
+      targets.length === 1
+        ? await patchSession(host, targets[0]!, { category: name }, scope)
+        : await patchSessions(host, targets, { category: name }, scope);
+    // Rows that left the list are absent from `targets`, so patching the
+    // remainder reports success for a selection that was only partly applied.
+    // Closing on that would leave the skipped rows unaccounted for, so the
+    // partial outcome is named here; it is terminal, as the group already exists.
+    if (moved === "completed" && targets.length < sessions.length) {
+      showToast({ message: t("sessionsView.newGroupMovePartial") });
+    }
+    return moved;
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";

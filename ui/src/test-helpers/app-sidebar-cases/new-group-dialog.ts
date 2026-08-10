@@ -104,4 +104,65 @@ describe("AppSidebar new group dialog", () => {
       restoreDialogPolyfill();
     }
   });
+
+  it("reports the partial outcome when only part of the selection leaves the list", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    await toastHost.updateComplete;
+    try {
+      const { sidebar, harness } = await mountMultiSelect([
+        "sessions.groups.put",
+        "sessions.patch",
+        "sessions.patchMany",
+      ]);
+      let landCatalogWrite!: () => void;
+      harness.groupsPut.mockReturnValueOnce(
+        new Promise((resolve) => {
+          landCatalogWrite = () => resolve("completed");
+        }),
+      );
+      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      await sidebar.updateComplete;
+      openContextMenu(sidebar, "agent:main:a");
+      await sidebar.updateComplete;
+      const menu = await sessionMenu(sidebar);
+      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
+
+      await waitForInputDialog();
+      await submitInputDialog("Projects");
+      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
+
+      // Only one of the two selected rows survives the catalog write. Moving the
+      // survivor is still correct, but the other row was requested and skipped.
+      harness.publish({
+        result: {
+          count: 1,
+          sessions: [{ key: "agent:main:b", agentId: "main" }],
+        } as unknown as SessionsListResult,
+      });
+      landCatalogWrite();
+
+      await waitForFast(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+      );
+      // The surviving row is patched on its own; the removed key is never sent,
+      // so patchMany stays out of it.
+      await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+      expect(harness.patch).toHaveBeenCalledWith(
+        "agent:main:b",
+        { category: "Projects" },
+        { agentId: "main" },
+      );
+      expect(harness.patchMany).not.toHaveBeenCalled();
+      // A partly applied selection must not close as a plain success.
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+        "Group created, but some selected sessions were not moved because the list changed. Move them from the row menu.",
+      );
+    } finally {
+      toastHost.remove();
+      restoreDialogPolyfill();
+    }
+  });
 });
