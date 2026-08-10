@@ -3991,7 +3991,7 @@ td.data-table-key-col {
 }
 
 .md-preview-dialog__reader.sidebar-markdown {
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   line-height: 1.74;
   color: var(--text);
 }
@@ -4015,7 +4015,11 @@ td.data-table-key-col {
 
 .md-preview-dialog__reader.sidebar-markdown h1 {
   font-family: var(--md-preview-serif);
-  font-size: clamp(2.2rem, 4.4vw, 3.35rem);
+  font-size: clamp(
+    calc(2.2rem * var(--control-ui-text-scale)),
+    calc(4.4vw * var(--control-ui-text-scale)),
+    calc(3.35rem * var(--control-ui-text-scale))
+  );
   line-height: 0.98;
 }
 
@@ -4024,12 +4028,20 @@ td.data-table-key-col {
   padding-top: 1.3rem;
   border-top: 1px solid color-mix(in srgb, var(--border) 82%, white 12%);
   font-family: var(--md-preview-serif);
-  font-size: clamp(1.45rem, 2.1vw, 2rem);
+  font-size: clamp(
+    calc(1.45rem * var(--control-ui-text-scale)),
+    calc(2.1vw * var(--control-ui-text-scale)),
+    calc(2rem * var(--control-ui-text-scale))
+  );
 }
 
 .md-preview-dialog__reader.sidebar-markdown h3 {
   margin-top: 1.9rem;
-  font-size: clamp(1.18rem, 1.4vw, 1.42rem);
+  font-size: clamp(
+    calc(1.18rem * var(--control-ui-text-scale)),
+    calc(1.4vw * var(--control-ui-text-scale)),
+    calc(1.42rem * var(--control-ui-text-scale))
+  );
 }
 
 .md-preview-dialog__reader.sidebar-markdown :is(p, ul, ol, blockquote, pre, table, hr, details) {
@@ -5287,7 +5299,7 @@ td.data-table-key-col {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   transition: opacity var(--duration-fast) ease;

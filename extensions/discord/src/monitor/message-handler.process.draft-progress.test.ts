@@ -802,10 +802,12 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({
+        toolCallId: "call-1",
         name: "exec",
         phase: "start",
       });
       await params?.replyOptions?.onCommandOutput?.({
+        toolCallId: "call-1",
         phase: "end",
         title: "pnpm test -- --watch=false",
         name: "exec",

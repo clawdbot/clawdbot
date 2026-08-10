@@ -284,7 +284,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 550;
   transition:
     background var(--duration-fast) ease,
@@ -325,7 +325,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   background: color-mix(in srgb, var(--card) 70%, transparent);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 550;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -334,7 +334,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__title {
   margin: 14px 0 0;
   padding: 0 9px;
-  font-size: 21px;
+  font-size: calc(21px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -401,7 +401,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   background: color-mix(in srgb, var(--card) 72%, transparent);
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   outline: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -425,7 +425,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 @media (hover: none) and (pointer: coarse) {
   .settings-sidebar__search-input {
-    font-size: 16px;
+    font-size: max(16px, calc(12.5px * var(--control-ui-text-scale)));
   }
 }
 
@@ -469,7 +469,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__empty {
   margin: 8px 9px 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
 }
 
@@ -482,7 +482,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__group-label {
   padding: 0 9px;
   margin: 0 0 4px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -559,7 +559,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__item-label {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -594,7 +594,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__subitem-label {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -608,7 +608,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   gap: 8px;
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -1042,7 +1042,7 @@ openclaw-settings-save-indicator {
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
@@ -1217,7 +1217,7 @@ html.openclaw-native-macos
   background: var(--bg-elevated);
   color: var(--muted);
   cursor: var(--cursor-action);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1267,7 +1267,7 @@ html.openclaw-native-macos
   flex: 1 1 auto;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -1287,7 +1287,7 @@ html.openclaw-native-macos
 .sidebar-update-card__subtitle {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1348,7 +1348,7 @@ html.openclaw-native-macos
 .sidebar-session-error {
   flex: 0 0 auto;
   padding: 8px 10px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.35;
 }
 
@@ -1523,7 +1523,7 @@ html.openclaw-native-macos
 .sidebar-session-group-count {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
@@ -1562,7 +1562,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-align: left;
 }
 
@@ -1717,7 +1717,7 @@ html.openclaw-native-macos
 
 .sidebar-recent-sessions__label-text,
 .sidebar-session-catalog-host__label {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1758,7 +1758,7 @@ html.openclaw-native-macos
   min-height: 28px;
   padding: 6px var(--sidebar-lead);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session-tree__show-more {
@@ -1767,7 +1767,7 @@ html.openclaw-native-macos
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   text-align: left;
 }
@@ -1805,10 +1805,10 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-catalog-host__count {
-  width: 20px;
-  flex: 0 0 20px;
+  width: calc(20px * var(--control-ui-text-scale));
+  flex: 0 0 calc(20px * var(--control-ui-text-scale));
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.68;
   text-align: center;
@@ -1879,16 +1879,16 @@ html.openclaw-native-macos
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: calc(12px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.03em;
 }
 
 .sidebar-session-catalog-project__count {
-  width: 20px;
-  flex: 0 0 20px;
+  width: calc(20px * var(--control-ui-text-scale));
+  flex: 0 0 calc(20px * var(--control-ui-text-scale));
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -1905,7 +1905,7 @@ html.openclaw-native-macos
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 18px;
 }
 
@@ -1918,7 +1918,7 @@ html.openclaw-native-macos
   display: block;
   padding: 4px 10px 10px var(--sidebar-lead);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session--archived {
@@ -1952,6 +1952,8 @@ html.openclaw-native-macos
 /* Every sidebar session source renders a thread. Keep density and text styling
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
+  --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
+
   display: flex;
   align-items: center;
   min-width: 0;
@@ -2010,9 +2012,9 @@ html.openclaw-native-macos
   align-items: center;
   justify-content: center;
   gap: 1px;
-  width: 31px;
+  width: var(--sidebar-child-session-toggle-width, 31px);
   height: 30px;
-  flex: 0 0 31px;
+  flex: 0 0 var(--sidebar-child-session-toggle-width, 31px);
   padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -2072,7 +2074,7 @@ html.openclaw-native-macos
 
 .sidebar-child-session-toggle__count {
   min-width: 9px;
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -2212,7 +2214,7 @@ html.openclaw-native-macos
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   color: var(--text);
 }
@@ -2234,11 +2236,11 @@ html.openclaw-native-macos
 }
 
 .sidebar-recent-session--child .sidebar-recent-session__name {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-recent-session--child .session-row-trail {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .sidebar-child-session__status {
@@ -2292,7 +2294,7 @@ html.openclaw-native-macos
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: 35px;
+  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
 /* State-bearing rows reserve the larger state/action maximum throughout the
@@ -2447,7 +2449,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 
 .sidebar-customize-menu__title {
   padding: 6px 10px 8px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -2457,7 +2459,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 .sidebar-customize-menu__provenance {
   margin: 0 10px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.35;
 }
 
@@ -2466,7 +2468,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   padding: 7px 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2484,7 +2486,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
   /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
   cursor: var(--cursor-action);
@@ -2612,7 +2614,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-session-sort-menu__title {
   padding: 4px 8px 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -2631,7 +2633,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
 }
 
@@ -2721,7 +2723,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2733,14 +2735,16 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   flex: 0 0 auto;
   min-width: 12px;
   color: var(--muted);
-  font: 11px/1 var(--mono);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1;
   text-align: center;
 }
 
 .session-menu__info {
   padding: 4px 8px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .session-menu__separator {
@@ -2827,7 +2831,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .nav-item__text {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   white-space: nowrap;
 }
@@ -2879,7 +2883,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-zone-entry .sidebar-recent-session__name {
   color: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -2997,7 +3001,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   gap: 4px;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -3023,7 +3027,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-agent-card__subtitle {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3046,7 +3050,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--warn) 18%, transparent);
   color: var(--warn);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -3173,14 +3177,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-identity-card__name {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 1.2;
 }
 
 .sidebar-identity-card__subtitle {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
 }
 
@@ -3253,7 +3257,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   width: min(320px, calc(100vw - 44px));
   max-width: 100%;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   text-align: left;
 }
@@ -3266,7 +3270,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .sidebar-hover-card__heading {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3320,7 +3324,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__person-email {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-hover-card__divider {
@@ -3366,7 +3370,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .sidebar-hover-card__metadata-value--mono {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-footer-bar__status {
@@ -3381,7 +3385,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   color: var(--danger);
   cursor: var(--cursor-action);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   line-height: 1;
 }
@@ -3396,7 +3400,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-footer-bar__status-detail {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 500;
   opacity: 0.72;
 }
@@ -3445,7 +3449,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 24px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
 }
 
@@ -3461,12 +3465,18 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   background: var(--bg);
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .sidebar-agent-menu__filter input {
+    font-size: max(16px, var(--control-ui-text-sm));
+  }
 }
 
 .sidebar-agent-menu__empty {
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
@@ -3488,7 +3498,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
@@ -3512,7 +3522,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-family: var(--mono);
   color: var(--danger);
 }
@@ -3944,7 +3954,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
 }
 
