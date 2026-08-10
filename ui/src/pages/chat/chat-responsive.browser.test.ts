@@ -784,9 +784,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const styles = await page.evaluate(() => {
         const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
         const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-        const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
         const menuStyle = getComputedStyle(menu);
-        const itemStyle = getComputedStyle(item);
+        const itemRule = Array.from(document.styleSheets)
+          .flatMap((sheet) => Array.from(sheet.cssRules))
+          .find(
+            (rule): rule is CSSStyleRule =>
+              rule instanceof CSSStyleRule && rule.selectorText === ".chat-pane__gateway-menu-item",
+          );
+        if (!itemRule) {
+          throw new Error("Expected gateway menu item style rule");
+        }
+        const itemStyle = itemRule.style;
         return {
           menu: {
             borderRadius: menuStyle.borderRadius,
