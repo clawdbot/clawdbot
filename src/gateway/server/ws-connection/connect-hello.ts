@@ -27,6 +27,7 @@ import { formatError } from "../../server-utils.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
+import { resolveGatewayRecoveryScope } from "../ws-shared-generation.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -37,6 +38,7 @@ export async function sendGatewayHello(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
   pluginSurfaceUrls: Record<string, string>,
+  authenticatedUserProfileId?: string,
 ): Promise<void> {
   const {
     connId,
@@ -66,13 +68,25 @@ export async function sendGatewayHello(
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
+    sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
+  const recoveryScope =
+    role === "operator"
+      ? resolveGatewayRecoveryScope({
+          deviceToken: deviceToken?.token,
+          deviceId: device?.id,
+          // Keep proxy aliases and casing on the canonical profile-owned recovery path.
+          authenticatedPrincipal: authenticatedUserProfileId ?? authResult.user,
+          sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
+        })
+      : undefined;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
@@ -115,6 +129,7 @@ export async function sendGatewayHello(
     auth: {
       role,
       scopes,
+      ...(recoveryScope ? { recoveryScope } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,

@@ -722,29 +722,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                snapshot: {
-                  client?: { recoveryScopeTracker?: { ready: boolean } } | null;
-                };
-              };
-            };
-          };
-        };
-        const client = app.runtime?.context.gateway.snapshot.client;
-        if (!client?.recoveryScopeTracker) {
-          throw new Error("Gateway recovery tracker is unavailable");
-        }
-        client.recoveryScopeTracker.ready = false;
-        (
-          document.querySelector("openclaw-new-session-page") as
-            | (HTMLElement & { requestUpdate: () => void })
-            | null
-        )?.requestUpdate();
-      });
+      await gateway.setOnline(false);
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);

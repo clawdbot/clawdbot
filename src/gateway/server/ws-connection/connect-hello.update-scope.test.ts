@@ -108,6 +108,7 @@ function makeState(role: "operator" | "node", scopes: string[]) {
     device: null,
     hasTokenAuth: false,
     hasPasswordAuth: false,
+    authResult: { ok: true, method: "none" },
     authMethod: "none",
     issuedBootstrapProfile: null,
     handoffBootstrapProfile: null,
@@ -205,6 +206,7 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.auth).toEqual({
       role: "operator",
       scopes: ["operator.pairing"],
+      recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",
       issuedAtMs: 1,
     });

@@ -53,3 +53,23 @@ export function resolveSharedGatewaySessionGeneration(
   }
   return undefined;
 }
+
+/** One-way browser recovery namespace. A verified human principal owns recovery;
+ * credential rotation invalidates records only when no human principal exists. */
+export function resolveGatewayRecoveryScope(params: {
+  deviceToken?: string;
+  deviceId?: string;
+  authenticatedPrincipal?: string;
+  sharedGatewaySessionGeneration?: string;
+}): string | undefined {
+  const material = params.authenticatedPrincipal
+    ? ["principal", params.authenticatedPrincipal, params.deviceId ?? ""]
+    : params.deviceToken
+      ? ["device-token", params.deviceToken]
+      : params.sharedGatewaySessionGeneration
+        ? ["shared-auth", params.sharedGatewaySessionGeneration, params.deviceId ?? ""]
+        : params.deviceId
+          ? ["device", params.deviceId]
+          : undefined;
+  return material ? sha256Base64Url(JSON.stringify(material)) : undefined;
+}

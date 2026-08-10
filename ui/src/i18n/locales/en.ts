@@ -689,8 +689,8 @@ export const en: TranslationMap = {
     cloudRequiresWorktree: "Cloud workers require a managed worktree",
     cloudRequiresOpenClawRuntime:
       "Cloud workers require the OpenClaw runtime; {runtime} is selected.",
-    cloudSecureContextRequired:
-      "Cloud workers need a secure browser context so recovery can protect your task.",
+    cloudRecoveryUnavailable:
+      "Cloud workers are unavailable because this connection does not support task recovery. Reconnect or update the Gateway.",
     cloudStartFailed: "The session was created locally, but cloud startup failed: {error}",
     cloudSyncsFolder: "Syncs {folder} to the cloud worker",
     folder: "Folder",

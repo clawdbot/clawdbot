@@ -1,5 +1,4 @@
 /** @vitest-environment node */
-import { createHash } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
@@ -1050,19 +1049,51 @@ describe("GatewayBrowserClient", () => {
           role: "operator",
           scopes: ["operator.read"],
           deviceToken: "stored-device-token",
+          recoveryScope: "device-recovery-scope",
         },
       },
     });
 
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScopeReady).toBe(true);
-    expect(client.recoveryScope).toBe(
-      createHash("sha256").update("stored-device-token").digest("hex"),
-    );
+    expect(client.recoveryScope).toBe("device-recovery-scope");
     expect(client.recoveryScope).not.toContain("stored-device-token");
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.scopes).toEqual(
       [...CONTROL_UI_OPERATOR_SCOPES].toSorted(),
     );
+    client.stop();
+  });
+
+  it("uses a Gateway-owned recovery scope without browser crypto or client credentials", async () => {
+    localStorage.clear();
+    stubInsecureCrypto();
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          recoveryScope: "gateway-recovery-scope",
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(connectFrame.params?.auth).toBeUndefined();
+    expect(connectFrame.params?.device).toBeUndefined();
+    expect(client.recoveryScope).toBe("gateway-recovery-scope");
+    expect(client.recoveryScopeReady).toBe(true);
     client.stop();
   });
 

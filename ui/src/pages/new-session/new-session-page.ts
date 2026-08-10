@@ -269,8 +269,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (selectionUnavailable) {
       this.error = t("newSession.catalogUnavailable");
     } else if (recovery.unsupported) {
-      this.error = t("newSession.cloudSecureContextRequired");
-    } else if (this.error === t("newSession.cloudSecureContextRequired")) {
+      this.error = t("newSession.cloudRecoveryUnavailable");
+    } else if (this.error === t("newSession.cloudRecoveryUnavailable")) {
       this.error = null;
     }
   }
