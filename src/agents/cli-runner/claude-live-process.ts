@@ -2,21 +2,6 @@ import crypto from "node:crypto";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  loadExecApprovals,
-  maxAsk,
-  minSecurity,
-  normalizeExecAsk,
-  resolveExecApprovalsFromFile,
-  resolveExecModePolicy,
-  type ExecAsk,
-  type ExecSecurity,
-} from "../../infra/exec-approvals.js";
-import {
-  LEGACY_IMPLICIT_AGENT_ID,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
 import type {
   CliOutput,
   CliStreamingDelta,
@@ -26,6 +11,7 @@ import type {
   CliToolUseStartDelta,
   CliUsage,
 } from "../cli-output-contracts.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
@@ -427,54 +413,16 @@ export async function refreshClaudePrompt(params: {
   return false;
 }
 
-// Known divergence: this live native-tool policy does not yet use canonical exec layering.
-// Follow-up: add a regression and consolidate it with src/agents/exec-defaults.ts.
-function readConfiguredExecPolicy(context: PreparedCliRunContext): {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  agentId: string;
-} {
-  const agentId =
-    context.params.agentId ??
-    resolveAgentIdFromSessionKey(
-      context.params.sessionKey,
-      context.params.config
-        ? resolveDefaultAgentId(context.params.config)
-        : LEGACY_IMPLICIT_AGENT_ID,
-    );
-  const agentExec = context.params.config
-    ? resolveAgentConfig(context.params.config, agentId)?.tools?.exec
-    : undefined;
-  const exec = agentExec ?? context.params.config?.tools?.exec;
-  const configured = resolveExecModePolicy({
-    mode: exec?.mode,
-    security: exec?.security ?? "full",
-    ask: exec?.ask ?? "off",
-  });
-  const security = configured.security;
-  const configuredAsk = configured.ask;
-  const sessionAsk = normalizeExecAsk(context.params.sessionEntry?.execAsk);
-  return {
-    agentId,
-    security,
-    ask: sessionAsk ? maxAsk(configuredAsk, sessionAsk) : configuredAsk,
-  };
-}
-
 export function resolveClaudeLiveExecPermission(
   context: PreparedCliRunContext,
 ): ClaudeLiveExecPermission {
-  const configured = readConfiguredExecPolicy(context);
-  const approvals = resolveExecApprovalsFromFile({
-    file: loadExecApprovals(),
-    agentId: configured.agentId,
-    overrides: {
-      security: configured.security,
-      ask: configured.ask,
-    },
+  const { security, ask } = resolveExecDefaults({
+    cfg: context.params.config,
+    sessionEntry: context.params.sessionEntry,
+    execOverrides: context.params.execOverrides,
+    agentId: context.params.agentId,
+    sessionKey: context.params.runtimePolicySessionKey ?? context.params.sessionKey,
   });
-  const security = minSecurity(configured.security, approvals.agent.security);
-  const ask = maxAsk(configured.ask, approvals.agent.ask);
   return {
     security,
     ask,

@@ -84,6 +84,71 @@ describe("Claude live process approvals", () => {
     });
   });
 
+  it.each([
+    {
+      name: "session deny overrides broader global and agent full policy",
+      requestId: "req-session-security-deny",
+      toolUseId: "tool-session-security-deny-1",
+      context: () =>
+        buildClaudeLiveRunContext({
+          sessionKey: "agent:main:main",
+          sessionEntry: { execSecurity: "deny" },
+          config: {
+            tools: { exec: { security: "full", ask: "off" } },
+            agents: {
+              list: [
+                {
+                  id: "main",
+                  default: true,
+                  tools: { exec: { security: "full", ask: "off" } },
+                },
+              ],
+            },
+          },
+        }),
+    },
+    {
+      name: "partial agent policy inherits restrictive global security",
+      requestId: "req-partial-agent-global-deny",
+      toolUseId: "tool-partial-agent-global-deny-1",
+      context: () =>
+        buildClaudeLiveRunContext({
+          sessionKey: "agent:main:main",
+          config: {
+            tools: { exec: { security: "deny", ask: "off" } },
+            agents: {
+              list: [
+                {
+                  id: "main",
+                  default: true,
+                  tools: { exec: { ask: "off" } },
+                },
+              ],
+            },
+          },
+        }),
+    },
+  ])("denies Claude live native tools when $name", async ({ requestId, toolUseId, context }) => {
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId,
+        toolUseId,
+        input: { command: "ls" },
+        sessionId: requestId,
+      }),
+    });
+
+    const result = await executePreparedCliRun(context());
+
+    expect(result.text).toBe("ok");
+    expectClaudeControlDecision(live, {
+      behavior: "deny",
+      requestId,
+      messageIncludes: "security=deny",
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("preserves image and PDF bytes inside approved Claude live control inputs", async () => {
     const input = {
       command: "process media",
