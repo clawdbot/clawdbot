@@ -73,7 +73,11 @@ describe("OpenClawTerminalPanel accessibility", () => {
       .querySelector<HTMLButtonElement>('[aria-label="Open full-screen terminal"]')
       ?.click();
 
-    expect(open).toHaveBeenCalledWith("/openclaw/terminal", "_blank", "noopener");
+    expect(open).toHaveBeenCalledWith(
+      "http://localhost:3000/openclaw/terminal",
+      "_blank",
+      "noopener,noreferrer",
+    );
 
     panel.fullscreen = true;
     await panel.updateComplete;

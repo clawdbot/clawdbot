@@ -1,6 +1,6 @@
 const RESET = "\x1b[0m";
 
-export const TERMINAL_INTRO_ART = [
+const TERMINAL_INTRO_ART = [
   "          ..              ..",
   "        .●●:.:          • •●●",
   "       .●●●•●●          ●•●●●●",

@@ -9,6 +9,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { terminalDocumentPath } from "../../app/terminal-document-mode.ts";
 import { t } from "../../i18n/index.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
@@ -317,7 +318,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private openFullscreen(): void {
-    window.open(terminalDocumentPath(this.basePath), "_blank", "noopener");
+    openExternalUrlSafe(terminalDocumentPath(this.basePath));
   }
 
   resetTerminalSessionPicker(): void {
