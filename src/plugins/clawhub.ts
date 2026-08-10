@@ -57,6 +57,8 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
 } from "./install.js";
+import { checkMinHostVersion } from "./min-host-version.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
 export type { ClawHubRiskAcknowledgementRequest };
@@ -1147,7 +1149,11 @@ function validateClawHubPluginPackage(params: {
 
   if (
     compatibility?.minGatewayVersion &&
-    !satisfiesGatewayMinimum(runtimeVersion, compatibility.minGatewayVersion)
+    !checkMinHostVersion({
+      currentVersion: runtimeVersion,
+      minHostVersion: compatibility.minGatewayVersion,
+      allowLegacyBareSemver: true,
+    }).ok
   ) {
     return buildClawHubInstallFailure(
       `Plugin "${pkg.name}" requires OpenClaw >=${compatibility.minGatewayVersion}, but this host is ${runtimeVersion}.`,
