@@ -4,7 +4,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
 import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
-import { folderDisplayName } from "./path.ts";
+import { folderDisplayName, isWorkspaceContainedPath } from "./path.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
@@ -131,6 +131,7 @@ function renderBrowseView(params: {
 
 export function renderPlaceSelect(params: {
   browseAvailable: boolean;
+  isAdmin: boolean;
   folder: string;
   workspace: string;
   sessions: readonly RecentPlaceSource[];
@@ -196,9 +197,12 @@ export function renderPlaceSelect(params: {
       : gatewayLabel;
   const label = params.showDestinations ? `${folderLabel} · ${destinationLabel}` : folderLabel;
   const effectiveFolder = folder || params.workspace;
-  const recents = params.browseAvailable
-    ? recentPlaces(params.sessions, { workspace: params.workspace, execNodes: params.execNodes })
-    : [];
+  const recents = recentPlaces(params.sessions, {
+    workspace: params.workspace,
+    execNodes: params.execNodes,
+    allowGatewayFolder: (recentFolder) =>
+      params.isAdmin || isWorkspaceContainedPath(params.workspace, recentFolder),
+  });
   const recentItems = recents.map((recent) => {
     const node = params.execNodes.find((candidate) => candidate.nodeId === recent.execNode);
     const recentLabel =
@@ -317,7 +321,9 @@ export function renderPlaceSelect(params: {
                 class="session-menu__item"
                 data-value="browse"
                 aria-pressed="false"
-                title=${params.browseAvailable ? nothing : t("newSession.browseRequiresAdmin")}
+                title=${params.browseAvailable || params.isAdmin
+                  ? nothing
+                  : t("newSession.browseRequiresAdmin")}
                 ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
                 @click=${() => params.onBrowse(browseTarget)}
               >

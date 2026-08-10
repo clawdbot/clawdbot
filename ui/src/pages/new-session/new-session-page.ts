@@ -72,7 +72,7 @@ import { isMissingRestoredFolderError } from "./folder-validation.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { isAbsolutePath } from "./path.ts";
+import { isAbsolutePath, isWorkspaceContainedPath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import {
   loadNewSessionPreference,
@@ -704,11 +704,24 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.restoredFolderValidation = "none";
   }
 
+  private restoreWorkspaceFolder() {
+    this.restoredFolderValidation = "none";
+    if (this.error === t("newSession.browserLoadFailed")) {
+      this.error = null;
+    }
+    this.folder = this.workspacePath();
+    this.worktree = false;
+    this.preferredWorktreeRestore = false;
+    this.persistPreference({ folder: this.folder, worktree: false });
+    this.maybeLoadBranches();
+  }
+
   private validateRestoredFolder(folder: string) {
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
-    if (snapshot?.phase !== "connected" || !client || !this.isAdmin()) {
-      this.restoredFolderValidation = "checking";
+    const workspaceContained = isWorkspaceContainedPath(this.workspacePath(), folder);
+    if (snapshot?.phase !== "connected" || !client || (!this.isAdmin() && !workspaceContained)) {
+      this.restoreWorkspaceFolder();
       return;
     }
     const requestId = ++this.restoredFolderValidationToken;
@@ -738,15 +751,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         if (isMissingRestoredFolderError(error)) {
-          this.restoredFolderValidation = "none";
-          if (this.error === t("newSession.browserLoadFailed")) {
-            this.error = null;
-          }
-          this.folder = this.workspacePath();
-          this.worktree = false;
-          this.preferredWorktreeRestore = false;
-          this.persistPreference({ folder: this.folder, worktree: false });
-          this.maybeLoadBranches();
+          this.restoreWorkspaceFolder();
           return;
         }
         this.restoredFolderValidation = "failed";
@@ -781,12 +786,10 @@ class NewSessionPage extends OpenClawLightDomElement {
         Boolean(storedFolder) &&
         storedFolder === preference?.workspace &&
         preference.workspace !== workspace;
-      // Only an admin can browse outside the workspace, so any other stored
-      // folder is unreachable for this viewer.
       const storedFolderUsable =
         Boolean(storedFolder) &&
         !storedWorkspaceMoved &&
-        (storedFolder === workspace || this.isAdmin());
+        (this.isAdmin() || isWorkspaceContainedPath(workspace, storedFolder));
       this.folder = storedFolderUsable ? storedFolder : workspace;
       this.folderSelectedByUser = false;
       this.preferredWorktreeRestore = preference?.worktree === true;
@@ -1171,7 +1174,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     ) {
       return false;
     }
-    if (this.usesCustomFolder() && !this.isAdmin()) {
+    if (
+      this.usesCustomFolder() &&
+      !this.isAdmin() &&
+      !isWorkspaceContainedPath(this.workspacePath(), this.folder)
+    ) {
       return false;
     }
     if (this.execNode && this.worktree) {
@@ -1663,7 +1670,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private browseAvailable(): boolean {
-    return this.isAdmin();
+    return this.gatewayConnected && (this.isAdmin() || Boolean(this.workspacePath()));
   }
 
   private closeAgentDropdown() {
@@ -1725,7 +1732,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (draft.length === 0) {
       return "";
     }
-    return isAbsolutePath(draft) ? draft : null;
+    if (!isAbsolutePath(draft)) {
+      return null;
+    }
+    return this.isAdmin() || isWorkspaceContainedPath(this.workspacePath(), draft) ? draft : null;
   }
 
   private selectBrowserTarget(target: BrowserTarget) {
@@ -1812,6 +1822,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const cloudDisabledReason = this.cloudDisabledReason();
     return renderPlaceSelect({
       browseAvailable: this.browseAvailable(),
+      isAdmin: this.isAdmin(),
       folder: this.folder,
       workspace: this.workspacePath(),
       sessions: this.context?.sessions.state.result?.sessions ?? [],

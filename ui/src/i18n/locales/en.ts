@@ -694,7 +694,7 @@ export const en: TranslationMap = {
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
-    browseRequiresAdmin: "Folder browsing needs an admin connection",
+    browseRequiresAdmin: "Browsing outside agent workspaces needs an admin connection",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",

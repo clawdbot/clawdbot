@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  SESSION_LIST_DEFAULTS,
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
@@ -62,6 +63,66 @@ suite.define(() => {
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "scope proof" },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("lets write-scoped operators browse and restore only workspace-contained folders", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const workspace = "/home/peter/openclaw";
+    const contained = `${workspace}/packages/app`;
+    const gateway = await installMockGateway(page, {
+      workspace,
+      workspaceGit: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "fs.listDir",
+        "sessions.create",
+        "worktrees.branches",
+      ],
+      operatorScopes: ["operator.read", "operator.write"],
+      methodResponses: {
+        "fs.listDir": {
+          path: workspace,
+          home: "/home/peter",
+          entries: [{ name: "packages", path: `${workspace}/packages` }],
+        },
+        "sessions.list": {
+          count: 2,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [
+            { key: "agent:main:inside", kind: "direct", updatedAt: 2, execCwd: contained },
+            { key: "agent:main:outside", kind: "direct", updatedAt: 1, execCwd: "/private/repo" },
+          ],
+          ts: Date.now(),
+        },
+        "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
+        "sessions.create": { key: "agent:main:write-workspace" },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      const browse = page.getByRole("button", { name: "Browse folders" });
+      await expect.poll(() => browse.isEnabled()).toBe(true);
+      await browse.click();
+      await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
+        params: { path: workspace },
+      });
+      await page.getByRole("button", { name: "Parent folder" }).click();
+      await page.getByRole("button", { name: "app", exact: true }).click();
+      expect(await page.locator('[data-value="recent::/private/repo"]').count()).toBe(0);
+
+      await page.locator(".new-session-page__message").fill("work in the package");
+      await page.getByRole("button", { name: "Start session" }).click();
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { cwd: contained, message: "work in the package" },
       });
     } finally {
       await context.close();
