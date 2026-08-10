@@ -11,7 +11,7 @@ import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundar
 import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
-import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
+import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
