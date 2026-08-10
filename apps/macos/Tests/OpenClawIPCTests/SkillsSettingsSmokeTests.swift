@@ -16,7 +16,6 @@ private func makeSkillStatus(
     eligible: Bool,
     requirements: SkillRequirements = SkillRequirements(bins: [], env: [], config: []),
     missing: SkillMissing = SkillMissing(bins: [], env: [], config: []),
-    configChecks: [OpenClawKit.SkillStatusConfigCheck] = [],
     install: [SkillInstallOption] = [])
     -> SkillStatus
 {
@@ -35,7 +34,7 @@ private func makeSkillStatus(
         eligible: eligible,
         requirements: requirements,
         missing: missing,
-        configChecks: configChecks,
+        configChecks: [],
         install: install)
 }
 

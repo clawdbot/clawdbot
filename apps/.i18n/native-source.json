@@ -42883,7 +42883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 354,
+      "line": 348,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/SkillManagement.swift",
       "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
       "surface": "apple",
