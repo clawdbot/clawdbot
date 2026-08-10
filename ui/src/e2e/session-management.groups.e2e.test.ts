@@ -616,8 +616,30 @@ suite.define(() => {
         "button.sidebar-session-sort:not(.sidebar-session-new)",
       );
       await sortSessionsButton.click();
+      const showAutomationSessions = page.getByRole("menuitemcheckbox", {
+        name: "Show automation sessions",
+      });
+      await activateMenuItem(showAutomationSessions);
+      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+
+      await sortSessionsButton.click();
+      await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
+      const groupingCheckBounds = await page
+        .getByRole("menuitemradio", { name: "Custom groups" })
+        .locator(".session-menu__check svg")
+        .boundingBox();
+      const nativeAutomationCheck = showAutomationSessions.locator('[part="checkmark"]');
+      await expect.poll(() => nativeAutomationCheck.count()).toBe(1);
+      expect(await nativeAutomationCheck.boundingBox()).toBeNull();
+      const automationCheck = showAutomationSessions.locator(".session-menu__check svg");
+      await expect.poll(() => automationCheck.count()).toBe(1);
+      const automationCheckBounds = await automationCheck.boundingBox();
+      if (!groupingCheckBounds || !automationCheckBounds) {
+        throw new Error("Expected visible trailing selection marks in the session sort menu");
+      }
+      expect(Math.abs(automationCheckBounds.x - groupingCheckBounds.x)).toBeLessThanOrEqual(1);
       await sortSessionsButton.click();
       await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
