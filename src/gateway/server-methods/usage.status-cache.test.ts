@@ -306,7 +306,7 @@ describe("usage.status provider usage cache", () => {
       ({
         ...config,
         models: { providers: { openai: { baseUrl } } },
-      }) as OpenClawConfig;
+      }) as unknown as OpenClawConfig;
 
     const first = withBaseUrl("https://one.example/v1");
     expect(await runUsageStatus(refreshingCapableClient, () => first)).toMatchObject({
