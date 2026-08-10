@@ -29,8 +29,8 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => mocks.gatewayCall(opts),
+vi.mock("./in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => mocks.gatewayCall(opts),
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({

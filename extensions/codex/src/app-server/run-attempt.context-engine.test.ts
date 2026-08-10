@@ -1781,11 +1781,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   it.each([
     {
-      name: "commitment-only",
-      trigger: "heartbeat",
-      bootstrapContextRunKind: "commitment-only",
-    },
-    {
       name: "Gateway-routed heartbeat",
       trigger: "user",
       bootstrapContextRunKind: "heartbeat",

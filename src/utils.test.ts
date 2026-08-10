@@ -197,6 +197,36 @@ describe("shortenHomePath", () => {
       );
     });
   });
+
+  it.skipIf(process.platform === "win32")("keeps POSIX home matching case-sensitive", () => {
+    withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
+      expect(shortenHomePath("/srv/openclaw-home/workspace")).toBe("/srv/openclaw-home/workspace");
+    });
+  });
+
+  it.skipIf(process.platform !== "win32")("keeps relative Windows paths relative", () => {
+    withEnv({ OPENCLAW_HOME: process.cwd() }, () => {
+      expect(shortenHomePath(`relative${path.sep}workspace`)).toBe(`relative${path.sep}workspace`);
+    });
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "shortens real extended-length Windows home aliases without exposing the absolute path",
+    async () => {
+      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+        const workspace = path.join(home, "workspace");
+        await fs.promises.mkdir(workspace);
+        const extendedAlias = `\\\\?\\${workspace.toUpperCase()}`;
+        expect(fs.statSync(extendedAlias).isDirectory()).toBe(true);
+
+        withEnv({ OPENCLAW_HOME: home }, () => {
+          const display = shortenHomePath(extendedAlias);
+          expect(display).toBe(`$OPENCLAW_HOME${path.sep}WORKSPACE`);
+          expect(display).not.toContain(home.toUpperCase());
+        });
+      });
+    },
+  );
 });
 
 describe("shortenHomeInString", () => {
@@ -209,6 +239,33 @@ describe("shortenHomeInString", () => {
       ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps embedded POSIX home matching case-sensitive",
+    () => {
+      withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
+        expect(shortenHomeInString("config: /srv/openclaw-home/openclaw.json")).toBe(
+          "config: /srv/openclaw-home/openclaw.json",
+        );
+      });
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "shortens real Windows home casing aliases inside diagnostic text",
+    async () => {
+      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+        const homeAlias = home.toUpperCase();
+        expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+
+        withEnv({ OPENCLAW_HOME: home }, () => {
+          expect(shortenHomeInString(`config: ${homeAlias}\\openclaw.json`)).toBe(
+            "config: $OPENCLAW_HOME\\openclaw.json",
+          );
+        });
+      });
+    },
+  );
 });
 
 describe("resolveUserPath", () => {

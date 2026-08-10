@@ -170,14 +170,22 @@ describe("runAuthProbes", () => {
     });
   });
 
-  it("runs Codex auth probes through raw OpenClaw model-run mode", async () => {
+  it("runs Codex-pinned auth probes through raw OpenClaw model-run mode", async () => {
     const runEmbeddedAgent = vi.fn(
-      async (_params: {
+      async (params: {
         agentDir?: string;
+        agentHarnessRuntimeOverride?: string;
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
-      }) => ({ text: "OK" }),
+      }) => {
+        if (params.agentHarnessRuntimeOverride !== "openclaw") {
+          throw new Error(
+            'Requested agent harness "codex" does not support openai/gpt-5.5 (Codex cannot reproduce authored request transport overrides).',
+          );
+        }
+        return { text: "OK" };
+      },
     );
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
     vi.doMock("../../agents/auth-profiles.js", () => ({
@@ -217,7 +225,17 @@ describe("runAuthProbes", () => {
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
       const result = await module.runAuthProbes({
-        cfg: {} as never,
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                agentRuntime: { id: "codex" },
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
         agentId: "probe-agent",
         agentDir: "/tmp/openclaw-probe-agent",
         workspaceDir: "/tmp/openclaw-probe-workspace",
@@ -235,6 +253,7 @@ describe("runAuthProbes", () => {
       expect(result.results[0]?.status).toBe("ok");
       expect(runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentHarnessRuntimeOverride: "openclaw",
           modelRun: true,
           disableTools: true,
           authProfileId: "openai:profile",

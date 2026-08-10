@@ -11,15 +11,9 @@ import {
   toCssPlacement,
 } from "../../lib/board/grid.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type {
-  BoardGrantDecision,
-  BoardObserverContext,
-  BoardViewWidget,
-  BoardWidgetFrameUrl,
-} from "../../lib/board/view-types.ts";
+import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
+import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import {
-  getBuiltinWidgetRenderer,
   getPluginWidgetKindContribution,
   loadPluginWidgetRenderer,
   pluginIdForWidgetKind,
@@ -47,15 +41,15 @@ const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
-  movePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
-  resizePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
-  moveToTab: (widget: BoardViewWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardViewWidget, w: number, h: number) => Promise<void>;
-  setHeightMode: (widget: BoardViewWidget, mode: "auto" | "fixed") => Promise<void>;
+  movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
+  resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
+  moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
+  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
+  setHeightMode: (widget: BoardWidget, mode: "auto" | "fixed") => Promise<void>;
   reportContentHeight: (name: string, height: number) => void;
-  remove: (widget: BoardViewWidget) => Promise<void>;
-  nudge: (widget: BoardViewWidget, direction: BoardGridDirection) => Promise<void>;
-  focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
+  remove: (widget: BoardWidget) => Promise<void>;
+  nudge: (widget: BoardWidget, direction: BoardGridDirection) => Promise<void>;
+  focus: (widget: BoardWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
   frameLoadFailed: (name: string) => Promise<void>;
   widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
@@ -66,14 +60,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  @property({ attribute: false }) widget?: BoardViewWidget;
+  @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
-  @property({ attribute: false }) observer?: BoardObserverContext;
   @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
@@ -177,7 +170,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleMenuSelect(
     event: CustomEvent<{ item: { value?: string } }>,
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     if (!this.canMutate) {
@@ -206,10 +199,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
-  private renderMcpApp(
-    widget: BoardViewWidget,
-    callbacks: BoardWidgetCellCallbacks,
-  ): TemplateResult {
+  private renderMcpApp(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
     const accessNotice =
       widget.grantState === "pending"
@@ -245,7 +235,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     });
   }
 
-  private renderBody(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     if (widget.contentKind === "mcp-app") {
       return this.renderMcpApp(widget, callbacks);
     }
@@ -266,16 +256,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         onRemove: () => void this.runAction(() => callbacks.remove(widget)),
       });
     }
-    if (widget.contentKind === "builtin") {
-      const renderer = getBuiltinWidgetRenderer(widget.builtin);
-      if (!renderer) {
-        throw new Error(t("board.widget.frameResolverMissing"));
-      }
-      return renderer({
-        observer: this.observer,
-        sessionKey: this.sessionKey,
-      });
-    }
     if (widget.contentKind === "plugin") {
       if (this.pluginRendererError) {
         return renderBoardWidgetError(this.pluginRendererError, () => this.retryPluginRenderer());
@@ -285,7 +265,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           widget,
           sessionKey: this.sessionKey,
           active: this.active,
-          canMutate: this.canMutate && !widget.readOnly,
+          canMutate: this.canMutate,
           requestUpdate: () => this.requestUpdate(),
         });
       }
@@ -355,10 +335,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleKeyDown(
     event: KeyboardEvent,
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
-    if (event.target !== event.currentTarget || widget.readOnly || !this.canMutate) {
+    if (event.target !== event.currentTarget || !this.canMutate) {
       return;
     }
     const direction =
@@ -401,7 +381,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyErrored = true;
     }
     const label = widget.title || widget.name;
-    const readOnly = widget.readOnly === true || !this.canMutate;
+    const readOnly = !this.canMutate;
     const bodyScrollable =
       bodyErrored ||
       this.actionError !== "" ||
@@ -444,16 +424,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
                 <span aria-hidden="true">⠿</span>
               </span>`}
           <span class="board-widget__title" title=${label}>${label}</span>
-          ${widget.contentKind === "builtin"
-            ? nothing
-            : html`<span class="board-widget__kind"
-                >${widget.contentKind === "mcp-app"
-                  ? t("board.widget.kindMcp")
-                  : widget.contentKind === "plugin"
-                    ? this.pluginRendererLabel || t("board.widget.kindPlugin")
-                    : t("board.widget.kindHtml")}</span
-              >`}
-          ${widget.contentKind === "builtin" ? nothing : renderBoardGrantedCapabilities(widget)}
+          <span class="board-widget__kind"
+            >${widget.contentKind === "mcp-app"
+              ? t("board.widget.kindMcp")
+              : widget.contentKind === "plugin"
+                ? this.pluginRendererLabel || t("board.widget.kindPlugin")
+                : t("board.widget.kindHtml")}</span
+          >
+          ${renderBoardGrantedCapabilities(widget)}
           ${readOnly
             ? nothing
             : renderBoardWidgetMenu({
@@ -481,7 +459,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               title=${t("board.widget.resizeHandle", { title: label })}
               @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
             ></span>`}
-        ${widget.grantState === "granted" && widget.contentKind !== "builtin"
+        ${widget.grantState === "granted"
           ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
           : nothing}
       </section>

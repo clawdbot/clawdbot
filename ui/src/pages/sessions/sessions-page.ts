@@ -19,12 +19,9 @@ import {
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
+import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type {
-  SessionMenuAction,
-  SessionMenuActionKind,
-  SessionMenuWork,
-} from "../../components/session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
@@ -449,46 +446,6 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     }
     return undefined;
-  }
-
-  private sessionMenuActionDisabledReasons(
-    row: GatewaySessionRow,
-  ): Partial<Record<SessionMenuActionKind, string>> {
-    const patchReason = this.mutationDisabledReason({
-      method: "sessions.patch",
-      params: { key: row.key, label: null },
-    });
-    const groupReason = this.mutationDisabledReason({
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    });
-    const forkReason = this.mutationDisabledReason({
-      method: "sessions.create",
-      params: { parentSessionKey: row.key, fork: true },
-    });
-    const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
-    const cloudWorkerStopReason = cloudWorkerStopAction
-      ? this.mutationDisabledReason(cloudWorkerStopAction)
-      : undefined;
-    const deleteReason = this.mutationDisabledReason({
-      method: "sessions.delete",
-      params: { key: row.key, ...(row.archived === true ? { archivedOnly: true } : {}) },
-    });
-    return {
-      ...(patchReason
-        ? {
-            "toggle-pin": patchReason,
-            "toggle-unread": patchReason,
-            rename: patchReason,
-            "move-to-group": patchReason,
-            "toggle-archived": patchReason,
-          }
-        : {}),
-      ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
-      ...(forkReason ? { fork: forkReason } : {}),
-      ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
-      ...(deleteReason ? { delete: deleteReason } : {}),
-    };
   }
 
   private applyRouteData() {
@@ -1427,7 +1384,11 @@ class SessionsPage extends OpenClawLightDomElement {
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
-        .actionDisabledReasons=${this.sessionMenuActionDisabledReasons(row)}
+        .actionDisabledReasons=${sessionMenuReasons({
+          snapshot: gateway,
+          session: row,
+          cloudWorkerStopAction,
+        })}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}

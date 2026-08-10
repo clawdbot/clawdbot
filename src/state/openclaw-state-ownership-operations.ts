@@ -31,16 +31,6 @@ import {
 type OpenClawStateOwnershipOptions = Omit<OpenClawStateDatabaseOptions, "database" | "readOnly">;
 type OwnershipDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
-class OpenClawStateOwnershipClaimConflictError extends Error {
-  constructor(requestedManagerId: string, existingManagerId: string) {
-    super(
-      `OpenClaw shared state is already claimed by external manager ${existingManagerId}; ` +
-        `manager ${requestedManagerId} cannot replace that durable ownership.`,
-    );
-    this.name = "OpenClawStateOwnershipClaimConflictError";
-  }
-}
-
 function requireOwnershipCheckpoint(
   walMaintenance: SqliteWalMaintenance,
   databasePath: string,
@@ -68,7 +58,10 @@ function claimOwnershipRow(
   }
   if (current) {
     if (current.managerId !== managerId) {
-      throw new OpenClawStateOwnershipClaimConflictError(managerId, current.managerId);
+      throw new Error(
+        `OpenClaw shared state is already claimed by external manager ${current.managerId}; ` +
+          `manager ${managerId} cannot replace that durable ownership.`,
+      );
     }
     return current;
   }

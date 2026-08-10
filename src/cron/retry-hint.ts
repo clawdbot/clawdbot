@@ -1,4 +1,4 @@
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 
 /** Classifies cron run failures for retry policy decisions. */
 export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";

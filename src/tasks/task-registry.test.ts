@@ -693,6 +693,16 @@ describe("task-registry", () => {
       emitAgentEvent({
         runId: "run-tools",
         stream: "tool",
+        data: {
+          phase: "input_delta",
+          name: "edit",
+          toolCallId: "call-streaming",
+          diff: { added: 3, removed: 1 },
+        },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
         data: { phase: "end", name: "read", toolCallId: "call-1" },
       });
       emitAgentEvent({

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createInitialUserMessageHandoff,
   type ApplicationInitialUserMessage,
@@ -9,29 +9,28 @@ function message(text: string): ApplicationInitialUserMessage {
 }
 
 describe("initial user message handoff", () => {
-  it("notifies once for actual prepare and clear changes", () => {
+  it("stores run ownership and preserves client privacy until clearing", () => {
     const handoff = createInitialUserMessageHandoff();
-    const listener = vi.fn();
     const owner = {};
+    const replacementOwner = {};
     const first = message("first");
-    const unsubscribe = handoff.subscribe(listener);
+    handoff.prepare({
+      sessionKey: "agent:main:main",
+      message: first,
+      owner,
+      pendingRunId: "initial-run",
+    });
 
-    handoff.prepare({ sessionKey: "agent:main:main", message: first, owner });
-    expect(listener).toHaveBeenCalledTimes(1);
-    handoff.prepare({ sessionKey: "main", message: first, owner });
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    handoff.prepare({ sessionKey: "main", message: message("replacement"), owner });
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(handoff.read("main", owner)).toEqual({
+      sessionKey: "agent:main:main",
+      message: first,
+      owner,
+      pendingRunId: "initial-run",
+    });
+    expect(handoff.read("main", replacementOwner)).toBeNull();
     handoff.clear("agent:main:missing");
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(handoff.read("main", owner)).not.toBeNull();
     handoff.clear("agent:main:main");
-    expect(listener).toHaveBeenCalledTimes(3);
-    handoff.clear();
-    expect(listener).toHaveBeenCalledTimes(3);
-
-    unsubscribe();
-    handoff.prepare({ sessionKey: "main", message: first, owner });
-    expect(listener).toHaveBeenCalledTimes(3);
+    expect(handoff.read("main", owner)).toBeNull();
   });
 });

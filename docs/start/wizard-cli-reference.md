@@ -303,7 +303,7 @@ Credential storage mode:
 - In non-interactive mode, `--secret-input-mode ref` creates only env-backed references for new credentials.
   - Set the provider env var in the onboarding process environment when adding a new credential.
   - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
-  - Existing resolvable named auth profiles are reused unchanged, including existing `env`, `file`, and `exec` references; no new `apiKey` or `keyRef` is written and no additional provider env var is required.
+  - Existing resolvable named auth profiles are reused unchanged, including existing `env`, `file`, `exec`, and `store` references; no new `apiKey` or `keyRef` is written and no additional provider env var is required.
   - For new custom-provider credentials, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
   - Existing plaintext profile credentials remain unchanged; reference mode does not migrate them. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).

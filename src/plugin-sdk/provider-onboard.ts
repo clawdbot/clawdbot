@@ -40,7 +40,7 @@ const LEGACY_OPENCODE_ZEN_DEFAULT_MODELS = new Set([
 ]);
 
 /** Current OpenCode Zen default model ref used by onboarding and repair flows. */
-export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-6";
+export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-5";
 
 /** Pair of preset appliers exposed by provider setup modules. */
 export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {

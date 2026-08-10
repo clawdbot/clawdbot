@@ -129,8 +129,7 @@ async function failHandedOffTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   error: unknown;
 }): Promise<void> {
-  const primaryFailure = recoveryError(params.error);
-  const failures = [primaryFailure];
+  const failures = [recoveryError(params.error)];
   let draining: WorkerSessionPlacementRecord;
   try {
     draining = params.placements.startDrain({
@@ -162,8 +161,6 @@ async function failHandedOffTurn(params: {
     failures.push(`environment destroy: ${recoveryError(error)}`);
   }
   try {
-    // Both teardown calls returned through the environment queue. Fence stale
-    // worker RPC durably now; failed teardown remains eligible for retry.
     const reconciling = params.placements.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
@@ -176,7 +173,7 @@ async function failHandedOffTurn(params: {
     params.placements.fail({
       sessionId: reconciling.sessionId,
       expectedGeneration: reconciling.generation,
-      recoveryError: truncateUtf16Safe(failures.join("; "), 1_024),
+      recoveryError: failures.join("; "),
     });
   } catch {
     // Leave the durable draining or reconciling row for startup reconciliation.
@@ -408,9 +405,7 @@ async function executeWorkerTurn(params: {
   if (runtimeResult.status === "fenced") {
     throw new Error(`Cloud worker turn was fenced: ${runtimeResult.reason}`);
   }
-  if (runtimeResult.status === "failed") {
-    throw new WorkerTurnExecutionError("Cloud worker turn failed");
-  }
+  const workerTurnFailed = runtimeResult.status === "failed";
 
   const completed = SessionManager.open(transcriptTarget);
   const currentPlacement = params.placements.get(placement.sessionId);
@@ -576,6 +571,9 @@ async function executeWorkerTurn(params: {
       )
       .catch(() => undefined);
   }
+  if (workerTurnFailed) {
+    throw new WorkerTurnExecutionError(terminal.message.errorMessage ?? "Cloud worker turn failed");
+  }
   const replyText = workspaceConflict
     ? text
       ? `${text}\n\n${workspaceConflict.summary}`
@@ -687,6 +685,17 @@ export function createWorkerSessionTurnPlacementProvider(
         if (error instanceof WorkerTurnExecutionError) {
           if (options.placements.validateTurnClaim(turnClaim)) {
             options.placements.releaseTurn(turnClaim);
+            throw error;
+          }
+          const settledPlacement = options.placements.get(turnClaim.sessionId);
+          if (
+            settledPlacement?.state === "active" &&
+            settledPlacement.environmentId === placement.environmentId &&
+            settledPlacement.activeOwnerEpoch === placement.activeOwnerEpoch &&
+            settledPlacement.turnClaim === null
+          ) {
+            // Workspace result settlement durably released this failed model turn.
+            // The outer fallback cycle owns run-terminal normalization.
             throw error;
           }
         }

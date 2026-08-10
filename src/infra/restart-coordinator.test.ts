@@ -4,10 +4,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  createSafeGatewayRestartPreflight,
-  requestSafeGatewayRestart,
-} from "./restart-coordinator.js";
+import { requestSafeGatewayRestart } from "./restart-coordinator.js";
 
 const scheduleGatewaySigusr1Restart = vi.hoisted(() => vi.fn());
 
@@ -17,6 +14,15 @@ vi.mock("./restart.js", () => ({
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
+  scheduleGatewaySigusr1Restart.mockReset().mockReturnValue({
+    ok: true,
+    pid: 123,
+    signal: "SIGUSR1",
+    delayMs: 0,
+    mode: "emit",
+    coalesced: false,
+    cooldownMsApplied: 0,
+  });
 });
 
 afterEach(() => {
@@ -24,8 +30,12 @@ afterEach(() => {
 });
 
 describe("safe gateway restart coordinator", () => {
+  const requestPreflight = (
+    inspect: NonNullable<Parameters<typeof requestSafeGatewayRestart>[0]>["inspect"],
+  ) => requestSafeGatewayRestart({ inspect }).preflight;
+
   it("reports safe when no restart blockers are active", () => {
-    const preflight = createSafeGatewayRestartPreflight({
+    const preflight = requestPreflight({
       getQueueSize: () => 0,
       getPendingReplies: () => 0,
       getEmbeddedRuns: () => 0,
@@ -54,7 +64,7 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("returns structured blockers for active work", () => {
-    const preflight = createSafeGatewayRestartPreflight({
+    const preflight = requestPreflight({
       getQueueSize: () => 2,
       getPendingReplies: () => 1,
       getEmbeddedRuns: () => 1,
@@ -89,7 +99,7 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("defers restart for aggregate background exec sessions", () => {
-    const preflight = createSafeGatewayRestartPreflight({
+    const preflight = requestPreflight({
       getQueueSize: () => 0,
       getPendingReplies: () => 0,
       getEmbeddedRuns: () => 0,
@@ -123,7 +133,7 @@ describe("safe gateway restart coordinator", () => {
 
     try {
       await request?.run(async () => {
-        const preflight = createSafeGatewayRestartPreflight({
+        const preflight = requestPreflight({
           getQueueSize: () => 0,
           getPendingReplies: () => 0,
           getEmbeddedRuns: () => 0,
@@ -149,7 +159,7 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("keeps truncated task titles on complete UTF-16 code points", () => {
-    const preflight = createSafeGatewayRestartPreflight({
+    const preflight = requestPreflight({
       getQueueSize: () => 0,
       getPendingReplies: () => 0,
       getEmbeddedRuns: () => 0,

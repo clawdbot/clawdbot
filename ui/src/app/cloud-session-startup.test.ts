@@ -493,8 +493,11 @@ describe("application cloud startup", () => {
     });
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     expect(initialUserMessage.read(input.recovery.sessionKey, client)).toMatchObject({
-      role: "user",
-      __openclaw: { idempotencyKey: "message-stable:user", seq: 7 },
+      pendingRunId: "message-stable",
+      message: {
+        role: "user",
+        __openclaw: { idempotencyKey: "message-stable:user", seq: 7 },
+      },
     });
     expect(sessions.refresh).not.toHaveBeenCalled();
     startup.dispose();

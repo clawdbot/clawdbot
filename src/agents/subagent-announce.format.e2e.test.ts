@@ -25,6 +25,7 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
+import { FailoverError } from "./failover-error.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
@@ -1062,8 +1063,21 @@ describe("subagent announce formatting", () => {
   it("retries direct agent announce on fallback cooldown exhaustion", async () => {
     agentSpy
       .mockRejectedValueOnce(
-        new Error(
+        new FailoverError(
           "All models failed (1): anthropic/claude-opus-4-7: Provider anthropic is in cooldown (all profiles unavailable) (overloaded)",
+          {
+            reason: "overloaded",
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            attempts: [
+              {
+                provider: "anthropic",
+                model: "claude-opus-4-7",
+                reason: "overloaded",
+                error: "Provider anthropic is in cooldown (all profiles unavailable)",
+              },
+            ],
+          },
         ),
       )
       .mockResolvedValueOnce(visibleAgentResponse());

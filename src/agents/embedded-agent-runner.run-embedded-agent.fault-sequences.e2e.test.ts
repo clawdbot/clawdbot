@@ -11,6 +11,7 @@ import {
 } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import { isFailoverError } from "./failover-error.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
@@ -486,14 +487,17 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         ["groq", "mock-2", "groq:p1"],
         ["groq", "mock-3", "groq:p1"],
       ]);
-      // BUG(refactor-02): exhaustion is still a prose-only thrown summary; there is no final
-      // structured error payload carrying the inner profile-level 429 -> 401 sequence yet.
+      // FIXED(refactor-02): exhaustion retains the exact prose and carries typed candidate attempts.
       expect(error.message).toMatch(/^All models failed \(3\): /);
       expect(error.message).toMatch(
         /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(timeout\) \| groq\/mock-3: .* \(billing\)/,
       );
+      expect(isFailoverError(error)).toBe(true);
+      if (!isFailoverError(error)) {
+        throw new Error("expected typed failover exhaustion");
+      }
       expect(error.attempts).toMatchObject([
-        { provider: "openai", model: "mock-1", reason: expect.stringMatching(/^auth/) },
+        { provider: "openai", model: "mock-1", reason: "auth" },
         { provider: "groq", model: "mock-2", reason: "timeout" },
         { provider: "groq", model: "mock-3", reason: "billing" },
       ]);

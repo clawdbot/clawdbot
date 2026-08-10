@@ -59,7 +59,6 @@ describe("Slack Enterprise Grid approval delivery", () => {
           slack: {
             botToken: "xoxb-test",
             appToken: "xapp-test",
-            enterpriseOrgInstall: true,
           },
         },
       },

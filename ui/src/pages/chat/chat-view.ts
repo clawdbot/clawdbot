@@ -155,7 +155,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     gatewayClient?: GatewayBrowserClient | null;
     composerHoldToRecord?: boolean;
     suggestionComposer?: boolean;
-    typingLabel?: string | null;
+    typingActors?: readonly { id: string; label: string }[];
     onTypingChange?: (typing: boolean) => void;
     canSend: boolean;
     disabledReason: string | null;
@@ -497,7 +497,7 @@ export function renderChat(props: ChatProps) {
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
     suggestionComposer: props.suggestionComposer,
-    typingLabel: props.typingLabel,
+    typingActors: props.typingActors,
     onTypingChange: props.onTypingChange,
     composerControls: props.composerControls,
     getDraft: props.getDraft,

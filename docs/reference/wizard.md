@@ -96,7 +96,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
-      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
+      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, `exec`, and `store` providers for onboarding probe/dashboard bootstrap.
       - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
     - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.

@@ -7,7 +7,7 @@ import {
   reserveExternalWindowForDeferredNavigation,
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
-import { resolveAssistantAttachmentAvailability } from "./chat-message-attachments.ts";
+import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,

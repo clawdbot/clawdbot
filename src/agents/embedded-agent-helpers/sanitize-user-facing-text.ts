@@ -27,14 +27,14 @@ import {
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
-} from "./failover-matches.js";
+} from "../failover/classify.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 
 /** Format the billing failure copy with optional provider/model context.
  *

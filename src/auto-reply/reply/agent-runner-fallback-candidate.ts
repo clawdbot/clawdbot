@@ -8,7 +8,6 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
-import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import { CommandLane } from "../../process/lanes.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -43,12 +42,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const bootstrapContextRunKind =
-    resolveHeartbeatRunScope(turn.opts) === "commitment-only"
-      ? ("commitment-only" as const)
-      : turn.opts?.isHeartbeat
-        ? ("heartbeat" as const)
-        : ("default" as const);
+  const bootstrapContextRunKind = turn.opts?.isHeartbeat
+    ? ("heartbeat" as const)
+    : ("default" as const);
 
   params.timing.logMilestoneIfSlow({
     runId: params.runId,

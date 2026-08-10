@@ -169,31 +169,27 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
-    color: "#FF4500",
     headless: false,
     noSandbox: false,
     attachOnly: false,
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      openclaw: { cdpPort: 18800 },
       work: {
         cdpPort: 18801,
-        color: "#0066CC",
         headless: true,
         executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       },
       user: {
         driver: "existing-session",
         attachOnly: true,
-        color: "#00AA00",
       },
       brave: {
         driver: "existing-session",
         attachOnly: true,
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
-        color: "#FB542B",
       },
-      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+      remote: { cdpUrl: "http://10.0.0.42:9222" },
     },
   },
 }
@@ -257,15 +253,11 @@ browser-specific model settings.
 {
   tools: {
     media: {
-      image: {
-        models: [
-          { provider: "bytedance", model: "doubao-seed-2.0-pro" },
-          // Add fallback candidates; first success wins
-          { provider: "openai", model: "gpt-4o" },
-        ],
-      },
-      // Shared media models also work when tagged for image support.
-      // models: [{ provider: "openai", model: "gpt-4o", capabilities: ["image"] }],
+      models: [
+        { provider: "bytedance", model: "doubao-seed-2.0-pro", capabilities: ["image"] },
+        // Add fallback candidates; first success wins
+        { provider: "openai", model: "gpt-4o", capabilities: ["image"] },
+      ],
     },
   },
   agents: {
@@ -293,8 +285,9 @@ Screenshot image blocks are private tool results: the agent can inspect them,
 but OpenClaw does not automatically attach them to channel replies. To share a
 screenshot, ask the agent to send it explicitly with the message tool.
 
-Use the existing `tools.media.image` / `tools.media.models` fields for model
-fallbacks, timeouts, byte limits, profiles, and provider request settings.
+Use `tools.media.models` for model fallbacks, timeouts, byte limits, profiles,
+and provider request settings. Tag screenshot-capable entries with the `image`
+capability.
 
 If the active main model already supports vision and no explicit image
 understanding model is configured, OpenClaw keeps the normal image result so the
@@ -369,7 +362,6 @@ main model can read the screenshot directly.
   The diagnostics do not enable acceleration, add a global acceleration setting,
   or grant sandbox browser device access.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
-- `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome, Brave, Edge, Chromium, Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. It can attach through Chrome MCP auto-connect, or through `cdpUrl` when you already have a DevTools endpoint for the running browser.
@@ -494,7 +486,6 @@ Example:
     profiles: {
       browserless: {
         cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
-        color: "#00AA00",
       },
     },
   },
@@ -523,7 +514,6 @@ Browserless as an externally managed CDP service:
       browserless: {
         cdpUrl: "ws://127.0.0.1:3000",
         attachOnly: true,
-        color: "#00AA00",
       },
     },
   },
@@ -586,7 +576,6 @@ proxies.
     profiles: {
       browserbase: {
         cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
-        color: "#F97316",
       },
     },
   },
@@ -618,7 +607,6 @@ WebSocket gateway.
     profiles: {
       notte: {
         cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",
-        color: "#7C3AED",
       },
     },
   },
@@ -695,7 +683,7 @@ Official background and setup references:
 - [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp)
 
 Built-in profile: `user`. Create your own custom existing-session profile if
-you want a different name, color, or browser data directory.
+you want a different name or browser data directory.
 
 By default the built-in `user` profile uses Chrome MCP auto-connect, which
 targets the default local Google Chrome profile. Use `userDataDir` for Brave,
@@ -710,7 +698,6 @@ directory:
         driver: "existing-session",
         attachOnly: true,
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
-        color: "#FB542B",
       },
     },
   },

@@ -24,9 +24,9 @@ import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolAuthorizationError, ToolInputError } from "./common.js";
 import {
-  callInProcessGatewayTool,
+  callAgentToolGatewayRequest,
   hasInProcessGatewayToolContext,
-  type InProcessGatewayCaller,
+  type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import {
   createAgentToAgentPolicy,
@@ -128,7 +128,7 @@ type SessionsToolOptions = {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
-  callGateway?: InProcessGatewayCaller;
+  callGateway?: AgentToolGatewayRequestCaller;
   hasInProcessGatewayContext?: () => boolean;
 };
 
@@ -189,6 +189,7 @@ function readGroupNames(value: unknown): string[] {
 async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
+  callGateway: AgentToolGatewayRequestCaller,
 ): Promise<{ cfg: OpenClawConfig; key: string; requesterKey: string }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
@@ -198,6 +199,7 @@ async function resolvePatchTarget(
     mainKey: context.mainKey,
     requesterInternalKey: context.effectiveRequesterKey,
     restrictToSpawned: context.restrictToSpawned,
+    callGateway,
   });
   if (!resolved.ok) {
     throw new ToolInputError(resolved.error);
@@ -221,6 +223,7 @@ async function resolvePatchTarget(
         sandboxed: opts.sandboxed === true,
       }),
       a2aPolicy: createAgentToAgentPolicy(context.cfg),
+      callGateway,
     });
     const access = guard.check(resolved.key);
     if (!access.allowed) {
@@ -235,7 +238,11 @@ async function resolvePatchTarget(
 }
 
 export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool {
-  const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
+  const gatewayRequest = opts.callGateway ?? callAgentToolGatewayRequest;
+  const callGateway = <T = Record<string, unknown>>(
+    method: string,
+    params: Record<string, unknown>,
+  ) => gatewayRequest<T>({ method, params });
   return {
     label: "Sessions",
     name: "sessions",
@@ -250,6 +257,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         const { key } = await resolvePatchTarget(
           { ...opts, config: opts.config ?? getRuntimeConfig() },
           rawKey,
+          gatewayRequest,
         );
         const context = resolveSessionToolContext({
           ...opts,
@@ -259,11 +267,11 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           throw new ToolInputError(`Cannot ${action} the session running this tool`);
         }
         if (action === "reset") {
-          return jsonResult(await gatewayCall("sessions.reset", { key, reason: "reset" }));
+          return jsonResult(await callGateway("sessions.reset", { key, reason: "reset" }));
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
-        const archived = await gatewayCall<{
+        const archived = await callGateway<{
           entry?: { sessionId?: string; lifecycleRevision?: string };
         }>("sessions.patch", { key, archived: true });
         const expectedSessionId = normalizeOptionalString(archived.entry?.sessionId);
@@ -274,7 +282,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           archived.entry?.lifecycleRevision,
         );
         return jsonResult(
-          await gatewayCall("sessions.delete", {
+          await callGateway("sessions.delete", {
             key,
             archivedOnly: true,
             expectedSessionId,
@@ -284,16 +292,16 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         );
       }
       if (action === "group_list") {
-        return jsonResult(await gatewayCall("sessions.groups.list", {}));
+        return jsonResult(await callGateway("sessions.groups.list", {}));
       }
       // Group catalog is global by contract. Owner-only tool gating protects mutations.
       if (action === "group_set") {
         const names = readGroupNames(params.names);
-        return jsonResult(await gatewayCall("sessions.groups.put", { names }));
+        return jsonResult(await callGateway("sessions.groups.put", { names }));
       }
       if (action === "group_rename") {
         return jsonResult(
-          await gatewayCall("sessions.groups.rename", {
+          await callGateway("sessions.groups.rename", {
             name: readGroupName(params.name, "name"),
             to: readGroupName(params.to, "to"),
           }),
@@ -301,7 +309,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "group_delete") {
         return jsonResult(
-          await gatewayCall("sessions.groups.delete", {
+          await callGateway("sessions.groups.delete", {
             name: readGroupName(params.name, "name"),
           }),
         );
@@ -313,6 +321,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       const { cfg, key, requesterKey } = await resolvePatchTarget(
         { ...opts, config: opts.config ?? getRuntimeConfig() },
         normalizeOptionalString(readStringParam(params, "sessionKey")),
+        gatewayRequest,
       );
       const patch = {
         key,
@@ -354,9 +363,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       const callSessionPatch = async (sessionPatch: typeof patch): Promise<SessionsPatchResult> =>
         sessionPatch.model === undefined
-          ? await gatewayCall<SessionsPatchResult>("sessions.patch", sessionPatch)
+          ? await callGateway<SessionsPatchResult>("sessions.patch", sessionPatch)
           : await withAgentSessionModelPatchOrigin(
-              async () => await gatewayCall<SessionsPatchResult>("sessions.patch", sessionPatch),
+              async () => await callGateway<SessionsPatchResult>("sessions.patch", sessionPatch),
             );
       const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
 
@@ -421,7 +430,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                   }
 
                   try {
-                    await gatewayCall("sessions.patch", archivePatch);
+                    await callGateway("sessions.patch", archivePatch);
                     return;
                   } catch (error) {
                     // A new turn can enter after the idle check. Wait for that
