@@ -13,8 +13,10 @@ import {
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
 const ErrorCodes = {
+  AGENT_TIMEOUT: "AGENT_TIMEOUT",
   APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
   INVALID_REQUEST: "INVALID_REQUEST",
+  NOT_LINKED: "NOT_LINKED",
   NOT_PAIRED: "NOT_PAIRED",
   UNAVAILABLE: "UNAVAILABLE",
 } as const;
@@ -74,6 +76,9 @@ function rpcHttpStatus(response: RpcResponse): number {
       return 404;
     case ErrorCodes.UNAVAILABLE:
       return 503;
+    case ErrorCodes.AGENT_TIMEOUT:
+      return 504;
+    case ErrorCodes.NOT_LINKED:
     case ErrorCodes.NOT_PAIRED:
       return 409;
     default:
