@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../config/io.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 const roots: string[] = [];
@@ -303,4 +304,42 @@ describe("default role materialization authored writes", () => {
       expect(persisted.agents?.defaults?.authInheritance?.agentId).toBe(expected);
     },
   );
+
+  it("preserves migrated legacy ownership during an unrelated write", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-owner-roundtrip-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          entries: {
+            ops: {},
+            research: { default: true },
+          },
+        },
+        gateway: { port: 18789 },
+      }),
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(tryResolveLegacyCompatibilityAgentId(snapshot.config)).toBe("research");
+
+    await io.writeConfigFile(
+      { ...snapshot.config, gateway: { ...snapshot.config.gateway, port: 19001 } },
+      { baseSnapshot: snapshot, explicitSetPaths: [["gateway", "port"]] },
+    );
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.agents?.ownership).toBeUndefined();
+    expect(persisted.agents?.entries?.research?.default).toBe(true);
+    const reread = await io.readConfigFileSnapshot();
+    expect(tryResolveLegacyCompatibilityAgentId(reread.config)).toBe("research");
+  });
 });

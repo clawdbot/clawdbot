@@ -243,6 +243,29 @@ describe("resolveSessionKeyForRequest", () => {
     );
   });
 
+  it("rejects an agent-constrained session id owned by another agent", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
+    const sharedStore = {
+      "agent:research:work": { sessionId: "research-session", updatedAt: 20 },
+      "agent:ops:work": { sessionId: "ops-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionId: "research-session" }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    expect(
+      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionId: "ops-session" }),
+    ).toMatchObject({ agentId: "ops", sessionKey: "agent:ops:work" });
+  });
+
   it("creates a missing session-id target under the retained owner", () => {
     hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
     mockSessionStores({});

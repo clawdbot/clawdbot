@@ -297,8 +297,7 @@ export async function writeConfigFileFromContext(
   }
   const identityRestoredPaths = new Set<string>();
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
-  const hasResolvedAuthoredIncludes =
-    hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
+  const hasIncludes = hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
   // Missing snapshots still need runtime-to-authored projection. Callers authoring an
   // exact bootstrap roster mark that intent through explicitSetPaths.
   if (snapshot.valid) {
@@ -314,6 +313,7 @@ export async function writeConfigFileFromContext(
       explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
+      preserveLegacyAgentRoster: Boolean(retainedLegacyDefaultAgentId) && !writesOwnershipTopology,
     });
   } else if (snapshot.exists && hasAuthoredIncludes) {
     persistCandidate = preserveIncludeOwnedConfigForWrite({
@@ -323,7 +323,7 @@ export async function writeConfigFileFromContext(
       rootAuthoredConfig: snapshot.parsed,
     });
   }
-  if (snapshot.exists && (snapshot.valid || hasResolvedAuthoredIncludes)) {
+  if (snapshot.exists && (snapshot.valid || hasIncludes)) {
     try {
       const resolvedIncludes = resolveConfigIncludes(
         snapshot.parsed,

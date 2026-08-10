@@ -41,7 +41,11 @@ import {
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
@@ -106,6 +110,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
 
 type SessionIdMatchSet = {
   candidates: SessionIdMatchCandidate[];
+  ownerConflict: boolean;
 };
 
 type SessionIdMatchCandidate = {
@@ -172,6 +177,7 @@ function collectSessionIdMatchesForRequest(opts: {
   clone?: boolean;
 }): SessionIdMatchSet {
   const candidates: SessionIdMatchCandidate[] = [];
+  let ownerConflict = false;
   const configuredAgentIds = listAgentIds(opts.cfg).map(normalizeAgentId);
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(opts.cfg);
   const persistedSessionStoreAgentId = opts.cfg.agents?.defaults?.sessionStore?.agentId?.trim();
@@ -214,9 +220,7 @@ function collectSessionIdMatchesForRequest(opts: {
       const pathOwnedAgentId =
         pathOwners?.size === 1 ? pathOwners.values().next().value : undefined;
       const sharedPathCompatibilityAgentId =
-        opts.searchOtherAgentStores && pathOwners && pathOwners.size > 1
-          ? fixedStoreCompatibilityAgentId
-          : undefined;
+        pathOwners && pathOwners.size > 1 ? fixedStoreCompatibilityAgentId : undefined;
       const parsedAgentId = parseAgentSessionKey(candidateKey)?.agentId;
       const normalizedParsedAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
       if (normalizedParsedAgentId && !configuredAgentIds.includes(normalizedParsedAgentId)) {
@@ -237,6 +241,15 @@ function collectSessionIdMatchesForRequest(opts: {
         legacyUnscopedOwner ??
         (isLegacyUnscopedKey ? undefined : scopedCandidateAgentId) ??
         compatibilityAgentId;
+      if (
+        !opts.searchOtherAgentStores &&
+        scopedCandidateAgentId &&
+        matchedAgentId &&
+        normalizeAgentId(matchedAgentId) !== scopedCandidateAgentId
+      ) {
+        ownerConflict = true;
+        continue;
+      }
       candidates.push({
         sessionKey: candidateKey,
         entry: candidateEntry,
@@ -253,7 +266,7 @@ function collectSessionIdMatchesForRequest(opts: {
 
   addMatches(opts.sessionStore, opts.storePath, opts.storeAgentId, { primary: true });
   if (!opts.searchOtherAgentStores) {
-    return { candidates };
+    return { candidates, ownerConflict };
   }
 
   for (const agentId of configuredAgentIds) {
@@ -272,7 +285,7 @@ function collectSessionIdMatchesForRequest(opts: {
     );
   }
 
-  return { candidates };
+  return { candidates, ownerConflict };
 }
 
 /**
@@ -395,7 +408,7 @@ export function resolveSessionKeyForRequestCore(opts: {
     !explicitSessionKey &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== requestedSessionId)
   ) {
-    const { candidates } = collectSessionIdMatchesForRequest({
+    const { candidates, ownerConflict } = collectSessionIdMatchesForRequest({
       cfg: opts.cfg,
       sessionStore,
       storePath,
@@ -404,6 +417,12 @@ export function resolveSessionKeyForRequestCore(opts: {
       searchOtherAgentStores: requestedAgentId === undefined,
       ...(opts.clone === false ? { clone: false } : {}),
     });
+    if (ownerConflict && requestedAgentId) {
+      throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+        surface: `session id "${requestedSessionId}"`,
+        hint: `The matching session belongs to a different agent than --agent "${requestedAgentId}".`,
+      });
+    }
     const selectedMatch = selectSessionIdMatchCandidate(
       candidates.filter((candidate) => candidate.resolution.agentId !== undefined),
       requestedSessionId,
