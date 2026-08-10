@@ -12,7 +12,7 @@ import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-mai
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 
-export type OpenClawStateDatabaseCloseResult = {
+type OpenClawStateDatabaseCloseResult = {
   caught: boolean;
   errors: unknown[];
 };
