@@ -31,6 +31,11 @@
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: ag-ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ag-ui/**"
+          - "docs/channels/ag-ui.md"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:

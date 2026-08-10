@@ -1175,6 +1175,7 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/ag-ui",
                   "channels/buzz",
                   "channels/clickclack",
                   "channels/irc",

@@ -1,0 +1,70 @@
+{
+  "name": "@openclaw/ag-ui",
+  "version": "2026.7.2",
+  "description": "OpenClaw AG-UI channel plugin — AG-UI protocol endpoint for AG-UI clients",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "keywords": [
+    "openclaw",
+    "ag-ui",
+    "sse",
+    "agent",
+    "channel-plugin"
+  ],
+  "dependencies": {
+    "@ag-ui/core": "0.0.57",
+    "@ag-ui/encoder": "0.0.57"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "commander": "14.0.3",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "ag-ui",
+      "label": "AG-UI",
+      "selectionLabel": "AG-UI",
+      "docsPath": "/channels/ag-ui",
+      "docsLabel": "ag-ui",
+      "blurb": "AG-UI protocol endpoint for AG-UI clients.",
+      "order": 90,
+      "defaults": {
+        "blockStreaming": true,
+        "chunkMode": "newline",
+        "surfaceReasoning": true
+      }
+    },
+    "install": {
+      "npmSpec": "@openclaw/ag-ui",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.7.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.7.2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.2",
+      "bundledDist": true
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
