@@ -59,6 +59,13 @@ export const SETTINGS_SEARCH_TARGETS = {
       "quickSettings.security.toolProfile",
     ],
   },
+  secrets: {
+    routeId: "secrets",
+    labelKey: "secretsStore.teamTitle",
+    hash: "",
+    searchKeys: ["secretsStore.teamDescription", "secretsStore.bulkHint"],
+    aliases: "environment variables env API keys credentials tokens passwords team store",
+  },
   system: {
     routeId: "connection",
     labelKey: "quickSettings.system.gatewayHost",

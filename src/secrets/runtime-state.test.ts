@@ -33,11 +33,41 @@ import {
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   hasSameSecretReloadContract,
+  isSecretStoreNameReferencedInConfig,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   restoreSecretsRuntimeSnapshotStateIfCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
+
+describe("secret store references", () => {
+  it("finds canonical and provider-defaulted store refs without matching other sources", () => {
+    expect(
+      isSecretStoreNameReferencedInConfig(
+        {
+          secrets: { defaults: { store: "default" } },
+          models: {
+            providers: {
+              one: {
+                apiKey: { source: "store", id: "TEAM_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        "TEAM_API_KEY",
+      ),
+    ).toBe(true);
+    expect(
+      isSecretStoreNameReferencedInConfig(
+        {
+          gateway: { auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } } },
+        },
+        "TEAM_API_KEY",
+      ),
+    ).toBe(false);
+  });
+});
 
 type PreparedSnapshotOverrides = Omit<
   Partial<PreparedSecretsRuntimeSnapshot>,

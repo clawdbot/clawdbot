@@ -625,6 +625,13 @@ export function createGatewayAuxHandlers(params: {
                 throw err;
               }
             }),
+          waitForSecretsReloadIdle: async () => {
+            // Store mutations must not join a preparation that began before their write.
+            const precedingReload = reloadInFlight;
+            if (precedingReload) {
+              await precedingReload.catch(() => undefined);
+            }
+          },
           log: params.log,
           resolveSecrets: async ({
             allowedPaths,
@@ -701,6 +708,9 @@ export function createGatewayAuxHandlers(params: {
       "question.list": createLazyHandler("question.list", loadQuestionHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
+      "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
+      "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
+      "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
     },
   };
 }

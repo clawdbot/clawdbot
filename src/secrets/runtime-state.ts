@@ -86,6 +86,13 @@ function listLocatedSecretRefs(
   return refs;
 }
 
+/** Whether the canonical config contains a store SecretRef for one entry name. */
+export function isSecretStoreNameReferencedInConfig(config: OpenClawConfig, name: string): boolean {
+  return listLocatedSecretRefs(config, config.secrets?.defaults).some(
+    ({ ref }) => ref.source === "store" && ref.id === name,
+  );
+}
+
 /** Whether two configs resolve the same SecretRefs through the same provider contracts. */
 export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
   return isDeepStrictEqual(
