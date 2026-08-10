@@ -219,6 +219,32 @@ describe("ExecApprovalManager", () => {
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
   });
 
+  it("never projects an allowed decision without its live local record", () => {
+    const timers = installTimerMocks();
+    const manager = new ExecApprovalManager({
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-live-projection");
+    record.agentRuntimeDelegatedAuthority = {
+      kind: "local",
+      operationalRunInstance: { instanceId: "instance-live", runId: "run-live" },
+      lifecycleGeneration: "generation-live",
+      claimId: "claim-live",
+    };
+    void manager.register(record, 60_000);
+    expect(manager.resolve(record.id, "allow-always")).toBe(true);
+    expect(manager.projectDecisionIfActive(record.id, "allow-always")).toBe("allow-always");
+
+    runTimer(timers.find((timer) => timer.delay === 15_000));
+    expect(manager.projectDecisionIfActive(record.id, "allow-always")).toBeNull();
+    expect(new ExecApprovalManager().projectDecisionIfActive(record.id, "allow-always")).toBeNull();
+
+    const unbound = manager.create({ command: "echo ok" }, 60_000, "approval-unbound");
+    void manager.register(unbound, 60_000);
+    expect(manager.resolve(unbound.id, "allow-always")).toBe(true);
+    expect(manager.projectDecisionIfActive(unbound.id, "allow-always")).toBe("allow-always");
+  });
+
   it("clamps oversized approval timers instead of letting Node fire them immediately", () => {
     const timers = installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);

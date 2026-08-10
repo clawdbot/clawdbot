@@ -625,6 +625,8 @@ type RunBtwSideQuestionParams = {
   senderE164?: string | null;
   senderIsOwner?: boolean;
   currentChannelId?: string;
+  /** Internal execution identity; never reuse a parent/correlation run id. */
+  authorityRunId?: string;
 };
 
 async function runCliBtwSideQuestion(params: {
@@ -646,12 +648,13 @@ async function runCliBtwSideQuestion(params: {
   messageChannel?: string;
   messageProvider?: string;
   currentChannelId?: string;
+  authorityRunId: string;
 }): Promise<ReplyPayload> {
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: params.cfg,
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
   });
-  const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
+  const runId = params.authorityRunId;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.cfg,
     runId,
@@ -706,7 +709,12 @@ async function runCliBtwSideQuestion(params: {
 export async function runBtwSideQuestion(
   paramsInput: RunBtwSideQuestionParams,
 ): Promise<ReplyPayload | undefined> {
-  let params = paramsInput;
+  // Side execution closes independently from the main run. A dedicated ID
+  // prevents caller correlation IDs from replacing the parent's live authority.
+  let params = {
+    ...paramsInput,
+    authorityRunId: paramsInput.authorityRunId ?? `btw-${randomUUID()}`,
+  };
   const sessionId = params.sessionEntry.sessionId?.trim();
   if (!sessionId) {
     throw new Error("No active session context.");
@@ -978,7 +986,7 @@ export async function runBtwSideQuestion(
       runtimeAuthPlan.modelRoute?.authRequirement === "api-key" && "auth" in resolvedAttempt
         ? resolvedAttempt.auth.apiKey?.trim()
         : undefined;
-    const sideRunId = params.opts?.runId ?? `btw-${randomUUID()}`;
+    const sideRunId = params.authorityRunId;
     const sandbox = await resolveSandboxContext({
       config: params.cfg,
       sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
@@ -992,7 +1000,7 @@ export async function runBtwSideQuestion(
     );
     const admittedRunContext = await preparedRunAdmission.admit("plugin-harness");
     try {
-      const { model: _sideModel, ...hostAttempt } = params;
+      const { model: _sideModel, authorityRunId: _authorityRunId, ...hostAttempt } = params;
       const host = createAgentHarnessHostCapabilities({
         attempt: {
           ...hostAttempt,
@@ -1011,7 +1019,7 @@ export async function runBtwSideQuestion(
         pluginId: resolveAgentHarnessOwnerPluginId(selectedHarness),
       });
       const sideParams = {
-        ...params,
+        ...hostAttempt,
         hostCapabilities: host.capabilities,
         sandbox,
         provider: runtimeModel.provider,
@@ -1159,6 +1167,7 @@ export async function runBtwSideQuestion(
       messages,
       inFlightPrompt,
       opts: params.opts,
+      authorityRunId: params.authorityRunId,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
       currentChannelId: params.currentChannelId,

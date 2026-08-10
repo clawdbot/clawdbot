@@ -1215,10 +1215,20 @@ describe("runBtwSideQuestion", () => {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
       }),
+      authorityRunId: "btw-side-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "Locked Codex answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({
+      opts: { runId: "btw-side-authority" },
+    });
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: expect.objectContaining({ runId: "btw-side-authority" }),
+      }),
+    );
     expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessId: "codex" }),
     );
@@ -1516,6 +1526,8 @@ describe("runBtwSideQuestion", () => {
       } as never,
       model: "claude-opus-4-7",
       sessionKey: DEFAULT_SESSION_KEY,
+      authorityRunId: "btw-cli-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "CLI side answer." });
@@ -1533,6 +1545,7 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.model).toBe("claude-opus-4-7");
     expect(prepareParams.disableTools).toBe(true);
+    expect(prepareParams).toMatchObject({ runId: "btw-cli-authority" });
     expect(prepareParams.cliSessionId).toBeUndefined();
     expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
     expect(prepareParams.prompt).toContain("<conversation_history>");

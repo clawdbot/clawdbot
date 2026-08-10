@@ -382,6 +382,7 @@ async function invokeNode(params: {
   validateAgentRuntimeApprovalAuthority?: () => boolean;
   execApprovalManager?: {
     projectDecisionIfActive: (id: string, decision: string) => string | null;
+    retainForHandoff?: (id: string) => (() => void) | null;
   };
 }) {
   const respond = vi.fn();
@@ -395,6 +396,12 @@ async function invokeNode(params: {
       params.nodeRegistry.getForPairingGeneration ??
       ((nodeId: string, _pairingGeneration: string) => params.nodeRegistry.get(nodeId)),
   };
+  const execApprovalManager = params.execApprovalManager
+    ? {
+        retainForHandoff: () => () => {},
+        ...params.execApprovalManager,
+      }
+    : undefined;
   await expectDefined(
     nodeHandlers["node.invoke"],
     'nodeHandlers["node.invoke"] test invariant',
@@ -403,7 +410,7 @@ async function invokeNode(params: {
     respond: respond as never,
     context: {
       nodeRegistry,
-      execApprovalManager: params.execApprovalManager,
+      execApprovalManager,
       logGateway,
       getRuntimeConfig: () => mocks.getRuntimeConfig(),
       validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
@@ -1977,6 +1984,8 @@ describe("node.invoke APNs wake path", () => {
       invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
     };
     let authorityActive = true;
+    const releaseHandoff = vi.fn();
+    const retainForHandoff = vi.fn(() => releaseHandoff);
     vi.spyOn(nodeInvokePluginPolicy, "applyPluginNodeInvokePolicy").mockImplementationOnce(
       async () => {
         await Promise.resolve();
@@ -1996,9 +2005,12 @@ describe("node.invoke APNs wake path", () => {
       requestParams: { nodeId, idempotencyKey: "idem-authority-close" },
       execApprovalManager: {
         projectDecisionIfActive: (_id, decision) => (authorityActive ? decision : null),
+        retainForHandoff,
       },
     });
 
+    expect(retainForHandoff).toHaveBeenCalledWith("approval-backend-bridge");
+    expect(releaseHandoff).toHaveBeenCalledOnce();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     expect(firstRespondCall(respond)).toMatchObject([
       false,

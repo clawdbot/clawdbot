@@ -1145,7 +1145,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (decision !== "allow-once" && decision !== "allow-always") {
       return decision;
     }
-    const authority = this.pending.get(recordId)?.record.agentRuntimeDelegatedAuthority;
+    const record = this.pending.get(recordId)?.record;
+    if (!record) {
+      // Durable approval truth is not executable authority. Once the local
+      // binding is gone, stale handoffs must fail closed even if they kept its verdict.
+      return null;
+    }
+    const authority = record.agentRuntimeDelegatedAuthority;
     if (!authority || this.options.validateAgentRuntimeDelegatedAuthority?.(authority) === true) {
       return decision;
     }

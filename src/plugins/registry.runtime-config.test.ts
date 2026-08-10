@@ -558,10 +558,15 @@ describe("plugin registry runtime config scope", () => {
       return await run(new AbortController().signal);
     });
     let embeddedRunScope = getPluginRuntimeGatewayRequestScope();
-    const runEmbeddedAgent = vi.fn(async () => {
-      embeddedRunScope = getPluginRuntimeGatewayRequestScope();
-      return { ok: true };
-    }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
+    const runEmbeddedAgent = vi.fn(
+      async (params: Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0]) => {
+        if ("preparedRunAdmission" in params || "admittedRunContext" in params) {
+          throw new Error("Plugin embedded-agent execution cannot supply host run authority.");
+        }
+        embeddedRunScope = getPluginRuntimeGatewayRequestScope();
+        return { ok: true };
+      },
+    ) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
     Object.defineProperties(runtime.agent, {
       runEmbeddedAgent: { configurable: true, value: runEmbeddedAgent },
       runEmbeddedPiAgent: { configurable: true, value: runEmbeddedAgent },
@@ -644,11 +649,6 @@ describe("plugin registry runtime config scope", () => {
     ).resolves.toEqual({ ok: true });
     expect(runEmbeddedAgent).toHaveBeenLastCalledWith({
       ...runParams,
-      preparedRunAdmission: expect.objectContaining({
-        admit: expect.any(Function),
-        close: expect.any(Function),
-        operationalRunInstance: expect.objectContaining({ runId: runParams.runId }),
-      }),
       skillWorkshopCollectionReconcile: undefined,
     });
     await expect(

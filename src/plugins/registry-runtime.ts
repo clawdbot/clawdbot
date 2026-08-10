@@ -1,11 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
@@ -14,7 +9,6 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -856,34 +850,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               if (ownerPluginId) {
                 return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
               }
-              const preparedRunAdmission = prepareAgentRunAdmission({
-                cfg:
-                  runParams.config ??
-                  (registryParams.runtime.config.current() as unknown as OpenClawConfig),
-                operationalRunInstance: createOperationalRunInstanceRef(runParams.runId),
-                facts: {
-                  runId: runParams.runId,
-                  agentId: runParams.sessionTarget?.agentId ?? runParams.agentId ?? "main",
-                  ingress: {
-                    kind: "plugin",
-                    boundary: "plugin-runtime",
-                    rawSourceRef: pluginId,
-                    state: "present",
-                  },
-                },
-              });
-              try {
-                return await (
-                  agent.runEmbeddedAgent as unknown as (
-                    params: RunEmbeddedAgentParams,
-                  ) => ReturnType<PluginRuntime["agent"]["runEmbeddedAgent"]>
-                )({
-                  ...runParams,
-                  preparedRunAdmission,
-                });
-              } finally {
-                preparedRunAdmission.close();
-              }
+              // The public runtime adapter owns admission preparation. Passing
+              // host authority through this plugin wrapper is rejected by design.
+              return await agent.runEmbeddedAgent(runParams);
             });
           };
           const scopedAgent = Object.create(

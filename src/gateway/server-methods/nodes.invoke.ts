@@ -162,6 +162,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       // Wake helpers identify their owner by the original signal. Compose the
       // caller only for dispatched node work; never replace that owner signal.
       const invocationLifecycle = signal ? AbortSignal.any([wakeLifecycle, signal]) : wakeLifecycle;
+      let releaseApprovalHandoff: (() => void) | undefined;
       try {
         const continuePairingWork = async (): Promise<boolean> => {
           const pairingCurrent = await awaitNodeInvokeWithinDeadline(
@@ -393,6 +394,23 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         }
         if (respondIfInvokeExpired()) {
           return;
+        }
+        if (forwardedParams.approvalAuthority) {
+          const authority = forwardedParams.approvalAuthority;
+          releaseApprovalHandoff =
+            context.execApprovalManager?.retainForHandoff(authority.recordId) ?? undefined;
+          if (!releaseApprovalHandoff) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "approved runtime authority closed before node dispatch",
+                { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
+              ),
+            );
+            return;
+          }
         }
         const isForwardedApprovalAuthorityActive = () =>
           isForwardedNodeInvokeApprovalAuthorityActive({
@@ -661,6 +679,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           undefined,
         );
       } finally {
+        releaseApprovalHandoff?.();
         releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
       }
     });
