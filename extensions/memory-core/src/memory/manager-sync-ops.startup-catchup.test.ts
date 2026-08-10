@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync ops.startup catchup plugin behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -530,6 +531,36 @@ describe("session startup catch-up", () => {
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
     expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
+  });
+
+  it("preserves indexed sessions when corpus enumeration fails", async () => {
+    const stalePath = "sessions/main/preserved.jsonl";
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: stalePath, hash: "preserved-hash", mtime: 10, size: 20 }],
+      true,
+    );
+    const scanError = Object.assign(new Error("transient session archive scan failure"), {
+      code: "EIO",
+    });
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+      throw scanError;
+    });
+
+    try {
+      const catchUp = harness.catchUp();
+      const corpusList = harness.waitForCorpusList();
+      await expect(catchUp).rejects.toBe(scanError);
+      await expect(corpusList).rejects.toBe(scanError);
+      expect(harness.syncCalls).toEqual([]);
+      expect(harness.getIndexedSourceState(stalePath)).toEqual({
+        path: stalePath,
+        hash: "preserved-hash",
+        mtime: 10,
+        size: 20,
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("retries transient session transcript reads during session indexing", async () => {
