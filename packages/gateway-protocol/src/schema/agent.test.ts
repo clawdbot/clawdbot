@@ -197,6 +197,7 @@ describe("Conversation schemas", () => {
         conversationRef: "conv_0123456789abcdef0123456789abcdef",
         channel: "reef",
         messageId: "01JZ0000000000000000000200",
+        messageIdSource: "platform",
         queueId: "conversation-send-1",
       }),
     ).toBe(true);
