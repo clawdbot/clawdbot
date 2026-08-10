@@ -5,6 +5,8 @@ import {
   isLikelyContextOverflowError,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -13,7 +15,6 @@ import {
   renderControlUiAgentFailureCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  renderUserFacingText,
 } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import {
@@ -466,6 +467,7 @@ export async function handleAgentExecutionError(params: {
           attempts: fallbackAttempts,
           provider: isFailoverError(err) ? err.provider : undefined,
           cooldownExpiry: isFailoverError(err) ? err.soonestCooldownExpiry : undefined,
+          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
         })
       : rateLimitOrOverloadedCopy
         ? rateLimitOrOverloadedCopy

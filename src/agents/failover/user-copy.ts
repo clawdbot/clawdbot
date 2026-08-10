@@ -10,7 +10,6 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
-import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
 import {
@@ -276,8 +275,10 @@ function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
 }
 
 /** Sanitize presentation text, then render error copy from classified facts when requested. */
-export function renderUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
-  const sanitized = sanitizeUserFacingText(text);
+export function renderSanitizedUserFacingText(
+  sanitized: string,
+  opts?: { errorContext?: boolean },
+): string {
   if (!sanitized) {
     return sanitized;
   }
@@ -415,6 +416,7 @@ function extractCodexUsageLimitErrorMessage(
   directMessage: string,
   directReason: FailoverReason | undefined,
   directProvider: string | undefined,
+  sanitizeText?: (text: string) => string,
 ): string | undefined {
   const attempt = attempts.find(
     (candidate) =>
@@ -426,7 +428,9 @@ function extractCodexUsageLimitErrorMessage(
   if (!text) {
     return undefined;
   }
-  const message = renderUserFacingText(text, { errorContext: true })
+  const message = renderSanitizedUserFacingText(sanitizeText?.(text) ?? text, {
+    errorContext: true,
+  })
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -447,6 +451,7 @@ export function renderRateLimitReplyCopy(params: {
   attempts?: readonly ReplyFallbackAttempt[];
   cooldownExpiry?: number | null;
   nowMs?: number;
+  sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
   const usageLimit = extractCodexUsageLimitErrorMessage(
@@ -454,6 +459,7 @@ export function renderRateLimitReplyCopy(params: {
     params.message,
     params.reason,
     params.provider,
+    params.sanitizeText,
   );
   if (usageLimit) {
     return usageLimit;
@@ -463,7 +469,10 @@ export function renderRateLimitReplyCopy(params: {
   }
   if (attempts.length === 0) {
     if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(params.message)) {
-      const providerMessage = renderUserFacingText(params.message, { errorContext: true });
+      const providerMessage = renderSanitizedUserFacingText(
+        params.sanitizeText?.(params.message) ?? params.message,
+        { errorContext: true },
+      );
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
     return RATE_LIMIT_RETRY_MESSAGE;

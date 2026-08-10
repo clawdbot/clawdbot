@@ -6,6 +6,8 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   describeFailoverError,
   findCliMaxTurnsError,
@@ -22,7 +24,6 @@ import {
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  renderUserFacingText,
   resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
@@ -436,6 +437,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
           cooldownExpiry: isFailoverError(params.err)
             ? params.err.soonestCooldownExpiry
             : undefined,
+          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
         }),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,

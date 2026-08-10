@@ -6,7 +6,7 @@
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
-import { renderUserFacingText } from "../failover/user-copy.js";
+import { renderUserFacingText } from "../embedded-agent-helpers/user-facing-text.js";
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {

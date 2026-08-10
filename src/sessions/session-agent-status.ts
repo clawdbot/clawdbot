@@ -4,7 +4,7 @@ import {
   type SessionAgentAttentionIconId,
   type SessionAgentStatus,
 } from "../../packages/gateway-protocol/src/session-agent-status.js";
-import { renderUserFacingText } from "../agents/failover/user-copy.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 
 const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;
 const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;

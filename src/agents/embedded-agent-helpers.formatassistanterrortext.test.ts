@@ -13,7 +13,7 @@ import {
   isRawApiErrorPayload,
 } from "./embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
-import { renderUserFacingText } from "./failover/user-copy.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {

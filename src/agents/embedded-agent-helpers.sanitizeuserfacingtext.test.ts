@@ -14,7 +14,7 @@ import {
 } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
-import { renderUserFacingText } from "./failover/user-copy.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { formatAgentInternalEventsForPrompt } from "./internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,

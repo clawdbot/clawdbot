@@ -31,12 +31,12 @@ import {
   buildExecApprovalContinuationFallbackPrompt,
   buildExecApprovalContinuationPrompt,
 } from "./bash-tools.exec-approval-output.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
-import { renderUserFacingText } from "./failover/user-copy.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const log = createSubsystemLogger("agents/exec-approval-followup");
