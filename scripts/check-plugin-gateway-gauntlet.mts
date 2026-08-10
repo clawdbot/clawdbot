@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -26,6 +25,9 @@ import {
   readQaSuiteSummary,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mts";
+// Termination tests import this entrypoint in a child before publishing readiness.
+// Keep its record guard on the dependency-light script seam to avoid startup skew.
+import { isRecord } from "./lib/record-shared.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
