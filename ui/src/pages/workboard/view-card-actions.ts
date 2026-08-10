@@ -4,6 +4,7 @@ import { t } from "../../i18n/index.ts";
 import {
   isActiveWorkboardCard,
   nextWorkboardCardPosition,
+  workboardCardSessionKey,
 } from "../../lib/workboard/card-state.ts";
 import {
   archiveWorkboardCard,
@@ -143,7 +144,7 @@ export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
     busy,
     activeTask,
     live,
-    linkedSessionKey: card.sessionKey ?? card.execution?.sessionKey,
+    linkedSessionKey: workboardCardSessionKey(card),
     writable,
     showStartControls: writable && cardCanStart(state, props.sessions, card),
     archived: Boolean(card.metadata?.archivedAt),

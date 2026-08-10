@@ -1099,6 +1099,31 @@ describe("renderWorkboard", () => {
     expect(state.editingCardId).toBe("card-1");
   });
 
+  it("opens the claiming session when no card or execution session is linked", () => {
+    const sessionKey = "agent:main:claim-owner";
+    const onOpenSession = vi.fn();
+    const { state, container, renderView } = createWorkboardView({ onOpenSession });
+    state.cards = [
+      createWorkboardCard({
+        status: "running",
+        metadata: {
+          claim: {
+            ownerId: "agent:main",
+            sessionKey,
+            token: "[redacted]",
+            claimedAt: 1,
+            lastHeartbeatAt: 2,
+          },
+        },
+      }),
+    ];
+    renderView();
+
+    buttonByLabel(container, "Open session")?.click();
+
+    expect(onOpenSession).toHaveBeenCalledWith(sessionKey);
+  });
+
   it("keeps focus inside the card modal and restores focus on Escape", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.cards = [];

@@ -407,7 +407,9 @@ Diagnostics are computed from local card metadata. Built-in checks flag:
 | `running_without_heartbeat` | `running` card with no claim heartbeat or execution update in over 20 minutes. |
 | `blocked_too_long`          | `blocked` card not updated in over 24 hours.                                   |
 | `repeated_failures`         | Card's tracked failure count reaches 2 or more.                                |
-| `missing_proof`             | `done` card with no proof, artifacts, or attachments.                          |
+| `missing_proof`             | `review` or `done` card with no proof, artifacts, or attachments.              |
+| `stale_proof`               | Latest proof predates the current attempt on a `review` or `done` card.        |
+| `contradictory_proof`       | `done` card whose latest proof is marked `failed`.                             |
 | `orphaned_session`          | `running` card with a `sessionKey` but no `execution` metadata.                |
 | `archived_but_active`       | Archived card remains in any non-`done` lifecycle status.                      |
 

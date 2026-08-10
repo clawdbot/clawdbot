@@ -176,7 +176,7 @@ export function staleSessionState(session: GatewaySessionRow): WorkboardStaleSta
 }
 
 export function workboardCardSessionKey(card: WorkboardCard): string | undefined {
-  return card.sessionKey ?? card.execution?.sessionKey;
+  return card.sessionKey ?? card.execution?.sessionKey ?? card.metadata?.claim?.sessionKey;
 }
 
 export function workboardCardRunId(card: WorkboardCard): string | undefined {

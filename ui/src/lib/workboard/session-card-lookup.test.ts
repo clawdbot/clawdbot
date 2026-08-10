@@ -43,6 +43,38 @@ function card(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Workboard session card lookup", () => {
+  it("indexes the claiming session when the card has no execution link", async () => {
+    const { client } = createClient([
+      {
+        cards: [
+          card({
+            sessionKey: undefined,
+            metadata: {
+              automation: { boardId: "platform" },
+              claim: {
+                ownerId: "agent:main",
+                sessionKey: "agent:main:claim-owner",
+                token: "[redacted]",
+                claimedAt: 1,
+                lastHeartbeatAt: 2,
+              },
+            },
+          }),
+        ],
+      },
+    ]);
+    const lease = acquireWorkboardSessionCardLookup(client);
+    const listener = vi.fn();
+    const unsubscribe = lease.subscribe("agent:main:claim-owner", listener);
+
+    await vi.waitFor(() =>
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ cardId: "card-1" })),
+    );
+
+    unsubscribe();
+    lease.release();
+  });
+
   it("coalesces subscribers and refreshes cached matches after Workboard changes", async () => {
     const { client, request, removeListener, emitChanged } = createClient([
       { cards: [card()] },

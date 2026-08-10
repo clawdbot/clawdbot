@@ -5,6 +5,7 @@ import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib
 import {
   findWorkboardSession,
   getWorkboardState,
+  workboardCardSessionKey,
   workboardMutationsReady,
   type WorkboardCard,
   type WorkboardDependencyState,
@@ -176,6 +177,7 @@ export function matchesFilter(
     card.metadata?.workerProtocol?.state,
     card.metadata?.workerProtocol?.detail,
     card.metadata?.claim?.ownerId,
+    card.metadata?.claim?.sessionKey,
     ...(card.metadata?.diagnostics ?? []).flatMap((diagnostic) => [
       diagnostic.kind,
       diagnostic.severity,
@@ -280,7 +282,7 @@ export function cardHasActiveOrRunningUnresolvedTask(
 }
 
 export function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
-  const sessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  const sessionKey = workboardCardSessionKey(card);
   const runId = card.runId ?? card.execution?.runId;
   return card.status === "running" && Boolean(sessionKey && runId);
 }
@@ -294,7 +296,7 @@ export function cardCanStart(
   const session = findWorkboardSession(card, sessions);
   const taskBlocksStart =
     taskIsActive(task) || cardHasUnresolvedTaskLink(card, task, state.missingTaskIds);
-  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  const linkedSessionKey = workboardCardSessionKey(card);
   return !taskBlocksStart && !cardHasUnresolvedStartedRun(card) && (!linkedSessionKey || !session);
 }
 

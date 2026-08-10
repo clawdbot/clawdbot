@@ -327,6 +327,9 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
           token: value.claim.token,
           claimedAt: value.claim.claimedAt,
           lastHeartbeatAt: value.claim.lastHeartbeatAt,
+          ...(typeof value.claim.sessionKey === "string"
+            ? { sessionKey: value.claim.sessionKey }
+            : {}),
           ...(typeof value.claim.expiresAt === "number"
             ? { expiresAt: value.claim.expiresAt }
             : {}),

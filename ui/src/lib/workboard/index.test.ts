@@ -2481,6 +2481,7 @@ describe("workboard controller", () => {
               },
               claim: {
                 ownerId: "agent:main",
+                sessionKey: "agent:main:session:claim-owner",
                 token: "[redacted]",
                 claimedAt: 10,
                 lastHeartbeatAt: 11,
@@ -2544,7 +2545,7 @@ describe("workboard controller", () => {
         dispatchCount: 2,
         lastDispatchAt: 20,
       },
-      claim: { token: "[redacted]" },
+      claim: { sessionKey: "agent:main:session:claim-owner", token: "[redacted]" },
       diagnostics: [{ actions: [{ kind: "add_proof", label: "Add proof" }] }],
       notifications: [{ sequence: 3 }],
     });

@@ -29,6 +29,7 @@ function cardSessionKeys(card: WorkboardCard): string[] {
   return [
     card.sessionKey,
     card.execution?.sessionKey,
+    card.metadata?.claim?.sessionKey,
     ...(card.metadata?.attempts?.map((attempt) => attempt.sessionKey) ?? []),
     ...(card.events?.map((event) => event.sessionKey) ?? []),
   ]
