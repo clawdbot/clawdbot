@@ -154,7 +154,7 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
   }
 }
 
-export function createPrivateSqliteDirectorySync(directoryPath: string): void {
+function createPrivateSqliteDirectorySync(directoryPath: string): void {
   if (process.platform !== "win32") {
     fsSync.mkdirSync(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
     return;
