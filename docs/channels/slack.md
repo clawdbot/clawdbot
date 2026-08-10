@@ -1970,8 +1970,10 @@ openclaw pairing list slack
 
     Slack does not create or remove slash commands automatically. `commands.native: "auto"` does not enable Slack native commands; use `true` and create the matching commands in the Slack app. In HTTP mode, every Slack slash command must include the Gateway URL. In Socket Mode, command payloads arrive over the websocket and Slack ignores `slash_commands[].url`.
 
-    Also check `commands.useAccessGroups`, DM authorization, channel allowlists,
-    and per-channel `users` allowlists. Slack returns ephemeral errors for
+    Also check `commands.allowFrom` (when configured), DM authorization,
+    channel allowlists, and per-channel `users` allowlists. Access-group
+    entries in channel allowlists are resolved automatically. Slack returns
+    ephemeral errors for
     blocked slash-command senders, including:
 
     - `This channel is not allowed.`
