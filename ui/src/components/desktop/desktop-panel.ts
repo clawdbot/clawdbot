@@ -587,8 +587,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     return html`
       <div class="desktop-toolbar desktop-toolbar--connection">
         ${this.desktopApps.length > 0
-          ? html`<div class="desktop-apps" aria-label=${t("desktop.apps")}>
-              <span class="desktop-apps__label">${t("desktop.apps")}</span>
+          ? html`<div class="desktop-apps">
               ${this.desktopApps.map((app) => {
                 const launching = this.launchingApp === app;
                 const label = desktopAppLabel(app);

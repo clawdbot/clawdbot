@@ -1947,7 +1947,6 @@ export const en: TranslationMap = {
       "No desktop-capable worker environments exist. Enable one with desktop: true in a crabbox cloud-worker profile.",
     connect: "Connect",
     connectingWorker: "Connecting to worker desktop…",
-    apps: "Apps",
     browser: "Browser",
     terminal: "Terminal",
     openingApp: "Opening {app}…",

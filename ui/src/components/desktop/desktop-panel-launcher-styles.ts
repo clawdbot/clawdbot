@@ -7,14 +7,6 @@ export const desktopPanelLauncherStyles = css`
     align-items: center;
     gap: 3px;
   }
-  .desktop-apps__label {
-    margin-right: 3px;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
   .desktop-app-button,
   .desktop-toolbar-action {
     display: inline-flex;
