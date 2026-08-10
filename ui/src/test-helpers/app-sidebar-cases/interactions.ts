@@ -4,7 +4,6 @@ import type {
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -16,13 +15,17 @@ import {
   createGateway,
   createGatewayHarness,
   createSessions,
-  createSessionsHarness,
   mountSidebar,
-  type SidebarLifecycleState,
-  type TestSessionMenu,
 } from "../app-sidebar.ts";
-import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
+import {
+  click,
+  mountMultiSelect,
+  openContextMenu,
+  rowLink,
+  selectedRowKeys,
+  sessionMenu,
+} from "./multi-select-support.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar context menu boundary", () => {
@@ -50,80 +53,6 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
-
-  function rowLink(sidebar: SidebarLifecycleState, key: string): HTMLAnchorElement {
-    const link = sidebar.querySelector<HTMLAnchorElement>(
-      `[data-session-key="${key}"] .sidebar-recent-session__link`,
-    );
-    if (!link) {
-      throw new Error(`expected row link for ${key}`);
-    }
-    return link;
-  }
-
-  function selectedRowKeys(sidebar: SidebarLifecycleState): string[] {
-    return Array.from(sidebar.querySelectorAll(".sidebar-recent-session--selected")).map(
-      (row) => row.getAttribute("data-session-key") ?? "",
-    );
-  }
-
-  function click(target: Element, init: MouseEventInit = {}) {
-    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
-  }
-
-  function openContextMenu(sidebar: SidebarLifecycleState, key: string) {
-    const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-    if (!row) {
-      throw new Error(`expected row for ${key}`);
-    }
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-  }
-
-  async function sessionMenu(sidebar: SidebarLifecycleState): Promise<TestSessionMenu> {
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("expected session menu");
-    }
-    await menu.updateComplete;
-    return menu;
-  }
-
-  async function mountMultiSelect(methods?: string[] | null, patchManyError?: Error) {
-    const harness = createSessionsHarness("main", KEYS);
-    const request = vi.fn((method: string, params?: unknown) => {
-      if (method !== "sessions.patchMany") {
-        return Promise.reject(new Error(`unexpected request: ${method}`));
-      }
-      if (patchManyError) {
-        return Promise.reject(patchManyError);
-      }
-      const patchParams = params as {
-        targets: Array<{ key: string; agentId?: string }>;
-        patch: Record<string, unknown>;
-      };
-      return harness.patchMany(patchParams.targets, patchParams.patch);
-    });
-    const gateway = createGatewayHarness({
-      request: (method, params) => {
-        return request(method, params);
-      },
-    } as GatewayBrowserClient);
-    if (methods !== undefined) {
-      gateway.publish({
-        phase: "connected",
-        hello: {
-          features: methods === null ? {} : { methods },
-          auth: { role: "operator", scopes: ["operator.write"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-    }
-    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    return { sidebar, harness, request };
-  }
-
   it("names each session's pin and menu buttons after their owning session", async () => {
     const { sidebar } = await mountMultiSelect();
 
@@ -235,111 +164,6 @@ describe("AppSidebar multi-select", () => {
     );
     expect(harness.patch).not.toHaveBeenCalled();
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-  });
-
-  it("writes a new group catalog before assigning the selection through patchMany", async () => {
-    const restoreDialogPolyfill = installDialogPolyfill();
-    try {
-      const { sidebar, harness } = await mountMultiSelect([
-        "sessions.groups.put",
-        "sessions.patchMany",
-      ]);
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:a");
-      await sidebar.updateComplete;
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
-
-      // Opening the owned dialog is inert: nothing reaches the Gateway until a
-      // name is submitted, and the submitted name is trimmed.
-      await waitForInputDialog();
-      expect(harness.groupsPut).not.toHaveBeenCalled();
-      expect(harness.patchMany).not.toHaveBeenCalled();
-      await submitInputDialog("  Projects  ");
-
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
-      // Each target carries the identity captured with its row, so a session
-      // replaced while the dialog was open is refused rather than reassigned.
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          {
-            key: "agent:main:a",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:a",
-          },
-          {
-            key: "agent:main:b",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:b",
-          },
-        ],
-        { category: "Projects" },
-      );
-      expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.patchMany.mock.invocationCallOrder[0]!,
-      );
-      expect(harness.patch).not.toHaveBeenCalled();
-      await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    } finally {
-      restoreDialogPolyfill();
-    }
-  });
-
-  it("assigns with captured identities when rows leave the projection mid-write", async () => {
-    const restoreDialogPolyfill = installDialogPolyfill();
-    try {
-      const { sidebar, harness } = await mountMultiSelect([
-        "sessions.groups.put",
-        "sessions.patchMany",
-      ]);
-      let landCatalogWrite!: () => void;
-      harness.groupsPut.mockReturnValueOnce(
-        new Promise((resolve) => {
-          landCatalogWrite = () => resolve("completed");
-        }),
-      );
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:a");
-      await sidebar.updateComplete;
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
-
-      await waitForInputDialog();
-      await submitInputDialog("Projects");
-      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
-
-      // Both rows leave this bounded projection while the catalog write is still
-      // in flight. That is not evidence they were deleted, so the assignment must
-      // still go out — carrying the identity captured with each row, which is what
-      // lets the Gateway refuse a target that really was replaced.
-      harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
-      landCatalogWrite();
-
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          {
-            key: "agent:main:a",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:a",
-          },
-          {
-            key: "agent:main:b",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:b",
-          },
-        ],
-        { category: "Projects" },
-      );
-      expect(harness.patch).not.toHaveBeenCalled();
-    } finally {
-      restoreDialogPolyfill();
-    }
   });
 
   it("archives serially when an older Gateway does not advertise patchMany", async () => {
