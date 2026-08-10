@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
+import { TRANSCRIPT_OWNER_BINDING_VERSION } from "../../transcripts/ownership-metadata.js";
 import { getTranscriptSourceProvider } from "../../transcripts/provider-registry.js";
 import type {
   TranscriptSessionDescriptor,
@@ -279,14 +280,13 @@ export async function startTranscripts(params: {
     title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    ...(params.ctx.agentId || owner
-      ? {
-          metadata: {
-            ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-            ...owner,
-          },
-        }
-      : {}),
+    metadata: {
+      // A missing marker means Doctor is looking at a pre-binding row; a
+      // current local-only start must never be reclassified as remote-owned.
+      ownerBindingVersion: TRANSCRIPT_OWNER_BINDING_VERSION,
+      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+      ...owner,
+    },
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);
