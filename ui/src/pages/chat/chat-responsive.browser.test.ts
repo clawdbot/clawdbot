@@ -396,7 +396,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         <label class="chat-session-rail__prompt">
                           <input class="chat-session-rail__input" type="text" placeholder="What should I know?" />
                         </label>
-                        <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit">${iconSvg()}</button>
+                        <button class="chat-send-btn">${iconSvg()}</button>
                       </footer>
                     </section>
                   </openclaw-chat-session-rail>`

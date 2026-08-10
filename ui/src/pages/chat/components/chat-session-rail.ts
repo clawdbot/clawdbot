@@ -456,22 +456,19 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     const disabled = !this.connected || this.companion.pendingQuestion !== null;
     return html`
       <div class="chat-session-rail__starters">
-        <p class="chat-session-rail__empty">${t("chat.rail.empty")}</p>
-        <div class="chip-row chat-session-rail__starter-row">
-          ${SESSION_RAIL_STARTER_KEYS.map((key) => {
-            const question = t(`chat.rail.starters.${key}` as Parameters<typeof t>[0]);
-            return html`
-              <button
-                class="chip chat-session-rail__starter"
-                type="button"
-                ?disabled=${disabled}
-                @click=${() => this.onSubmit?.(question)}
-              >
-                ${icons.spark}<span>${question}</span>
-              </button>
-            `;
-          })}
-        </div>
+        ${SESSION_RAIL_STARTER_KEYS.map((key) => {
+          const question = t(`chat.rail.starters.${key}` as Parameters<typeof t>[0]);
+          return html`
+            <button
+              class="chip chat-session-rail__starter"
+              type="button"
+              ?disabled=${disabled}
+              @click=${() => this.onSubmit?.(question)}
+            >
+              ${icons.spark}<span>${question}</span>
+            </button>
+          `;
+        })}
       </div>
     `;
   }
@@ -488,7 +485,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     return html`
       <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
-          ? this.renderStarters()
+          ? html`<p class="chat-session-rail__empty">${t("chat.rail.empty")}</p>`
           : nothing}
         ${this.companion.exchanges.map((exchange) =>
           this.renderExchange(exchange.question, exchange.answer, exchange.ts),
@@ -649,6 +646,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
           : nothing}
         ${this.renderThread()}
+        ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
+          ? this.renderStarters()
+          : nothing}
         <form
           class="chat-session-rail__composer"
           @submit=${(event: SubmitEvent) => {
@@ -674,14 +674,14 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             />
           </label>
           <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit"
+            class="chat-send-btn"
             type="submit"
             aria-label=${t("chat.rail.askSubmit")}
             ?disabled=${!this.connected ||
             this.companion.pendingQuestion !== null ||
             !this.companion.draft.trim()}
           >
-            ${icons.cornerDownLeft}
+            ${icons.arrowUp}
           </button>
         </form>
       </section>

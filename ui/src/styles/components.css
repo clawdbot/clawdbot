@@ -1729,8 +1729,7 @@ openclaw-chat-session-rail {
 }
 
 .chat-session-rail__hide,
-.chat-session-rail__toggle,
-.chat-session-rail__submit {
+.chat-session-rail__toggle {
   color: var(--muted);
 }
 
@@ -1837,26 +1836,26 @@ openclaw-chat-session-rail {
   border-top: 0;
 }
 
-/* Sits where the first exchange will land rather than centred in the column:
-   in a full-height rail, centring strands the starters in the middle and makes
-   them jump to the top as soon as an answer arrives. */
+/* Openers stack against the composer they feed, so the eye travels chips ->
+   input without crossing the thread. Left-aligned: they are actions, not
+   content, and centring them would read as a second empty state. */
 .chat-session-rail__starters {
-  display: grid;
-  gap: 12px;
-  justify-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 14px 10px;
 }
 
+/* Centred in the thread's empty space, both axes: margin auto claims the free
+   vertical room inside the flex column. */
 .chat-session-rail__empty {
-  margin: 0;
+  margin: auto 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
   text-align: center;
-}
-
-.chat-session-rail__starter-row {
-  justify-content: center;
-  gap: 6px;
 }
 
 .chat-session-rail__starter {
@@ -1867,14 +1866,12 @@ openclaw-chat-session-rail {
   color: var(--text);
 }
 
+/* strokeIcon already inlines fill/stroke/stroke-width on the svg. */
 .chat-session-rail__starter svg {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
   color: var(--muted);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
 }
 
 .chat-session-rail__starter:disabled {
