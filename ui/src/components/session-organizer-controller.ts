@@ -392,7 +392,11 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const nextLabel = window.prompt(t("sessionsView.renameSessionPrompt"), session.label);
+    const { showInputDialog } = await import("./input-dialog.ts");
+    const nextLabel = await showInputDialog({
+      title: t("sessionsView.renameSessionPrompt"),
+      defaultValue: session.label,
+    });
     if (nextLabel === null) {
       return;
     }

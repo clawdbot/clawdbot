@@ -23,26 +23,21 @@ import {
   type buildContextEnginePromptCacheInfo,
 } from "./attempt.context-engine-helpers.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt.prompt-helpers.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { shouldPersistCompletedBootstrapTurn } from "./attempt.thread-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
 type PromptCacheInfo = ReturnType<typeof buildContextEnginePromptCacheInfo>;
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type CompleteEmbeddedAttemptAfterTurnInput = {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngine?: ContextEngine;
   activeSession: AgentSession;
   sessionManager: SessionManager;
-  sessionLockController: AttemptSessionLockController;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   state: {
     promptError: unknown;
     yieldAborted: boolean;
@@ -102,7 +97,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       messagesSnapshot: AgentMessage[];
       prePromptMessageCount: number;
       sessionManager?: SessionManager;
-      withSessionManagerRewriteLock: WithOwnedSessionWriteLock;
+      withSessionManagerRewriteLock: WithOwnedTranscriptWrite;
     }) => {
       await finalizeAttemptContextEngineTurn({
         contextEngine: activeContextEngine,
@@ -179,13 +174,13 @@ export async function completeEmbeddedAttemptAfterTurn(
         prePromptMessageCount:
           state.contextEngineAfterTurnCheckpoint ?? state.prePromptMessageCount,
         sessionManager,
-        withSessionManagerRewriteLock: input.withOwnedSessionWriteLock,
+        withSessionManagerRewriteLock: input.withOwnedTranscriptWrite,
       });
     }
   }
 
   if (!state.beforeAgentFinalizeRevisionReason) {
-    await input.withOwnedSessionWriteLock(async () => {
+    await input.withOwnedTranscriptWrite(async () => {
       const lifecycleState = input.readLifecycleState();
       if (
         shouldPersistCompletedBootstrapTurn({

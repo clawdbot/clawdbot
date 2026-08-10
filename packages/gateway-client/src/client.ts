@@ -220,6 +220,7 @@ type AssembledConnect = {
   authApprovalRuntimeToken: string | undefined;
   authAgentRuntimeIdentityToken: string | undefined;
   resolvedDeviceToken: string | undefined;
+  storedScopes: string[] | undefined;
   storedToken: string | undefined;
   usingStoredDeviceToken: boolean | undefined;
 };
@@ -869,6 +870,7 @@ export class GatewayClient {
       authApprovalRuntimeToken,
       authAgentRuntimeIdentityToken,
       resolvedDeviceToken,
+      storedScopes,
       storedToken,
       usingStoredDeviceToken,
     };
@@ -978,11 +980,16 @@ export class GatewayClient {
     const role = this.opts.role ?? "operator";
     const authInfo = helloOk.auth;
     if (authInfo?.deviceToken && this.opts.deviceIdentity) {
+      const tokenRole = authInfo.role ?? role;
+      const scopes =
+        tokenRole === role && authInfo.deviceToken === assembled.storedToken
+          ? (assembled.storedScopes ?? authInfo.scopes ?? [])
+          : (authInfo.scopes ?? []);
       this.deps.storeDeviceAuthToken({
         deviceId: this.opts.deviceIdentity.deviceId,
-        role: authInfo.role ?? role,
+        role: tokenRole,
         token: authInfo.deviceToken,
-        scopes: authInfo.scopes ?? [],
+        scopes,
         env: this.opts.env,
       });
     }

@@ -1,6 +1,5 @@
 /** Classifies prompt failures and performs yield or mid-turn recovery. */
 import type { AgentSession } from "../../sessions/index.js";
-import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import {
   isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
@@ -11,11 +10,7 @@ import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId">;
-type PromptErrorSessionLockController = Pick<
-  EmbeddedAttemptSessionLockController,
-  "releaseHeldLockForAbort"
->;
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type EmbeddedAttemptPromptErrorOutcome = {
   promptFailure?: {
@@ -31,8 +26,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
-  sessionLockController: PromptErrorSessionLockController;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
@@ -47,8 +41,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
       runId: input.attempt.runId,
       sessionId: input.attempt.sessionId,
     });
-    await input.sessionLockController.releaseHeldLockForAbort({ terminal: false });
-    await input.withOwnedSessionWriteLock(async () => {
+    await input.withOwnedTranscriptWrite(async () => {
       stripSessionsYieldArtifacts(input.activeSession);
       if (input.yieldMessage) {
         await persistSessionsYieldContextMessage(input.activeSession, input.yieldMessage);
@@ -59,7 +52,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
 
   if (isMidTurnPrecheckSignal(input.error)) {
     const request = input.error.request;
-    await input.withOwnedSessionWriteLock(() => {
+    await input.withOwnedTranscriptWrite(() => {
       input.handleMidTurnPrecheckRequest(request);
     });
     return {};

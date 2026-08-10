@@ -7,8 +7,8 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../config/config.js";
+import { prepareAgentRequestPreflight } from "../gateway/agent-turn/agent-request-preflight.js";
 import { createAgentTurnIo } from "../gateway/agent-turn/io.js";
-import { prepareAgentRequestPreflight } from "../gateway/server-methods/agent-request-preflight.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,

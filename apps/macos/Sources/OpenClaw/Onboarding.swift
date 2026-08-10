@@ -151,7 +151,7 @@ enum OnboardingSystemAgentResumeStore {
 
     static func isPending(
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
         self.pendingState(for: routeIdentity, defaults: defaults, now: now) != .none
@@ -162,7 +162,7 @@ enum OnboardingSystemAgentResumeStore {
         routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
         activationTimeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
         -> Date?
     {
@@ -183,7 +183,7 @@ enum OnboardingSystemAgentResumeStore {
         routeIdentity: String,
         activationOwner: ActivationOwner? = nil,
         deadline: Date,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
         guard let routeIdentity = normalized(routeIdentity) else { return }
@@ -199,7 +199,7 @@ enum OnboardingSystemAgentResumeStore {
     static func markVerified(
         ifOwnedBy routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
         guard let routeIdentity = normalized(routeIdentity) else { return }
@@ -219,7 +219,7 @@ enum OnboardingSystemAgentResumeStore {
     static func markCompleted(
         ifOwnedBy routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
         guard let routeIdentity = normalized(routeIdentity) else { return false }
@@ -238,7 +238,7 @@ enum OnboardingSystemAgentResumeStore {
 
     static func activationOwner(
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> ActivationOwner?
     {
         guard let routeIdentity = normalized(routeIdentity) else { return nil }
@@ -248,7 +248,7 @@ enum OnboardingSystemAgentResumeStore {
     static func isOwned(
         by activationOwner: ActivationOwner,
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
         guard let routeIdentity = normalized(routeIdentity),
@@ -259,7 +259,7 @@ enum OnboardingSystemAgentResumeStore {
 
     static func pendingState(
         for routeIdentity: String?,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> PendingState
     {
         guard let routeIdentity = normalized(routeIdentity),
@@ -282,7 +282,7 @@ enum OnboardingSystemAgentResumeStore {
     static func clear(
         ifOwnedBy routeIdentity: String,
         activationOwner: ActivationOwner? = nil,
-        defaults: UserDefaults = .standard) -> Bool
+        defaults: UserDefaults = AppDefaults.standard) -> Bool
     {
         guard let routeIdentity = normalized(routeIdentity) else { return false }
         var records = self.loadRecords(defaults: defaults)
@@ -294,7 +294,7 @@ enum OnboardingSystemAgentResumeStore {
         return true
     }
 
-    static func clear(defaults: UserDefaults = .standard) {
+    static func clear(defaults: UserDefaults = AppDefaults.standard) {
         defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
         defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
     }
@@ -537,8 +537,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     var busyReason: String?
 
     static func markComplete() {
-        UserDefaults.standard.set(true, forKey: onboardingSeenKey)
-        UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        AppDefaults.standard.set(true, forKey: onboardingSeenKey)
+        AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = true
         DashboardManager.shared.handleOnboardingCompletion()
     }
@@ -827,7 +827,7 @@ struct OnboardingView: View {
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
         aiSetupGateway: GatewayConnection = .shared,
-        systemAgentDefaults: UserDefaults = .standard,
+        systemAgentDefaults: UserDefaults = AppDefaults.standard,
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,

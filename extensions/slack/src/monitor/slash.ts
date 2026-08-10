@@ -23,6 +23,10 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
+import {
+  mergeNativeCommandSpecs,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/native-command-registry";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -30,7 +34,6 @@ import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-s
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
@@ -877,7 +880,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   };
 
-  let nativeCommands: Array<{ name: string }> = [];
+  let nativeCommands: NativeCommandSpec[] = [];
   let slashCommandsRuntime: typeof import("./slash-commands.runtime.js") | null = null;
   if (
     registration.mode === "disabled" &&
@@ -899,18 +902,11 @@ export async function registerSlackMonitorSlashCommands(params: {
       skillCommands,
       provider: "slack",
     });
-    const existingNativeNames = new Set(
-      normalizeStringEntriesLower(nativeCommands.map((command) => command.name)),
-    );
     const { listProviderPluginCommandSpecs } = await loadSlackPluginCommandsRuntime();
-    for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
-      const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
-      if (!normalizedName || existingNativeNames.has(normalizedName)) {
-        continue;
-      }
-      existingNativeNames.add(normalizedName);
-      nativeCommands.push(pluginCommand);
-    }
+    nativeCommands = mergeNativeCommandSpecs({
+      primary: nativeCommands,
+      secondary: listProviderPluginCommandSpecs("slack"),
+    });
     registration = nativeCommands.length > 0 ? { mode: "native" } : { mode: "disabled" };
   }
 

@@ -9,6 +9,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
+  bindAgentRunTaskRunId,
   claimAgentRunContext,
   consumeCronNextCheckProposal,
   getAgentRunContext,
@@ -24,6 +25,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -203,6 +205,12 @@ export async function runCronIsolatedAgentTurn(params: {
         ownsContext: ownsRunContext,
       },
     );
+    if (runContextOwnerToken) {
+      const taskRunId = getActiveCronTaskRunId();
+      if (taskRunId) {
+        bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
+      }
+    }
     const { executeCronRun } = await loadCronExecutorRuntime();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,

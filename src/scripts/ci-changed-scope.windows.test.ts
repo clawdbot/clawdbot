@@ -115,6 +115,29 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes web and Teams file URL handling to Windows", () => {
+    for (const fileUrlPath of [
+      "src/media/local-media-path.ts",
+      "src/media/local-media-path.windows.test.ts",
+      "src/media/local-roots.ts",
+      "src/media/local-roots.test.ts",
+      "src/media/web-media.ts",
+      "src/media/web-media.file-url.windows.test.ts",
+      "src/channels/inbound-event/media.ts",
+      "src/channels/inbound-event/media.test.ts",
+      "src/gateway/managed-image-attachments.ts",
+      "src/gateway/managed-image-attachments.test.ts",
+      "extensions/msteams/src/media-helpers.ts",
+      "extensions/msteams/src/media-helpers.test.ts",
+      "extensions/msteams/src/messenger.test.ts",
+    ]) {
+      expect(detectChangedScope([fileUrlPath]), fileUrlPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SecretRef path-security changes and native fixtures to Windows", () => {
     for (const secretRefPath of [
       "src/commands/doctor-gateway-auth-token.ts",

@@ -58,6 +58,7 @@ export function createTelegramHandlerInboundRuntime(
 ) {
   const {
     resolveMediaRuntime,
+    recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
@@ -233,6 +234,9 @@ export function createTelegramHandlerInboundRuntime(
         maxBytes: mediaMaxBytes,
         ...mediaRuntime,
       });
+      if (media) {
+        await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
+      }
     } catch (mediaErr) {
       const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
       const warningThreadParams = buildTelegramThreadParams(

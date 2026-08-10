@@ -1,4 +1,5 @@
 // WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { RawData } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -22,7 +23,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { rawDataByteLength, rawDataToString } from "../../../infra/ws.js";
+import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
   getGatewaySuspendAdmissionPhase,

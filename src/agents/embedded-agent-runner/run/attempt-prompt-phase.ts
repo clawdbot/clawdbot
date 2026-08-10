@@ -41,7 +41,7 @@ type PromptContextPhaseInput = Omit<
   PromptContextInput,
   "attempt" | "messages" | "prompt" | "replaceSessionMessages"
 >;
-type PromptExecutionPhaseInput = Omit<PromptDispatchInput["execution"], "sessionLockController">;
+type PromptExecutionPhaseInput = PromptDispatchInput["execution"];
 type PromptObservationPhaseInput = Omit<PromptDispatchInput["observation"], "transcriptLeafId">;
 type PromptToolSurface = ReturnType<typeof applyPromptBuildToolsAllow>;
 type PromptPreflightPhaseInput = PromptDispatchInput["preflight"] & {
@@ -54,14 +54,13 @@ type PromptSubmissionPhaseInput = Pick<
   | "toolResultPromptProjectionState"
   | "trajectoryRecorder"
 >;
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function runEmbeddedAttemptPromptPhase(input: {
   attempt: PromptAssemblyInput["attempt"];
   activeSession: PromptAssemblyInput["activeSession"];
   sessionManager: PromptAssemblyInput["sessionManager"];
-  sessionLockController: PromptDispatchInput["execution"]["sessionLockController"];
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   getCompactionReserveTokens: () => number;
   emptyExplicitToolAllowlistError?: Error;
   assembly: PromptAssemblyPhaseInput;
@@ -223,7 +222,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             modelPrompt: promptForModel,
             sessionManager,
             systemPrompt: systemPromptForHook,
-            withOwnedSessionWriteLock: input.withOwnedSessionWriteLock,
+            withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
           });
     if (beforeAgentRunOutcome) {
       input.lifecycle.markBeforeAgentRunBlocked(beforeAgentRunOutcome);
@@ -248,7 +247,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         provider: attempt.provider,
         sessionManager: {
           appendCustomEntry: async (customType, data) => {
-            await input.withOwnedSessionWriteLock(() => {
+            await input.withOwnedTranscriptWrite(() => {
               sessionManager.appendCustomEntry(customType, data);
             });
           },
@@ -276,10 +275,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         ...input.lifecycle.readState(),
         skipPromptSubmission,
       },
-      execution: {
-        ...input.execution,
-        sessionLockController: input.sessionLockController,
-      },
+      execution: input.execution,
       observation: {
         ...input.observation,
         ...(promptToolSurface
@@ -313,8 +309,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       handleMidTurnPrecheckRequest,
       markYieldAborted: input.lifecycle.markYieldAborted,
       releaseLeasedSteering,
-      sessionLockController: input.sessionLockController,
-      withOwnedSessionWriteLock: input.withOwnedSessionWriteLock,
+      withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });
     if (promptErrorOutcome.promptFailure) {
@@ -332,7 +327,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
 
   const pendingMidTurnPrecheckRequest = input.lifecycle.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
-    await input.withOwnedSessionWriteLock(() => {
+    await input.withOwnedTranscriptWrite(() => {
       removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
       const state = input.lifecycle.readState();
       if (!state.preflightRecovery && state.promptErrorSource !== "precheck") {

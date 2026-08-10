@@ -15,6 +15,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -28,7 +29,6 @@ import {
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -91,6 +91,8 @@ const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
 const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
+  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
+  agentId?: string;
   backend?: TuiBackend;
   submitBurstWindowMs?: number;
   ctrlCExitWindowMs?: number;
@@ -167,12 +169,10 @@ export function resolveTuiSessionKey(params: {
 }) {
   const trimmed = (params.raw ?? "").trim();
   if (!trimmed) {
-    if (params.sessionScope === "global") {
-      return "global";
-    }
-    return buildAgentMainSessionKey({
+    return resolveCanonicalMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
+      sessionScope: params.sessionScope,
     });
   }
   const parsed = parseAgentSessionKey(trimmed);
@@ -195,11 +195,12 @@ export function resolveInitialTuiAgentId(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
   initialSessionInput?: string;
+  agentId?: string;
   cwd?: string;
 }) {
-  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
+  const explicitAgentId = resolveExplicitInitialTuiAgentId(params);
+  if (explicitAgentId) {
+    return explicitAgentId;
   }
 
   const cwd = params.cwd ?? tryProcessCwd();
@@ -209,6 +210,15 @@ export function resolveInitialTuiAgentId(params: {
   }
 
   return normalizeAgentId(params.fallbackAgentId);
+}
+
+function resolveExplicitInitialTuiAgentId(params: {
+  initialSessionInput?: string;
+  agentId?: string;
+}): string | null {
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  const explicitAgentId = parsed?.agentId ?? params.agentId?.trim();
+  return explicitAgentId ? normalizeAgentId(explicitAgentId) : null;
 }
 
 export function resolveGatewayDisconnectState(
@@ -598,10 +608,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const sessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   const sessionMainKey = normalizeMainKey(config.session?.mainKey);
   const agentDefaultId = resolveDefaultAgentId(config);
+  const initialSessionAgentId = resolveExplicitInitialTuiAgentId({
+    initialSessionInput,
+    agentId: opts.agentId,
+  });
   let currentAgentId = resolveInitialTuiAgentId({
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
+    agentId: opts.agentId,
   });
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -1247,14 +1262,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       chatLog.dismissBtw();
     },
   };
-
-  const initialSessionAgentId = (() => {
-    if (!initialSessionInput) {
-      return null;
-    }
-    const parsed = parseAgentSessionKey(initialSessionInput);
-    return parsed ? normalizeAgentId(parsed.agentId) : null;
-  })();
 
   const sessionActions = createSessionActions({
     client,
