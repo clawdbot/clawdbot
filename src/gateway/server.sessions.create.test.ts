@@ -64,6 +64,8 @@ type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
 type GenerateDashboardSessionTitle =
   (typeof import("./dashboard-session-title.js"))["generateDashboardSessionTitle"];
+type ReadSessionMessageCountAsync =
+  (typeof import("./session-transcript-readers.js"))["readSessionMessageCountAsync"];
 
 const sessionDiffBaselineMocks = vi.hoisted(() => ({
   ensure: vi.fn<EnsureSessionDiffBaseline>(),
@@ -73,6 +75,11 @@ const sessionDiffBaselineMocks = vi.hoisted(() => ({
 const dashboardTitleMocks = vi.hoisted(() => ({
   actual: undefined as GenerateDashboardSessionTitle | undefined,
   generate: vi.fn<GenerateDashboardSessionTitle>(),
+}));
+
+const sessionTranscriptReaderMocks = vi.hoisted(() => ({
+  actual: undefined as ReadSessionMessageCountAsync | undefined,
+  readCount: vi.fn<ReadSessionMessageCountAsync>(),
 }));
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
@@ -92,6 +99,13 @@ vi.mock("./dashboard-session-title.js", async (importOriginal) => {
   return { ...actual, generateDashboardSessionTitle: dashboardTitleMocks.generate };
 });
 
+vi.mock("./session-transcript-readers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
+  sessionTranscriptReaderMocks.actual = actual.readSessionMessageCountAsync;
+  sessionTranscriptReaderMocks.readCount.mockImplementation(actual.readSessionMessageCountAsync);
+  return { ...actual, readSessionMessageCountAsync: sessionTranscriptReaderMocks.readCount };
+});
+
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
@@ -106,6 +120,11 @@ beforeEach(() => {
     throw new Error("actual dashboard title generator was not loaded");
   }
   dashboardTitleMocks.generate.mockImplementation(dashboardTitleMocks.actual);
+  sessionTranscriptReaderMocks.readCount.mockReset();
+  if (!sessionTranscriptReaderMocks.actual) {
+    throw new Error("actual session transcript reader was not loaded");
+  }
+  sessionTranscriptReaderMocks.readCount.mockImplementation(sessionTranscriptReaderMocks.actual);
 });
 
 async function makeNonGitTempDir(prefix: string): Promise<string> {
@@ -1157,6 +1176,55 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       workspaceDir: worktree?.path,
     });
     ws.close();
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
+test("sessions.create preserves a committed worktree when initial-turn setup fails", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-post-commit-failure-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:post-commit-worktree";
+  let worktreeId: string | undefined;
+  sessionTranscriptReaderMocks.readCount.mockRejectedValueOnce(
+    new Error("synthetic post-commit initial-turn failure"),
+  );
+  try {
+    await expect(
+      directSessionReq(
+        "sessions.create",
+        {
+          agentId: "main",
+          key,
+          message: "start the committed session",
+          worktree: true,
+          worktreeName: "post-commit-worktree",
+        },
+        { client: { connect: { scopes: ["operator.admin"] } } as never },
+      ),
+    ).rejects.toThrow("synthetic post-commit initial-turn failure");
+
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      sessionId: expect.any(String),
+      worktree: { id: expect.any(String), branch: "openclaw/post-commit-worktree" },
+    });
+    const owned = findLiveRegistryWorktreeByOwner(process.env, "session", key);
+    expect(owned).toBeDefined();
+    await expect(
+      fs.stat(requireNonEmptyString(owned?.path, "committed worktree path")),
+    ).resolves.toBeDefined();
+    worktreeId = owned?.id;
   } finally {
     if (worktreeId) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
