@@ -305,6 +305,115 @@ describe("plugin command runtime", () => {
     expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
   });
 
+  it("awaits cleanup from detached handler context after execution settles", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ status: "loaded" } as never);
+    let releaseDetached!: () => void;
+    const detachedGate = new Promise<void>((resolve) => {
+      releaseDetached = resolve;
+    });
+    let releaseCleanup!: () => void;
+    cleanupReplacedPluginHostRegistry.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseCleanup = resolve;
+        }),
+    );
+    let detachedClear!: Promise<void>;
+    registerCommand(registry, {
+      pluginId: "detached",
+      name: "detached",
+      handler: () => {
+        detachedClear = (async () => {
+          await detachedGate;
+          await clearActivePluginRegistry();
+        })();
+        return Promise.resolve({ text: "scheduled" });
+      },
+    });
+    setActivePluginRegistry(registry);
+    const dispatch = requirePluginDispatch(
+      createPluginCommandRuntime().listNativeCandidates("telegram")[0]!,
+    );
+
+    await expect(dispatch.execute(executionContext)).resolves.toEqual({ text: "scheduled" });
+    expect(getPluginCommandExecutionCount(registry)).toBe(0);
+    releaseDetached();
+    await vi.waitFor(() => expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce());
+    let clearSettled = false;
+    void detachedClear.then(() => {
+      clearSettled = true;
+    });
+    await Promise.resolve();
+    expect(clearSettled).toBe(false);
+    releaseCleanup();
+    await detachedClear;
+    expect(clearSettled).toBe(true);
+  });
+
+  it("does not reuse an outer admission for detached nested handler cleanup", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ status: "loaded" } as never);
+    let releaseDetached!: () => void;
+    const detachedGate = new Promise<void>((resolve) => {
+      releaseDetached = resolve;
+    });
+    let detachedClear!: Promise<void>;
+    registerCommand(registry, {
+      pluginId: "inner",
+      name: "inner",
+      handler: () => {
+        detachedClear = (async () => {
+          await detachedGate;
+          await clearActivePluginRegistry();
+        })();
+        return Promise.resolve({ text: "inner" });
+      },
+    });
+    let releaseOuter!: () => void;
+    const outerGate = new Promise<void>((resolve) => {
+      releaseOuter = resolve;
+    });
+    let outerHolding!: () => void;
+    const outerHoldingGate = new Promise<void>((resolve) => {
+      outerHolding = resolve;
+    });
+    let innerDispatch!: PluginCommandDispatch;
+    registerCommand(registry, {
+      pluginId: "outer",
+      name: "outer",
+      handler: async () => {
+        await innerDispatch.execute({ ...executionContext, commandBody: "/inner" });
+        outerHolding();
+        await outerGate;
+        return { text: "outer" };
+      },
+    });
+    setActivePluginRegistry(registry);
+    const candidates = createPluginCommandRuntime().listNativeCandidates("telegram");
+    innerDispatch = requirePluginDispatch(
+      candidates.find((candidate) => candidate.name === "inner")!,
+    );
+    const outerDispatch = requirePluginDispatch(
+      candidates.find((candidate) => candidate.name === "outer")!,
+    );
+
+    const running = outerDispatch.execute({ ...executionContext, commandBody: "/outer" });
+    await outerHoldingGate;
+    expect(getPluginCommandExecutionCount(registry)).toBe(1);
+    let clearSettled = false;
+    void detachedClear.then(() => {
+      clearSettled = true;
+    });
+    releaseDetached();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(clearSettled).toBe(false);
+    releaseOuter();
+    await expect(running).resolves.toEqual({ text: "outer" });
+    await detachedClear;
+    expect(clearSettled).toBe(true);
+  });
+
   it("fails factory creation when no registry generation exists", () => {
     resetPluginRuntimeStateForTest();
     expect(() => createPluginCommandRuntime()).toThrow("requires an active or request-scoped");

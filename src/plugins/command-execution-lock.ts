@@ -8,8 +8,13 @@ type PluginCommandExecutionState = {
   waiters: Array<() => void>;
 };
 
+type PluginCommandExecutionToken = {
+  registry: PluginRegistry;
+  active: boolean;
+};
+
 const executionStates = new WeakMap<PluginRegistry, PluginCommandExecutionState>();
-const executionContext = new AsyncLocalStorage<ReadonlySet<PluginRegistry>>();
+const executionContext = new AsyncLocalStorage<ReadonlySet<PluginCommandExecutionToken>>();
 
 function getExecutionState(registry: PluginRegistry): PluginCommandExecutionState {
   const existing = executionStates.get(registry);
@@ -49,7 +54,11 @@ function endPluginCommandExecution(registry: PluginRegistry): void {
 }
 
 export function isPluginCommandExecutionActiveHere(registry: PluginRegistry): boolean {
-  return executionContext.getStore()?.has(registry) === true;
+  return (
+    [...(executionContext.getStore() ?? [])].some(
+      (token) => token.registry === registry && token.active,
+    ) === true
+  );
 }
 
 export async function withPluginCommandExecution<T>(
@@ -59,11 +68,15 @@ export async function withPluginCommandExecution<T>(
   if (!beginPluginCommandExecution(registry)) {
     return { admitted: false };
   }
-  const active = new Set(executionContext.getStore() ?? []);
-  active.add(registry);
+  const token: PluginCommandExecutionToken = { registry, active: true };
+  const active = new Set(
+    [...(executionContext.getStore() ?? [])].filter((inherited) => inherited.registry !== registry),
+  );
+  active.add(token);
   try {
     return { admitted: true, value: await executionContext.run(active, run) };
   } finally {
+    token.active = false;
     endPluginCommandExecution(registry);
   }
 }
