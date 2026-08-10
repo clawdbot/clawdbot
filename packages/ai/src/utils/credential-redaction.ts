@@ -1,5 +1,5 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { stableStringify } from "@openclaw/normalization-core";
+import { extractBalancedJsonFragments, stableStringify } from "@openclaw/normalization-core";
 
 const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "passwordfile",
@@ -35,8 +35,14 @@ const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
 const MAX_DIAGNOSTIC_DEPTH = 8;
-const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z0-9][A-Za-z0-9 _.-]*\][^{}[\]",]*$/u;
-const PREFIXED_DIAGNOSTIC_JSON_RE = /^(?!\s*[[{])(.*?)(\{.*|\[\s*[{"\d\]tfn-].*)$/su;
+const PLAIN_BRACKET_TAG_RE = /^\[[A-Za-z0-9][A-Za-z0-9 _.-]*\]$/u;
+const JSON_ARRAY_START_RE = /\[\s*(?:[{"\d\]-]|true\b|false\b|null\b)/u;
+const MALFORMED_JSON_RE =
+  /\{|(?:"[^"]+"|\b(?:b64_json|data|(?:input|output)?(?:audio|image|video)[\w-]*))\s*:/iu;
+
+function looksLikeDiagnosticJson(value: string): boolean {
+  return JSON_ARRAY_START_RE.test(value) || MALFORMED_JSON_RE.test(value);
+}
 
 function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
@@ -225,19 +231,34 @@ export function projectDiagnosticValue(
 /** Redacts bounded structured JSON while preserving harmless diagnostic text byte-for-byte. */
 export function redactDiagnosticText(value: string): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
-  const prefixed = text.match(PREFIXED_DIAGNOSTIC_JSON_RE);
-  const json = prefixed?.[2] ?? value;
-  if ((!prefixed && !/^\s*[[{]/u.test(value)) || PLAIN_BRACKETED_TEXT_RE.test(json)) {
+  if (!looksLikeDiagnosticJson(text)) {
     return text;
   }
-  if (json.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
+  if (text.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
     return "[Oversized diagnostic JSON redacted]";
   }
-  try {
-    const state = { changed: false };
-    const projected = projectDiagnosticValue(JSON.parse(json), {}, new WeakSet(), 0, false, state);
-    return state.changed ? `${prefixed?.[1] ?? ""}${stableStringify(projected)}` : text;
-  } catch {
-    return "[Malformed diagnostic JSON redacted]";
+  let cursor = 0;
+  let redacted = "";
+  let unstructured = "";
+  for (const fragment of extractBalancedJsonFragments(text)) {
+    const plainText = text.slice(cursor, fragment.startIndex);
+    unstructured += plainText;
+    redacted += plainText;
+    try {
+      const state = { changed: false };
+      const parsed = JSON.parse(fragment.json);
+      const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), 0, false, state);
+      redacted += state.changed ? stableStringify(projected) : fragment.json;
+    } catch {
+      if (!PLAIN_BRACKET_TAG_RE.test(fragment.json) || JSON_ARRAY_START_RE.test(fragment.json)) {
+        return "[Malformed diagnostic JSON redacted]";
+      }
+      redacted += fragment.json;
+    }
+    cursor = fragment.endIndex + 1;
   }
+  const remainder = text.slice(cursor);
+  return looksLikeDiagnosticJson(unstructured + remainder)
+    ? "[Malformed diagnostic JSON redacted]"
+    : redacted + remainder;
 }

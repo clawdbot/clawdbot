@@ -80,6 +80,12 @@ describe("projectProviderError", () => {
     );
   });
 
+  it("bounds repeated structured diagnostic fragments before extraction", () => {
+    expect(projectProviderError("{}".repeat(8193)).errorMessage).toBe(
+      "[Oversized diagnostic JSON redacted]",
+    );
+  });
+
   it.each([
     {
       name: "Error.message",
@@ -128,6 +134,30 @@ describe("projectProviderError", () => {
       name: "long provider prefix",
       error: new Error(`${"x".repeat(129)}: {"b64_json":"QUJDRA=="}`),
       expected: `${"x".repeat(129)}: {"b64_json":"<redacted>"}`,
+    },
+    {
+      name: "suffixed Anthropic JSON message",
+      error: new Error(
+        'HTTP 429: {"type":"error","error":{"message":"safe","b64_json":"QUJDRA=="}}; Retry-After: 30 seconds',
+      ),
+      expected:
+        'HTTP 429: {"error":{"b64_json":"<redacted>","message":"safe"},"type":"error"}; Retry-After: 30 seconds',
+    },
+    {
+      name: "bracket-tagged JSON message",
+      error: new Error('[ERROR] payload {"type":"video","data":"QUJDRA=="}'),
+      expected: '[ERROR] payload {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
+    },
+    {
+      name: "harmless JSON before sensitive JSON",
+      error: new Error('meta {"ok":true} payload {"type":"video","data":"QUJDRA=="}'),
+      expected:
+        'meta {"ok":true} payload {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
+    },
+    {
+      name: "two sensitive JSON fragments",
+      error: new Error('first {"b64_json":"QUJDRA=="} second {"b64_json":"QUJDRA=="}'),
+      expected: 'first {"b64_json":"<redacted>"} second {"b64_json":"<redacted>"}',
     },
   ])("redacts media from $name", ({ error, expected }) => {
     expect(projectProviderError(error).errorMessage).toBe(expected);
@@ -288,24 +318,29 @@ describe("projectProviderError", () => {
     expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
   });
 
-  it.each([
-    '[ERROR] payload {"type":"video","data":"QUJDRA=="}',
-    '[ERROR] payload "type":"video","data":"QUJDRA=="',
-  ])("fails closed when bracketed diagnostic text contains structured payload", (body) => {
-    expect(projectProviderError({ status: 500, body }).errorBody).toBe(
-      "[Malformed diagnostic JSON redacted]",
-    );
-  });
-
-  it.each(['{"type":"video","data":"QUJDRA=="', '[undefined,{"b64_json":"QUJDRA=="}]'])(
-    "fails closed for malformed JSON response-body strings",
+  it.each(['[ERROR] payload "type":"video","data":"QUJDRA=="'])(
+    "fails closed when bracketed diagnostic text contains a malformed structured payload",
     (body) => {
-      const projected = projectProviderError({ status: 500, body });
-
-      expect(JSON.stringify(projected)).not.toContain("QUJDRA==");
-      expect(projected.errorBody).toBe("[Malformed diagnostic JSON redacted]");
+      expect(projectProviderError({ status: 500, body }).errorBody).toBe(
+        "[Malformed diagnostic JSON redacted]",
+      );
     },
   );
+
+  it.each([
+    '{"type":"video","data":"QUJDRA=="',
+    'Error: {"type":"video","data":"QUJDRA=="',
+    'meta {"ok":true} payload {"type":"video","data":"QUJDRA=="',
+    '[ERROR] payload "type":"video","data":"QUJDRA==" context {"ok":true}',
+    'meta {"ok":true} payload type:video,data:"QUJDRA=="',
+    'payload "b64_json" {} : "QUJDRA=="',
+    '[undefined,{"b64_json":"QUJDRA=="}]',
+  ])("fails closed for malformed JSON response-body strings", (body) => {
+    const projected = projectProviderError({ status: 500, body });
+
+    expect(JSON.stringify(projected)).not.toContain("QUJDRA==");
+    expect(projected.errorBody).toBe("[Malformed diagnostic JSON redacted]");
+  });
 
   it("retains readable status and body from a hostile non-Error value", () => {
     const error = {

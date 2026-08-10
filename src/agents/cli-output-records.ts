@@ -1,7 +1,7 @@
+import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
-import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
