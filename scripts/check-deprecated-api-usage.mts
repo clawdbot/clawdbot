@@ -143,7 +143,7 @@ function collectRuleViolations(rule: DeprecatedRule) {
   return collectIdentifierRuleViolations(rule);
 }
 
-function* walkMarkdown(dir) {
+function* walkMarkdown(dir: string): Generator<string> {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -162,7 +162,7 @@ function collectBundledSkillsRemovedTaskFlowAliasViolations() {
     { regex: /api\.runtime\.tasks\.flow\b/gu, name: "api.runtime.tasks.flow" },
     { regex: /api\.runtime\.taskFlow\b/gu, name: "api.runtime.taskFlow" },
   ];
-  const violations = [];
+  const violations: string[] = [];
 
   if (!fs.existsSync(skillRoot)) {
     return violations;
