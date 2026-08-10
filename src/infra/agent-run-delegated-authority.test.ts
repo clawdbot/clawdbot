@@ -60,6 +60,7 @@ test("stale projection sweeping cannot retire a live delegated authority claim",
 });
 
 test("terminal clear preserves exact authority until its outer owner closes", () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(100);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const delayedOwner = claimAgentRunContext(
     "delayed-terminal-run",
@@ -84,6 +85,9 @@ test("terminal clear preserves exact authority until its outer owner closes", ()
 
     expect(closed).toEqual([]);
     expect(getAgentRunContext("delayed-terminal-run")).toBeDefined();
+    clock.mockReturnValue(10_000);
+    expect(sweepStaleRunContexts(500)).toBe(0);
+    expect(validateAgentRunDelegatedAuthority(copiedAuthority)).toBe(true);
     expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
     expect(closed).toEqual([authority.claimId]);
     expect(validateAgentRunDelegatedAuthority(copiedAuthority)).toBe(false);
@@ -91,6 +95,7 @@ test("terminal clear preserves exact authority until its outer owner closes", ()
     releaseAgentRunContext("delayed-terminal-run", delayedOwner);
     expect(getAgentRunContext("delayed-terminal-run")).toBeUndefined();
   } finally {
+    clock.mockRestore();
     unregister();
   }
 });

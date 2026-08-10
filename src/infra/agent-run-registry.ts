@@ -696,7 +696,6 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     const owners = state.owners.get(runId);
     if (
       owners?.lifecycleGeneration === state.lifecycleGeneration &&
-      !owners.clearRequested &&
       owners.sweepProtectedClaimIds.size > 0
     ) {
       continue;
