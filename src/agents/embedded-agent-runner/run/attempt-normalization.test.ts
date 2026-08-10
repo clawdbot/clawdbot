@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-prepare.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
@@ -8,10 +8,7 @@ const sessionAccessorMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
-  ...sessionAccessorMocks,
-}));
+vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
 
 beforeEach(() => {
   sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);

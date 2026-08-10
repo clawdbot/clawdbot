@@ -7,7 +7,7 @@ import {
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
-} from "./attempt-tool-prepare.js";
+} from "./attempt-tool-construction-plan.js";
 
 type EmbeddedAttemptToolConstructionPlan = ReturnType<
   typeof resolveEmbeddedAttemptToolConstructionPlan

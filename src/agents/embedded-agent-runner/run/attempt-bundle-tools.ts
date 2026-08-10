@@ -16,10 +16,10 @@ import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import {
   applyEmbeddedAttemptToolsAllow,
-  type prepareEmbeddedAttemptToolBase,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
-} from "./attempt-tool-prepare.js";
+} from "./attempt-tool-construction-plan.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;

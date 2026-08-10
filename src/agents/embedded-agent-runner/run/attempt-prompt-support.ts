@@ -40,7 +40,7 @@ import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
-} from "./attempt-tool-prepare.js";
+} from "./attempt-tool-construction-plan.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 

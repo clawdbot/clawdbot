@@ -25,7 +25,7 @@ import {
 import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
-} from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
+} from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
