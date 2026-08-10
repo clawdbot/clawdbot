@@ -1,8 +1,16 @@
 // Qa Lab tests cover gateway rpc client plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+type GatewayRequestOptions = {
+  expectFinal?: boolean;
+  onSent?: () => void;
+  timeoutMs?: number;
+};
+
 const gatewayRpcMock = vi.hoisted(() => {
-  const request = vi.fn(async () => ({ ok: true }));
+  const request = vi.fn(
+    async (_method: string, _params: unknown, _options: GatewayRequestOptions) => ({ ok: true }),
+  );
   const stopAndWait = vi.fn(async () => {});
   const clients: Array<{ options: Record<string, unknown> }> = [];
   class GatewayClient {
@@ -198,7 +206,7 @@ describe("startQaGatewayRpcClient", () => {
 
   it("does not retry a sent request whose Gateway error says it is not connected", async () => {
     gatewayRpcMock.request.mockImplementationOnce(async (_method, _params, options) => {
-      options.onSent();
+      options.onSent?.();
       throw new Error("gateway not connected");
     });
     const client = await startQaGatewayRpcClient({
