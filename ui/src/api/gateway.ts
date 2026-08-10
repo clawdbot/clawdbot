@@ -47,7 +47,6 @@ import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
 } from "../lib/nodes/index.ts";
-import { migrateCloudSessionRecoveryScope } from "../lib/sessions/cloud-recovery.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
@@ -547,12 +546,14 @@ export class GatewayBrowserClient {
         plan.selectedAuth.resolvedDeviceToken ??
         plan.selectedAuth.authToken,
     );
+    const migrateRecoveryScope =
+      serverScope && legacyScope
+        ? (await import("../lib/sessions/cloud-recovery-migration.runtime.ts")).default
+        : undefined;
     if (plan.generation !== this.recoveryScopeGeneration || !this.client.connected) {
       return;
     }
-    if (serverScope && legacyScope) {
-      migrateCloudSessionRecoveryScope(this.opts.url, legacyScope, serverScope);
-    }
+    migrateRecoveryScope?.(this.opts.url, legacyScope, serverScope!);
     this.recoveryScopeValue = serverScope ?? legacyScope;
     this.recoveryScopeResolved = true;
     this.opts.onRecoveryScopeChange?.();

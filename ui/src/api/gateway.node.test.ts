@@ -20,6 +20,24 @@ import {
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const recoveryMigrationRuntimeLoad = vi.hoisted(() => {
+  let release = () => {};
+  let markStarted = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { markStarted, pending, release, started };
+});
+
+vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", async (importOriginal) => {
+  recoveryMigrationRuntimeLoad.markStarted();
+  await recoveryMigrationRuntimeLoad.pending;
+  return await importOriginal();
+});
+
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEFAULT_DEVICE_AUTH_STORAGE_KEY = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:${DEFAULT_GATEWAY_URL}`;
@@ -1034,6 +1052,74 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
+  it("does not let a stale hello runtime import publish or migrate recovery", async () => {
+    useNodeFakeTimers();
+    const sessionStorage = createStorageMock();
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    const recovery = {
+      sessionKey: "agent:cloud:stale",
+      messageId: "message-stale",
+      message: "keep the current connection",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      recoveryScope: legacyScope,
+      phase: "sending" as const,
+    };
+    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+    firstWs.emitMessage({
+      type: "res",
+      id: firstConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [], recoveryScope: "server-stale" },
+      },
+    });
+    await recoveryMigrationRuntimeLoad.started;
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+
+    firstWs.emitClose(1006, "socket lost");
+    await vi.advanceTimersByTimeAsync(800);
+    const secondWs = getLatestWebSocket();
+    const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-current");
+    secondWs.emitMessage({
+      type: "res",
+      id: secondConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [], recoveryScope: "server-current" },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+
+    recoveryMigrationRuntimeLoad.release();
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe("server-current");
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
+    ).toEqual({ ...recovery, recoveryScope: "server-current" });
+    client.stop();
+  });
+
   it("publishes a credential-scoped recovery identity after hello", async () => {
     const onRecoveryScopeChange = vi.fn();
     const client = new GatewayBrowserClient({
@@ -1097,77 +1183,6 @@ describe("GatewayBrowserClient", () => {
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScope).toBe(legacyScope);
     expect(client.recoveryScopeReady).toBe(true);
-    client.stop();
-  });
-
-  it("does not let a stale hello digest publish or migrate recovery", async () => {
-    useNodeFakeTimers();
-    const sessionStorage = createStorageMock();
-    vi.stubGlobal("sessionStorage", sessionStorage);
-    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
-    const recovery = {
-      sessionKey: "agent:cloud:stale",
-      messageId: "message-stale",
-      message: "keep the current connection",
-      profileId: "aws",
-      agentId: "cloud",
-      gatewayUrl: DEFAULT_GATEWAY_URL,
-      recoveryScope: legacyScope,
-      phase: "sending" as const,
-    };
-    expect(writeCloudSessionRecovery(recovery)).toBe(true);
-    const staleDigest = createDeferred<ArrayBuffer>();
-    vi.stubGlobal("crypto", {
-      randomUUID: () => "req-stale-scope",
-      subtle: { digest: vi.fn(() => staleDigest.promise) },
-    });
-    const onRecoveryScopeChange = vi.fn();
-    const client = new GatewayBrowserClient({
-      url: DEFAULT_GATEWAY_URL,
-      onRecoveryScopeChange,
-    });
-
-    const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
-    firstWs.emitMessage({
-      type: "res",
-      id: firstConnect.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [], recoveryScope: "server-stale" },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
-
-    firstWs.emitClose(1006, "socket lost");
-    localStorage.clear();
-    await vi.advanceTimersByTimeAsync(800);
-    const secondWs = getLatestWebSocket();
-    const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-current");
-    secondWs.emitMessage({
-      type: "res",
-      id: secondConnect.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [], recoveryScope: "server-current" },
-      },
-    });
-    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
-
-    staleDigest.resolve(Uint8Array.from(createHash("sha256").update(STORED_CRED).digest()).buffer);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(client.recoveryScope).toBe("server-current");
-    expect(onRecoveryScopeChange).toHaveBeenCalledTimes(1);
-    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
-      recovery,
-    );
-    expect(
-      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
-    ).toBeNull();
     client.stop();
   });
 
