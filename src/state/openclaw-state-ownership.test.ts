@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +7,11 @@ import {
   readConfigHealthStateFromStore,
   writeConfigHealthStateToStore,
 } from "../config/io.health-state.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { withEnv } from "../test-utils/env.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -19,6 +22,7 @@ import {
   repairOpenClawStateDatabaseSchemaIfNeeded,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "./openclaw-state-ownership-operations.js";
 import {
   inspectOpenClawStateOwnershipAtPath,
@@ -81,6 +85,15 @@ function snapshotSqliteFamily(databasePath: string) {
       }),
     ),
   };
+}
+
+function resolveExpectedOwnershipCoordinatorPath(databasePath: string): string {
+  const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
+  const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
+  return path.join(
+    resolveGatewayLockDir(stateDir),
+    `state-ownership.${sha256HexPrefix(canonicalDatabasePath, 8)}.lock.sqlite`,
+  );
 }
 
 function mockCoordinatorRollbackFailure(onRollback?: () => void) {
@@ -157,6 +170,7 @@ describe("external shared-state ownership", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
+    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = new DatabaseSync(databasePath);
     const ownership = {
@@ -226,51 +240,150 @@ describe("external shared-state ownership", () => {
     }
   });
 
+  it("does not expose rolled-back ownership from a rollback-journal race", () => {
+    const env = createEnv();
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync, StatementSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    writer.exec(
+      "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; " +
+        "PRAGMA cache_size = 2; PRAGMA cache_spill = ON;",
+    );
+    const baselineOwnership = {
+      version: 1 as const,
+      mode: "external" as const,
+      managerId: "baseline-supervisor",
+      claimedAt: 1,
+    };
+    const transientOwnership = {
+      version: 1 as const,
+      mode: "external" as const,
+      managerId: "rollback-race-supervisor",
+      claimedAt: 2,
+    };
+    const payload = JSON.stringify("x".repeat(8192));
+    writer.exec("BEGIN IMMEDIATE;");
+    const insert = writer.prepare(
+      `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+       VALUES (?, ?, ?)`,
+    );
+    insert.run(
+      STATE_SUPERVISION_KEY,
+      JSON.stringify(baselineOwnership),
+      baselineOwnership.claimedAt,
+    );
+    for (let index = 0; index < 256; index += 1) {
+      insert.run(`rollback-race-${index.toString().padStart(3, "0")}`, payload, index);
+    }
+    writer.exec("COMMIT;");
+    const originalGet = Object.getOwnPropertyDescriptor(StatementSync.prototype, "get")?.value as
+      | ((this: import("node:sqlite").StatementSync, ...params: unknown[]) => unknown)
+      | undefined;
+    if (!originalGet) {
+      throw new Error("StatementSync.get descriptor is unavailable");
+    }
+    let transactionStarted = false;
+    let transientOwnershipObserved = false;
+    const get = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
+      this: import("node:sqlite").StatementSync,
+      ...params: unknown[]
+    ) {
+      if (!transactionStarted && params[0] === STATE_SUPERVISION_KEY) {
+        transactionStarted = true;
+        writer.exec("BEGIN IMMEDIATE;");
+        writer
+          .prepare(
+            `UPDATE config_machine_state
+             SET value_json = CASE WHEN state_key = ? THEN ? ELSE ? END,
+                 updated_at_ms = ?`,
+          )
+          .run(
+            STATE_SUPERVISION_KEY,
+            JSON.stringify(transientOwnership),
+            JSON.stringify("y".repeat(8192)),
+            transientOwnership.claimedAt,
+          );
+        const racedReader = new DatabaseSync(resolveImmutableSqliteFileUri(databasePath), {
+          readOnly: true,
+        });
+        try {
+          const result = originalGet.call(
+            racedReader.prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1",
+            ),
+            STATE_SUPERVISION_KEY,
+          );
+          transientOwnershipObserved =
+            (result as { value_json?: unknown } | undefined)?.value_json ===
+            JSON.stringify(transientOwnership);
+          writer.exec("ROLLBACK;");
+          return result;
+        } finally {
+          racedReader.close();
+        }
+      }
+      return originalGet.apply(this, params);
+    });
+
+    try {
+      const inspected = inspectOpenClawStateOwnershipAtPath(databasePath);
+      expect(transactionStarted).toBe(true);
+      expect(transientOwnershipObserved).toBe(true);
+      expect(inspected).toEqual(baselineOwnership);
+    } finally {
+      get.mockRestore();
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK;");
+      }
+      writer.close();
+    }
+  });
+
   it("inspects consolidated ownership without modifying its SQLite family or state tree", () => {
     const fixture = claimFixture();
     const stateDir = fixture.externalEnv.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("ownership fixture state directory is unavailable");
     }
+    fs.rmSync(path.join(stateDir, "tmp"), { force: true, recursive: true });
     expect(fs.readdirSync(stateDir)).toEqual(["state"]);
     const before = snapshotSqliteFamily(fixture.databasePath);
 
-    expect(inspectOpenClawStateOwnershipAtPath(fixture.databasePath)).toEqual(fixture.ownership);
+    if (process.platform !== "win32") {
+      fs.chmodSync(stateDir, 0o500);
+    }
+    try {
+      expect(inspectOpenClawStateOwnershipAtPath(fixture.databasePath)).toEqual(fixture.ownership);
+    } finally {
+      if (process.platform !== "win32") {
+        fs.chmodSync(stateDir, 0o700);
+      }
+    }
 
     expect(snapshotSqliteFamily(fixture.databasePath)).toEqual(before);
     expect(fs.readdirSync(stateDir)).toEqual(["state"]);
   });
 
-  it("excludes public path inspection during an ownership transition", () => {
+  it("keeps one state-local coordinator across temporary-directory environments", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
-    const moduleUrl = new URL("./openclaw-state-ownership.ts", import.meta.url).href;
-    runWithOpenClawStateOwnershipCoordinator(databasePath, "test ownership transition", () => {
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--input-type=module",
-          "-e",
-          `const { inspectOpenClawStateOwnershipAtPath } = await import(process.env.OPENCLAW_OWNERSHIP_MODULE); inspectOpenClawStateOwnershipAtPath(process.env.OPENCLAW_OWNERSHIP_DATABASE);`,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_OWNERSHIP_DATABASE: databasePath,
-            OPENCLAW_OWNERSHIP_MODULE: moduleUrl,
-          },
-        },
-      );
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/another OpenClaw process is changing shared state ownership/u);
-    });
+    const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
+    const coordinatorPath = resolveExpectedOwnershipCoordinatorPath(databasePath);
+    fs.rmSync(path.join(stateDir, "tmp"), { force: true, recursive: true });
 
-    expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toBeNull();
-  }, 15_000);
+    for (const temporaryDirectory of [
+      tempDirs.make("ownership-tmp-a-"),
+      tempDirs.make("ownership-tmp-b-"),
+    ]) {
+      withEnv({ TMPDIR: temporaryDirectory }, () =>
+        runWithOpenClawStateOwnershipCoordinator(databasePath, "test coordinator path", () => {}),
+      );
+      expect(fs.existsSync(coordinatorPath)).toBe(true);
+    }
+    expect(fs.readdirSync(path.dirname(coordinatorPath))).toEqual([path.basename(coordinatorPath)]);
+  });
 
   it("closes an unpublished fresh handle when coordinator release fails", () => {
     const env = createEnv();
