@@ -301,30 +301,6 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   );
 }
 
-export function restoreChatScroll(
-  host: ChatScrollHost,
-  target: HTMLElement,
-  scrollTop: number,
-): number {
-  cancelChatScroll(host);
-  const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight);
-  target.scrollTop = Math.min(Math.max(0, scrollTop), maxScrollTop);
-  const restoredScrollTop = target.scrollTop;
-  const distanceFromBottom = maxScrollTop - restoredScrollTop;
-  host.chatLastScrollTop = restoredScrollTop;
-  host.chatLastScrollHeight = target.scrollHeight;
-  host.chatHasAutoScrolled = true;
-  // A virtualized transcript may not expose its final scroll height yet. Keep
-  // the restored viewport locked until the requested offset becomes reachable.
-  host.chatFollowLocked =
-    scrollTop > maxScrollTop || distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX;
-  host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
-  host.chatIsProgrammaticScroll = false;
-  host.chatProgrammaticScrollTarget = restoredScrollTop;
-  setNewMessagesBelow(host, host.chatFollowLocked);
-  return restoredScrollTop;
-}
-
 export function resetChatScroll(host: ChatScrollHost): void {
   cancelChatScroll(host);
   host.chatHasAutoScrolled = false;

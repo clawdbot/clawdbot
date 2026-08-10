@@ -81,6 +81,7 @@ export class ChatPage extends OpenClawLightDomElement {
   private readonly chatMessagesBySession: ChatMessageCache = new Map();
   private classicColumnId = "c1";
   private classicPaneId = "p1";
+  private routeHref = "";
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
   private readonly viewerPresence = new ChatViewerPresenceController(this);
   private readonly retainedSessions = new ChatPageRetainedSessions(this, {
@@ -97,6 +98,7 @@ export class ChatPage extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.routeHref = window.location.href;
     this.layout = loadSettings().chatSplitLayout;
     this.mediaQuery = window.matchMedia("(max-width: 1099px)");
     this.narrow = this.mediaQuery.matches;
@@ -146,6 +148,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const activeSessionKey = this.layout ? (activePane?.sessionKey ?? null) : undefined;
     const draftRendered = this.draftFocus.rendered(data, activeSessionKey, this.consumedDraftData);
     if (changedProperties.has("data")) {
+      this.routeHref = window.location.href;
       if (
         data?.canonicalLocation &&
         stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
@@ -477,7 +480,7 @@ export class ChatPage extends OpenClawLightDomElement {
     options?: { replace?: boolean },
   ): boolean => {
     const trimmed = sessionKey.trim();
-    if (!trimmed) {
+    if (!trimmed || window.location.href !== this.routeHref) {
       return false;
     }
     const resolvedLayout = this.layout ?? this.classicLayout();

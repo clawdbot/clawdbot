@@ -29,6 +29,7 @@ import {
   CHAT_HISTORY_INTENT_IDLE_MS,
   CHAT_HISTORY_TOUCH_INTENT_PX,
   CHAT_HISTORY_UPWARD_KEYS,
+  clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
@@ -378,16 +379,17 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         releaseStaleContinuation();
         return;
       }
-      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
-        releaseStaleContinuation();
-        return;
-      }
-      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
         attachments: [],
         draft,
         send: true,
       });
+      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
+        clearPaneSessionHandoff(this.context, this.paneId, result.sessionKey);
+        releaseStaleContinuation();
+        return;
+      }
+      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
       this.activeCatalogContinuation = null;
       state.chatSending = false;
       state.requestUpdate();

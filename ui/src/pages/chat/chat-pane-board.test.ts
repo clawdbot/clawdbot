@@ -425,11 +425,7 @@ describe("chat pane board shell", () => {
 
     pane.persistBoardSessionView({ face: "dashboard" });
 
-    expect(onFaceChange).toHaveBeenCalledWith(
-      "pane-1",
-      "agent:main:retained",
-      "dashboard",
-    );
+    expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
 
   it("uses in-memory tab preferences while the route owns the face", () => {

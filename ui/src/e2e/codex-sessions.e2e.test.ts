@@ -958,8 +958,11 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
     await page.getByText("Release checklist", { exact: true }).click();
-    await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
-    const composer = page.locator(".agent-chat__composer-combobox > textarea");
+    const catalogPane = page
+      .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
+      .filter({ hasText: "prepare release" });
+    await catalogPane.getByText("prepare release", { exact: true }).waitFor();
+    const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks");
     await gateway.setMethodResponse("sessions.list", {
       count: 1,

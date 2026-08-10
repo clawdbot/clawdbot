@@ -23,7 +23,7 @@ const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
-export type ChatSessionSnapshot = {
+type ChatSessionSnapshot = {
   displayedLeafEntryId?: string | null;
   messages: unknown[];
   pagination: ChatHistoryPagination;

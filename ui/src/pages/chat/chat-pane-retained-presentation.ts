@@ -7,7 +7,9 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
+import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { resetChatThreadSessionPresentationState } from "./components/chat-thread.ts";
@@ -24,6 +26,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     this.syncActiveBindings();
+    if (active && this.presented && this.state?.chatQueue.length) {
+      void refreshCurrentChatSessionList(this.state).catch(() => undefined);
+      void retryReconnectableQueuedChatSends(this.state);
+    }
     this.querySelector(".chat-transcript-announcement")?.setAttribute(
       "aria-live",
       active ? "polite" : "off",
@@ -129,11 +135,21 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.requestUpdate?.();
     if (handoff.send) {
-      void state.handleSendChat().catch((error: unknown) => {
-        if (this.state === state && state.sessionKey === sessionKey) {
-          setChatError(state, error instanceof Error ? error.message : String(error));
-          state.requestUpdate?.();
+      queueMicrotask(() => {
+        if (
+          this.state !== state ||
+          state.sessionKey !== sessionKey ||
+          !this.active ||
+          !this.presented
+        ) {
+          return;
         }
+        void state.handleSendChat().catch((error: unknown) => {
+          if (this.state === state && state.sessionKey === sessionKey) {
+            setChatError(state, error instanceof Error ? error.message : String(error));
+            state.requestUpdate?.();
+          }
+        });
       });
     }
   }

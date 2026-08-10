@@ -33,6 +33,32 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   return url.toString();
 }
 
+export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
+  await page.evaluate((pathname) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: {
+        context: {
+          navigate: (routeId: string, options: { pathname: string }) => void;
+        };
+      };
+    };
+    if (!app.runtime) {
+      throw new Error("OpenClaw application runtime is unavailable");
+    }
+    app.runtime.context.navigate("chat", { pathname });
+  }, controlUiSessionPath(sessionKey));
+  await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
+  await page.waitForFunction(
+    (targetSessionKey) =>
+      [...document.querySelectorAll<HTMLElement>("openclaw-chat-pane")].some(
+        (pane) =>
+          pane.classList.contains("chat-pane-cache__pane--visible") &&
+          (pane as HTMLElement & { sessionKey?: string }).sessionKey === targetSessionKey,
+      ),
+    sessionKey,
+  );
+}
+
 export function controlUiBundledGatewayUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

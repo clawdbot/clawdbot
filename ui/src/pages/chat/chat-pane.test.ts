@@ -511,10 +511,16 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     pane.sessionKey = "main";
     state.sessionKey = canonicalSessionKey;
+    state.settings = {
+      sessionKey: canonicalSessionKey,
+      lastActiveSessionKey: canonicalSessionKey,
+    } as ChatPageHost["settings"];
     state.hello = hello;
     state.loadAssistantIdentity = vi.fn(async () => {});
     pane.connectedClient = null;
     pane.onPaneSessionChange = navigate;
+    pane.active = true;
+    pane.presented = true;
 
     pane.applyGatewaySnapshot(snapshot);
 

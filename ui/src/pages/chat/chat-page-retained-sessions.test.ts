@@ -57,7 +57,7 @@ function setNavigationContext(page: ChatPage) {
     chatAttachmentHandoff,
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { chatAttachmentHandoff, navigate, patch };
+  return { chatAttachmentHandoff, navigate, patch, replace };
 }
 
 function stubMatchMedia() {
@@ -154,7 +154,10 @@ describe("chat page retained sessions", () => {
 
       document.body.append(page);
       await page.updateComplete;
-      const pane = expectDefined(page.querySelector<RenderedPane>("openclaw-chat-pane"));
+      const pane = expectDefined(
+        page.querySelector<RenderedPane>("openclaw-chat-pane"),
+        "retained chat pane",
+      );
       expect(pane.focusComposer).toBe(true);
 
       const combobox = document.createElement("div");
@@ -213,6 +216,25 @@ describe("chat page retained sessions", () => {
 
     page.remove();
     expect(navigation.chatAttachmentHandoff.clearPane).not.toHaveBeenCalled();
+  });
+
+  it("rejects a pane callback while a newer browser route is loading", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
+    const previousHref = window.location.href;
+
+    try {
+      history.pushState(null, "", "/chat/main?catalog=pi&host=node&thread=next");
+
+      expect(pane?.onPaneSessionChange?.("p1", "agent:main:main", { replace: true })).toBe(false);
+      expect(navigation.replace).not.toHaveBeenCalled();
+    } finally {
+      history.replaceState(null, "", previousHref);
+    }
   });
 
   it("presents a retained sidebar destination before route data resolves", async () => {

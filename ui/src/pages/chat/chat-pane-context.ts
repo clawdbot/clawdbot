@@ -282,7 +282,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (
       routeSessionKey &&
       canonicalRouteSessionKey &&
-      canonicalRouteSessionKey !== routeSessionKey
+      canonicalRouteSessionKey !== routeSessionKey &&
+      this.active &&
+      this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();

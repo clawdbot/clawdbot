@@ -150,6 +150,7 @@ describe("chat pane retained presentation lifecycle", () => {
 
     pane.presented = false;
     pane.presented = true;
+    Object.defineProperty(pane, "active", { configurable: true, value: true });
     await Promise.resolve();
 
     expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog");

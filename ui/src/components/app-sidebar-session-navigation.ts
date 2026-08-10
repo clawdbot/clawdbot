@@ -173,7 +173,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ];
     for (const row of liveRows) {
       if (adopted.has(row.key) && !byKey.has(row.key)) {
-        byKey.set(row.key, this.projectSidebarSession(row));
+        byKey.set(row.key, this.getSessionNavigationState().toSidebarSession(row));
       }
     }
     return [...byKey.values()];
@@ -253,10 +253,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   protected hideEmptyCreatorFilteredGroup(category: string | undefined, rowCount: number): boolean {
     return this.sessionCreatorFilterActive && Boolean(category) && rowCount === 0;
-  }
-
-  protected projectSidebarSession(row: GatewaySessionRow): SidebarRecentSession {
-    return this.getSessionNavigationState().toSidebarSession(row);
   }
 
   public getRouteSessionKey(): string {

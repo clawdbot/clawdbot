@@ -76,8 +76,8 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
         scopeKey,
         attachments: [...attachments],
         fallbacks: Object.fromEntries(
-          fallbackEntries.map(([key, fallback]) => [
-            key,
+          fallbackEntries.map(([fallbackKey, fallback]) => [
+            fallbackKey,
             { ...fallback, attachments: [...fallback.attachments] },
           ]),
         ),
