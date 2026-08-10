@@ -81,7 +81,26 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
   return Boolean(search && typeof search === "object" && search.enabled === false);
 }
 
-/** Creates the `web_search` tool, or `null` when web search is disabled by config. */
+/**
+ * Session `toolOverrides.webSearch` is tri-state:
+ * - `false` always suppresses the managed tool
+ * - `true` enables it even when `tools.web.search.enabled` is false
+ * - omitted follows the global/runtime config gate
+ */
+function isWebSearchToolSuppressed(params: {
+  enabled?: boolean;
+  config?: OpenClawConfig;
+}): boolean {
+  if (params.enabled === false) {
+    return true;
+  }
+  if (params.enabled === true) {
+    return false;
+  }
+  return isWebSearchDisabled(params.config);
+}
+
+/** Creates the `web_search` tool, or `null` when web search is disabled. */
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   enabled?: boolean;
@@ -90,7 +109,7 @@ export function createWebSearchTool(options?: {
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
 }): AnyAgentTool | null {
-  if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
+  if (isWebSearchToolSuppressed({ enabled: options?.enabled, config: options?.config })) {
     return null;
   }
 
@@ -111,7 +130,7 @@ export function createWebSearchTool(options?: {
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
           runtimeWebSearch: options?.runtimeWebSearch,
         });
-      if (isWebSearchDisabled(config)) {
+      if (isWebSearchToolSuppressed({ enabled: options?.enabled, config })) {
         throw new Error("web_search is disabled.");
       }
       if (providerSelectionId) {

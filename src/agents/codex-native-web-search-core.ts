@@ -121,8 +121,11 @@ export function resolveCodexNativeSearchActivation(params: {
   senderE164?: string | null;
   agentDir?: string;
 }): CodexNativeSearchActivation {
+  // Session enable (`webSearchEnabled: true`) must win over a global
+  // tools.web.search.enabled=false, matching Control UI session overrides.
   const globalWebSearchEnabled =
-    params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false;
+    params.webSearchEnabled === true ||
+    (params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false);
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
   const hasRequiredAuth =

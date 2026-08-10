@@ -116,6 +116,27 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.inactiveReason).toBe("globally_disabled");
   });
 
+  it("reactivates native search when the session enables search against a global disable", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              openaiCodex: { enabled: true, mode: "live" },
+            },
+          },
+        },
+      },
+      webSearchEnabled: true,
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+    });
+
+    expect(result.globalWebSearchEnabled).toBe(true);
+    expect(result.state).toBe("native_active");
+  });
+
   it("keeps native injection disabled when the session disables web search", () => {
     const result = resolveCodexNativeSearchActivation({
       config: baseConfig,

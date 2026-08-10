@@ -177,6 +177,21 @@ describe("web_search late-bound runtime fallback", () => {
     expect(mocks.runWebSearch).not.toHaveBeenCalled();
   });
 
+  it("keeps session enable overrides above a late-bound global disable", async () => {
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
+      config: { tools: { web: { search: { enabled: false, provider: "brave" } } } },
+    });
+    const tool = createWebSearchTool({
+      enabled: true,
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      lateBindRuntimeConfig: true,
+    });
+
+    await tool?.execute("call-search", { query: "openclaw" }, undefined);
+
+    expect(mocks.runWebSearch).toHaveBeenCalledOnce();
+  });
+
   it("returns typed unavailability for only the isolated search provider", async () => {
     setActiveDegradedSecretOwners([
       {

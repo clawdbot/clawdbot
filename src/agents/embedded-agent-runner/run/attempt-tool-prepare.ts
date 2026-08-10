@@ -256,7 +256,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
-          webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+          // Preserve tri-state: true must remain distinguishable from omitted so
+          // createWebSearchTool can honor session enable against a global disable.
+          webSearchEnabled: attempt.toolOverrides?.webSearch,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,

@@ -20,6 +20,31 @@ describe("web_search tool schema", () => {
     expect(createWebSearchTool({ enabled: false })).toBeNull();
   });
 
+  it("omits the managed tool when global search is disabled and no session override is set", () => {
+    expect(
+      createWebSearchTool({
+        config: { tools: { web: { search: { enabled: false } } } },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the managed tool when the session enables search against a global disable", () => {
+    const tool = createWebSearchTool({
+      enabled: true,
+      config: { tools: { web: { search: { enabled: false } } } },
+    });
+    expect(tool?.name).toBe("web_search");
+  });
+
+  it("omits the managed tool when the session disables search even if global search is on", () => {
+    expect(
+      createWebSearchTool({
+        enabled: false,
+        config: { tools: { web: { search: { enabled: true } } } },
+      }),
+    ).toBeNull();
+  });
+
   it("marks query as required for model tool-call schemas", () => {
     const tool = createWebSearchTool();
     const parameters = tool?.parameters as { required?: unknown } | undefined;
