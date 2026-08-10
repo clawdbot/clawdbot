@@ -241,9 +241,16 @@ function acquireOpenClawStateWriteAccess(options: {
     );
     return access;
   } catch (operationError) {
+    let releaseFailed = false;
+    let releaseError: unknown;
     try {
       access.release();
-    } catch (releaseError) {
+    } catch (error) {
+      releaseFailed = true;
+      releaseError = error;
+    }
+    if (releaseFailed) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains the release failure in its error list and the primary failure as its third-argument cause.
       throw new AggregateError(
         [operationError, releaseError],
         "state ownership inspection and coordinator release both failed",

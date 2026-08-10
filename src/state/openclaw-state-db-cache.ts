@@ -1,0 +1,167 @@
+import path from "node:path";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  registerNodeSqliteKyselyQueryErrorHandler,
+} from "../infra/kysely-sync.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+
+const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+
+export type OpenClawStateDatabaseCloseResult = {
+  caught: boolean;
+  errors: unknown[];
+};
+
+/** Close both physical-handle owners while retaining every cleanup failure. */
+export function closeOpenClawStateDatabaseHandle(
+  database: OpenClawStateDatabase,
+): OpenClawStateDatabaseCloseResult {
+  let caught = false;
+  const errors: unknown[] = [];
+  try {
+    database.walMaintenance.close();
+  } catch (error) {
+    caught = true;
+    errors.push(error);
+  }
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  try {
+    if (database.db.isOpen) {
+      database.db.close();
+    }
+  } catch (error) {
+    caught = true;
+    errors.push(error);
+  }
+  return { caught, errors };
+}
+
+export function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
+  if (cachedDatabases.get(database.path) !== database) {
+    return false;
+  }
+  // Remove ownership before cleanup. A poisoned native handle can reject close,
+  // but it must never remain discoverable as the process-wide shared handle.
+  cachedDatabases.delete(database.path);
+  // Eviction is best-effort; the triggering database error remains authoritative.
+  closeOpenClawStateDatabaseHandle(database);
+  return true;
+}
+
+/** Evict an exact cached shared-state owner after a proven corruption read. */
+export function evictOpenClawStateDatabaseAfterCorruption(
+  database: OpenClawStateDatabase,
+  error: unknown,
+): boolean {
+  return isSqliteCorruptionError(error) && evictCachedOpenClawStateDatabase(database);
+}
+
+const terminalOpenLatch = createSqliteTerminalOpenLatch({
+  closeByPath: (pathname) => {
+    const cached = cachedDatabases.get(pathname);
+    if (cached) {
+      evictCachedOpenClawStateDatabase(cached);
+    }
+  },
+});
+
+/** Publish a fully opened handle and bind query corruption to its exact cache owner. */
+export function publishOpenClawStateDatabase(
+  database: OpenClawStateDatabase,
+): OpenClawStateDatabase {
+  const { db, path: pathname } = database;
+  cachedDatabases.set(pathname, database);
+  registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
+    // Write transactions own rollback and evict at their outer boundary.
+    if (!db.isTransaction && isSqliteCorruptionError(error)) {
+      evictCachedOpenClawStateDatabase(database);
+    }
+  });
+  terminalOpenLatch.clear(pathname);
+  return database;
+}
+
+export function getCachedOpenClawStateDatabase(
+  pathname: string,
+): OpenClawStateDatabase | undefined {
+  return cachedDatabases.get(path.resolve(pathname));
+}
+
+export function getOpenClawStateDatabaseIfOpenAtPath(
+  pathname: string,
+): OpenClawStateDatabase | undefined {
+  const cached = getCachedOpenClawStateDatabase(pathname);
+  return cached?.db.isOpen ? cached : undefined;
+}
+
+/** Remove a closed cached owner while fresh-open access is held. */
+export function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase): void {
+  if (cachedDatabases.get(database.path) !== database) {
+    return;
+  }
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  cachedDatabases.delete(database.path);
+}
+
+/** Latch background verification damage so later opens fail without rescanning. */
+export function recordOpenClawStateDatabaseOpenFailure(
+  pathname: string,
+  error: Error,
+  generation?: SqliteFileGeneration,
+): boolean {
+  return terminalOpenLatch.record(pathname, error, generation);
+}
+
+/** Clear a terminal open failure after doctor rewrites the database file. */
+export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
+  terminalOpenLatch.clear(pathname);
+}
+
+/** Reject shared-state access after a process-local terminal failure. */
+export function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
+}
+
+/** Close one cached shared state database handle by exact pathname. */
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  database.walMaintenance.close();
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(resolvedPath);
+  return true;
+}
+
+/** Close all cached shared state database handles. */
+export function closeOpenClawStateDatabase(): void {
+  for (const database of cachedDatabases.values()) {
+    database.walMaintenance.close();
+    if (database.db.isOpen) {
+      database.db.close();
+    }
+  }
+  cachedDatabases.clear();
+}
+
+/** Test whether any cached shared state database handle is still open. */
+export function isOpenClawStateDatabaseOpen(): boolean {
+  return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
+}
+
+/** Close shared state handles and clear terminal failure latches for test isolation. */
+export function closeOpenClawStateDatabaseForTest(): void {
+  closeOpenClawStateDatabase();
+  terminalOpenLatch.clearAll();
+}

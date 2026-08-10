@@ -7,10 +7,8 @@ import {
   enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -24,7 +22,6 @@ import {
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
-import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   isSqliteCorruptionError,
   runSqliteImmediateTransactionSync,
@@ -44,6 +41,17 @@ import {
   readOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
+import {
+  assertOpenClawStateDatabaseOpenAllowed,
+  clearOpenClawStateDatabaseOpenFailure,
+  closeOpenClawStateDatabaseHandle,
+  closeStaleCachedOpenClawStateDatabase,
+  evictCachedOpenClawStateDatabase,
+  getCachedOpenClawStateDatabase,
+  getOpenClawStateDatabaseIfOpenAtPath,
+  publishOpenClawStateDatabase,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -99,55 +107,15 @@ export {
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-repair.js";
 export { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-state-db-startup-checkpoint.js";
-
-/**
- * Shared OpenClaw SQLite state database lifecycle and metadata writers.
- *
- * This module owns schema creation, additive migrations for released state
- * tables, private file permissions, cached handles, and audit rows for
- * migrations/backups that operate on local state.
- */
-const cachedDatabases = new Map<string, OpenClawStateDatabase>();
-
-function closeOpenClawStateDatabaseHandle(database: OpenClawStateDatabase): unknown[] {
-  const errors: unknown[] = [];
-  try {
-    database.walMaintenance.close();
-  } catch (error) {
-    errors.push(error);
-  }
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
-  try {
-    if (database.db.isOpen) {
-      database.db.close();
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-  return errors;
-}
-
-function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
-  if (cachedDatabases.get(database.path) !== database) {
-    return false;
-  }
-  // Remove ownership before cleanup. A poisoned native handle can reject close,
-  // but it must never remain discoverable as the process-wide shared handle.
-  cachedDatabases.delete(database.path);
-  // Eviction is best-effort; the triggering database error remains authoritative.
-  closeOpenClawStateDatabaseHandle(database);
-  return true;
-}
-
-const terminalOpenLatch = createSqliteTerminalOpenLatch({
-  closeByPath: (pathname) => {
-    const cached = cachedDatabases.get(pathname);
-    if (!cached) {
-      return;
-    }
-    evictCachedOpenClawStateDatabase(cached);
-  },
-});
+export {
+  clearOpenClawStateDatabaseOpenFailure,
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseForTest,
+  evictOpenClawStateDatabaseAfterCorruption,
+  isOpenClawStateDatabaseOpen,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "./openclaw-state-db-cache.js";
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
 export function confirmOpenClawStateDatabaseIntegrity(
@@ -158,34 +126,11 @@ export function confirmOpenClawStateDatabaseIntegrity(
   return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }
 
-/** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawStateDatabaseOpenFailure(
-  pathname: string,
-  error: Error,
-  generation?: SqliteFileGeneration,
-): boolean {
-  return terminalOpenLatch.record(pathname, error, generation);
-}
-
-/** Clear a terminal open failure after doctor rewrites the database file. */
-export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
-  terminalOpenLatch.clear(pathname);
-}
-
-/** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(options: OpenClawStateDatabaseOptions = {}): void {
-  const pathname = resolveDatabasePath(options);
-  const terminalFailure = terminalOpenLatch.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
-}
-
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
 export function assertOpenClawStateDatabaseFreshOpenAllowed(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  assertOpenClawStateDatabaseOpenAllowed(options);
+  assertOpenClawStateDatabaseOpenAllowed(resolveDatabasePath(options));
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   let quarantineFailure: Error | undefined;
@@ -627,19 +572,6 @@ function openUnpublishedOpenClawStateDatabase(
   return { db, path: pathname, walMaintenance };
 }
 
-function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
-  const { db, path: pathname } = database;
-  cachedDatabases.set(pathname, database);
-  registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
-    // Write transactions own rollback and evict at their outer boundary.
-    if (!db.isTransaction && isSqliteCorruptionError(error)) {
-      evictCachedOpenClawStateDatabase(database);
-    }
-  });
-  terminalOpenLatch.clear(pathname);
-  return database;
-}
-
 /** Open or return a cached shared state database after schema and migration checks. */
 
 export function openOpenClawStateDatabase(
@@ -657,8 +589,8 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
   // every open fails fast here until doctor repairs the file and clears it.
-  assertOpenClawStateDatabaseOpenAllowed(options);
-  const cached = cachedDatabases.get(pathname);
+  assertOpenClawStateDatabaseOpenAllowed(pathname);
+  const cached = getCachedOpenClawStateDatabase(pathname);
   if (cached?.db.isOpen) {
     assertOpenClawStateWriteAllowed({ database: cached.db, databasePath: pathname, env });
     return cached;
@@ -672,9 +604,7 @@ export function openOpenClawStateDatabase(
       () => {
         if (cached) {
           // A closed handle can leave Kysely and WAL helpers cached; clear both under access.
-          cached.walMaintenance.close();
-          clearNodeSqliteKyselyCacheForDatabase(cached.db);
-          cachedDatabases.delete(pathname);
+          closeStaleCachedOpenClawStateDatabase(cached);
         }
         return (unpublished = openUnpublishedOpenClawStateDatabase(pathname, env));
       },
@@ -683,10 +613,11 @@ export function openOpenClawStateDatabase(
     if (!unpublished) {
       throw error;
     }
-    const cleanupErrors = closeOpenClawStateDatabaseHandle(unpublished);
-    if (cleanupErrors.length > 0) {
+    const cleanup = closeOpenClawStateDatabaseHandle(unpublished);
+    if (cleanup.caught) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains every cleanup failure in its error list and the primary failure as its third-argument cause.
       throw new AggregateError(
-        [error, ...cleanupErrors],
+        [error, ...cleanup.errors],
         `Fresh OpenClaw state database open failed releasing access and closing its unpublished handle for ${pathname}.`,
         { cause: error },
       );
@@ -758,51 +689,5 @@ export function runOpenClawStateWriteTransaction<T>(
 export function getOpenClawStateDatabaseIfOpen(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase | undefined {
-  const cached = cachedDatabases.get(resolveDatabasePath(options));
-  return cached?.db.isOpen ? cached : undefined;
-}
-
-/** Evict an exact cached shared-state owner after a proven corruption read. */
-export function evictOpenClawStateDatabaseAfterCorruption(
-  database: OpenClawStateDatabase,
-  error: unknown,
-): boolean {
-  return isSqliteCorruptionError(error) && evictCachedOpenClawStateDatabase(database);
-}
-
-/** Close one cached shared state database handle by exact pathname. */
-export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
-  const resolvedPath = path.resolve(pathname);
-  const database = cachedDatabases.get(resolvedPath);
-  if (!database) {
-    return false;
-  }
-  database.walMaintenance.close();
-  if (database.db.isOpen) {
-    database.db.close();
-  }
-  cachedDatabases.delete(resolvedPath);
-  return true;
-}
-
-/** Close all cached shared state database handles. */
-export function closeOpenClawStateDatabase(): void {
-  for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close();
-    if (database.db.isOpen) {
-      database.db.close();
-    }
-  }
-  cachedDatabases.clear();
-}
-
-/** Test whether any cached shared state database handle is still open. */
-export function isOpenClawStateDatabaseOpen(): boolean {
-  return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
-}
-
-/** Close shared state handles and clear terminal failure latches for test isolation. */
-export function closeOpenClawStateDatabaseForTest(): void {
-  closeOpenClawStateDatabase();
-  terminalOpenLatch.clearAll();
+  return getOpenClawStateDatabaseIfOpenAtPath(resolveDatabasePath(options));
 }
