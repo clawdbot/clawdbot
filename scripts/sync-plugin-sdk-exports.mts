@@ -56,27 +56,30 @@ function syncRootPackageExports() {
 // package-name resolution inside the monorepo. Every export key must have a src
 // facade file (its runtime `default` target) and name a canonical SDK entrypoint;
 // dangling keys typecheck via prebuilt dist d.ts but fail on runtime resolution.
-function syncFacadePackageExports() {
-  const facadePackageDir = path.join(repoRoot, "packages", "plugin-sdk");
+// Validation runs before any manifest write so an invalid facade cannot leave a
+// partially rewritten export map behind a zero exit status.
+function collectFacadeSubpaths(): string[] | null {
   const facadeSubpaths = fs
-    .readdirSync(path.join(facadePackageDir, "src"))
+    .readdirSync(path.join(repoRoot, "packages", "plugin-sdk", "src"))
     .filter((file) => file.endsWith(".ts"))
     .map((file) => file.slice(0, -".ts".length))
     .toSorted();
   const entrypointSet = new Set(pluginSdkEntrypoints);
   const staleFacades = facadeSubpaths.filter((subpath) => !entrypointSet.has(subpath));
-  if (staleFacades.length > 0) {
-    for (const subpath of staleFacades) {
-      console.error(
-        `packages/plugin-sdk/src/${subpath}.ts does not match any plugin SDK entrypoint. ` +
-          "Delete the facade or add the entrypoint to scripts/lib/plugin-sdk-entrypoints.json.",
-      );
-    }
-    failed = true;
-    return;
+  if (staleFacades.length === 0) {
+    return facadeSubpaths;
   }
+  for (const subpath of staleFacades) {
+    console.error(
+      `packages/plugin-sdk/src/${subpath}.ts does not match any plugin SDK entrypoint. ` +
+        "Delete the facade or add the entrypoint to scripts/lib/plugin-sdk-entrypoints.json.",
+    );
+  }
+  return null;
+}
 
-  const facadePackageJsonPath = path.join(facadePackageDir, "package.json");
+function syncFacadePackageExports(facadeSubpaths: string[]) {
+  const facadePackageJsonPath = path.join(repoRoot, "packages", "plugin-sdk", "package.json");
   const facadePackageJson: Record<string, unknown> & { exports?: Record<string, unknown> } =
     JSON.parse(fs.readFileSync(facadePackageJsonPath, "utf8"));
   const nextExports = Object.fromEntries(
@@ -116,11 +119,15 @@ function syncFacadePackageExports() {
   );
 }
 
+const facadeSubpaths = collectFacadeSubpaths();
+if (facadeSubpaths === null) {
+  process.exit(1);
+}
 syncRootPackageExports();
-syncFacadePackageExports();
+syncFacadePackageExports(facadeSubpaths);
+if (failed) {
+  process.exit(1);
+}
 if (checkOnly) {
-  if (failed) {
-    process.exit(1);
-  }
   console.log("plugin-sdk exports synced.");
 }
