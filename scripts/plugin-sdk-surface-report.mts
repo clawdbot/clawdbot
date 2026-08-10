@@ -315,7 +315,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the unused WhatsApp-specific ack policy helper.
       // -10: collapse inbound-dispatch callable aliases and wrappers.
       // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
-      2922,
+      // -3: keep the generic plugin-command reply carrier opaque and non-callable.
+      2919,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
