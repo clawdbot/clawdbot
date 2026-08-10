@@ -5,12 +5,12 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   deriveContinuationDelegateChildRunId,
   deriveContinuationDelegateChildSessionKey,
-} from "./subagent-continuation-ids.js";
+} from "../../subagent-continuation-ids.js";
+import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
+import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
