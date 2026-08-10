@@ -6,17 +6,42 @@ import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyFailoverSignal } from "./classify.js";
 
-const providerRuntimeMocks = vi.hoisted(() => ({
-  classifyProviderFailoverSignalWithPlugin: vi.fn(),
-}));
+const providerRuntimeMocks = vi.hoisted(() => {
+  const runtime = { classifyProviderFailoverSignalWithPlugin: vi.fn() };
+  return { ...runtime, requireProviderRuntime: vi.fn(() => runtime) };
+});
 
 vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
+  resolveNodeRequireFromMeta: () => providerRuntimeMocks.requireProviderRuntime,
 }));
 
 describe("provider failover hook structured signals", () => {
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
+    providerRuntimeMocks.requireProviderRuntime.mockClear();
+  });
+
+  it("does not resolve provider runtime for a generic non-context error", () => {
+    expect(
+      classifyFailoverSignal({ provider: "demo-provider", message: "429 too many requests" }),
+    ).toEqual({ kind: "reason", reason: "rate_limit" });
+    expect(providerRuntimeMocks.requireProviderRuntime).not.toHaveBeenCalled();
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("resolves provider runtime for a context-shaped message", () => {
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(
+      "context_overflow",
+    );
+
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        message: "input exceeds the maximum context window",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(providerRuntimeMocks.requireProviderRuntime).toHaveBeenCalledTimes(1);
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
   });
 
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
@@ -113,26 +138,14 @@ describe("provider failover hook structured signals", () => {
     });
   });
 
-  it("passes a message-inferred HTTP status to the single provider consultation", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue("billing");
-
+  it("does not promote a message-inferred HTTP status to a structured consultation", () => {
     expect(
       classifyFailoverSignal({
         provider: "demo-provider",
         message: "403 concurrency limit breached",
       }),
-    ).toEqual({ kind: "reason", reason: "billing" });
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledWith({
-      provider: "demo-provider",
-      context: {
-        provider: "demo-provider",
-        status: 403,
-        code: undefined,
-        errorType: undefined,
-        errorMessage: "403 concurrency limit breached",
-      },
-    });
+    ).toEqual({ kind: "reason", reason: "auth" });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
   it("passes nested provider error types through failover error normalization", () => {

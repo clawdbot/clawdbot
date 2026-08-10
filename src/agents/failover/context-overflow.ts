@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isBillingErrorMessage, isRateLimitErrorMessage } from "./message-patterns.js";
 import {
   classifyProviderPluginError,
+  looksLikeProviderContextOverflowCandidate,
   matchesLegacyProviderContextOverflow,
 } from "./provider-patterns.js";
 
@@ -87,7 +88,8 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
   return (
-    classifyProviderPluginError({ errorMessage }) === "context_overflow" ||
+    (looksLikeProviderContextOverflowCandidate(errorMessage) &&
+      classifyProviderPluginError({ errorMessage }) === "context_overflow") ||
     isContextOverflowErrorFromTables(errorMessage)
   );
 }

@@ -50,6 +50,7 @@ import {
 import {
   classifyLegacyProviderSpecificError,
   classifyProviderPluginError,
+  looksLikeProviderContextOverflowCandidate,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 export {
@@ -299,16 +300,34 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
-  // Consult the provider plugin once with the fullest signal first. Legacy
-  // provider fallbacks run next, then generic tables classify what remains.
+  const messageClassification = signal.message
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
+    : null;
+  const detailClassification = classifyFailoverDetailCandidates(signal.details, signal.provider);
+  const messageOrDetailClassification = mergeMessageAndDetailClassification(
+    messageClassification,
+    detailClassification,
+  );
+  const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  // Pure table matches are also the cheap runtime-load gate. Structured,
+  // context-shaped, and otherwise-unclassified signals still consult the
+  // provider once; its result remains authoritative over the prepared tables.
   const hasProviderHookSignal = Boolean(
     signal.message || signal.code || signal.errorType || typeof inferredStatus === "number",
   );
-  const providerPluginReason = hasProviderHookSignal
+  const hasStructuredDescriptor =
+    explicitStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;
+  const hasContextCandidate = Boolean(
+    signal.message && looksLikeProviderContextOverflowCandidate(signal.message),
+  );
+  const shouldConsultProviderPlugin =
+    hasProviderHookSignal &&
+    (hasStructuredDescriptor || hasContextCandidate || !messageClassification);
+  const providerPluginReason = shouldConsultProviderPlugin
     ? classifyProviderPluginError({
         errorMessage: signal.message ?? "",
         provider: signal.provider,
-        status: explicitStatus ?? inferredStatus,
+        status: explicitStatus,
         code: signal.code,
         errorType: signal.errorType,
       })
@@ -325,15 +344,6 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   ) {
     return toReasonClassification("timeout");
   }
-  const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
-    : null;
-  const detailClassification = classifyFailoverDetailCandidates(signal.details, signal.provider);
-  const messageOrDetailClassification = mergeMessageAndDetailClassification(
-    messageClassification,
-    detailClassification,
-  );
-  const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
   const effectiveMessageClassification = providerPluginReason

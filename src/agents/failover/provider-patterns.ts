@@ -1,4 +1,5 @@
 import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
+import { isRateLimitErrorMessage } from "./message-patterns.js";
 import type { FailoverReason } from "./signal.js";
 type ProviderErrorPattern = {
   /** Regex to match against the raw error message. */
@@ -89,8 +90,9 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   return cachedProviderRuntimeHooks ?? null;
 }
 
-function looksLikeProviderContextOverflowCandidate(errorMessage: string): boolean {
+export function looksLikeProviderContextOverflowCandidate(errorMessage: string): boolean {
   return (
+    !isRateLimitErrorMessage(errorMessage) &&
     PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE.test(errorMessage) &&
     PROVIDER_CONTEXT_OVERFLOW_ACTION_RE.test(errorMessage)
   );
