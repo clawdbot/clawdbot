@@ -61,9 +61,9 @@ export const SETTINGS_SEARCH_TARGETS = {
   },
   secrets: {
     routeId: "secrets",
-    labelKey: "secretsStore.teamTitle",
+    labelKey: "tabs.secrets",
     hash: "",
-    searchKeys: ["secretsStore.bulkHint"],
+    searchKeys: [],
     aliases: "env credentials tokens team store",
   },
   system: {

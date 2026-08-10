@@ -249,11 +249,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
     return nothing;
   }
   return html`
-    <openclaw-modal-dialog
-      label=${t("secretsStore.bulkAdd")}
-      description=${t("secretsStore.bulkHint")}
-      @modal-cancel=${props.onCloseBulk}
-    >
+    <openclaw-modal-dialog label=${t("secretsStore.bulkAdd")} @modal-cancel=${props.onCloseBulk}>
       <form
         class="secrets-store-dialog"
         aria-busy=${props.busy ? "true" : "false"}
@@ -264,14 +260,12 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
       >
         <div class="secrets-store-dialog__header">
           <h2>${t("secretsStore.bulkAdd")}</h2>
-          <p>${t("secretsStore.bulkHint")}</p>
         </div>
         <label class="secrets-store-field">
           <span>${t("secretsStore.bulkValues")}</span>
           <textarea
             class="settings-input secrets-store-dialog__bulk"
             name="bulk-values"
-            placeholder=${t("secretsStore.bulkPlaceholder")}
             autocomplete="off"
             spellcheck="false"
             autofocus
@@ -298,7 +292,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
         </label>
         ${props.bulkInvalidNames.length
           ? html`<div class="callout danger" role="alert">
-              ${t("secretsStore.invalidNames", { names: props.bulkInvalidNames.join(", ") })}
+              ${t("secretsStore.invalidName")} ${props.bulkInvalidNames.join(", ")}
             </div>`
           : nothing}
         ${props.formError
@@ -366,7 +360,7 @@ export function renderSecretsStore(props: SecretsStoreViewProps): TemplateResult
           : nothing}
         ${renderSettingsSection(
           {
-            title: t("secretsStore.teamTitle"),
+            title: t("tabs.secrets"),
             actions,
             count: props.entries.length,
           },

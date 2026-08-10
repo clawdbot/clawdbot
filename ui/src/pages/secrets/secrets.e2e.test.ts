@@ -118,7 +118,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        await page.getByRole("heading", { name: "Team secrets" }).waitFor();
+        await page.getByRole("heading", { name: "Secrets" }).waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
@@ -140,7 +140,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
         const bulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
         await bulkDialog
-          .getByLabel("Assignments", { exact: true })
+          .getByRole("textbox", { name: "Assignments", exact: true })
           .fill('BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test');
         await bulkDialog.getByText("1 secrets detected").waitFor();
         await capture(page, "03-bulk-add-dialog.png");

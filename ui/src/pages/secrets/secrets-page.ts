@@ -186,10 +186,7 @@ class SecretsPage extends OpenClawLightDomElement {
       this.dialogMode = null;
       this.formError = null;
       this.notice = result.warningCount
-        ? t("secretsStore.savedWithWarnings", {
-            name: draft.name,
-            count: String(result.warningCount),
-          })
+        ? `${t("secretsStore.saved", { name: draft.name })} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
         : t("secretsStore.saved", { name: draft.name });
     });
   }
@@ -222,9 +219,7 @@ class SecretsPage extends OpenClawLightDomElement {
     }
     const parsed = this.bulkParsed;
     if (parsed.invalidNames.length > 0) {
-      this.formError = t("secretsStore.invalidNames", {
-        names: parsed.invalidNames.join(", "),
-      });
+      this.formError = `${t("secretsStore.invalidName")} ${parsed.invalidNames.join(", ")}`;
       return;
     }
     if (parsed.entries.length === 0) {
@@ -235,7 +230,7 @@ class SecretsPage extends OpenClawLightDomElement {
       (entry) => new TextEncoder().encode(entry.value).byteLength > MAX_VALUE_BYTES,
     );
     if (oversized) {
-      this.formError = t("secretsStore.bulkValueTooLarge", { name: oversized.name });
+      this.formError = `${oversized.name}: ${t("secretsStore.valueTooLarge")}`;
       return;
     }
     void this.runStoreTask(async (store) => {
@@ -250,10 +245,7 @@ class SecretsPage extends OpenClawLightDomElement {
       this.bulkOpen = false;
       this.formError = null;
       this.notice = result.warningCount
-        ? t("secretsStore.bulkSavedWithWarnings", {
-            count: String(result.saved),
-            warnings: String(result.warningCount),
-          })
+        ? `${t("secretsStore.bulkSaved", { count: String(result.saved) })} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
         : t("secretsStore.bulkSaved", { count: String(result.saved) });
     });
   }

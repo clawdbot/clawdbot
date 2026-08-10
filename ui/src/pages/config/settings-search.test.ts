@@ -144,7 +144,7 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
-      expect.objectContaining({ routeId: "secrets", label: "Team secrets" }),
+      expect.objectContaining({ routeId: "secrets", label: "Secrets" }),
       expect.objectContaining({
         routeId: "advanced",
         search: "?section=secrets&advanced=1",
@@ -312,7 +312,7 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
-      expect.objectContaining({ routeId: "secrets", label: "Team secrets", hash: "" }),
+      expect.objectContaining({ routeId: "secrets", label: "Secrets", hash: "" }),
     ]);
   });
 
