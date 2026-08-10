@@ -1253,7 +1253,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run parity lane
         id: run_lane
@@ -1434,7 +1434,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Generate parity report
         id: generate_report
@@ -1517,7 +1517,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run runtime-pair lane
         id: candidate_runtime_pair
@@ -2127,7 +2127,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run Discord live lane
         id: run_lane
@@ -2226,7 +2226,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run WhatsApp live lane
         id: run_lane
@@ -2322,7 +2322,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run Slack live lane
         id: run_lane

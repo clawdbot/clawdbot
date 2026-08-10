@@ -32,12 +32,17 @@ import {
   type PreparedModelRuntimeReplacementGateId,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
+import {
+  notifyPreparedModelRuntimePublication,
+  resetPreparedModelRuntimePublicationListenersForTest,
+} from "./prepared-model-runtime.publication-events.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
 } from "./prepared-model-runtime.owner.js";
 export type { PreparedModelRuntimeReplacementGateId } from "./prepared-model-runtime.owner.js";
+export { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 export type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLease,
@@ -65,34 +70,12 @@ let refreshRequestEpoch = 0;
 let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 type AuthMutationEvent = { agentDir?: string; affectsInheritedStores: boolean };
 const pendingAuthMutations: AuthMutationEvent[] = [];
-type PreparedModelRuntimePublicationEvent =
-  | { phase: "invalidated" | "published" }
-  | { phase: "failed"; error: Error };
-const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
 
 const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
-
-/** Observes committed prepared model/auth generations without starting discovery. */
-export function registerPreparedModelRuntimePublicationListener(
-  listener: (event: PreparedModelRuntimePublicationEvent) => void,
-): () => void {
-  publicationListeners.add(listener);
-  return () => publicationListeners.delete(listener);
-}
-
-function notifyPreparedModelRuntimePublication(event: PreparedModelRuntimePublicationEvent): void {
-  for (const listener of publicationListeners) {
-    try {
-      listener(event);
-    } catch (error) {
-      log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
-    }
-  }
-}
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -500,6 +483,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
+    owner.pluginGeneration = undefined;
   }
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   if (!pendingModelRuntimeReplacement) {
@@ -647,6 +631,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           owner.pending = undefined;
           owner.needsRefresh = true;
           owner.refreshError = refreshError;
+          owner.pluginGeneration = undefined;
         }
       }
       if (
@@ -698,6 +683,7 @@ async function drainPendingAuthMutations(): Promise<void> {
       owners,
       agentBuildCompletions,
       buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+      reusePluginGenerations: true,
     });
   }
 }
@@ -763,7 +749,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   refreshRequestEpoch = 0;
   pendingAuthMutations.length = 0;
   replyDispatchPublication.clear();
-  publicationListeners.clear();
+  resetPreparedModelRuntimePublicationListenersForTest();
   modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 }
 

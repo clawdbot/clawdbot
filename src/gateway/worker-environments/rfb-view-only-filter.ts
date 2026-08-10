@@ -44,7 +44,8 @@ export function createRfbClientMessageFilter() {
       case 5:
         return 6;
       case 6:
-        return pending.length < 8 ? 8 : 8 + pending.readUInt32BE(4);
+        // noVNC marks extended clipboard payloads with a negative signed length.
+        return pending.length < 8 ? 8 : 8 + Math.abs(pending.readInt32BE(4));
       case 150:
         return 10;
       case 248:

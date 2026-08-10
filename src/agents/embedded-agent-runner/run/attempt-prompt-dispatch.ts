@@ -1,9 +1,11 @@
 /** Runs prompt-local image preparation, observability, preflight, and provider dispatch. */
-import type { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-execution-prepare.js";
-import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
+import type { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
 import { prepareEmbeddedAttemptPromptPreflight } from "./attempt-prompt-preflight.js";
-import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import {
+  prepareEmbeddedAttemptPromptExecution,
+  submitEmbeddedAttemptPrompt,
+} from "./attempt-prompt-submit.js";
+import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptContext = ReturnType<typeof prepareEmbeddedAttemptPromptContext>;

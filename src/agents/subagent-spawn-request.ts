@@ -19,9 +19,9 @@ import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-pla
 import { loadSubagentConfig } from "./subagent-spawn-session-patch.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
-import { validateStructuredOutputSchema } from "./swarm-output-schema.js";
-import { reserveSwarmRun } from "./swarm-scheduler.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import { validateStructuredOutputSchema } from "./subagents/swarm/swarm-output-schema.js";
+import { reserveSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 
 type ResolvedSubagentSpawnRequest = {
   request: {

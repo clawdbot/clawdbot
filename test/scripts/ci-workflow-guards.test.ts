@@ -3510,6 +3510,11 @@ NODE
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-sqlite-session-schema-baseline",
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
@@ -3795,6 +3800,25 @@ NODE
     expect(runStep.run).toContain("session-accessor-boundary)");
     expect(runStep.run).toContain(
       'run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary',
+    );
+  });
+
+  it("runs the export name collision ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("export-name-collisions)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions',
     );
   });
 
@@ -5655,6 +5679,37 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("uses candidate-owned script interfaces for frozen target CI", () => {
+    const workflow = readCiWorkflow();
+    const buildChecks = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Run built artifact checks",
+    );
+    const qaBuild = workflow.jobs["qa-smoke-ci-profile"].steps.find(
+      (step: WorkflowStep) => step.name === "Build QA smoke runtime",
+    );
+    const additionalChecks = workflow.jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+
+    expect(buildChecks.run).toContain("pnpm test:gateway:watch-regression -- --skip-build");
+    expect(buildChecks.run).not.toContain("scripts/check-gateway-watch-regression.mts");
+    expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(2);
+    expect(qaBuild.run).toContain('package_script="scripts/package-openclaw-for-docker.mts"');
+    expect(qaBuild.run).toContain('package_script="scripts/package-openclaw-for-docker.mjs"');
+    expect(additionalChecks.run).toContain(
+      "boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)",
+    );
+    expect(additionalChecks.run).toContain(
+      "boundary_runner=(node scripts/run-additional-boundary-checks.mjs)",
+    );
+    expect(additionalChecks.run).not.toContain(
+      "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
+    );
+    expect(additionalChecks.run).not.toContain(
+      "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
+    );
+  });
+
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -6665,25 +6720,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    const publicRuntimeBuild = smokeBuildStep.run.indexOf(
-      "node --import tsx scripts/build-all.mts qaRuntime",
-    );
+    const publicRuntimeBuild = smokeBuildStep.run.indexOf("pnpm build qaRuntime");
     const uiBuild = smokeBuildStep.run.indexOf("pnpm ui:build");
     const packageBuild = smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs");
     const privateRuntimeBuild = smokeBuildStep.run.lastIndexOf(
-      "node --import tsx scripts/build-all.mts qaRuntime",
+      "OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime",
     );
-    expect(smokeBuildStep.run).toContain("node --import tsx scripts/build-all.mts qaRuntime");
+    expect(smokeBuildStep.run).toContain("pnpm build qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env).not.toHaveProperty("OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("unset OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("--skip-build");
-    expect(smokeBuildStep.run).toContain(
-      "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime",
-    );
-    expect(
-      smokeBuildStep.run.match(/node --import tsx scripts\/build-all\.mts qaRuntime/g),
-    ).toHaveLength(2);
+    expect(smokeBuildStep.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime");
+    expect(smokeBuildStep.run.match(/pnpm build qaRuntime/g)).toHaveLength(2);
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');

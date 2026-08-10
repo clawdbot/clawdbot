@@ -635,7 +635,7 @@
   background: transparent;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-tool-card__detail-link:hover,
@@ -818,7 +818,7 @@
   background: transparent;
   border: 0;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font: inherit;
   font-size: 11px;
   padding: 2px 4px;
@@ -1966,7 +1966,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
   text-underline-offset: 2px;

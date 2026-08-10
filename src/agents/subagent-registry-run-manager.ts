@@ -69,8 +69,8 @@ import {
   getSubagentSessionStartedAt,
 } from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
-import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
-import { isSwarmRunQueued, removeQueuedSwarmRun } from "./swarm-scheduler.js";
+import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
+import { isSwarmRunQueued, removeQueuedSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = isFastTestRuntimeEnv() ? 25 : 5_000;

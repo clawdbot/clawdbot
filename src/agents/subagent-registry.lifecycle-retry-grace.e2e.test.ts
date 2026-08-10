@@ -10,7 +10,10 @@ import {
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
-import { testing as settleWakeTesting } from "./subagent-announce.requester-settle-wake.js";
+import {
+  maybeWakeRequesterAfterAllChildrenSettled,
+  testing as settleWakeTesting,
+} from "./subagent-announce.requester-settle-wake.js";
 import * as announceRead from "./subagent-registry-announce-read.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
@@ -373,6 +376,17 @@ describe("subagent registry lifecycle error grace", () => {
       .filter((request): request is GatewayRequest => request.method === "agent");
   }
 
+  function getRequesterWakeCalls() {
+    return getAgentCalls().filter((request) => {
+      const idempotencyKey = (request.params as Record<string, unknown> | undefined)
+        ?.idempotencyKey;
+      return (
+        typeof idempotencyKey === "string" &&
+        idempotencyKey.startsWith("announce:requester-settle:")
+      );
+    });
+  }
+
   function getAgentResultsForChildSession(childSessionKey: string): string[] {
     return getAgentCalls()
       .filter((request) => {
@@ -495,16 +509,7 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(0);
     await flushAsync();
 
-    const requesterWakeCalls = () =>
-      getAgentCalls().filter((request) => {
-        const idempotencyKey = (request.params as Record<string, unknown> | undefined)
-          ?.idempotencyKey;
-        return (
-          typeof idempotencyKey === "string" &&
-          idempotencyKey.startsWith("announce:requester-settle:")
-        );
-      });
-    expect(requesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
     expect(
       ["run-yield-alpha", "run-yield-beta"].map((runId) => findTaskByRunId(runId)?.deliveryStatus),
     ).toEqual(["delivered", "delivered"]);
@@ -533,15 +538,16 @@ describe("subagent registry lifecycle error grace", () => {
         rearmGeneration: undefined,
       },
     ]);
-    expect(requesterWakeCalls()).toHaveLength(1);
+    await waitForAgentCallCount(3);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
 
     agentCallGates.delete(betaSessionKey);
     releaseBetaDelivery?.();
     await waitForDeliveredCleanup("run-yield-alpha");
     await waitForDeliveredCleanup("run-yield-beta");
 
-    expect(requesterWakeCalls()).toHaveLength(1);
-    const requesterWakeParams = requesterWakeCalls()[0]?.params as
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    const requesterWakeParams = getRequesterWakeCalls()[0]?.params as
       | Record<string, unknown>
       | undefined;
     expect(requesterWakeParams?.idempotencyKey).toContain(":yield-1");
@@ -555,7 +561,66 @@ describe("subagent registry lifecycle error grace", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
-    expect(requesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+  });
+
+  it("keeps a frozen live child asleep until its real registry row becomes terminal", async () => {
+    const requesterTurnRunId = "run-requester-live-child";
+    const liveChildSessionKey = "agent:main:subagent:frozen-live-child";
+    registerCompletionRun(
+      "run-frozen-live-child",
+      "frozen-live-child",
+      "live child",
+      requesterTurnRunId,
+    );
+    setAssistantOutput(liveChildSessionKey, "live child complete");
+
+    expect(
+      mod.markRequesterTurnYielded({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+      }),
+    ).toBe(1);
+    expect(
+      mod.settleRequesterAfterSessionSpawns({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [
+          { runId: "run-frozen-live-child", childSessionKey: liveChildSessionKey },
+        ],
+      }),
+    ).toBe(true);
+
+    const liveChild = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((run) => run.runId === "run-frozen-live-child");
+    if (!liveChild) {
+      throw new Error("expected frozen live child");
+    }
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        settledEntry: liveChild,
+        transitionBatch: noop,
+        completeBatch: () => true,
+      }),
+    ).toBe(false);
+    await flushAsync();
+
+    expect(getRequesterWakeCalls()).toHaveLength(0);
+    expect(liveChild.execution.status).toBe("running");
+
+    emitLifecycleEvent("run-frozen-live-child", { phase: "end", endedAt: Date.now() + 1 });
+    await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup("run-frozen-live-child");
+
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((run) => run.runId === "run-frozen-live-child")?.execution,
+    ).toMatchObject({ status: "terminal", endedAt: expect.any(Number) });
+    expect(getRequesterWakeCalls()).toHaveLength(1);
   });
 
   it("blocks the native Task and mirrored Flow when a yielded requester cannot settle", async () => {

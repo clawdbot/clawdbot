@@ -36,8 +36,11 @@ describe("prepared model runtime snapshots", () => {
     const build = startSerializedSnapshotBuild(input, new Map(), 1_000, "static");
 
     await expect(build.pending).resolves.toMatchObject({
-      agentDir: input.agentDir,
-      config: input.config,
+      snapshot: {
+        agentDir: input.agentDir,
+        config: input.config,
+      },
+      pluginGeneration: expect.any(Object),
     });
     await expect(build.completion).resolves.toBeUndefined();
   });

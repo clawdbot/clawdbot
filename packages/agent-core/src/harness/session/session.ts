@@ -106,24 +106,19 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       }
     }
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
-    const resetKeptEntries =
-      boundary.type === "reset"
-        ? new Set(selectResetKeptEntries(pathEntries.slice(0, boundaryIdx)))
-        : undefined;
+    const firstKeptIdx = pathEntries.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+    const keptEntries =
+      firstKeptIdx >= 0 && firstKeptIdx < boundaryIdx
+        ? pathEntries.slice(firstKeptIdx, boundaryIdx)
+        : [];
+    const replayEntries =
+      boundary.type === "reset" ? selectResetKeptEntries(keptEntries) : keptEntries;
     // Both retained-tail forms follow rewritten prefixes, so prefix-bound checkpoints are stale.
-    let foundFirstKept = false;
-    for (const entry of pathEntries.slice(0, boundaryIdx)) {
-      if (entry.id === boundary.firstKeptEntryId) {
-        foundFirstKept = true;
-      }
-      if (foundFirstKept) {
-        if (boundary.type === "reset") {
-          if (resetKeptEntries?.has(entry)) {
-            appendResetKeptMessage(messages, entry);
-          }
-        } else {
-          appendContextMessage(messages, entry, { prefixWasRewritten: true });
-        }
+    for (const entry of replayEntries) {
+      if (boundary.type === "reset") {
+        appendResetKeptMessage(messages, entry);
+      } else {
+        appendContextMessage(messages, entry, { prefixWasRewritten: true });
       }
     }
     for (const entry of pathEntries.slice(boundaryIdx + 1)) {

@@ -464,6 +464,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
           true,
       taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
+      taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
+      onCopyTaskSuggestionPrompt: (suggestion) => void this.copyTaskSuggestionPrompt(suggestion),
       onAcceptTaskSuggestion: (suggestion, mode, cloudProfileId) =>
         void this.acceptTaskSuggestion(suggestion, mode, cloudProfileId),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),

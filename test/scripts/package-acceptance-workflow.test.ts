@@ -1768,7 +1768,7 @@ describe("package acceptance workflow", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
     expectTextToIncludeAll(buildPrivateQa.run, [
-      "node --import tsx scripts/build-all.mts qaRuntime",
+      "pnpm build qaRuntime",
       "test -f dist/plugin-sdk/qa-runtime.js",
       "test -f dist/extensions/qa-lab/runtime-api.js",
     ]);
@@ -1809,6 +1809,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")');
     expect(releaseChecksWorkflow).toContain(
       'codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"',
+    );
+    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(6);
+    expect(releaseChecksWorkflow).not.toContain(
+      "node --import tsx scripts/build-all.mts qaRuntime",
     );
     expect(releaseChecksWorkflow).toContain(
       "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",

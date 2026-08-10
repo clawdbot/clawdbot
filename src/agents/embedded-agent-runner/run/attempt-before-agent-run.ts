@@ -5,7 +5,6 @@ import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
-import { cloneHookMessages } from "./attempt-hook-messages.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -91,7 +90,8 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
       {
         prompt: input.modelPrompt,
         systemPrompt: input.systemPrompt,
-        messages: cloneHookMessages(input.hookMessages),
+        /** Gives hooks an isolated message snapshot they cannot mutate in-session. */
+        messages: input.hookMessages.map((message) => structuredClone(message)),
         channelId: input.hookContext.channelId,
         accountId: input.attempt.agentAccountId ?? undefined,
         senderId: input.attempt.senderId ?? undefined,

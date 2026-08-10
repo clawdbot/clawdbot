@@ -1240,7 +1240,7 @@ describe("google-meet plugin", () => {
     await transcriptionHandle.stop();
   });
 
-  it("declares advanced config metadata in the plugin entry and manifest", () => {
+  it("keeps advanced config metadata manifest-owned", () => {
     const manifest = JSON.parse(
       readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as {
@@ -1248,11 +1248,9 @@ describe("google-meet plugin", () => {
       configSchema?: GoogleMeetManifestConfigSchema;
     };
     const configSchema = requireGoogleMeetManifestConfigSchema(manifest);
-    const entry = plugin as unknown as {
-      configSchema: {
-        uiHints?: Record<string, unknown>;
-      };
-    };
+    const entry = plugin as unknown as { configSchema: Record<string, unknown> };
+
+    expect(entry.configSchema).not.toHaveProperty("uiHints");
 
     for (const key of [
       "chrome.audioBufferBytes",
@@ -1263,7 +1261,6 @@ describe("google-meet plugin", () => {
       "voiceCall.dtmfDelayMs",
       "voiceCall.postDtmfSpeechDelayMs",
     ]) {
-      expect(entry.configSchema.uiHints?.[key]).toHaveProperty("advanced", true);
       expect(manifest.uiHints?.[key]).toHaveProperty("advanced", true);
     }
     const chromeProperties = configSchema.properties?.chrome?.properties;

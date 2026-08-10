@@ -11,6 +11,7 @@ import {
   type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
@@ -30,6 +31,7 @@ import {
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
+import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -695,6 +697,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
           return false;
         }
+        const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
         const event: SessionTypingEvent = {
           sessionKey: target.canonicalKey,
           sessionId: current.entry.sessionId,
@@ -704,7 +707,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {
-          sessionKeys: [...sessionKeys].toSorted(),
+          sessionKeys: subscriptionKeys(current.canonicalKey, current.agentId, defaultAgentId),
           agentId: target.agentId,
           dropIfSlow: true,
         });

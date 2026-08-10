@@ -278,6 +278,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   let settledBatch: SubagentRunRecord[];
   if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
+    // Retired rows no longer own completion, but every surviving frozen member
+    // must be terminal before this batch can wake its requester.
     settledBatch = frozenBatchRunIds
       .map((runId) => runsById.get(runId))
       .filter(
@@ -285,9 +287,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
           Boolean(entry?.requesterSettleWake) &&
           entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
       );
+    if (
+      settledBatch.some(
+        (entry) => entry.execution.status === "running" || !hasSubagentRunEnded(entry),
+      )
+    ) {
+      return false;
+    }
   } else {
     settledBatch = buildConnectedSettledWave(
-      requesterRuns.filter((entry) => entry.requesterSettleWake && hasSubagentRunEnded(entry)),
+      requesterRuns.filter(
+        (entry) =>
+          entry.requesterSettleWake &&
+          entry.execution.status !== "running" &&
+          hasSubagentRunEnded(entry),
+      ),
       currentSettledEntry,
     );
   }
