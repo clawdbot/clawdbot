@@ -1,3 +1,4 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provider-auth.js";
@@ -68,7 +69,7 @@ function resolveModelRuntimeAgentIdsFromChangedPaths(
     if (!match) {
       return undefined;
     }
-    agentIds.add(match[1]!);
+    agentIds.add(normalizeAgentId(match[1]!));
   }
   return agentIds.size > 0 ? agentIds : undefined;
 }

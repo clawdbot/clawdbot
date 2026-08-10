@@ -1211,6 +1211,20 @@ describe("gateway hot reload model state", () => {
     });
   });
 
+  it("normalizes mixed-case agent entry keys when scoping the refresh", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan(["agents.entries.Alpha.model"]), nextConfig);
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      agentIds: new Set(["alpha"]),
+    });
+  });
+
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
     const newCron = {
