@@ -6761,6 +6761,22 @@ describe("update-cli", () => {
     expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
   });
 
+  it("rejects a managed handoff launched from a different canonical install root", async () => {
+    const sentinel = await runControlPlaneUpdate({
+      meta: {
+        root: path.join(process.cwd(), "other-checkout"),
+        handoffId: "wrong-root-handoff",
+      },
+      options: { yes: true, json: true },
+    });
+
+    expect(sentinel).toBeNull();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getErrorOutput()).toContain("Managed update handoff root mismatch");
+  });
+
   it("does not write a control-plane sentinel when a dry-run preflight fails", async () => {
     const sentinel = await runControlPlaneUpdate({
       meta: {

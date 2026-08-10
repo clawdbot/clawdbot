@@ -65,6 +65,13 @@ async function startHandoffAndReadCommand(params: {
   const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
     commandArgv?: string[];
   };
+  const metaPath = path.join(path.dirname(paramsPath), "sentinel-meta.json");
+  const metaFile = JSON.parse(await fs.readFile(metaPath, "utf-8")) as {
+    meta?: { root?: string };
+  };
+  expect(metaFile.meta?.root).toBe(
+    await fs.realpath("/tmp/openclaw").catch(() => path.resolve("/tmp/openclaw")),
+  );
   return { command: result.command, commandArgv: helperParams.commandArgv };
 }
 
