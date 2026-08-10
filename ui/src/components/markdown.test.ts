@@ -887,6 +887,58 @@ PY
     });
   });
 
+  describe("github link marks", () => {
+    it.each([
+      [
+        "bare autolink",
+        "https://github.com/openclaw/openclaw/pull/3434",
+        "https://github.com/openclaw/openclaw/pull/3434",
+      ],
+      ["issue shorthand", "[#3434](https://github.com/openclaw/openclaw/pull/3434)", "#3434"],
+      ["labelled link", "[the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
+      ["www host", "[the fix](https://www.github.com/openclaw/openclaw/pull/3434)", "the fix"],
+      ["http scheme", "[the fix](http://github.com/openclaw/openclaw/pull/3434)", "the fix"],
+      ["list item", "- [the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
+    ])("marks %s", (_kind, input, expectedText) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.classList.contains("markdown-github-link")).toBe(true);
+      // The mark is CSS-only: the anchor keeps its authored text so copied text
+      // and screen-reader output stay unchanged.
+      expect(link?.textContent).toBe(expectedText);
+    });
+
+    it.each([
+      ["non-github host", "[docs](https://example.com/openclaw)"],
+      ["lookalike host", "[docs](https://notgithub.com/openclaw)"],
+      ["github in query", "[docs](https://example.com/?to=https://github.com/openclaw)"],
+      ["subdomain host", "[pages](https://openclaw.github.io/openclaw)"],
+      ["image-only link", "[![build](data:image/png;base64,x)](https://github.com/openclaw)"],
+    ])("leaves %s unmarked", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      expect(fragment.querySelector("a.markdown-github-link")).toBeNull();
+    });
+
+    it("leaves github urls inside code untouched", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "`https://github.com/openclaw/openclaw`\n\n```\nhttps://github.com/openclaw/openclaw\n```",
+        ),
+      );
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelector(".markdown-github-link")).toBeNull();
+    });
+
+    it("keeps the hover preview target intact on marked links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[#3434](https://github.com/openclaw/openclaw/pull/3434)"),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
+      expect(link?.getAttribute("href")).toBe("https://github.com/openclaw/openclaw/pull/3434");
+      expect(link?.getAttribute("target")).toBe("_blank");
+    });
+  });
+
   describe("security", () => {
     it("blocks javascript: in links via DOMPurify", () => {
       const html = toSanitizedMarkdownHtml("[click me](javascript:alert(1))");
