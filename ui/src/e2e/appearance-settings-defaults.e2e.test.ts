@@ -540,7 +540,10 @@ suite.define(() => {
       await expect
         .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
+      await viewItem.hover();
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
@@ -567,6 +570,7 @@ suite.define(() => {
       await expect
         .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      await viewItem.hover();
       await expect
         .poll(() =>
           viewMenu
