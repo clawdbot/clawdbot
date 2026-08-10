@@ -83,7 +83,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
       "approve",
       expect.objectContaining({
         client: teamClient,
-        enterpriseEventScope: {
+        eventScope: {
           apiAppId: "A123",
           enterpriseId: "E123",
           teamId: "T123",
@@ -139,7 +139,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
       "channel:D123",
       "approve",
       expect.objectContaining({
-        enterpriseEventScope: expect.objectContaining({ teamId: "T123" }),
+        eventScope: expect.objectContaining({ teamId: "T123" }),
       }),
     );
   });

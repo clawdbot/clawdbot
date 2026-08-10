@@ -526,7 +526,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
         client,
-        ...(enterpriseEventScope ? { enterpriseEventScope } : {}),
+        ...(enterpriseEventScope ? { eventScope: enterpriseEventScope } : {}),
       });
       return {
         channelId: message.channelId,
