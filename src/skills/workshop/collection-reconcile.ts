@@ -143,10 +143,6 @@ export async function reconcileSkillCollection(params: {
         MAX_RECONCILED_SKILL_BYTES,
       );
       if (plan.every((entry) => entry.action === "keep")) {
-        clearCuratedSkillLifecycle(
-          current.map((skill) => skill.filePath),
-          params.env ? { env: params.env } : {},
-        );
         const backupRoot = collectionBackupRoot(workspaceDir, params.env);
         let backupId = await latestCommittedBackupId(backupRoot);
         if (!backupId) {
@@ -159,6 +155,10 @@ export async function reconcileSkillCollection(params: {
           await commitCollectionBackup(workspaceDir, backup);
           backupId = backup.manifest.id;
         }
+        clearCuratedSkillLifecycle(
+          current.map((skill) => skill.filePath),
+          params.env ? { env: params.env } : {},
+        );
         return {
           result: {
             backupId,
@@ -206,10 +206,6 @@ export async function reconcileSkillCollection(params: {
           const skill = currentByName.get(entry.name)!;
           await removeSkillDirectory(workspaceDir, skill.baseDir);
         }
-        clearCuratedSkillLifecycle(
-          current.map((skill) => skill.filePath),
-          params.env ? { env: params.env } : {},
-        );
         await commitCollectionBackup(workspaceDir, backup);
       } catch (error) {
         try {
@@ -234,6 +230,10 @@ export async function reconcileSkillCollection(params: {
         }
         throw error;
       }
+      clearCuratedSkillLifecycle(
+        current.map((skill) => skill.filePath),
+        params.env ? { env: params.env } : {},
+      );
       await pruneOlderBackups(backup.backupRoot, backup.manifest.id);
       bumpSkillsSnapshotVersion({ reason: "workshop" });
       const changes: SkillCollectionChange[] = [];

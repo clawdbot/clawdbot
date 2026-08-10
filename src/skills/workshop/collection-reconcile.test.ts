@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -14,6 +15,7 @@ import {
   reconcileSkillCollection,
   restoreLatestSkillCollectionBackup,
 } from "./collection-reconcile.js";
+import { getArchivedSkillFiles } from "./curator.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 
 const dispatchCommittedSkillChangeBestEffort = vi.hoisted(() =>
@@ -309,6 +311,48 @@ describe("skill collection reconciliation", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "large-0", "SKILL.md"), "utf8"),
     ).resolves.not.toContain("x".repeat(100));
+  });
+
+  it("preserves archived lifecycle state when backup commit fails", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "archived", description: "Archived procedure", body: "# Original\n" },
+    ]);
+    const skillFile = path.join(workspaceDir, "skills", "archived", "SKILL.md");
+    openOpenClawStateDatabase({ env: testState.env })
+      .db.prepare(
+        `INSERT INTO skill_lifecycle (
+          skill_file, skill_key, skill_name, state, pinned,
+          state_changed_at_ms, created_at_ms, archived_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(skillFile, "archived", "Archived", "archived", 0, 10, 1, "unused");
+    const rename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (String(oldPath).includes(`${path.sep}.pending-`)) {
+        throw new Error("forced backup commit failure");
+      }
+      await rename(oldPath, newPath);
+    });
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        readSkillHashes: await readCollectionHashes(),
+        plan: [
+          {
+            action: "write",
+            name: "archived",
+            description: "Rewritten archived procedure",
+            content: "# Rewritten\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("forced backup commit failure");
+    renameSpy.mockRestore();
+
+    expect(getArchivedSkillFiles({ env: testState.env })).toEqual(new Set([skillFile]));
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
   });
 });
 
