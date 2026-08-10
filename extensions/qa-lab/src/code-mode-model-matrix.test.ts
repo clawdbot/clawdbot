@@ -28,6 +28,14 @@ describe("Code Mode model matrix options", () => {
     });
   });
 
+  it("accepts the pnpm option separator", () => {
+    expect(
+      parseCodeModeMatrixOptions(["--", "--model", "ollama/qwen3.5:9b"], "/repo"),
+    ).toMatchObject({
+      models: ["ollama/qwen3.5:9b"],
+    });
+  });
+
   it("rejects ambiguous selectors and output paths", () => {
     expect(() => parseCodeModeMatrixOptions([])).toThrow("At least one --model");
     expect(() => parseCodeModeMatrixOptions(["--model", "qwen3.5:9b"])).toThrow("provider/model");
@@ -608,7 +616,11 @@ describe("Code Mode model matrix artifacts", () => {
       expect(lines).toHaveLength(2);
       expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
         failureCategory: "harness_error",
-        error: { kind: "harness_error", message: "fixture exploded" },
+        error: {
+          kind: "harness_error",
+          message: "fixture exploded",
+          phase: "infrastructure",
+        },
       });
       const evidence = validateQaEvidenceSummaryJson(
         JSON.parse(await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8")),

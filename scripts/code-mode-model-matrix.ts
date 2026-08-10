@@ -45,7 +45,7 @@ export type CodeModeMatrixOptions = {
   timeoutSeconds: number;
 };
 
-type MatrixCell = {
+export type MatrixCell = {
   id: string;
   mode: CodeModeMatrixMode;
   model: string;
@@ -53,13 +53,13 @@ type MatrixCell = {
   task: CodeModeMatrixTask;
 };
 
-type MatrixTaskFixture = {
+export type MatrixTaskFixture = {
   expected: string;
   prompt: string;
   resultPath?: string;
 };
 
-type MatrixRuntimeEntrypoint = {
+export type MatrixRuntimeEntrypoint = {
   args: string[];
   cwd: string;
 };
@@ -113,11 +113,12 @@ export type CodeModeMatrixCellResult = {
   usage?: AgentExecEnvelope["usage"];
 };
 
-type RunCellParams = {
+export type RunCellParams = {
   buildSha256: string;
   cell: MatrixCell;
   gitSha: string;
   keepState: boolean;
+  localModelLean?: boolean;
   outputDir: string;
   repoRoot: string;
   runtime?: MatrixRuntimeEntrypoint;
@@ -136,7 +137,7 @@ type MatrixRunDependencies = {
   runCell?: (params: RunCellParams) => Promise<CodeModeMatrixCellResult>;
 };
 
-type SourceIdentity = {
+export type SourceIdentity = {
   gitSha: string;
   sourceDirty: boolean;
   sourcePatchSha256: string | null;
@@ -229,6 +230,9 @@ export function parseCodeModeMatrixOptions(
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--" && index === 0) {
+      continue;
+    }
     if (arg === "--model") {
       const value = readOptionValue(argv, index, arg).trim();
       if (!value.includes("/")) {
@@ -584,7 +588,7 @@ async function readGitSha(repoRoot: string): Promise<string> {
   return stdout.trim();
 }
 
-async function readSourceIdentity(repoRoot: string): Promise<SourceIdentity> {
+export async function readCodeModeMatrixSourceIdentity(repoRoot: string): Promise<SourceIdentity> {
   const gitSha = await readGitSha(repoRoot);
   const [{ stdout: patch }, { stdout: untrackedOutput }] = await Promise.all([
     execFileAsync("git", ["diff", "--binary", "HEAD", "--", "."], {
@@ -645,7 +649,7 @@ async function hashDirectory(root: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function hashRuntimeArtifacts(repoRoot: string): Promise<string> {
+export async function hashCodeModeMatrixRuntimeArtifacts(repoRoot: string): Promise<string> {
   const artifacts = [{ label: "dist", root: path.join(repoRoot, "dist") }];
   const packagesRoot = path.join(repoRoot, "packages");
   const packageEntries = await fs.readdir(packagesRoot, { withFileTypes: true });
@@ -667,7 +671,7 @@ async function hashRuntimeArtifacts(repoRoot: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function buildMatrixCliArtifacts(repoRoot: string): Promise<void> {
+export async function buildCodeModeMatrixCliArtifacts(repoRoot: string): Promise<void> {
   for (const args of [
     ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
     ["scripts/tsdown-build.mjs", "--no-clean"],
@@ -848,7 +852,7 @@ async function cloneTreeWithHardlinks(source: string, destination: string): Prom
   }
 }
 
-async function prepareRuntimeEntrypoint(
+export async function prepareCodeModeMatrixRuntimeEntrypoint(
   repoRoot: string,
   runtimeRoot: string,
 ): Promise<MatrixRuntimeEntrypoint> {
@@ -950,7 +954,7 @@ async function executeAgentExec(params: {
     params.matrix.cell.model,
     "--code-mode",
     params.matrix.cell.mode,
-    "--local-model-lean",
+    ...(params.matrix.localModelLean === false ? [] : ["--local-model-lean"]),
     "--thinking",
     params.matrix.thinking,
     "--timeout",
@@ -1014,6 +1018,71 @@ async function executeAgentExec(params: {
       };
     }
     throw error;
+  }
+}
+
+export async function runCodeModeMatrixFrontierCell(params: {
+  cell: MatrixCell;
+  fixture: MatrixTaskFixture;
+  outputDir: string;
+  repoRoot: string;
+  runtime: MatrixRuntimeEntrypoint;
+  thinking: string;
+  timeoutSeconds: number;
+}): Promise<{
+  effectPassed: boolean;
+  envelope: AgentExecEnvelope;
+  stdoutContractValid: boolean;
+}> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-frontier-"));
+  const stateDir = path.join(root, "state");
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(
+    path.join(workspace, "facts.txt"),
+    `project=openclaw\nverification_code=${params.fixture.expected}\n`,
+    "utf8",
+  );
+  if (params.fixture.resultPath) {
+    await fs.rm(path.join(workspace, params.fixture.resultPath), { force: true });
+  }
+  try {
+    const fixture = {
+      ...params.fixture,
+      ...(params.fixture.resultPath
+        ? { resultPath: path.join(workspace, params.fixture.resultPath) }
+        : {}),
+    };
+    const command = await executeAgentExec({
+      fixture,
+      matrix: {
+        buildSha256: "",
+        cell: params.cell,
+        gitSha: "",
+        keepState: false,
+        localModelLean: false,
+        outputDir: params.outputDir,
+        repoRoot: params.repoRoot,
+        runtime: params.runtime,
+        sourceDirty: false,
+        sourcePatchSha256: null,
+        thinking: params.thinking,
+        timeoutSeconds: params.timeoutSeconds,
+      },
+      stateDir,
+      workspace,
+    });
+    const effectPassed = fixture.resultPath
+      ? (await fs.readFile(fixture.resultPath, "utf8").catch(() => "")).trim() === fixture.expected
+      : true;
+    return {
+      effectPassed,
+      envelope: command.envelope,
+      stdoutContractValid: command.stdoutContractValid,
+    };
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
   }
 }
 
@@ -1295,11 +1364,11 @@ export async function runCodeModeModelMatrix(
           sourceDirty: false,
           sourcePatchSha256: null,
         }
-      : await readSourceIdentity(options.repoRoot);
+      : await readCodeModeMatrixSourceIdentity(options.repoRoot);
   const cells = buildCells(options);
   await assertOutputOutsideGitMetadata(options.repoRoot, outputDir);
   if (!options.dryRun) {
-    await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
+    await (deps.buildCliArtifacts ?? buildCodeModeMatrixCliArtifacts)(options.repoRoot);
   }
   // Build first so its output set is complete, then reserve evidence storage
   // before hashing. Dry runs also write evidence, so every run needs isolation.
@@ -1307,7 +1376,7 @@ export async function runCodeModeModelMatrix(
   await reserveCodeModeMatrixOutputDir(options.repoRoot, outputDir);
   const buildSha256 = options.dryRun
     ? null
-    : await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(options.repoRoot);
+    : await (deps.readBuildSha256 ?? hashCodeModeMatrixRuntimeArtifacts)(options.repoRoot);
   const manifest = {
     schemaVersion: MATRIX_SCHEMA_VERSION,
     generatedAt: now.toISOString(),
@@ -1343,7 +1412,7 @@ export async function runCodeModeModelMatrix(
     : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-runtime-"));
   try {
     const runtime = runtimeRoot
-      ? await prepareRuntimeEntrypoint(options.repoRoot, runtimeRoot)
+      ? await prepareCodeModeMatrixRuntimeEntrypoint(options.repoRoot, runtimeRoot)
       : undefined;
     const results: CodeModeMatrixCellResult[] = [];
     const resultsPath = path.join(outputDir, "results.jsonl");
