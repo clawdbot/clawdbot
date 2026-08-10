@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import {
@@ -42,6 +42,7 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
+import { parseCliProfileArgs } from "./profile.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
@@ -614,6 +615,7 @@ describe("plugins cli install", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (ORIGINAL_OPENCLAW_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -2483,7 +2485,39 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().mode).toBe("update");
   });
 
-  it("suggests update or --force when npm plugin install target already exists", async () => {
+  it.each([
+    {
+      context: "the default profile",
+      profile: undefined,
+      container: undefined,
+      expectedUpdateCommand: "openclaw plugins update <id-or-npm-spec>",
+    },
+    {
+      context: "a named profile",
+      profile: "work",
+      container: undefined,
+      expectedUpdateCommand: "openclaw --profile work plugins update <id-or-npm-spec>",
+    },
+    {
+      context: "a selected container",
+      profile: undefined,
+      container: "demo",
+      expectedUpdateCommand: "openclaw --container demo plugins update <id-or-npm-spec>",
+    },
+  ])("suggests update or --force for an existing npm plugin in $context", async (context) => {
+    const parsedArgs = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      ...(context.profile ? ["--profile", context.profile] : []),
+      "plugins",
+      "install",
+      "@example/lossless-claw",
+    ]);
+    if (!parsedArgs.ok) {
+      throw new Error(parsedArgs.error);
+    }
+    vi.stubEnv("OPENCLAW_PROFILE", parsedArgs.profile ?? "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", context.container ?? "");
     loadConfig.mockReturnValue({} as OpenClawConfig);
     mockClawHubPackageNotFound("@example/lossless-claw");
     installPluginFromNpmSpec.mockResolvedValue({
@@ -2496,12 +2530,12 @@ describe("plugins cli install", () => {
       error: "package.json missing openclaw.hooks",
     });
 
-    await expect(
-      runAcknowledgedPluginsInstallCommand(["plugins", "install", "@example/lossless-claw"]),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runAcknowledgedPluginsInstallCommand(parsedArgs.argv.slice(2))).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(runtimeErrors.at(-1)).toContain(
-      "Use `openclaw plugins update <id-or-npm-spec>` to upgrade the tracked plugin, or rerun install with `--force` to replace it.",
+      `Use \`${context.expectedUpdateCommand}\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`,
     );
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });

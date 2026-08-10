@@ -28,6 +28,7 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
+import { parseCliProfileArgs } from "./profile.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -246,6 +247,7 @@ describe("plugins cli update", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     restoreTty();
     if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
       delete process.env.OPENCLAW_NIX_MODE;
@@ -340,6 +342,54 @@ describe("plugins cli update", () => {
     );
 
     expect(runtimeErrors.at(-1)).toContain(`No tracked plugin or hook pack found for "${id}".`);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      context: "the default profile",
+      profile: undefined,
+      container: undefined,
+      expectedPluginsCommand: "openclaw plugins list",
+      expectedHooksCommand: "openclaw hooks list",
+    },
+    {
+      context: "a named profile",
+      profile: "work",
+      container: undefined,
+      expectedPluginsCommand: "openclaw --profile work plugins list",
+      expectedHooksCommand: "openclaw --profile work hooks list",
+    },
+    {
+      context: "a selected container",
+      profile: undefined,
+      container: "demo",
+      expectedPluginsCommand: "openclaw --container demo plugins list",
+      expectedHooksCommand: "openclaw --container demo hooks list",
+    },
+  ])("preserves $context in missing update-target recovery commands", async (context) => {
+    const parsedArgs = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      ...(context.profile ? ["--profile", context.profile] : []),
+      "plugins",
+      "update",
+      "missing-plugin",
+    ]);
+    if (!parsedArgs.ok) {
+      throw new Error(parsedArgs.error);
+    }
+    vi.stubEnv("OPENCLAW_PROFILE", parsedArgs.profile ?? "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", context.container ?? "");
+    primeUpdateConfigSnapshot({ config: {} as OpenClawConfig });
+
+    await expect(runPluginsCommand(parsedArgs.argv.slice(2))).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      `Run "${context.expectedPluginsCommand}" or "${context.expectedHooksCommand}" to inspect installed packages.`,
+    );
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();

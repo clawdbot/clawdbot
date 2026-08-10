@@ -571,12 +571,47 @@ describe("formatCliCommand", () => {
     ).toBe("openclaw --container demo doctor");
   });
 
-  it("does not prepend --container for update commands", () => {
-    expect(formatCliCommand("openclaw update", { OPENCLAW_CONTAINER_HINT: "demo" })).toBe(
-      "openclaw update",
-    );
-    expect(
-      formatCliCommand("pnpm openclaw update --channel beta", { OPENCLAW_CONTAINER_HINT: "demo" }),
-    ).toBe("pnpm openclaw update --channel beta");
+  it.each([
+    "openclaw update",
+    "pnpm openclaw update --channel beta",
+    "openclaw --no-color update",
+    "openclaw --log-level debug update",
+    "openclaw --log-level=debug update",
+    "openclaw --profile work update",
+    "openclaw --profile=work update",
+    "openclaw --update",
+    "openclaw --no-color --update",
+    "openclaw --log-level debug --update",
+  ])("does not prepend --container for the root updater: %s", (command) => {
+    expect(formatCliCommand(command, { OPENCLAW_CONTAINER_HINT: "demo" })).toBe(command);
+  });
+
+  it.each([
+    {
+      command: "openclaw plugins update demo",
+      expected: "openclaw --container demo plugins update demo",
+    },
+    {
+      command: "openclaw plugins update --all",
+      expected: "openclaw --container demo plugins update --all",
+    },
+    {
+      command: "pnpm openclaw plugins update demo",
+      expected: "pnpm openclaw --container demo plugins update demo",
+    },
+    {
+      command: "openclaw --no-color plugins update demo",
+      expected: "openclaw --container demo --no-color plugins update demo",
+    },
+    {
+      command: "openclaw config set update.channel stable",
+      expected: "openclaw --container demo config set update.channel stable",
+    },
+    {
+      command: "openclaw plugins update --update",
+      expected: "openclaw --container demo plugins update --update",
+    },
+  ])("preserves --container for non-root update command $command", ({ command, expected }) => {
+    expect(formatCliCommand(command, { OPENCLAW_CONTAINER_HINT: "demo" })).toBe(expected);
   });
 });
