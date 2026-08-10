@@ -63,6 +63,9 @@ type WorkerPlacementSessionTarget = ReturnType<
   WorkerPlacementSessionRuntime["resolveGatewaySessionStoreTargetWithStore"]
 >;
 
+/** Keeps store identity, session incarnation, canonical ownership, and the live worktree
+ * in one cross-phase fence. Initial resolution throws normally; barrier revalidation
+ * supplies expectedTarget and yields an invalid_state retry when the target changed. */
 function resolveWorkerPlacementSessionTarget(params: {
   sessionRuntime: WorkerPlacementSessionRuntime;
   config: ReturnType<typeof getRuntimeConfig>;
