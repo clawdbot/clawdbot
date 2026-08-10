@@ -2,11 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 
 const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePlugin: resolveProviderRuntimePluginMock,
 }));
 
