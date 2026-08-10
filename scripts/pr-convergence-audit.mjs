@@ -982,13 +982,24 @@ export async function auditPrConvergence({ repo, pr, provider }) {
   const acknowledgedReReviewSourceIds = new Set(
     reReviewReceipts.map((receipt) => receipt.commandCommentId),
   );
+  const hasAuthenticatedReceiptAtOrAfter = (effectiveAt) => {
+    const requestMs = Date.parse(effectiveAt ?? "");
+    return (
+      Number.isFinite(requestMs) &&
+      reReviewReceipts.some((receipt) => {
+        const receiptMs = Date.parse(receipt.effectiveAt ?? "");
+        return Number.isFinite(receiptMs) && receiptMs >= requestMs;
+      })
+    );
+  };
   const findings = [
     ...findingItems
       .flatMap((item) => extractFindingsFromEvidenceItem(item, evidence.headSha))
       .filter(
         (finding) =>
           finding.kind !== "re_review_request" ||
-          !acknowledgedReReviewSourceIds.has(finding.sourceId),
+          (!acknowledgedReReviewSourceIds.has(finding.sourceId) &&
+            !hasAuthenticatedReceiptAtOrAfter(finding.effectiveAt)),
       ),
     ...reReviewReceipts.map((receipt) => ({
       id: `${EVIDENCE_SURFACES.ISSUE_COMMENT}:${receipt.receiptCommentId}:re_review_request`,

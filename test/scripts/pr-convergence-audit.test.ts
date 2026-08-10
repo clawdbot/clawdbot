@@ -272,6 +272,14 @@ describe("pr-convergence-audit", () => {
       prAuthor: "contributor",
       issueComments: [
         {
+          id: 8999,
+          html_url: `${prUrl}#issuecomment-8999`,
+          created_at: "2026-07-26T08:58:00Z",
+          author_association: "CONTRIBUTOR",
+          user: { login: "contributor", type: "User" },
+          body: "@clawsweeper re-review",
+        },
+        {
           id: 9000,
           html_url: `${prUrl}#issuecomment-9000`,
           created_at: "2026-07-26T08:59:00Z",
