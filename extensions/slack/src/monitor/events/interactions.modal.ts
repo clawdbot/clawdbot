@@ -156,6 +156,7 @@ function resolveModalSessionRouting(params: {
           senderId: params.userId,
           eventScope: params.eventScope,
         }),
+        channelType: "im",
       };
   if (
     metadata.sessionKey &&
