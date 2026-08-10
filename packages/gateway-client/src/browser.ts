@@ -8,6 +8,7 @@ export * from "./protocol-client.js";
 export * from "./reconnect-policy.js";
 export * from "./session-projection.js";
 export * from "./session-subscriptions.js";
+export * from "./scope-upgrade.js";
 export {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
