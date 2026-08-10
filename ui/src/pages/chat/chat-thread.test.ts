@@ -339,6 +339,59 @@ describe("assistant commentary grouping", () => {
     ]);
   });
 
+  it("keeps same-run commentary on its causal side of a persisted steer", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-active",
+        messages: [
+          userMessage("Original prompt", 1_000, {
+            __openclaw: {
+              id: "original-user",
+              seq: 1,
+              idempotencyKey: "run-active:user",
+            },
+          }),
+          userMessage("Please run autoreview here", 3_000, {
+            __openclaw: {
+              id: "steering-user",
+              seq: 2,
+              idempotencyKey: "steer-send:user",
+            },
+          }),
+        ],
+        streamSegments: [
+          {
+            text: "First progress update",
+            ts: 2_000,
+            runId: "run-active",
+            itemId: "preamble-a",
+          },
+          {
+            text: "Autoreview is running",
+            ts: 4_000,
+            runId: "run-active",
+            itemId: "preamble-b",
+          },
+        ],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      {
+        kind: "group",
+        role: "user",
+        messages: [{ message: { content: "Original prompt" } }],
+      },
+      { kind: "stream", text: "First progress update" },
+      {
+        kind: "group",
+        role: "user",
+        messages: [{ message: { content: "Please run autoreview here" } }],
+      },
+      { kind: "stream", text: "Autoreview is running" },
+    ]);
+  });
+
   it("keeps replayed tool and commentary items inside their older turn", () => {
     const items = buildCachedChatItems(
       createProps({

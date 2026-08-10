@@ -1,7 +1,8 @@
 ---
-summary: "Secrets management: SecretRef contract, runtime snapshot behavior, and safe one-way scrubbing"
+summary: "Secrets management: SecretRef contract, shared secret store, runtime snapshots, and safe one-way scrubbing"
 read_when:
   - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
+  - Storing team-wide secrets and environment values in the shared SQLite store
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
 title: "Secrets management"
@@ -99,8 +100,8 @@ The log entry includes the reason the active-surface policy used.
 In interactive onboarding, choosing SecretRef storage runs preflight validation before saving:
 
 - Env refs: validates the env var name and confirms a non-empty value is visible during setup.
-- Provider refs (`file` or `exec`): validates provider selection, resolves `id`, and checks the resolved value type.
-- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, and `exec` refs) using the same fail-fast gate.
+- Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
+- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
 
 Validation failure shows the error and lets you retry.
 
@@ -109,7 +110,7 @@ Validation failure shows the error and lets you retry.
 One object shape everywhere:
 
 ```json5
-{ source: "env" | "file" | "exec", provider: "default", id: "..." }
+{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }
 ```
 
 <Tabs>
@@ -155,6 +156,18 @@ One object shape everywhere:
     - `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
 
   </Tab>
+  <Tab title="store">
+    ```json5
+    { source: "store", provider: "default", id: "OPENAI_API_KEY" }
+    ```
+
+    Validation:
+
+    - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
+    - `id` uses the environment-name grammar `^[A-Z][A-Z0-9_]{0,127}$`
+    - This release resolves only the Gateway-wide team scope
+
+  </Tab>
 </Tabs>
 
 ## Provider config
@@ -166,6 +179,7 @@ Define providers under `secrets.providers`:
   secrets: {
     providers: {
       default: { source: "env" },
+      teamstore: { source: "store" },
       filemain: {
         source: "file",
         path: "~/.openclaw/secrets.json",
@@ -190,6 +204,7 @@ Define providers under `secrets.providers`:
       env: "default",
       file: "filemain",
       exec: "vault",
+      store: "teamstore",
     },
   },
 }
@@ -246,6 +261,44 @@ codes and free-form fields such as `message` are accepted for protocol-v1 compat
 but are not displayed because resolver output can contain credential material.
 
 </Accordion>
+
+<Accordion title="Store provider">
+- Reads values from OpenClaw's shared state SQLite database.
+- The provider has no connection settings. `secrets.defaults.store` selects its default alias.
+- Only team scope is resolved in this release. Identity scope is reserved for a later settings experience.
+
+</Accordion>
+
+## Shared secret store
+
+The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it locally with `openclaw secrets store`; there are no Gateway URL or token options for these commands.
+
+Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
+
+- `secret` values are write-only through the CLI. List and get output never reveal them.
+- `env` values can be returned by `store list` and `store get`.
+
+Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
+
+Reference an entry from `openclaw.json` with the `store` source:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        apiKey: { source: "store", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    },
+  },
+}
+```
+
+After changing a value used by config, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
+
+<Warning>
+Store values are not encrypted at rest. They are stored unencrypted in the shared state SQLite database (`state/openclaw.sqlite`), protected by the same `0600` file and `0700` directory permissions as other credentials in that database. Operators who need stronger storage isolation should use an external exec provider such as the [1Password plugin](/plugins/onepassword) or [Vault SecretRefs](/plugins/vault).
+</Warning>
 
 ## File-backed API keys
 
@@ -586,6 +639,7 @@ Warning and audit signals:
 
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
 - `REF_SHADOWED` (audit finding when SQLite auth-profile credentials take precedence over `openclaw.json` refs)
+- `STORE_PLAINTEXT_RESIDUE` (audit finding when a stored name still has an equivalent plaintext config value)
 
 Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
 
@@ -685,6 +739,7 @@ If you save a plan instead of applying during `configure`, apply that saved plan
     - Plaintext sensitive provider header residues in generated `models.json` entries.
     - Unresolved refs.
     - Precedence shadowing (SQLite auth profiles taking priority over `openclaw.json` refs).
+    - Store residue (a stored name still has an equivalent plaintext value in config).
 
     Exec note: by default, audit skips exec SecretRef resolvability checks to avoid command side effects. Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
 
@@ -694,7 +749,7 @@ If you save a plan instead of applying during `configure`, apply that saved plan
   <Accordion title="secrets configure">
     Interactive helper that:
 
-    - Configures `secrets.providers` first (`env`/`file`/`exec`, add/edit/remove).
+    - Configures `secrets.providers` first (`env`/`file`/`exec`/`store`, add/edit/remove).
     - Lets you select supported secret-bearing fields in `openclaw.json` plus the SQLite auth-profile store for one agent scope.
     - Can create a new auth-profile mapping directly in the target picker.
     - Captures SecretRef details (`source`, `provider`, `id`).

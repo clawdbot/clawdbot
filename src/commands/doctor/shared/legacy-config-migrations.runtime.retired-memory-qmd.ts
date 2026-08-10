@@ -5,6 +5,8 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { normalizeConfiguredMemoryExtraPaths } from "../../../memory-host-sdk/host/config-utils.js";
+import type { MemoryExtraPath } from "../../../memory-host-sdk/host/types.js";
 import { visitAgentConfigScopes } from "./legacy-config-migrations.runtime.tier-eval.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
@@ -58,32 +60,33 @@ function migrateRetiredQmdExternalPaths(params: {
   }
   const memory = ensureRecord(params.scope, "memory");
   const search = ensureRecord(memory, "search");
-  const existingPaths = Array.isArray(search.extraPaths)
-    ? search.extraPaths.filter((value): value is string => typeof value === "string")
-    : [];
-  const nextPaths = [...existingPaths];
-  const seen = new Set(existingPaths.map((value) => value.trim()).filter(Boolean));
+  const existingPaths = normalizeConfiguredMemoryExtraPaths(
+    Array.isArray(search.extraPaths)
+      ? search.extraPaths.filter(
+          (entry): entry is MemoryExtraPath =>
+            typeof entry === "string" || typeof getRecord(entry)?.path === "string",
+        )
+      : [],
+  );
+  const nextPaths: MemoryExtraPath[] = [...existingPaths];
+  const entryKey = (entry: MemoryExtraPath) =>
+    typeof entry === "string" ? `${entry}\0` : `${entry.path}\0${entry.pattern?.trim() ?? ""}`;
+  const seen = new Set(existingPaths.map(entryKey));
   let added = 0;
-  let unsupportedPatterns = 0;
   for (const entry of params.entries) {
-    if (!seen.has(entry.path)) {
-      seen.add(entry.path);
-      nextPaths.push(entry.path);
-      added += 1;
+    const nextEntry: MemoryExtraPath = entry.pattern ? entry : entry.path;
+    const key = entryKey(nextEntry);
+    if (seen.has(key)) {
+      continue;
     }
-    if (entry.pattern && entry.pattern !== "**/*.md") {
-      unsupportedPatterns += 1;
-    }
+    seen.add(key);
+    nextPaths.push(nextEntry);
+    added += 1;
   }
   if (added > 0) {
     search.extraPaths = nextPaths;
     params.changes.push(
       `Migrated ${added} external QMD path${added === 1 ? "" : "s"} from ${params.sourcePath} → ${params.targetPath}.`,
-    );
-  }
-  if (unsupportedPatterns > 0) {
-    params.changes.push(
-      `Removed ${unsupportedPatterns} QMD path pattern filter${unsupportedPatterns === 1 ? "" : "s"} from ${params.sourcePath}; builtin memory indexes supported files under the preserved paths.`,
     );
   }
 }

@@ -114,7 +114,12 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       "session.observer",
       expect.objectContaining({ health: "done" }),
       harness.subscribers.get("agent:main:session-1"),
-      { dropIfSlow: true },
+      expect.objectContaining({
+        agentId: "main",
+        dropIfSlow: true,
+        sessionKeys: ["agent:main:session-1"],
+        sessionSubscriptionVerified: true,
+      }),
     );
   });
 
@@ -526,13 +531,19 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
     completeModel.mockRejectedValue(new Error("model unavailable"));
-    harness.observer.handleEvent(lifecycleEvent({ phase: "end", endedAt: 60_000 }));
+    harness.observer.handleEvent(
+      lifecycleEvent({
+        phase: "end",
+        endedAt: 60_000,
+        terminalReply: { disposition: "visible", text: "The repaired tests now pass." },
+      }),
+    );
     await advanceAndFlush(0);
     const observerCalls = observerBroadcasts(harness);
     expect(observerCalls).toHaveLength(2);
     const synthesized = observerCalls.at(-1)?.[1] as SessionObserverDigest;
     expect(synthesized.health).toBe("done");
-    expect(synthesized.headline).toBe("Fixing tests");
+    expect(synthesized.headline).toBe("The repaired tests now pass.");
     expect(synthesized.revision).toBe(2);
     expect(harness.persistDigest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -540,6 +551,28 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       }),
     );
   });
+
+  it.each(["silent", "empty"] as const)(
+    "does not invent a terminal headline for a %s reply",
+    async (disposition) => {
+      useFakeTime();
+      const completeModel = vi.fn(async () =>
+        modelMessage({ headline: "Fixing tests", health: "grinding" }),
+      );
+      const harness = createHarness({ completeModel });
+      startAndAddToolNotes(harness.observer);
+      await advanceAndFlush(12_000);
+
+      completeModel.mockRejectedValue(new Error("model unavailable"));
+      harness.observer.handleEvent(
+        lifecycleEvent({ phase: "end", endedAt: 60_000, terminalReply: { disposition } }),
+      );
+      await advanceAndFlush(0);
+
+      const synthesized = observerBroadcasts(harness).at(-1)?.[1] as SessionObserverDigest;
+      expect(synthesized.headline).toBe("Fixing tests");
+    },
+  );
 
   it("does not persist a synthesized terminal digest for a superseded run", async () => {
     useFakeTime();

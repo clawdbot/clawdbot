@@ -21,10 +21,13 @@ import {
   refreshSessionsAfterBatch,
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
+import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
+export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
+
 function requireSessionMutationAccess(
-  host: SessionOrganizerControllerHost,
+  host: SessionActionHost,
   scope: SidebarSessionMutationScope,
   request: {
     method: string;
@@ -41,8 +44,8 @@ function requireSessionMutationAccess(
 }
 
 export async function patchSession(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
   refresh: { deferListRefresh?: boolean } = {},
@@ -120,13 +123,13 @@ export async function patchSessions(
 }
 
 async function patchSessionRowsSerial(
-  host: SessionOrganizerControllerHost,
-  rows: readonly SidebarRecentSession[],
+  host: SessionActionHost,
+  rows: readonly SessionActionRow[],
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
   options: { deferListRefresh?: boolean } = {},
-): Promise<SidebarRecentSession[] | null> {
-  const completed: SidebarRecentSession[] = [];
+): Promise<SessionActionRow[] | null> {
+  const completed: SessionActionRow[] = [];
   for (const row of rows) {
     const result = await patchSession(host, row, patch, scope, { deferListRefresh: true });
     if (result === "stale") {
@@ -146,8 +149,8 @@ async function patchSessionRowsSerial(
 }
 
 export async function archiveSessionWithUndo(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
   const result = await patchSession(host, session, { archived: true }, scope);
@@ -157,9 +160,8 @@ export async function archiveSessionWithUndo(
   showToast({
     message: t("sessionsView.sessionArchived"),
     actionLabel: t("common.undo"),
-    onAction: () => {
-      void restoreArchivedSessions(host, [{ session, pinned: session.pinned }], scope);
-    },
+    onAction: () =>
+      void restoreArchivedSessions(host, [{ session, pinned: session.pinned }], scope),
   });
 }
 
@@ -189,8 +191,8 @@ async function archiveSessionsWithUndo(
 }
 
 async function restoreArchivedSessions(
-  host: SessionOrganizerControllerHost,
-  archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
+  host: SessionActionHost,
+  archived: readonly { session: SessionActionRow; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
 ) {
   const rows = archived.map((entry) => entry.session);
@@ -514,8 +516,8 @@ export async function assignSessionCategory(
 }
 
 export async function forkSession(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -593,8 +595,8 @@ export async function stopCloudWorker(
 }
 
 export async function deleteSession(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
   if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {

@@ -18,7 +18,7 @@ scenario:
     - docs/tools/subagents.md
     - docs/help/testing.md
   codeRefs:
-    - src/agents/subagent-spawn.ts
+    - src/agents/subagents/spawn/subagent-spawn.ts
     - src/agents/system-prompt.ts
     - extensions/qa-lab/src/suite.ts
   execution:

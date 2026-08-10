@@ -13,6 +13,7 @@ import {
   type TerminalBackend,
 } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
+import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
 import {
@@ -53,7 +54,7 @@ function terminalOwnerMatches(owner: TerminalOwner | null, ownerKey: string): bo
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly byConn = new Map<string, Set<string>>();
-  private readonly pendingOpens = new Set<TerminalPendingOpen>();
+  private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
   // Connection-owned opens still awaiting spawn. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
@@ -268,6 +269,7 @@ export class TerminalSessionManager {
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
       this.indexByConn(request.owner.connId, session.id);
+      session.output.push(composeTerminalIntroBanner());
     }
 
     backend.onData((chunk) => {
@@ -392,8 +394,13 @@ export class TerminalSessionManager {
     return true;
   }
 
-  /** Closes every PTY owned by one exact agent session. */
+  /** Closes every live or spawning PTY owned by one exact agent session or task. */
   closeAgentSessions(agentSessionKey: string): number {
+    for (const [pending, owner] of this.pendingOpens) {
+      if (terminalOwnerMatches(owner, agentSessionKey)) {
+        pending.abort("terminal closed because its task ended");
+      }
+    }
     const owned = [...this.sessions.values()].filter(
       (session) => !session.closed && terminalOwnerMatches(session.owner, agentSessionKey),
     );
@@ -495,7 +502,7 @@ export class TerminalSessionManager {
   }
 
   private trackPendingOpen(owner: TerminalOwner, pending: TerminalPendingOpen): void {
-    this.pendingOpens.add(pending);
+    this.pendingOpens.set(pending, owner);
     if (owner.kind !== "conn") {
       return;
     }
@@ -570,7 +577,7 @@ export class TerminalSessionManager {
   closeDisallowedAgents(isAllowed: (agentId: string) => boolean): void {
     // Config can change while spawn is awaiting the native PTY import. Mark the
     // pending open so it kills the process instead of registering stale access.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       if (!isAllowed(pending.agentId)) {
         pending.abort("terminal closed because the agent policy changed");
       }
@@ -621,7 +628,7 @@ export class TerminalSessionManager {
    */
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       pending.abort("gateway closed during terminal open");
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.

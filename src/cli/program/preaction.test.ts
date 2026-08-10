@@ -257,10 +257,6 @@ describe("registerPreActionHooks", () => {
       .command("pending")
       .option("--json")
       .action(() => {});
-    programLocal
-      .command("commitments")
-      .option("--json")
-      .action(() => {});
     programLocal.command("configure").action(() => {});
     programLocal.command("onboard").action(() => {});
     const channels = programLocal.command("channels");
@@ -362,7 +358,6 @@ describe("registerPreActionHooks", () => {
 
   it.each([
     ["approvals", "pending"],
-    ["commitments"],
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],

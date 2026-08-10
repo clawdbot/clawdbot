@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
-import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
   getAgentTestMocks,
   makeContext,

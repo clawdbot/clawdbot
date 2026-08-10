@@ -33,6 +33,7 @@ export const attachHandlers: GatewayRequestHandlers = {
     const grantParams = paramRecord(params);
     const cfg = context.getRuntimeConfig();
     const sessionKey = readString(grantParams, "sessionKey") ?? resolveMainSessionKey(cfg);
+    const agentId = sessionKey === "global" ? readString(grantParams, "agentId") : undefined;
     const harnessEntry = isAgentHarnessSessionKey(sessionKey)
       ? resolveSessionEntryAccessTarget({ cfg, sessionKey }).entry
       : undefined;
@@ -57,7 +58,11 @@ export const attachHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const grant = mintAttachGrant({ sessionKey, ttlMs: readPositiveNumber(grantParams, "ttlMs") });
+    const grant = mintAttachGrant({
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+      ttlMs: readPositiveNumber(grantParams, "ttlMs"),
+    });
     respond(true, {
       sessionKey: grant.sessionKey,
       token: grant.token,

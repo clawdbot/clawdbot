@@ -400,7 +400,7 @@ describe("gateway session utils", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store: Record<string, SessionEntry> = {
       recent: { sessionId: "recent", updatedAt: 30 },
-      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40, icon: "name:spark" },
+      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
       archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
     } satisfies Record<string, SessionEntry>;
 
@@ -409,7 +409,6 @@ describe("gateway session utils", () => {
     expect(active.sessions[0]).toMatchObject({
       pinned: true,
       pinnedAt: 40,
-      icon: "name:spark",
       archived: false,
     });
 

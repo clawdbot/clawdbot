@@ -7,11 +7,9 @@ export {
   removeAckReactionHandleAfterReply,
   removeAckReactionAfterReply,
   shouldAckReaction,
-  shouldAckReactionForWhatsApp,
   type AckReactionHandle,
   type AckReactionGateParams,
   type AckReactionScope,
-  type WhatsAppAckReactionMode,
 } from "../channels/ack-reactions.js";
 export { logAckFailure, logTypingFailure, type LogFn } from "../channels/logging.js";
 export { missingTargetError } from "../infra/outbound/target-errors.js";

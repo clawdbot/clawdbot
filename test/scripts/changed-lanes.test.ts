@@ -41,6 +41,7 @@ import {
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
+  shouldRunWrapperShadowingCheck,
   createNpmLockGuardCommand,
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
@@ -1231,7 +1232,7 @@ describe("scripts/changed-lanes", () => {
 
   it("delegates generated docs baselines with heavy owner checks", () => {
     for (const changedPath of [
-      "docs/.generated/plugin-sdk-api-baseline.sha256",
+      "docs/.generated/plugin-sdk-api-baseline.jsonl",
       "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
     ]) {
       const result = detectChangedLanes([changedPath]);
@@ -1469,6 +1470,7 @@ describe("scripts/changed-lanes", () => {
       "format changed files",
       "deprecated API usage",
       "plugin boundaries",
+      "wrapper shadowing",
       "package patch guard",
       // These live-Docker paths include `src/gateway/*.live.test.ts`, and the
       // full-tree knip scan sees test files, so a deleted last consumer can
@@ -1651,6 +1653,7 @@ describe("scripts/changed-lanes", () => {
       "--import",
       "check:deprecated-api-usage",
       "plugins:boundary-report:ci",
+      "check:wrapper-shadowing",
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
@@ -1831,7 +1834,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/generate-plugin-sdk-api-baseline.ts",
         "scripts/lib/plugin-sdk-doc-metadata.ts",
         "scripts/lib/plugin-sdk-entries.mts",
-        "docs/.generated/plugin-sdk-api-baseline.sha256",
+        "docs/.generated/plugin-sdk-api-baseline.jsonl",
       ]),
     ).toBe(true);
     expect(shouldRunPluginSdkApiBaselineCheck(["docs/help/troubleshooting.md"])).toBe(false);
@@ -1916,6 +1919,28 @@ describe("scripts/changed-lanes", () => {
         args: ["plugins:boundary-report:ci"],
       });
     }
+  });
+
+  it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(
+      shouldRunWrapperShadowingCheck([
+        "src/channels/turn/run-channel-turn.ts",
+        "scripts/check-wrapper-shadowing.mts",
+        "scripts/check-export-name-collisions.mts",
+        "scripts/lib/wrapper-shadowing-baseline.json",
+        "scripts/lib/ts-guard-utils.mts",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunWrapperShadowingCheck(["docs/concepts/message-lifecycle.md"])).toBe(false);
+
+    const plan = createChangedCheckPlan(
+      detectChangedLanes(["scripts/check-wrapper-shadowing.mts"]),
+    );
+    expect(plan.commands).toContainEqual({
+      name: "wrapper shadowing",
+      args: ["check:wrapper-shadowing"],
+    });
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -2429,6 +2454,17 @@ describe("delegationFailedBeforeRunning", () => {
     // Falling back locally here would re-run on macOS and could pass a lane
     // whose truth is Linux, turning a red gate green.
     expect(delegationFailedBeforeRunning(output)).toBe(false);
+  });
+
+  it("treats a full workload-routing provider outage as never having run", () => {
+    // Provider selection happens before any dispatch, so an exhausted routing
+    // chain (every doctor failing) can never carry a remote verdict.
+    const output = [
+      "[crabbox] no ready provider for workload=ci-fast",
+      "[crabbox] provider readiness blacksmith-testbox:doctor exited 1,daytona:doctor exited 124,azure:doctor exited 124,aws:doctor exited 124",
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(true);
   });
 
   it("does not mistake an infrastructure error kind for a command verdict", () => {

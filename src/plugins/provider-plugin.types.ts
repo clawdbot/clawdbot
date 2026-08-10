@@ -1,5 +1,5 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { AgentMessage, StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";

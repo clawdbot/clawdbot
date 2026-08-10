@@ -228,7 +228,8 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   const remoteTokenConfigured = hasConfiguredSecretInput(remote.token, secretDefaults);
   const remotePasswordConfigured = hasConfiguredSecretInput(remote.password, secretDefaults);
 
-  const wideAreaEnabled = typeof wideArea.enabled === "boolean" ? wideArea.enabled : null;
+  const wideAreaEnabled =
+    typeof wideArea.domain === "string" ? wideArea.domain.trim().length > 0 : null;
 
   return {
     path,

@@ -16,6 +16,7 @@ started.
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
 - **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Diversity-aware ordering** with MMR enabled on hybrid results by default.
 - **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
@@ -87,8 +88,8 @@ per-agent SQLite database. OpenClaw does not create `USER.md` automatically.
 
 Each chunk can carry nullable importance and trigger metadata. Null values are
 neutral, so older indexes remain usable. Search combines hybrid relevance,
-recency decay, and importance; trigger recall only injects curated or
-promoted-trusted entries.
+recency decay, and importance before applying MMR diversity; trigger recall
+only injects curated or promoted-trusted entries.
 
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
@@ -122,7 +123,8 @@ The builtin engine is the right choice for most users:
 
 The builtin engine can index directories outside the workspace with
 `memory.search.extraPaths`. It uses bounded lexical query expansion to improve
-conversational recall, but it does not provide a separate reranking stage.
+conversational recall, but it does not provide a learned or model-based relevance
+reranking stage. Its MMR pass is deterministic and local.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.
@@ -154,9 +156,9 @@ error.
 
 ## Configuration
 
-For embedding provider setup, hybrid search tuning (weights, MMR, temporal
-decay), batch indexing, multimodal memory, sqlite-vec, extra paths, and all
-other config knobs, see the
+For embedding provider setup, search result limits and thresholds, batch
+indexing, multimodal memory, sqlite-vec, extra paths, and all other config
+knobs, see the
 [Memory configuration reference](/reference/memory-config).
 
 ## Related

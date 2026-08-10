@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -38,7 +37,6 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageTo } from "./origin-routing.js";
 import {
   buildPendingFinalDeliveryText,
   sanitizePendingFinalDeliveryText,
@@ -255,17 +253,6 @@ export function buildInlinePluginStatusPayload(params: {
   return { text: lines.join("\n") };
 }
 
-function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
-  return payloads
-    .filter(
-      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
-    )
-    .map((payload) => payload.text?.trim())
-    .filter((text): text is string => Boolean(text))
-    .join("\n")
-    .trim();
-}
-
 export function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -273,55 +260,6 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
     parseMode: "auto",
   });
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
-}
-
-export function enqueueCommitmentExtractionForTurn(params: {
-  cfg: OpenClawConfig;
-  commandBody: string;
-  isHeartbeat: boolean;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  sessionKey?: string;
-  replyToChannel?: string;
-  payloads: ReplyPayload[];
-  runId: string;
-}): void {
-  if (params.isHeartbeat) {
-    return;
-  }
-  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
-  const assistantText = joinCommitmentAssistantText(params.payloads);
-  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  const channel =
-    params.replyToChannel ??
-    params.followupRun.run.messageProvider ??
-    params.sessionCtx.Surface ??
-    params.sessionCtx.Provider;
-  if (!userText || !assistantText || !sessionKey || !channel) {
-    return;
-  }
-  const to = resolveOriginMessageTo({
-    originatingTo: params.sessionCtx.OriginatingTo,
-    to: params.sessionCtx.To,
-  });
-  enqueueCommitmentExtraction({
-    cfg: params.cfg,
-    agentId: params.followupRun.run.agentId,
-    sessionKey,
-    channel,
-    ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
-    ...(to ? { to } : {}),
-    ...(params.sessionCtx.MessageThreadId !== undefined
-      ? { threadId: String(params.sessionCtx.MessageThreadId) }
-      : {}),
-    ...(params.followupRun.run.senderId ? { senderId: params.followupRun.run.senderId } : {}),
-    userText,
-    assistantText,
-    ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
-      : {}),
-    sourceRunId: params.runId,
-  });
 }
 
 export function refreshSessionEntryFromStore(params: {

@@ -179,8 +179,10 @@ Gateway responds with `hello-ok`:
 
 `server`, `features`, `snapshot`, `policy`, and `auth` are all required by
 `HelloOkSchema` (`packages/gateway-protocol/src/schema/frames.ts`). `auth`
-reports the negotiated role/scopes even when no device token is issued (shape
-above). `policy.attachments` is optional (older gateways omit it) and advertises
+reports the negotiated role and the current socket's effective authorization
+scopes even when no device token is issued (shape above). `deviceToken`, when
+present, is the primary reusable credential for the same device and role.
+`policy.attachments` is optional (older gateways omit it) and advertises
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
 
@@ -224,12 +226,12 @@ a terminal handshake failure.
 
 When a device token is issued, `hello-ok.auth` adds it:
 
-```json
+```json validate=false
 {
   "auth": {
     "deviceToken": "…",
     "role": "operator",
-    "scopes": ["operator.read", "operator.write"]
+    "scopes": ["operator.read"]
   }
 }
 ```
@@ -238,7 +240,7 @@ Built-in QR/setup-code bootstrap is a mobile handoff path. A successful
 baseline setup-code connect returns a primary node token plus one bounded
 operator token:
 
-```json
+```json validate=false
 {
   "auth": {
     "deviceToken": "…",
@@ -527,7 +529,6 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
-    - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients, including workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates. Requires `operator.read`.
     - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one agent, or `agentScope: "all"` to list configured agents together.
       Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
@@ -563,11 +564,11 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Operator terminal">
     - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state.
-    - `terminal.input`, `terminal.resize`, and `terminal.close` operate only on sessions owned by the calling connection.
+    - `terminal.input` and `terminal.resize` operate on sessions owned by the calling connection and agent-owned sessions where that connection is an attached viewer. `terminal.close` kills a connection-owned session, but only detaches the calling viewer from an agent-owned session.
     - `terminal.upload` accepts one base64 file up to 16 MiB, stages it in a private 24-hour temporary directory on the session's Gateway or paired-node host, and returns the absolute path. The caller must still paste or otherwise use that path; the RPC never writes terminal input or executes a command.
-    - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
+    - `terminal.data` and `terminal.exit` events stream to the connection owner and attached viewers. Task-owned agent terminals close when their authoritative task reaches a terminal state; ordinary conversation-owned agent terminals remain persistent.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
-    - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
+    - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`).
     - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
 
   </Accordion>
@@ -576,9 +577,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
     - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
-    - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` as needed, and returns room/session metadata plus recent Talk events, never the plaintext token or its hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
-    - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state clears.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions.
     - `talk.session.submitToolResult` completes a provider tool call emitted by a gateway-owned realtime relay session. The request waits for any asynchronous completion signal exposed by the provider bridge; failed submissions keep the linked run active and do not emit a successful tool-result event. Pass `options: { willContinue: true }` for interim tool output or `options: { suppressResponse: true }` when the provider bridge advertises suppression support and the result should not start another response.
     - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
@@ -633,7 +632,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Session control">
     - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields.
-    - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
+    - `sessions.subscribe` enables session change events for the current WebSocket client. The subscription ends when that client disconnects.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
@@ -1115,8 +1114,16 @@ not replay rejected requests after reconnecting.
 - Private-ingress `gateway.auth.mode: "none"` skips shared-secret connect auth
   entirely; do not expose that mode on public/untrusted ingress.
 - After pairing, the gateway issues a device token scoped to the connection
-  role + scopes, returned in `hello-ok.auth.deviceToken`. Clients should
-  persist it after any successful connect.
+  role + approved grant, returned in `hello-ok.auth.deviceToken`. Clients should
+  persist it with `hello-ok.auth.scopes` after a successful connect when the token
+  is new or different from the stored token.
+- `hello-ok.auth.scopes` is the current socket's live authority and matches the
+  scopes enforced by RPC dispatch.
+- When `hello-ok.auth.deviceToken` exactly matches the token already stored for
+  the same gateway, device, client, and role, preserve that record's stored scopes
+  instead of replacing them with a narrower live scope set. A newly issued or
+  rotated token uses `hello-ok.auth.scopes`; its approved grant matches that
+  connection when it is issued.
 - Reconnecting with that stored device token should also reuse the stored
   approved scope set for that token. This preserves read/probe/status access
   already granted and avoids silently collapsing reconnects to a narrower
@@ -1138,6 +1145,8 @@ not replay rejected requests after reconnecting.
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
   includes `operator.talk.secrets` for native Talk configuration reads, but
   excludes pairing-mutation scopes and `operator.admin`.
+- `hello-ok.auth.deviceTokens` contains only additional bootstrap-handoff tokens.
+  Do not use it as metadata for the primary `deviceToken` reconnect record.
 - While a non-baseline setup-code bootstrap waits for approval,
   `PAIRING_REQUIRED` details include `recommendedNextStep: "wait_then_retry"`,
   `retryable: true`, and `pauseReconnect: false`. Keep reconnecting with the
@@ -1146,8 +1155,9 @@ not replay rejected requests after reconnecting.
 - Persist `hello-ok.auth.deviceTokens` only when the connect used bootstrap
   auth on a trusted transport such as `wss://` or loopback/local pairing.
 - If a client supplies an explicit `deviceToken` or explicit `scopes`, that
-  caller-requested scope set remains authoritative; cached scopes are only
-  reused when the client is reusing the stored per-device token.
+  caller-requested scope set remains authoritative for the live connection and
+  is reported in `hello-ok.auth.scopes`; cached token-grant scopes are only reused
+  when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing`). Rotating or revoking a
   node or other non-operator role also requires `operator.admin`.

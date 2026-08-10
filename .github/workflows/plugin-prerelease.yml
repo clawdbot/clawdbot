@@ -346,14 +346,10 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          const result = spawnSync(
-            "pnpm",
-            ["exec", "node", "--import", "tsx", "scripts/test-projects.mts", ...configs],
-            {
-              env: childEnv,
-              stdio: "inherit",
-            },
-          );
+          const result = spawnSync("pnpm", ["test", "--", ...configs], {
+            env: childEnv,
+            stdio: "inherit",
+          });
           process.exit(result.status ?? 1);
           EOF
 

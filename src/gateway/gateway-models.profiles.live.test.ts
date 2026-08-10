@@ -29,7 +29,6 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
-import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
@@ -44,7 +43,6 @@ import {
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
-import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
@@ -60,6 +58,8 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { appendPrioritizedDynamicLiveModels } from "../agents/test-helpers/live-model-dynamic-candidates.js";
+import { createLiveTargetMatcher } from "../agents/test-helpers/live-target-matcher.js";
 import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { clearRuntimeConfigSnapshot } from "../config/io.js";

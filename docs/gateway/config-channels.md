@@ -114,11 +114,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 ```json5
 {
-  web: {
-    enabled: true,
-  },
   channels: {
     whatsapp: {
+      enabled: true,
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000,
@@ -197,12 +195,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
-      retry: {
-        attempts: 3,
-        minDelayMs: 400,
-        maxDelayMs: 30000,
-        jitter: 0.1,
-      },
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "ipv4first",
@@ -473,20 +465,22 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
-- `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
-  org-wide event path. Startup verifies the bot token with `auth.test` and
-  fails when the configured mode does not match Slack's installation identity.
-  Enterprise DMs must be disabled or use `dmPolicy: "open"` with an effective
-  `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
-  mutable names and unsupported channel prefixes fail startup. V1 handles only
-  direct Socket Mode or HTTP `message` and `app_mention` events with immediate
-  replies; relay, commands, interactions, App Home, reaction event listeners,
-  pins, action tools, native approvals, bindings, deferred delivery, and
-  proactive sends are unavailable. Listener-owned acknowledgment, typing, and
-  status reactions remain available with `reactions:write`; inbound reaction
-  notifications and reaction action tools are unavailable. See
+- Slack detects Enterprise Grid org-wide installations automatically from the
+  bot token with `auth.test`; no installation-mode setting is required.
+  Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
+  `pairing`. Channel and user policies must use stable Slack IDs; mutable names
+  and unsupported channel prefixes fail startup. Mention-pattern channel
+  scopes and static route-binding peers use workspace-qualified Slack targets.
+  Direct Socket Mode or HTTP messages, mentions, workspace-qualified actions,
+  deferred delivery, proactive sends, supported event listeners and
+  interactions, static route bindings, and Slack-native approvals from
+  workspace-qualified turns are supported. Relay, channel-ID-change events,
+  App Home, Agent and Assistant lifecycle events, configured ACP bindings, and
+  runtime current-conversation bindings remain unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
+- The retired `enterpriseOrgInstall` key is removed by `openclaw doctor --fix`
+  at the Slack root and account levels.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
@@ -836,7 +830,12 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
     },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    entries: {
+      main: {
+        default: true,
+        groupChat: { mentionPatterns: ["@openclaw", "openclaw"] },
+      },
+    },
   },
 }
 ```
@@ -879,12 +878,12 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
       },
-    ],
+    },
   },
 }
 ```
@@ -905,13 +904,10 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     debug: false, // allow /debug
     restart: true, // allow /restart + external SIGUSR1 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw", // raw | hash
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -934,9 +930,8 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `ownerDisplay: "hash"` hashes owner ids in the system prompt. Set `ownerDisplaySecret` to control hashing.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
-- `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)
   - channel-specific command surfaces: [Channels](/channels)

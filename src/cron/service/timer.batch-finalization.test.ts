@@ -1,4 +1,5 @@
 // Completed cron work must become durable before unrelated batch work drains.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDueIsolatedJob,
@@ -419,6 +420,84 @@ describe("cron batch outcome finalization", () => {
             reason: "consecutive-failures",
             atMs: dueAt + 10,
             consecutiveErrors: 10,
+          },
+        },
+      });
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
+
+  it("records and notifies a Date-overflow auto-disable only after persistence", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-01T15:02:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "date-overflow-auto-disable",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt - 60_000 };
+    job.pacing = { min: "1s" };
+    job.state.runningAtMs = dueAt;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const order: string[] = [];
+    const enqueueSystemEvent = vi.fn((_text: string) => {
+      order.push("notify");
+    });
+    const requestHeartbeat = vi.fn(() => {
+      order.push("heartbeat");
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt + 10,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const save = cronStoreModule.saveCronJobsStore;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (...args) => {
+        if (args[1].jobs[0]?.state.autoDisabled) {
+          expect(enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(requestHeartbeat).not.toHaveBeenCalled();
+          order.push("persist");
+        }
+        return await save(...args);
+      });
+
+    try {
+      const finalized = await finalizeCompletedCronRunOutcomes(state, [
+        {
+          jobId: job.id,
+          job: structuredClone(job),
+          activeJobMarker: markCronJobActive(job.id),
+          status: "ok",
+          startedAt: dueAt,
+          endedAt: dueAt + 10,
+          nextCheck: { delayMs: MAX_DATE_TIMESTAMP_MS },
+        },
+      ]);
+
+      expect(finalized).toHaveLength(1);
+      expect(state.store?.jobs[0]?.enabled).toBe(false);
+      expect(state.store?.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+      expect(order).toEqual(["persist", "notify", "heartbeat"]);
+      expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain(
+        "next run is outside the supported Date range",
+      );
+      expect(requestHeartbeat).toHaveBeenCalledOnce();
+      expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
+        enabled: false,
+        state: {
+          autoDisabled: {
+            reason: "schedule-errors",
+            atMs: dueAt + 10,
+            consecutiveErrors: 1,
           },
         },
       });

@@ -90,6 +90,19 @@ function requireProvisionedEnvironment(
   };
 }
 
+function isExactAttachedEnvironment(
+  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
+  placement: WorkerActiveDispatchPlacement,
+): boolean {
+  return (
+    environment?.environmentId === placement.environmentId &&
+    environment.state === "attached" &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId
+  );
+}
+
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
@@ -104,8 +117,20 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     workspaceOperations: options.workspaceOperations,
   });
 
+  const reportTransition = (
+    observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
+    placement: WorkerDispatchPlacement,
+  ): void => {
+    try {
+      observer?.(placement);
+    } catch {
+      // Reporting cannot overturn the durable placement transition.
+    }
+  };
+
   const dispatch = async (
     request: WorkerPlacementDispatchRequest,
+    onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerActiveDispatchPlacement> => {
     let placement: WorkerDispatchPlacement | undefined;
     let environmentId: string | null = null;
@@ -121,6 +146,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             sessionKey: request.sessionKey,
             agentId: request.agentId,
           });
+          reportTransition(onTransition, placement);
           return placement;
         },
       });
@@ -134,6 +160,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         expectedGeneration: placement.generation,
         patch: { environmentId: expectedEnvironmentId },
       });
+      reportTransition(onTransition, placement);
       const environment = await environments.create(request.profileId, idempotencyKey);
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
@@ -148,6 +175,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           workerBundleHash: provisioned.bundleHash,
         },
       });
+      reportTransition(onTransition, placement);
       const readyTunnel = await environments.startTunnel({ environmentId, ownerEpoch });
       const synced = await readyTunnel.syncWorkspace({
         localPath,
@@ -164,6 +192,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           remoteWorkspaceDir: synced.remoteWorkspaceDir,
         },
       });
+      reportTransition(onTransition, placement);
       const credential = await environments.attachSession({
         environmentId,
         ownerEpoch,
@@ -187,26 +216,34 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           if (activated.state !== "active") {
             throw new Error("Worker dispatch activation did not produce an active placement");
           }
+          reportTransition(onTransition, activated);
           return activated;
         },
       });
       return activePlacement;
     } catch (error) {
-      const current = placement ? placements.get(request.sessionId) : undefined;
-      if (current && current.state !== "local" && current.state !== "reclaimed") {
-        if (current.state === "active") {
-          await failure.failActive(current, error);
-        } else {
-          const currentEnvironmentId = environmentId ?? current.environmentId;
-          const currentEnvironment = currentEnvironmentId
-            ? environments.get(currentEnvironmentId)
-            : undefined;
-          await failure.teardownEnvironment({
-            placement: current,
-            environmentId: currentEnvironment?.environmentId ?? null,
-            ownerEpoch: ownerEpoch ?? currentEnvironment?.ownerEpoch ?? null,
-            primaryError: error,
-          });
+      try {
+        const current = placement ? placements.get(request.sessionId) : undefined;
+        if (current && current.state !== "local" && current.state !== "reclaimed") {
+          if (current.state === "active") {
+            await failure.failActive(current, error);
+          } else {
+            const currentEnvironmentId = environmentId ?? current.environmentId;
+            const currentEnvironment = currentEnvironmentId
+              ? environments.get(currentEnvironmentId)
+              : undefined;
+            await failure.teardownEnvironment({
+              placement: current,
+              environmentId: currentEnvironment?.environmentId ?? null,
+              ownerEpoch: ownerEpoch ?? currentEnvironment?.ownerEpoch ?? null,
+              primaryError: error,
+            });
+          }
+        }
+      } finally {
+        const finalPlacement = placements.get(request.sessionId);
+        if (finalPlacement) {
+          reportTransition(onTransition, finalPlacement);
         }
       }
       throw error;
@@ -226,13 +263,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
         const environment = environments.get(current.environmentId);
-        if (
-          !environment ||
-          environment.state !== "attached" ||
-          environment.ownerEpoch !== current.activeOwnerEpoch ||
-          environment.attachedSessionIds.length !== 1 ||
-          environment.attachedSessionIds[0] !== current.sessionId
-        ) {
+        if (!isExactAttachedEnvironment(environment, current)) {
           throw new Error("Active cloud worker does not match its session placement");
         }
         const journalOwner = {
@@ -408,7 +439,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   },
                 });
               } finally {
-                if (!destroyed) {
+                if (
+                  !destroyed &&
+                  isExactAttachedEnvironment(environments.get(current.environmentId), current)
+                ) {
                   await quiescence.resume();
                 }
               }

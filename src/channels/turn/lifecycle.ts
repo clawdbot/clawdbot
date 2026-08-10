@@ -33,6 +33,7 @@ import type {
   ChannelDeliveryResult,
   ChannelTurnDeliveryAdapter,
   ChannelTurnPlan,
+  ChannelProviderOwnedMessageSendingDeliveryAdapter,
   ChannelTurnResolved,
   ChannelTurnResult,
   PreparedChannelTurn,
@@ -649,6 +650,13 @@ export async function dispatchAssembledChannelTurn(
   return await dispatchChannelTurnWithDeliveryOwner(params, "legacy-dispatcher");
 }
 
+export function dispatchRoutedChannelTurn(
+  params: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+): Promise<ChannelTurnResult>;
+export function dispatchRoutedChannelTurn(
+  params: ChannelTurnPlan<ChannelProviderOwnedMessageSendingDeliveryAdapter>,
+): Promise<ChannelTurnResult>;
+export function dispatchRoutedChannelTurn(params: ChannelTurnPlan): Promise<ChannelTurnResult>;
 export async function dispatchRoutedChannelTurn(
   params: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
 ): Promise<ChannelTurnResult> {
@@ -658,5 +666,3 @@ export async function dispatchRoutedChannelTurn(
     "routed-delivery",
   );
 }
-
-export { runPreparedInboundReply } from "./execution.js";

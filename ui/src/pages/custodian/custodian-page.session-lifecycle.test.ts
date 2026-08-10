@@ -113,6 +113,55 @@ describe("custodian page session lifecycle", () => {
     expect(page.querySelector(".custodian__wizard-step")).toBeNull();
   });
 
+  it("starts fresh without replaying an invalidated typed wizard cancel", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "evicted-cancel-session",
+        reply: "Enter the token.",
+        action: "none",
+        wizardInputPending: true,
+        step: {
+          id: "token",
+          type: "text",
+          message: "Bot token",
+          sensitive: true,
+        },
+      })
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "No active OpenClaw chat session is awaiting that wizard cancel.",
+          details: buildSystemAgentSessionInvalidatedErrorDetails(),
+        }),
+      )
+      .mockResolvedValueOnce({
+        sessionId: "replacement-session",
+        reply: "Fresh session ready.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    const cancel = await waitForFast(() => {
+      const button = page.querySelector<HTMLButtonElement>(".custodian__wizard-cancel");
+      expect(button).not.toBeNull();
+      return button!;
+    });
+
+    cancel.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      sessionId: "evicted-cancel-session",
+      wizardCancel: { stepId: "token" },
+    });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("wizardCancel");
+    expect(request.mock.calls[2]?.[1]?.sessionId).not.toBe("evicted-cancel-session");
+    await waitForFast(() => expect(page.textContent).toContain("Fresh session ready."));
+    expect(page.querySelector(".custodian__wizard-step")).toBeNull();
+  });
+
   it("keeps the live session after an error that does not invalidate it", async () => {
     const request = vi
       .fn()

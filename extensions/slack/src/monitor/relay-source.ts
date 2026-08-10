@@ -8,6 +8,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { type ClientOptions, type RawData } from "ws";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
@@ -286,19 +287,6 @@ export function parseRelayFrame(data: RawData): unknown {
   } catch (cause) {
     throw new SlackRelayMalformedFrameError("Slack relay received malformed JSON frame", { cause });
   }
-}
-
-function rawDataToString(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
 }
 
 function extractRelaySlackMessageEvent(

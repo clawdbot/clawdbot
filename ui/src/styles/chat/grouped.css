@@ -191,6 +191,13 @@
   min-width: 0;
 }
 
+/* Own-message footers are right-aligned, so hover-revealed time/actions must
+   slot in to the LEFT of the always-visible name; otherwise the name jumps
+   sideways on hover. Peer footers are left-aligned and already stable. */
+.chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
+  order: 1;
+}
+
 .chat-group-footer-actions,
 .chat-message-actions-row {
   display: flex;
@@ -908,7 +915,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
   padding: 1px 6px;
   border-radius: var(--radius-sm, 4px);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--mono);
 }
 
 .msg-meta__cost {

@@ -139,6 +139,7 @@
   "request-url",
   "response-limit-runtime",
   "retry-runtime",
+  "runtime-doctor",
   "runtime-doctor-migrations",
   "runtime-fetch",
   "sandbox",

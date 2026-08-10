@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
   clearSessionSuspensionTimers: vi.fn(() => 0),
+  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
+  getAcpSessionManager: vi.fn(() => ({})),
   closePluginStateDatabase: vi.fn(async () => undefined),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -85,6 +87,14 @@ vi.mock("./embeddings-http.js", () => ({
 
 vi.mock("../agents/session-suspension.js", () => ({
   clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
+}));
+
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
+  disposeAcpSessionManagerInstance: mocks.disposeAcpSessionManagerInstance,
+}));
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: mocks.getAcpSessionManager,
 }));
 
 vi.mock("../plugin-state/plugin-state-store.js", async () => ({
@@ -195,6 +205,9 @@ describe("createGatewayCloseHandler", () => {
     mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
     mocks.clearSessionSuspensionTimers.mockReset();
     mocks.clearSessionSuspensionTimers.mockReturnValue(0);
+    mocks.disposeAcpSessionManagerInstance.mockReset();
+    mocks.disposeAcpSessionManagerInstance.mockResolvedValue(undefined);
+    mocks.getAcpSessionManager.mockClear();
     mocks.closePluginStateDatabase.mockReset();
     mocks.closePluginStateDatabase.mockResolvedValue(undefined);
   });
@@ -356,8 +369,11 @@ describe("createGatewayCloseHandler", () => {
     ]);
   });
 
-  it("stops plugin services before channel runtimes", async () => {
+  it("disposes ACP sessions before plugin services and channel runtimes", async () => {
     const events: string[] = [];
+    mocks.disposeAcpSessionManagerInstance.mockImplementation(async () => {
+      events.push("acp-sessions");
+    });
     const pluginServices = {
       stop: vi.fn(async () => {
         events.push("plugin-services");
@@ -376,9 +392,54 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "test" });
 
-    expect(events).toEqual(["plugin-services", "channel:discord"]);
+    expect(events).toEqual(["acp-sessions", "plugin-services", "channel:discord"]);
+    expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledWith(
+      expect.anything(),
+      "gateway-shutdown",
+    );
     expect(pluginServices.stop).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledWith("discord");
+  });
+
+  it("continues plugin shutdown when ACP session disposal fails", async () => {
+    mocks.disposeAcpSessionManagerInstance.mockRejectedValue(new Error("ACP close failed"));
+    const pluginServices = { stop: vi.fn(async () => undefined) };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ pluginServices: pluginServices as never }),
+    );
+
+    const result = await close({ reason: "test" });
+
+    expect(pluginServices.stop).toHaveBeenCalledOnce();
+    expect(result.warnings).toContain("acp-session-manager");
+  });
+
+  it("keeps plugin services alive until a slow ACP session disposal settles", async () => {
+    vi.useFakeTimers();
+    let releaseDisposal!: () => void;
+    mocks.disposeAcpSessionManagerInstance.mockReturnValue(
+      new Promise<undefined>((resolve) => {
+        releaseDisposal = () => resolve(undefined);
+      }),
+    );
+    const pluginServices = { stop: vi.fn(async () => undefined) };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ pluginServices: pluginServices as never }),
+    );
+
+    try {
+      const closePromise = close({ reason: "test" });
+      await vi.advanceTimersByTimeAsync(5_001);
+
+      expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledOnce();
+      expect(pluginServices.stop).not.toHaveBeenCalled();
+
+      releaseDisposal();
+      await closePromise;
+      expect(pluginServices.stop).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the secrets runtime snapshot only after channels stop (#112681)", async () => {

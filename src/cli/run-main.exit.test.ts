@@ -116,6 +116,9 @@ const readLocalOnboardingStateMock = vi.hoisted(() =>
 const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
 const runTuiMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<void>>(async () => {}));
+const runTuiCliActionMock = vi.hoisted(() =>
+  vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
+);
 const probeGatewayConfiguredModelMock = vi.hoisted(() =>
   vi.fn<
     () => Promise<{
@@ -164,6 +167,7 @@ const createCliProgressMock = vi.hoisted(() =>
   })),
 );
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+const readSourceConfigBestEffortMock = vi.hoisted(() => vi.fn(async () => ({})));
 const startProxyMock = vi.hoisted(() =>
   vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
 );
@@ -422,12 +426,17 @@ vi.mock("../tui/tui.js", () => ({
   runTui: runTuiMock,
 }));
 
+vi.mock("./tui-cli.js", () => ({
+  runTuiCliAction: runTuiCliActionMock,
+}));
+
 vi.mock("./progress.js", () => ({
   createCliProgress: createCliProgressMock,
 }));
 
 vi.mock("../config/io.js", () => ({
   readBestEffortConfig: loadConfigMock,
+  readSourceConfigBestEffort: readSourceConfigBestEffortMock,
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -2367,27 +2376,24 @@ describe("runCli exit behavior", () => {
   it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
     ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
-  ])("reads proxy config without observation for the update dry-run %s", async (_name, argv) => {
+  ])("reads source-only proxy config for the update dry-run %s", async (_name, argv) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
-    loadConfigMock.mockReturnValueOnce({ proxy: { selected: "dry-run" } });
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "dry-run" } });
 
     await runCli(argv);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({
-      observe: false,
-      skipPluginValidation: true,
-    });
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
     expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
   });
 
-  it("keeps observed proxy config reads for mutable updates", async () => {
+  it("reads source-only proxy config for mutable updates", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
     await runCli(["node", "openclaw", "update"]);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({
-      skipPluginValidation: true,
-    });
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
@@ -2565,6 +2571,23 @@ describe("runCli exit behavior", () => {
     expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: true, quiet: true });
   });
 
+  it("keeps explicit database preflight isolated from default state selection", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli([
+      "node",
+      "openclaw",
+      "database",
+      "preflight",
+      "/tmp/openclaw-candidate.sqlite",
+      "--json",
+    ]);
+
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(startProxyMock).not.toHaveBeenCalled();
+  });
+
   it("keeps agent exec outside the CLI dotenv loader", async () => {
     buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: vi.fn() });
     await runCli(["node", "openclaw", "agent", "exec", "test prompt"]);
@@ -2689,6 +2712,159 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("routes a bare-root Control UI URL directly to the TUI action", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+
+    await withInteractiveTty(() => runCli(["node", "openclaw", target]));
+
+    expect(runTuiCliActionMock).toHaveBeenCalledWith(target, {});
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["tui", "attach", "logs"])(
+    "leaves an explicit %s URL invocation on the Commander path",
+    async (command) => {
+      const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+      const argv = ["node", "openclaw", command, target];
+      buildProgramMock.mockReturnValueOnce({
+        commands: [{ name: () => command, aliases: () => [] }],
+        parseAsync: commanderParseAsyncMock,
+      });
+
+      await runCli(argv);
+
+      expect(runTuiCliActionMock).not.toHaveBeenCalled();
+      expect(buildProgramMock).toHaveBeenCalledTimes(1);
+      expect(commanderParseAsyncMock).toHaveBeenCalledWith(argv);
+    },
+  );
+
+  it("leaves plugin-owned URL arguments on the plugin command path", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+    const argv = ["node", "openclaw", "googlemeet", target];
+    buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: commanderParseAsyncMock });
+
+    await runCli(argv);
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenCalledWith(argv);
+  });
+
+  it("does not steal a URL argument from an unowned command", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+
+    await expect(runCli(["node", "openclaw", "unknown-owner", target])).rejects.toThrow(
+      "Unknown command: openclaw unknown-owner",
+    );
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "after the URL",
+      args: [
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--token",
+        "direct-token",
+        "--password=direct-password",
+        "--tls-fingerprint",
+        "sha256:direct",
+        "--deliver",
+        "--message",
+        "continue here",
+      ],
+    },
+    {
+      label: "before the URL with split values",
+      args: [
+        "--token",
+        "direct-token",
+        "--password",
+        "direct-password",
+        "--tls-fingerprint",
+        "sha256:direct",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--deliver",
+        "--message",
+        "continue here",
+      ],
+    },
+    {
+      label: "before the URL with inline values",
+      args: [
+        "--token=direct-token",
+        "--password=direct-password",
+        "--tls-fingerprint=sha256:direct",
+        "--message=continue here",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--deliver",
+      ],
+    },
+  ])("forwards bare-root TUI options $label without an environment handoff", async ({ args }) => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+      },
+      () => withInteractiveTty(() => runCli(["node", "openclaw", ...args])),
+    );
+
+    expect(runTuiCliActionMock).toHaveBeenCalledWith(target, {
+      token: "direct-token",
+      password: "direct-password",
+      tlsFingerprint: "sha256:direct",
+      deliver: true,
+      message: "continue here",
+    });
+  });
+
+  it.each([
+    ["unknown inline option", ["--typo=do-not-print-me"]],
+    ["unknown split option", ["--typo", "do-not-print-me"]],
+    ["option terminator", ["--"]],
+  ])("rejects a pre-URL %s without reflecting values", async (_label, prefix) => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", ...prefix, target]);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain("do-not-print-me");
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing pre-URL direct option value before command discovery", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+
+    await expect(runCli(["node", "openclaw", "--token", target])).rejects.toThrow(
+      "--token requires a value",
+    );
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a bare session ref as root-command sugar", async () => {
+    await expect(runCli(["node", "openclaw", "movies-a1166b81"])).rejects.toThrow(
+      "Unknown command: openclaw movies-a1166b81",
+    );
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not claim host shorthand as root-command sugar", async () => {
+    await expect(runCli(["node", "openclaw", "gateway.example/main/a1166b81"])).rejects.toThrow(
+      "Unknown command: openclaw gateway.example/main/a1166b81",
+    );
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
   });
 
   it("suggests close known commands for unowned command roots before proxy startup", async () => {

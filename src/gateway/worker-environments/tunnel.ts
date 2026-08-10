@@ -6,7 +6,6 @@ import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferred, type Deferred } from "../../shared/deferred.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
-import { boundedWorkerError } from "./service-validation.js";
 import {
   advanceWorkerSshAfterTransportExit,
   prepareWorkerSsh,
@@ -29,6 +28,7 @@ import {
   workerSshProcessError,
   WORKER_TUNNEL_READY_MARKER,
 } from "./tunnel-ssh-runner.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 

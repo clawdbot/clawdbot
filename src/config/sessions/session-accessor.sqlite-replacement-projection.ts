@@ -13,7 +13,6 @@ import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   readSqliteSessionEntryStore,
-  sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
@@ -86,14 +85,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     const replacementAuthorityKeys = selectedStatuses
       ? new Set(entries.map(({ sessionKey }) => sessionKey))
       : selectedKeys;
-    const operation = await params.update(
-      entries.map(({ entry, sessionKey }) => ({
-        entry: cloneSessionEntry(entry),
-        sessionKey,
-      })),
+    const expectedEntryJson = new Map(
+      entries.map(({ sessionKey, entry }) => [sessionKey, JSON.stringify(entry)]),
     );
+    const operation = await params.update(entries);
     const replacements = normalize(operation.replacements);
-    const expectedEntries = new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
     const claimedCanonicalKeys = new Set<string>();
     for (const replacement of replacements) {
       const previousSessionKeys = replacement.previousSessionKeys;
@@ -123,7 +119,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       }
       if (canonical) {
         for (const previousSessionKey of previousSessionKeys) {
-          if (!expectedEntries.has(previousSessionKey)) {
+          if (!expectedEntryJson.has(previousSessionKey)) {
             throw new Error(
               `Session entry canonical projection cannot replace missing alias ${previousSessionKey}`,
             );
@@ -134,7 +130,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
 
     const applicable = replacements.filter(
       (replacement) =>
-        replacement.previousSessionKeys || expectedEntries.has(replacement.sessionKey),
+        replacement.previousSessionKeys || expectedEntryJson.has(replacement.sessionKey),
     );
     if (params.requireWriteSuccess && replacements.length > 0 && applicable.length === 0) {
       throw new Error("session entry replacements did not persist any rows");
@@ -154,10 +150,14 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     const current = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction(
       (transactionDb) => {
+        const transactionEntries = new Map<string, SessionEntry>();
         for (const sessionKey of validationKeys) {
           const transactionEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-          if (!sqliteSessionEntriesEqual(transactionEntry, expectedEntries.get(sessionKey))) {
+          if (JSON.stringify(transactionEntry) !== expectedEntryJson.get(sessionKey)) {
             throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
+          }
+          if (transactionEntry) {
+            transactionEntries.set(sessionKey, transactionEntry);
           }
         }
         for (const replacement of applicable) {
@@ -165,7 +165,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             replacement.sessionKey,
             ...(replacement.previousSessionKeys ?? []),
           ].flatMap((sessionKey) => {
-            const entry = expectedEntries.get(sessionKey);
+            const entry = transactionEntries.get(sessionKey);
             return entry ? [{ entry, sessionKey }] : [];
           });
           const selectedBefore = sourceEntries.toSorted(

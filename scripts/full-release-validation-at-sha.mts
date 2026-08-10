@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
@@ -18,6 +19,8 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
   ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
+export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
+export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
@@ -67,9 +70,9 @@ function displayValue(value: unknown): string {
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
-Creates temporary remote branches pinned to trusted main release tooling and
-the exact target commit, dispatches Full Release Validation with the target
-branch as its ref input,
+Creates temporary remote branches pinned to the exact Tooling SHA and Validation SHA,
+dispatches Full Release Validation with the Validation SHA branch as its ref input
+and expected_sha as its immutable identity,
 watches the parent run, verifies all child workflow head SHAs match the trusted
 workflow lineage through the release evidence manifest, then deletes both
 temporary branches by default. --keep-branch retains both branches. Exact-target and changelog-only Release SHA
@@ -212,6 +215,9 @@ export function parseArgs(argv: string[]) {
   }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
+  }
+  if (Object.hasOwn(args.inputs, "expected_sha")) {
+    throw new Error("SHA-pinned release validation reserves expected_sha for the resolved --sha");
   }
   if (
     args.targetRef &&
@@ -375,7 +381,8 @@ function readWorkflowRun(parentRunId: string, workflowSha: string) {
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
-  for (let attempt = 0; attempt < 480; attempt += 1) {
+  const deadline = Date.now() + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
+  while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
       suite = readWorkflowRun(parentRunId, workflowSha);
@@ -404,10 +411,19 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
         `Full Release Validation concluded ${stringValue(suite.conclusion, "unknown").toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 45_000);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs),
+    );
   }
   throw new Error(
-    `Timed out waiting for Full Release Validation: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+    `Timed out after ${FULL_RELEASE_WAIT_TIMEOUT_MINUTES} minutes waiting for Full Release Validation: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
   );
 }
 
@@ -431,10 +447,31 @@ export function assertTrustedWorkflowHarness(
     runStatus("git", ["cat-file", "-e", `${workflowSha}:${relativePath}`], {
       stdio: ["ignore", "ignore", "ignore"],
     }).status === 0,
+  readPath: (relativePath: string) => string = (relativePath) =>
+    run("git", ["show", `${workflowSha}:${relativePath}`]),
 ) {
   if (!pathExists(TRUSTED_WORKFLOW_PATH)) {
     throw new Error(
       `trusted workflow SHA ${workflowSha} does not contain ${TRUSTED_WORKFLOW_PATH}`,
+    );
+  }
+  let workflow: unknown;
+  try {
+    workflow = parseYaml(readPath(TRUSTED_WORKFLOW_PATH));
+  } catch (error) {
+    throw new Error(
+      `Tooling SHA ${workflowSha} contains invalid ${TRUSTED_WORKFLOW_PATH}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (
+    !isRecord(workflow) ||
+    !isRecord(workflow.on) ||
+    !isRecord(workflow.on.workflow_dispatch) ||
+    !isRecord(workflow.on.workflow_dispatch.inputs) ||
+    !Object.hasOwn(workflow.on.workflow_dispatch.inputs, "expected_sha")
+  ) {
+    throw new Error(
+      `Tooling SHA ${workflowSha} is missing workflow_dispatch input expected_sha in ${TRUSTED_WORKFLOW_PATH}`,
     );
   }
   const verifierPath = RELEASE_EVIDENCE_VERIFIER_PATHS.find((relativePath) =>
@@ -503,12 +540,13 @@ function main() {
   const remoteTargetBranchRef = `refs/heads/${targetBranch}`;
   const dispatchInputs = {
     ref: targetBranch,
+    expected_sha: targetSha,
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,
   };
 
-  console.log(`Target SHA: ${targetSha}`);
-  console.log(`Trusted workflow SHA: ${workflowSha}`);
+  console.log(`Validation SHA: ${targetSha}`);
+  console.log(`Tooling SHA: ${workflowSha}`);
   console.log(`Temporary target ref: ${targetBranch}`);
   console.log(`Temporary workflow ref: ${branch}`);
 

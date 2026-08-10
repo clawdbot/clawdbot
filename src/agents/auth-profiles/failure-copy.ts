@@ -5,7 +5,7 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../failover/signal.js";
 import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 
 type AuthProfileFailureCopyParams = {

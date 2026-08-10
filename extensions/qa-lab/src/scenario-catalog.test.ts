@@ -294,11 +294,6 @@ describe("qa scenario catalog", () => {
       ["agents.defaults.compaction.reserveTokens", "agents.defaults.compaction.reserveTokensFloor"],
     ],
     [
-      "commitments-heartbeat-target-none",
-      { agents: { defaults: { heartbeat: { every: "30m", target: "none" } } } },
-      ["commitments"],
-    ],
-    [
       "active-memory-preprompt-recall",
       { plugins: { entries: { "active-memory": { config: { mode: "always" } } } } },
       [],
@@ -819,8 +814,6 @@ describe("qa scenario catalog", () => {
     ) as { requiredProviderMode?: string } | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
     const retryFailure = readQaScenarioById("message-tool-stranded-final-retry-failure");
-    const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
-    const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
     expect(retryFailureConfig?.requiredProviderMode).toBe("mock-openai");
@@ -830,9 +823,6 @@ describe("qa scenario catalog", () => {
     expect(JSON.stringify(retryFailure.execution.flow)).toContain(
       "this seeded scenario is mock-openai only",
     );
-    expect(heartbeatFlow).toContain("sessionKey");
-    expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
-    expect(heartbeatFlow).not.toContain("waitForNoOutbound");
   });
 
   it.each([

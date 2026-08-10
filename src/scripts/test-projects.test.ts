@@ -701,6 +701,16 @@ describe("test-projects args", () => {
     ).toStrictEqual([]);
   });
 
+  it("routes bundled plugin manifest changes through the docs config audit", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/voice-call/openclaw.plugin.json"])).toEqual({
+      mode: "targets",
+      targets: [
+        "extensions/voice-call/openclaw.plugin.json",
+        "src/config/docs-config-examples.test.ts",
+      ],
+    });
+  });
+
   it("routes auth setup script changes to the focused auth monitor test", () => {
     const changedPaths = ["scripts/setup-auth-system.sh"];
 
@@ -886,28 +896,6 @@ describe("test-projects args", () => {
         watchMode: false,
       },
     ]);
-  });
-
-  it("rejects explicit test-support helper files with no importing tests", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
-    try {
-      fs.mkdirSync(path.join(tempDir, "src", "lonely"), { recursive: true });
-      fs.writeFileSync(
-        path.join(tempDir, "src", "lonely", "runtime.test-helpers.ts"),
-        "export {};\n",
-      );
-
-      expect(
-        findUnmatchedExplicitTestTargets(["src/lonely/runtime.test-helpers.ts"], tempDir),
-      ).toEqual([
-        {
-          target: "src/lonely/runtime.test-helpers.ts",
-          reason: "target-matched-no-test-files",
-        },
-      ]);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("accepts explicit Vitest config targets routed as whole config runs", () => {

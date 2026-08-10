@@ -2,7 +2,8 @@
 // Builds shared Docker images, prepares one OpenClaw npm tarball, assigns lanes
 // to bare/functional images, and runs lanes through weighted resource pools.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -31,7 +32,11 @@ import {
 } from "./lib/docker-e2e-plan.mts";
 import type { DockerE2eLane } from "./lib/docker-e2e-scenarios.mts";
 import { sleep } from "./lib/sleep.mjs";
-import { validatePrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
+import {
+  createPrepublishPluginRegistryArtifact,
+  inspectNpmPackageTarball,
+  validatePrepublishPluginRegistryArtifact,
+} from "./prepublish-plugin-registry-artifact.mjs";
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
@@ -53,8 +58,17 @@ const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
+const CANDIDATE_ENV_KEYS =
+  "OPENCLAW_DOCKER_E2E_SELECTED_SHA OPENCLAW_CURRENT_PACKAGE_TGZ OPENCLAW_CURRENT_PACKAGE_VERSION OPENCLAW_CURRENT_PACKAGE_SHA256".split(
+    " ",
+  );
+const REGISTRY_ENV_KEYS =
+  "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256".split(
+    " ",
+  );
 
 type SchedulerLimits = ReturnType<typeof parseSchedulerOptions>;
+type DockerCandidatePlan = ReturnType<typeof resolveDockerE2ePlan>["plan"];
 
 type SchedulerActiveState = {
   count: number;
@@ -135,10 +149,11 @@ const IS_MAIN = (() => {
 
 function dockerAllUsage() {
   return [
-    "Usage: node scripts/test-docker-all.mjs [--plan-json]",
+    "Usage: node scripts/test-docker-all.mjs [--plan-json | --prepare-only=<manifest>]",
     "",
     "Options:",
     "  --plan-json    Print the resolved Docker E2E plan as JSON and exit.",
+    "  --prepare-only Prepare one immutable candidate manifest and exit.",
     "  -h, --help     Show this help.",
     "",
     "Lane selection and scheduler settings are configured with OPENCLAW_DOCKER_ALL_* env vars.",
@@ -146,23 +161,29 @@ function dockerAllUsage() {
 }
 
 export function parseDockerAllCliArgs(argv: readonly string[]) {
-  const options = {
+  const options: { help: boolean; planJson: boolean; prepareOnly?: string } = {
     help: false,
     planJson: false,
   };
   for (const arg of argv) {
     if (arg === "--plan-json") {
       options.planJson = true;
+    } else if (arg.startsWith("--prepare-only=")) {
+      options.prepareOnly = arg.slice("--prepare-only=".length);
+      if (!options.prepareOnly) {
+        throw new Error(`--prepare-only requires a manifest path\n\n${dockerAllUsage()}`);
+      }
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {
       throw new Error(`unknown argument: ${arg}\n\n${dockerAllUsage()}`);
     }
   }
+  assert(!(options.planJson && options.prepareOnly), "conflicting plan/prep options");
   return options;
 }
 
-let cliOptions = {
+let cliOptions: ReturnType<typeof parseDockerAllCliArgs> = {
   help: false,
   planJson: false,
 };
@@ -361,6 +382,75 @@ function commandEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return env;
 }
 
+function gitOutput(repoRoot: string, args: string[]) {
+  return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+}
+
+function rootPackageVersion(repoRoot: string) {
+  return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version as string;
+}
+
+function readCompleteTuple(env: NodeJS.ProcessEnv, keys: readonly string[], label: string) {
+  const entries = keys.flatMap((key) => (env[key] ? [[key, env[key]]] : []));
+  const complete = entries.length === keys.length;
+  assert(!entries.length || complete, `${label} fields must be complete`);
+  return complete ? Object.fromEntries(entries) : undefined;
+}
+
+function validateRegistryEnvironment(baseEnv: NodeJS.ProcessEnv, plan: DockerCandidatePlan) {
+  validatePrepublishPluginRegistryArtifact({
+    artifactDir: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR!,
+    expectedCandidateVersion: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION!,
+    expectedManifestSha256: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256!,
+    expectedSourceSha: baseEnv.OPENCLAW_DOCKER_E2E_SELECTED_SHA!,
+    requiredPackages: plan.requiredPrepublishPluginPackages,
+  });
+}
+
+export function validateDockerCandidateEnvironment(
+  baseEnv: NodeJS.ProcessEnv,
+  plan: DockerCandidatePlan,
+  repoRoot = ROOT_DIR,
+) {
+  const strictCandidate = CANDIDATE_ENV_KEYS.slice(2).some((key) => baseEnv[key]);
+  if (!strictCandidate || !plan.needs.package) {
+    baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ &&= path.resolve(baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ);
+    const registryDir = baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+    if (!plan.needs.prepublishPluginRegistry || !registryDir) {
+      delete baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+      return;
+    }
+    baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = path.resolve(registryDir);
+    validateRegistryEnvironment(baseEnv, plan);
+    return;
+  }
+  const candidate = readCompleteTuple(baseEnv, CANDIDATE_ENV_KEYS, "Docker candidate")!;
+  const registry = readCompleteTuple(baseEnv, REGISTRY_ENV_KEYS, "Docker candidate registry");
+  const packagePath = candidate.OPENCLAW_CURRENT_PACKAGE_TGZ;
+  if (
+    !path.isAbsolute(packagePath) ||
+    gitOutput(repoRoot, ["rev-parse", "HEAD"]) !== candidate.OPENCLAW_DOCKER_E2E_SELECTED_SHA
+  ) {
+    throw new Error("Docker candidate path must be absolute and selected SHA must equal HEAD");
+  }
+  const packed = inspectNpmPackageTarball(packagePath);
+  if (
+    packed.packageJson.name !== "openclaw" ||
+    packed.packageJson.version !== rootPackageVersion(repoRoot) ||
+    packed.packageJson.version !== candidate.OPENCLAW_CURRENT_PACKAGE_VERSION ||
+    packed.sha256 !== candidate.OPENCLAW_CURRENT_PACKAGE_SHA256
+  ) {
+    throw new Error("Docker candidate package identity differs from the immutable tuple");
+  }
+  if (registry) {
+    const registryDir = registry.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+    assert(path.isAbsolute(registryDir), "Docker candidate registry path must be absolute");
+    validateRegistryEnvironment(baseEnv, plan);
+  } else if (plan.needs.prepublishPluginRegistry) {
+    throw new Error("Docker plan requires a prepublish plugin registry tuple");
+  }
+}
+
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -431,7 +521,7 @@ export function githubWorkflowRerunCommand(
   return fields.join(" ");
 }
 
-function buildLaneRerunCommand(name: string, baseEnv: NodeJS.ProcessEnv) {
+export function buildLaneRerunCommand(name: string, baseEnv: NodeJS.ProcessEnv) {
   const poolLane = findLaneByName(name);
   const build = name.startsWith("live-") ? "1" : "0";
   const image = poolLane ? e2eImageForLane(poolLane, baseEnv) : baseEnv.OPENCLAW_DOCKER_E2E_IMAGE;
@@ -443,8 +533,8 @@ function buildLaneRerunCommand(name: string, baseEnv: NodeJS.ProcessEnv) {
     ["OPENCLAW_DOCKER_E2E_IMAGE", image || DEFAULT_E2E_FUNCTIONAL_IMAGE],
     ["OPENCLAW_DOCKER_E2E_BARE_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE],
     ["OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE],
-    ["OPENCLAW_CURRENT_PACKAGE_TGZ", baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ],
-    ["OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR", baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR],
+    ...CANDIDATE_ENV_KEYS.map((key) => [key, baseEnv[key]] as const),
+    ...REGISTRY_ENV_KEYS.map((key) => [key, baseEnv[key]] as const),
     ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
     ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
     ["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
@@ -1101,7 +1191,7 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   const packageTgz = path.join(packDir, "openclaw-current.tgz");
   await runForeground(
     "Prepare OpenClaw package once",
-    `node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
+    `node ${shellQuote(path.join(ROOT_DIR, "scripts/package-openclaw-for-docker.mjs"))} --source-dir ${shellQuote(ROOT_DIR)} --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
     baseEnv,
   );
   await fs.promises.access(packageTgz);
@@ -1112,6 +1202,57 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
   baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
+}
+
+async function prepareDockerCandidate(
+  plan: DockerCandidatePlan,
+  logDir: string,
+  manifestPath: string,
+) {
+  const sourceSha = gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]);
+  let candidate = null;
+  if (plan.needs.package) {
+    if (gitOutput(ROOT_DIR, ["status", "--porcelain=v1"])) {
+      throw new Error("repository has working-tree changes; refusing to prepare Docker candidate");
+    }
+    const candidateEnv = commandEnv();
+    for (const key of [...CANDIDATE_ENV_KEYS, ...REGISTRY_ENV_KEYS]) {
+      delete candidateEnv[key];
+    }
+    await prepareOpenClawPackage(candidateEnv, logDir);
+    const packagePath = candidateEnv.OPENCLAW_CURRENT_PACKAGE_TGZ!;
+    const packed = inspectNpmPackageTarball(packagePath);
+    const version = rootPackageVersion(ROOT_DIR);
+    if (packed.packageJson.name !== "openclaw" || packed.packageJson.version !== version) {
+      throw new Error("packed Docker candidate name or version differs from the root package");
+    }
+    let registry = null;
+    if (plan.needs.prepublishPluginRegistry) {
+      const registryDir = path.join(logDir, "prepublish-plugin-registry");
+      fs.rmSync(registryDir, { force: true, recursive: true });
+      const artifact = createPrepublishPluginRegistryArtifact({
+        repoRoot: ROOT_DIR,
+        outputDir: registryDir,
+        sourceSha,
+        candidateVersion: version,
+        requiredPackages: plan.requiredPrepublishPluginPackages,
+      });
+      registry = {
+        dir: registryDir,
+        candidateVersion: version,
+        manifestSha256: artifact.manifestSha256,
+      };
+    }
+    candidate = {
+      package: { path: packagePath, name: packed.packageJson.name, version, sha256: packed.sha256 },
+      registry,
+    };
+  }
+  await mkdir(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(
+    manifestPath,
+    `${JSON.stringify({ schema: "openclaw.qa-docker-candidate/v1", schemaVersion: 1, sourceSha, candidate }, null, 2)}\n`,
+  );
 }
 
 function e2eImageForLane(poolLane: DockerE2eLane, baseEnv: NodeJS.ProcessEnv) {
@@ -1664,20 +1805,6 @@ async function main() {
       allowFrozenTargetScenarioOmissions,
       candidatePackageRoot: ROOT_DIR,
     });
-  const prepublishPluginRegistryDir = process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
-  if (plan.needs.prepublishPluginRegistry && prepublishPluginRegistryDir) {
-    baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = path.resolve(prepublishPluginRegistryDir);
-    validatePrepublishPluginRegistryArtifact({
-      artifactDir: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
-      expectedCandidateVersion:
-        process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION ?? "",
-      expectedManifestSha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 ?? "",
-      expectedSourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ?? "",
-      requiredPackages: plan.requiredPrepublishPluginPackages,
-    });
-  } else {
-    delete baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
-  }
   if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
     throw new Error(
       `frozen target scenario omissions require trusted workflow opt-in: ${omittedUnsupportedLaneNames.join(", ")}`,
@@ -1701,6 +1828,10 @@ async function main() {
 
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+    return;
+  }
+  if (cliOptions.prepareOnly) {
+    await prepareDockerCandidate(plan, logDir, path.resolve(cliOptions.prepareOnly));
     return;
   }
 
@@ -1754,6 +1885,7 @@ async function main() {
     console.log("==> Dry run complete");
     return;
   }
+  validateDockerCandidateEnvironment(baseEnv, plan);
 
   // Planning can report unsupported scenarios, but execution cannot pass when
   // frozen-target omissions leave no selected lane to run.

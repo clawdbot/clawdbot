@@ -5016,6 +5016,90 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
+  it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const turnIds = ["turn-ada", "turn-grace"] as const;
+    let nextTurnIndex = 0;
+    const harness = createAppServerHarness(async (method, params) => {
+      if (method === "thread/resume") {
+        return threadStartResult((params as { threadId?: string }).threadId ?? "thread-existing");
+      }
+      if (method === "turn/start") {
+        const turnId = turnIds[nextTurnIndex++];
+        if (!turnId) {
+          throw new Error("unexpected extra turn/start");
+        }
+        return turnStartResult(turnId);
+      }
+      return {};
+    });
+
+    const runTurn = async (sender: { id: string; name: string }, prompt: string, runId: string) => {
+      const expectedTurnStarts =
+        harness.requests.filter((request) => request.method === "turn/start").length + 1;
+      const params = createParams(sessionFile, workspaceDir, { prompt, runId });
+      params.trigger = "user";
+      const message = {
+        role: "user" as const,
+        content: prompt,
+        timestamp: Date.now(),
+        __openclaw: { senderId: sender.id, senderName: sender.name },
+      };
+      params.userTurnTranscriptRecorder = {
+        message,
+        resolveMessage: async () => message,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending() {},
+        markRuntimePersisted() {},
+      } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      const run = runCodexAppServerAttempt(params);
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedTurnStarts),
+        fastWait,
+      );
+      await harness.completeTurn({
+        threadId: "thread-existing",
+        turnId: `turn-${sender.name.toLowerCase()}`,
+      });
+      await run;
+    };
+
+    await runTurn({ id: "profile-ada", name: "Ada" }, "first request", "run-ada");
+    await runTurn({ id: "profile-grace", name: "Grace" }, "second request", "run-grace");
+
+    expect(
+      harness.requests
+        .filter((request) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["thread/resume", "turn/start", "turn/start"]);
+    expect(
+      harness.requests
+        .filter((request) => request.method === "turn/start")
+        .map(
+          (request) =>
+            (
+              request.params as {
+                additionalContext?: Record<string, { kind: string; value: string }>;
+              }
+            ).additionalContext?.openclaw_current_sender,
+        ),
+    ).toEqual([
+      {
+        kind: "untrusted",
+        value: '{"sender":{"id":"profile-ada","name":"Ada"}}',
+      },
+      {
+        kind: "untrusted",
+        value: '{"sender":{"id":"profile-grace","name":"Grace"}}',
+      },
+    ]);
+  });
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });

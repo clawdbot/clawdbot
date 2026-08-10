@@ -994,7 +994,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveConversationLabel",
       "shouldDebounceTextInbound",
       "shouldAckReaction",
-      "shouldAckReactionForWhatsApp",
       "toLocationContext",
       "resolveThreadBindingConversationIdFromBindingId",
       "resolveThreadBindingEffectiveExpiresAt",
@@ -1142,9 +1141,16 @@ describe("plugin-sdk subpath exports", () => {
       "logTypingFailure",
       "removeAckReactionAfterReply",
       "shouldAckReaction",
-      "shouldAckReactionForWhatsApp",
       "DEFAULT_EMOJIS",
     ]);
+    expectSourceOmits("channel-feedback", [
+      "shouldAckReactionForWhatsApp",
+      "WhatsAppAckReactionMode",
+    ]);
+    expectRepoSourceOmitsSnippet("src/channels/ack-reactions.ts", "shouldAckReactionForWhatsApp");
+    expectRepoSourceOmitsSnippet("src/channels/ack-reactions.ts", "WhatsAppAckReactionMode");
+    expectSourceMentions("channel-streaming", ["SlackChannelStreamingConfig"]);
+    expectRepoSourceOmitsSnippet("src/channels/streaming.ts", "SlackChannelStreamingConfig");
     expectSourceMentions("status-helpers", [
       "appendMatchMetadata",
       "asString",
@@ -1266,7 +1272,7 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("provider-catalog-shared", {
       mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
-      omits: ["buildDeepSeekProvider", "buildOpenAICodexProvider", "buildVeniceProvider"],
+      omits: ["buildDeepSeekProvider", "buildVeniceProvider"],
     });
 
     expectSourceMentions("setup", [

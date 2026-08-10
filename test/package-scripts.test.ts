@@ -221,6 +221,18 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs mixed-case local media file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media/local-media-path.windows.test.ts",
+    );
+  });
+
+  it("runs sandbox media staging file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
+    );
+  });
+
   it("runs the native OpenSSH resolver proof in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/ssh-client.windows.test.ts",
@@ -311,5 +323,36 @@ describe("package scripts", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/fs-safe-remove.test.ts",
     );
+  });
+
+  it("runs web and Teams file URL coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/media/web-media.file-url.windows.test.ts");
+    expect(script).toContain("extensions/msteams/src/media-helpers.test.ts");
+    expect(script).toContain("extensions/msteams/src/messenger.test.ts");
+  });
+
+  it("runs native usage footer home-path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+    );
+  });
+
+  it("runs native media-understanding file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+    );
+  });
+
+  it("runs shared home display and visible command coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/utils.test.ts");
+    expect(script).toContain("src/commands/agents.commands.list.test.ts");
+    expect(script).toContain("src/cli/daemon-cli/status.print.test.ts");
+    expect(script).toContain("packages/terminal-core/src/display-string.test.ts");
+    expect(script).toContain("src/agents/sandbox/fs-paths.test.ts");
+    expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
   });
 });

@@ -2,7 +2,6 @@ import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owne
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
   PreparedModelRuntimeOwner,
-  PreparedModelRuntimeSnapshot,
   PreparedReplyDispatchRuntime,
 } from "./prepared-model-runtime.types.js";
 
@@ -15,15 +14,17 @@ const EMPTY_REPLY_DISPATCH_PUBLICATION: PreparedReplyDispatchPublication = Objec
 });
 
 function createReplyDispatchRuntime(
-  snapshot: PreparedModelRuntimeSnapshot,
+  runtimeOwner: PreparedModelRuntimeOwner,
 ): PreparedReplyDispatchRuntime {
+  const snapshot = runtimeOwner.snapshot!;
   const owner = resolvePublishedModelCatalogOwner(snapshot);
-  if (!snapshot.inboundPluginRegistry) {
+  const inboundPluginRegistry = runtimeOwner.pluginGeneration?.inboundPluginRegistry;
+  if (!inboundPluginRegistry) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
     );
   }
-  return Object.freeze({ ...owner, inboundPluginRegistry: snapshot.inboundPluginRegistry });
+  return Object.freeze({ ...owner, inboundPluginRegistry });
 }
 
 function buildReplyDispatchPublication(
@@ -37,7 +38,7 @@ function buildReplyDispatchPublication(
           `prepared reply dispatch runtime owner was not published for ${owner.input.agentId ?? owner.input.agentDir}`,
         );
       }
-      return createReplyDispatchRuntime(owner.snapshot);
+      return createReplyDispatchRuntime(owner);
     })
     .toSorted((left, right) => left.agentId.localeCompare(right.agentId));
   if (new Set(runtimes.map((runtime) => runtime.agentId)).size !== runtimes.length) {

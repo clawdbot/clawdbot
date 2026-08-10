@@ -378,12 +378,16 @@ export async function maybeRepairSandboxImages(
   );
 
   if (sandbox.browser?.enabled && containerEngine.id === "docker") {
+    const browserImage = resolveSandboxBrowserImage(cfg);
     await handleMissingSandboxImage(
       {
         engineCommand: containerEngine.command,
         kind: "browser",
-        image: resolveSandboxBrowserImage(cfg),
-        buildScript: "scripts/sandbox-browser-setup.sh",
+        image: browserImage,
+        buildScript:
+          browserImage === DEFAULT_SANDBOX_BROWSER_IMAGE
+            ? "scripts/sandbox-browser-setup.sh"
+            : undefined,
         updateConfig: (image) => {
           next = updateSandboxBrowserImage(next, image);
           changes.push(`Updated agents.defaults.sandbox.browser.image → ${image}`);

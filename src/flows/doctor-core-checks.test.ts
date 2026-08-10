@@ -1013,30 +1013,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
-
-  it("registers stale session locks as a legacy-owned structured check", async () => {
-    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
-
-    if (typeof check.repair !== "function") {
-      throw new Error("expected session lock check repair");
-    }
-    await expect(
-      check.repair(
-        {
-          mode: "fix",
-          runtime,
-          cfg: {},
-          cwd: "/tmp/openclaw-test-workspace",
-        },
-        [],
-      ),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        status: "skipped",
-        reason: "legacy doctor session lock contribution owns cleanup",
-      }),
-    );
-  });
 });
 
 describe("core/doctor/bootstrap-size", () => {

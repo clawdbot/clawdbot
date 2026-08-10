@@ -311,9 +311,9 @@ This example gives the `research` agent a writable primary workspace, read-only 
         scope: "agent",
       },
     },
-    list: [
-      {
-        id: "research",
+    entries: {
+      research: {
+        default: true,
         workspace: "/srv/openclaw/research-workspace",
         sandbox: {
           workspaceAccess: "rw",
@@ -324,7 +324,7 @@ This example gives the `research` agent a writable primary workspace, read-only 
           },
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -364,16 +364,16 @@ openclaw sandbox recreate --agent research
         },
       },
     },
-    list: [
-      {
-        id: "build",
+    entries: {
+      build: {
+        default: true,
         sandbox: {
           docker: {
             binds: ["/mnt/cache:/cache:rw"],
           },
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -399,7 +399,7 @@ Default Docker image: `openclaw-sandbox:bookworm-slim`
 <Note>
 **Recommended build path**
 
-After enabling sandboxing, run `openclaw doctor`. For Docker, Doctor can build a missing configured OpenClaw default or common sandbox image and the Docker browser image. It does not build arbitrary custom images or Podman images.
+After enabling sandboxing, run `openclaw doctor`. For Docker, Doctor can build a missing configured OpenClaw default or common sandbox image and the default Docker browser image. It does not build arbitrary custom images or Podman images.
 
 The builder scripts, Dockerfiles, browser entrypoint, and shared build helpers ship in the npm package. Older releases that do not contain those assets can use the inline base-image recipe below or a source checkout.
 </Note>
@@ -450,7 +450,7 @@ The builder scripts, Dockerfiles, browser entrypoint, and shared build helpers s
 
   </Step>
   <Step title="Optional: build the sandbox browser image">
-    With Docker browser sandboxing enabled, run `openclaw doctor` and accept the build prompt. From a source checkout, you can also run:
+    With Docker browser sandboxing enabled and the default browser image configured, run `openclaw doctor` and accept the build prompt. From a source checkout, you can also run:
 
     ```bash
     scripts/sandbox-browser-setup.sh

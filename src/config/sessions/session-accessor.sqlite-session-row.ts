@@ -115,7 +115,8 @@ export function bindSqliteSessionNode(params: {
     label: normalizeSqliteText(params.entry.label),
     display_name: normalizeSqliteText(params.entry.displayName),
     category: normalizeSqliteText(params.entry.category),
-    icon: normalizeSqliteText(params.entry.icon),
+    // The retired custom-icon column remains nullable until a future schema-version migration.
+    icon: null,
     pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),

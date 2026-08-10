@@ -5,8 +5,8 @@ import {
   hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
   NATIVE_UPDATE_DECLINED_EVENT,
-  postNativeUpdate,
 } from "../app/native-link-routing.ts";
+import { confirmAndStartUpdate } from "../app/update-confirmation.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
@@ -84,6 +84,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     this.nativeUpdateAvailable = hasNativeUpdateBridge();
   };
 
+  // The Mac app only declines an update it was already handed, so this is the
+  // tail of a confirmed click. Re-confirming here would ask twice for one action.
   private readonly handleNativeUpdateDeclined = () => {
     this.nativeUpdateDeclined = true;
     this.nativeUpdateAvailable = false;
@@ -208,9 +210,14 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               if (busy || !this.canUpdate) {
                 return;
               }
-              if (this.nativeUpdateDeclined || !postNativeUpdate()) {
-                this.onUpdate();
-              }
+              void confirmAndStartUpdate({
+                startGatewayUpdate: () => this.onUpdate(),
+                updateAvailable: this.updateAvailable,
+                updateSchedule: this.updateSchedule,
+                // Read the bridge at click time: a Mac app that installed it
+                // after the last availability event still owns this update.
+                viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
+              });
             }}
           >
             <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
