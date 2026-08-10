@@ -1,5 +1,5 @@
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
-import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import type { Api, AssistantMessageEventStreamContract, Model, StreamFn } from "@openclaw/llm-core";
 // Simple completion transport tests cover provider-specific stream alias
 // selection before the generic completion helper invokes the LLM layer.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
 const prepareGoogleSimpleCompletionModel = vi.fn((_registry: unknown, model: unknown) => model);
 const inheritManagedTransport = vi.fn((_source: Model, target: Model) => target);
-const pluginStreamFn = vi.fn(() => "plugin-stream-result" as never);
+const pluginStreamFn = vi.fn(() => createAssistantMessageEventStream());
 const TEST_SECRET = "ollama-provider-secret";
 const TEST_SECRET_SENTINEL = "test-secret-sentinel";
 const initialHost = getAiTransportHost();
@@ -33,6 +33,21 @@ vi.mock("./provider-transport-stream.js", () => ({
 let prepareModelForSimpleCompletionImpl: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 let apiRegistry: ApiRegistry;
 const SIMPLE_COMPLETION_SOURCE_ID = "test:simple-completion-transport";
+
+function requireSynchronousStream(
+  stream: ReturnType<StreamFn>,
+): AssistantMessageEventStreamContract {
+  if (
+    stream instanceof Promise ||
+    !("push" in stream) ||
+    !("end" in stream) ||
+    typeof stream.push !== "function" ||
+    typeof stream.end !== "function"
+  ) {
+    throw new Error("Expected synchronous assistant event stream");
+  }
+  return stream as AssistantMessageEventStreamContract;
+}
 
 function prepareModelForSimpleCompletion(
   params: Omit<
@@ -317,7 +332,13 @@ describe("prepareModelForSimpleCompletion", () => {
         if (registry.getApiProvider(api)) {
           return false;
         }
-        registry.registerApiProvider({ api, stream: streamFn, streamSimple: streamFn });
+        registry.registerApiProvider({
+          api,
+          stream: (runtimeModel, context, options) =>
+            requireSynchronousStream(streamFn(runtimeModel, context, options)),
+          streamSimple: (runtimeModel, context, options) =>
+            requireSynchronousStream(streamFn(runtimeModel, context, options)),
+        });
         return true;
       },
     );
