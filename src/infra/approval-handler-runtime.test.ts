@@ -145,6 +145,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     const shouldHandle = vi.fn().mockReturnValue(true);
     const runtime = await createTestApprovalHandler(
       makeNativeApprovalCapability({
+        eventKinds: ["plugin"],
         shouldHandle,
         unbindPending,
       }),
@@ -180,7 +181,11 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     const resolveApprovalKind = vi.fn().mockReturnValue("plugin");
     const shouldHandle = vi.fn().mockReturnValue(true);
     const runtime = await createTestApprovalHandler(
-      makeNativeApprovalCapability({ resolveApprovalKind, shouldHandle }),
+      makeNativeApprovalCapability({
+        eventKinds: ["plugin"],
+        resolveApprovalKind,
+        shouldHandle,
+      }),
     );
     const approvalRuntime = expectApprovalRuntime(runtime);
     const request = {
