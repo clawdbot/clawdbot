@@ -109,20 +109,22 @@ test("projects.list exposes checkout details only at write scope", async () => {
       expect(project).not.toHaveProperty("originUrl");
     }
 
-    const writeResult = await invokeProjectMethod("projects.list", {}, cfg, ["operator.write"]);
-    expect(writeResult).toMatchObject({
-      ok: true,
-      payload: {
-        projects: [
-          { id: "workspace:main", repoRoot: "/workspace/alpha" },
-          {
-            id: "registered",
-            repoRoot: repo,
-            originUrl: "https://github.com/openclaw/openclaw.git",
-          },
-        ],
-      },
-    });
+    for (const scope of ["operator.write", "operator.admin"]) {
+      const writeResult = await invokeProjectMethod("projects.list", {}, cfg, [scope]);
+      expect(writeResult).toMatchObject({
+        ok: true,
+        payload: {
+          projects: [
+            { id: "workspace:main", repoRoot: "/workspace/alpha" },
+            {
+              id: "registered",
+              repoRoot: repo,
+              originUrl: "https://github.com/openclaw/openclaw.git",
+            },
+          ],
+        },
+      });
+    }
   } finally {
     await state.cleanup();
   }

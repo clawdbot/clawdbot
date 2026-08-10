@@ -12,7 +12,7 @@ import {
   registerProjectRegistry,
   removeProjectRegistry,
 } from "../../projects/project-registry.js";
-import { WRITE_SCOPE } from "../operator-scopes.js";
+import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -22,7 +22,8 @@ export const projectsHandlers: GatewayRequestHandlers = {
       return;
     }
     const projects = listProjectRegistry(context.getRuntimeConfig());
-    if (client?.connect.scopes?.includes(WRITE_SCOPE)) {
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes).allowed) {
       respond(true, { projects }, undefined);
       return;
     }
