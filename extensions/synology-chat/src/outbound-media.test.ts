@@ -164,6 +164,53 @@ describe("Synology Chat hosted outbound media", () => {
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 
+  it("never treats capability query values as an on-demand fetch target", async () => {
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/floor-plan.png",
+    });
+    const requestUrl = new URL(internalCapabilityUrl(prepared.url), "http://localhost");
+    requestUrl.searchParams.set("url", "http://127.0.0.1/private");
+    requestUrl.searchParams.set("target", "https://files.example.com/changed.png");
+    const response = makeRes();
+
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: `${requestUrl.pathname}${requestUrl.search}` }),
+      response,
+      account,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(Buffer.from(response.body).toString("utf8")).toBe("frozen-image-bytes");
+    expect(response.headers).not.toHaveProperty("location");
+    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
+
+    const targetOnly = makeRes();
+    await expect(
+      tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: "/internal/synology?target=http://127.0.0.1/private" }),
+        targetOnly,
+        account,
+      ),
+    ).resolves.toBe(false);
+    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates guarded-load rejection without creating a capability", async () => {
+    loadWebMediaMock.mockRejectedValueOnce(
+      new Error("Blocked hostname or private/internal IP address"),
+    );
+
+    await expect(
+      prepareSynologyHostedMedia({
+        account: createAccount(),
+        mediaUrl: "https://rebind.example.test/private",
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP address");
+    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed for wrong tokens, accounts, routes, and unsupported methods", async () => {
     const account = createAccount();
     const prepared = await prepareSynologyHostedMedia({
@@ -258,6 +305,146 @@ describe("Synology Chat hosted outbound media", () => {
     expect(responses.map((response) => response.statusCode).toSorted((a, b) => a - b)).toEqual([
       401, 401, 401, 401, 503,
     ]);
+  });
+
+  it("holds serving slots until responses finish or close", async () => {
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/report.pdf",
+    });
+    const requestUrl = internalCapabilityUrl(prepared.url);
+    const stalled = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
+    await Promise.all(
+      stalled.map((response) =>
+        tryHandleSynologyHostedMediaRequest(
+          makeReq("GET", "", { url: requestUrl }),
+          response,
+          account,
+        ),
+      ),
+    );
+
+    const blocked = makeRes();
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: requestUrl }),
+      blocked,
+      account,
+    );
+    expect(blocked.statusCode).toBe(503);
+
+    stalled[0]?.emit("finish");
+    const admitted = makeRes();
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: requestUrl }),
+      admitted,
+      account,
+    );
+    expect(admitted.statusCode).toBe(200);
+
+    for (const response of stalled.slice(1)) {
+      response.emit("close");
+    }
+  });
+
+  it("closes stalled attachment responses and releases their serving slot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    installRuntime();
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/report.pdf",
+    });
+    const requestUrl = internalCapabilityUrl(prepared.url);
+    const stalled = makeRes({ finishOnEnd: false });
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: requestUrl }),
+      stalled,
+      account,
+    );
+
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(stalled.destroyed).toBe(true);
+
+    const admitted = makeRes();
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: requestUrl }),
+      admitted,
+      account,
+    );
+    expect(admitted.statusCode).toBe(200);
+  });
+
+  it("bounds repeated authenticated downloads without charging HEAD requests", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.alloc(32 * 1024 * 1024, 0x61),
+      kind: undefined,
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+    });
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/report.pdf",
+    });
+    const requestUrl = internalCapabilityUrl(prepared.url);
+
+    for (let index = 0; index < 4; index += 1) {
+      const response = makeRes();
+      await tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: requestUrl }),
+        response,
+        account,
+      );
+      expect(response.statusCode).toBe(200);
+      await Promise.resolve();
+    }
+
+    const head = makeRes();
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("HEAD", "", { url: requestUrl }),
+      head,
+      account,
+    );
+    expect(head.statusCode).toBe(200);
+
+    const limited = makeRes();
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: requestUrl }),
+      limited,
+      account,
+    );
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers["retry-after"]).toBe("60");
+  });
+
+  it("persists frozen capabilities across plugin-state reopen and runtime replacement", async () => {
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/floor-plan.png",
+    });
+    const requestUrl = internalCapabilityUrl(prepared.url);
+
+    resetPluginStateStoreForTests();
+    installRuntime();
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("changed-source-bytes"),
+      kind: "image",
+      contentType: "image/png",
+      fileName: "changed.png",
+    });
+    const response = makeRes();
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: requestUrl }),
+      response,
+      account,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(Buffer.from(response.body).toString("utf8")).toBe("frozen-image-bytes");
+    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects active content and leaves no live capability", async () => {

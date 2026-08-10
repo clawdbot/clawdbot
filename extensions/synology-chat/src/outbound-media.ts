@@ -30,6 +30,10 @@ const SYNOLOGY_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 const SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS = 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS = 2;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES = 4;
+const SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS = 2 * 60_000;
+const SYNOLOGY_OUTBOUND_MEDIA_SERVED_BYTES_WINDOW_MS = 60_000;
+const SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVED_BYTES_PER_WINDOW = 128 * 1024 * 1024;
+const SYNOLOGY_OUTBOUND_MEDIA_MAX_BUDGET_ACCOUNTS = 128;
 const ACTIVE_CONTENT_TYPES = new Set([
   "image/svg+xml",
   "text/html",
@@ -68,7 +72,60 @@ const servingLimiter = createWebhookInFlightLimiter({
   maxTrackedKeys: 128,
 });
 const hostedMediaStores = new Map<string, HostedOutboundMediaStore>();
+const servedByteWindows = new Map<string, { startedAt: number; bytes: number }>();
 let hostedMediaRuntime: ReturnType<typeof getSynologyRuntime> | undefined;
+
+function reserveServedBytes(accountId: string, byteLength: number, now = Date.now()): boolean {
+  const existing = servedByteWindows.get(accountId);
+  const active =
+    existing && now - existing.startedAt < SYNOLOGY_OUTBOUND_MEDIA_SERVED_BYTES_WINDOW_MS
+      ? existing
+      : { startedAt: now, bytes: 0 };
+  if (active.bytes + byteLength > SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVED_BYTES_PER_WINDOW) {
+    return false;
+  }
+  servedByteWindows.delete(accountId);
+  servedByteWindows.set(accountId, {
+    startedAt: active.startedAt,
+    bytes: active.bytes + byteLength,
+  });
+  while (servedByteWindows.size > SYNOLOGY_OUTBOUND_MEDIA_MAX_BUDGET_ACCOUNTS) {
+    const oldest = servedByteWindows.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    servedByteWindows.delete(oldest);
+  }
+  return true;
+}
+
+function holdServingLeaseUntilResponseDone(res: ServerResponse, accountId: string): void {
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    clearTimeout(timeout);
+    res.off("finish", release);
+    res.off("close", release);
+    servingLimiter.release(accountId);
+  };
+  // `res.end()` only queues the body. Keep the account slot until the socket
+  // finishes or closes so slow readers cannot bypass the response concurrency cap.
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      res.statusCode = 504;
+      res.end("Attachment response timed out");
+    } else {
+      res.destroy();
+    }
+    release();
+  }, SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS);
+  timeout.unref?.();
+  res.once("finish", release);
+  res.once("close", release);
+}
 
 function createHostedMediaStore(accountId: string): HostedOutboundMediaStore {
   const runtime = getSynologyRuntime();
@@ -100,6 +157,7 @@ function getHostedMediaStore(accountId: string): HostedOutboundMediaStore {
     hostedMediaStores.clear();
     preparationLimiter.clear();
     servingLimiter.clear();
+    servedByteWindows.clear();
   }
   const existing = hostedMediaStores.get(accountId);
   if (existing) {
@@ -325,6 +383,7 @@ export async function tryHandleSynologyHostedMediaRequest(
     res.end("Attachment temporarily unavailable");
     return true;
   }
+  let responseOwnsServingLease = false;
   try {
     const store = getHostedMediaStore(account.accountId);
     const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
@@ -355,6 +414,12 @@ export async function tryHandleSynologyHostedMediaRequest(
       servedMetadata = entry.metadata;
       body = entry.buffer;
     }
+    if (method === "GET" && !reserveServedBytes(account.accountId, servedMetadata.byteLength)) {
+      res.statusCode = 429;
+      res.setHeader("Retry-After", "60");
+      res.end("Attachment download limit exceeded");
+      return true;
+    }
     for (const [name, value] of Object.entries(
       buildHostedOutboundMediaResponseHeaders(servedMetadata, {
         fallbackFileName: `attachment-${candidate.id.slice(0, 10)}.bin`,
@@ -363,9 +428,14 @@ export async function tryHandleSynologyHostedMediaRequest(
       res.setHeader(name, value);
     }
     res.statusCode = 200;
+    res.setHeader("Accept-Ranges", "none");
+    responseOwnsServingLease = true;
+    holdServingLeaseUntilResponseDone(res, account.accountId);
     res.end(body);
     return true;
   } finally {
-    servingLimiter.release(account.accountId);
+    if (!responseOwnsServingLease) {
+      servingLimiter.release(account.accountId);
+    }
   }
 }

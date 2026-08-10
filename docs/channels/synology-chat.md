@@ -115,7 +115,7 @@ openclaw message send --channel synology-chat --target synology:123456 --message
 
 Outbound text is chunked at 2000 characters, and ordinary links remain intact. Keep **Hide URL previews in conversations and channels** enabled in Synology Chat Admin Console on a supported Chat Server release.
 
-For attachments, OpenClaw loads the source under its guarded outbound-media policy, freezes the resulting bytes in bounded plugin-scoped SQLite state, and gives Synology a short-lived opaque HTTPS capability on the configured webhook route. The NAS receives only this OpenClaw-hosted URL, never the original remote or local media reference. Capabilities are account- and route-scoped, reusable for delayed `GET` or `HEAD` requests during their ten-minute lifetime, and expire automatically. Files are limited to 32 MB.
+For attachments, OpenClaw loads the source under its guarded outbound-media policy, freezes the resulting bytes in bounded plugin-scoped SQLite state, and gives Synology a short-lived opaque HTTPS capability on the configured webhook route. The NAS receives only this OpenClaw-hosted URL, never the original remote or local media reference. Capabilities are account- and route-scoped, reusable for delayed `GET` or `HEAD` requests during their ten-minute lifetime, and expire automatically. Files are limited to 32 MB. Each account can serve at most four attachment responses concurrently and 128 MB per minute; stalled responses are closed after two minutes. Byte-range responses are not advertised.
 
 `webhookUrl` and `webhookPath` have different roles:
 
