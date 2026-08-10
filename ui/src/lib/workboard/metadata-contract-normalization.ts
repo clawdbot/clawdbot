@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WORKBOARD_DECOMPOSITION_MODES } from "@openclaw/workboard-contract";
 import type {
   WorkboardAutomation,
+  WorkboardDecompositionMode,
   WorkboardDiagnosticAction,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
@@ -54,12 +56,18 @@ export function normalizeAutomation(value: unknown): WorkboardAutomation | undef
   const workspaceAccess = normalizeWorkspaceAccess(value.workspaceAccess);
   const skills = normalizeStringArray(value.skills);
   const createdCardIds = normalizeStringArray(value.createdCardIds);
+  const decompositionMode = WORKBOARD_DECOMPOSITION_MODES.includes(
+    value.decompositionMode as WorkboardDecompositionMode,
+  )
+    ? (value.decompositionMode as WorkboardDecompositionMode)
+    : undefined;
   const automation: WorkboardAutomation = {
     ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
     ...(typeof value.boardId === "string" ? { boardId: value.boardId } : {}),
     ...(typeof value.createdByCardId === "string"
       ? { createdByCardId: value.createdByCardId }
       : {}),
+    ...(decompositionMode ? { decompositionMode } : {}),
     ...(typeof value.idempotencyKey === "string" ? { idempotencyKey: value.idempotencyKey } : {}),
     ...(skills.length ? { skills } : {}),
     ...(workspace?.kind ? { workspace: workspace as WorkboardWorkspace } : {}),
@@ -86,7 +94,8 @@ export function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAc
       value.kind !== "reclaim" &&
       value.kind !== "reassign" &&
       value.kind !== "add_proof" &&
-      value.kind !== "open_session") ||
+      value.kind !== "open_session" &&
+      value.kind !== "repair_dependency") ||
     typeof value.label !== "string"
   ) {
     return null;

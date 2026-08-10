@@ -26,6 +26,7 @@ type WorkboardCardInput = {
   tenant?: unknown;
   boardId?: unknown;
   createdByCardId?: unknown;
+  decompositionMode?: unknown;
   idempotencyKey?: unknown;
   skills?: unknown;
   workspace?: unknown;
@@ -115,6 +116,7 @@ export type WorkboardCompleteInput = {
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
+  decompositionMode?: unknown;
 };
 export type WorkboardBlockInput = {
   ownerId?: unknown;
@@ -172,6 +174,10 @@ export type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;
   completeParent?: unknown;
+  decompositionMode?: unknown;
+};
+export type WorkboardRepairDecompositionInput = {
+  apply?: unknown;
 };
 export type WorkboardNotificationSubscribeInput = {
   boardId?: unknown;

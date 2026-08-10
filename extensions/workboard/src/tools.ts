@@ -325,6 +325,57 @@ export function createWorkboardTools(params: {
       },
     },
     {
+      name: "workboard_unlink_dependency",
+      label: "Workboard Unlink Dependency",
+      description: "Remove a reciprocal hard parent/child dependency link; safe to repeat.",
+      parameters: Type.Object(
+        {
+          parentId: Type.String({ description: "Parent Workboard card id." }),
+          childId: Type.String({ description: "Child Workboard card id." }),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        return jsonResult({
+          card: redactClaimToken(
+            await store.unlinkDependency(
+              readStringParam(record, "parentId", { required: true }),
+              readStringParam(record, "childId", { required: true }),
+              { ownerId, token: record.token as string | undefined },
+            ),
+          ),
+        });
+      },
+    },
+    {
+      name: "workboard_repair_decomposition",
+      label: "Workboard Repair Decomposition",
+      description:
+        "Dry-run by default, or apply an idempotent repair of stale hard links on explicitly orchestration-marked decomposition.",
+      parameters: Type.Object(
+        {
+          parentId: Type.String({ description: "Aggregate parent Workboard card id." }),
+          apply: Type.Optional(
+            Type.Boolean({ description: "Apply candidates; default is dry-run." }),
+          ),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        return jsonResult(
+          await store.repairDecomposition(
+            readStringParam(record, "parentId", { required: true }),
+            record,
+            { ownerId, token: record.token as string | undefined },
+          ),
+        );
+      },
+    },
+    {
       name: "workboard_read",
       label: "Workboard Read",
       description:
@@ -768,7 +819,7 @@ export function createWorkboardTools(params: {
       name: "workboard_decompose",
       label: "Workboard Decompose",
       description:
-        "Fan out a Workboard card into linked child cards and optionally complete the parent orchestration card.",
+        "Fan out a Workboard card into hard-dependent children by default, or explicit non-blocking orchestration children, and optionally complete the parent.",
       parameters: Type.Object(
         {
           id: Type.String({ description: "Parent Workboard card id." }),
@@ -777,6 +828,13 @@ export function createWorkboardTools(params: {
           completeParent: Type.Optional(
             Type.Boolean({
               description: "Complete the parent after child creation. Default true.",
+            }),
+          ),
+          decompositionMode: Type.Optional(
+            Type.String({
+              enum: ["hard", "orchestration"],
+              description:
+                "Child relationship mode. Hard dependencies are the default; use orchestration for explicit non-blocking provenance.",
             }),
           ),
           children: Type.Array(

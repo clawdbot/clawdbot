@@ -54,6 +54,8 @@ describe("workboard gateway methods", () => {
       "workboard.cards.comment",
       "workboard.cards.link",
       "workboard.cards.linkDependency",
+      "workboard.cards.unlinkDependency",
+      "workboard.cards.repairDecomposition",
       "workboard.cards.proof",
       "workboard.cards.artifact",
       "workboard.cards.claim",

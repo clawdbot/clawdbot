@@ -49,6 +49,8 @@
       "workboard_list",
       "workboard_create",
       "workboard_link",
+      "workboard_unlink_dependency",
+      "workboard_repair_decomposition",
       "workboard_read",
       "workboard_claim",
       "workboard_heartbeat",
@@ -92,6 +94,12 @@
       "optional": true
     },
     "workboard_link": {
+      "optional": true
+    },
+    "workboard_unlink_dependency": {
+      "optional": true
+    },
+    "workboard_repair_decomposition": {
       "optional": true
     },
     "workboard_read": {

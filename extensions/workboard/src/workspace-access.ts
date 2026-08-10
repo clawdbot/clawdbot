@@ -28,6 +28,8 @@ export const WORKBOARD_TOOL_NAMES = [
   "workboard_list",
   "workboard_create",
   "workboard_link",
+  "workboard_unlink_dependency",
+  "workboard_repair_decomposition",
   "workboard_read",
   "workboard_claim",
   "workboard_heartbeat",

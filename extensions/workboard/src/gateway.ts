@@ -131,6 +131,41 @@ export function registerWorkboardGatewayMethods(params: {
   );
 
   api.registerGatewayMethod(
+    "workboard.cards.unlinkDependency",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const parentId = requestParams.parentId;
+        const childId = requestParams.childId;
+        if (typeof parentId !== "string" || typeof childId !== "string") {
+          throw new Error("parentId and childId are required.");
+        }
+        respond(true, {
+          card: redactClaimToken(await store.unlinkDependency(parentId, childId)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.repairDecomposition",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const parentId = requestParams.parentId;
+        if (typeof parentId !== "string") {
+          throw new Error("parentId is required.");
+        }
+        respond(true, await store.repairDecomposition(parentId, requestParams));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
     "workboard.cards.proof",
     async ({ params: requestParams, respond }) => {
       try {

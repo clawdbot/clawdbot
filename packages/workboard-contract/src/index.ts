@@ -22,6 +22,7 @@ export const WORKBOARD_EXECUTION_STATUSES = [
   "blocked",
   "done",
 ] as const;
+export const WORKBOARD_DECOMPOSITION_MODES = ["orchestration", "hard"] as const;
 export const WORKBOARD_EVENT_KINDS = [
   "created",
   "edited",
@@ -36,6 +37,7 @@ export const WORKBOARD_EVENT_KINDS = [
   "attempt_updated",
   "comment_added",
   "link_added",
+  "link_removed",
   "proof_added",
   "artifact_added",
   "attachment_added",
@@ -71,6 +73,9 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "repeated_failures",
   "missing_proof",
   "orphaned_session",
+  "dependency_cycle",
+  "broken_dependency",
+  "aggregate_deadlock",
   "archived_but_active",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
@@ -86,6 +91,7 @@ export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = string;
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
+export type WorkboardDecompositionMode = (typeof WORKBOARD_DECOMPOSITION_MODES)[number];
 export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
@@ -206,7 +212,15 @@ export type WorkboardClaim = {
 };
 
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
+  kind:
+    | "claim"
+    | "unblock"
+    | "promote"
+    | "reclaim"
+    | "reassign"
+    | "add_proof"
+    | "open_session"
+    | "repair_dependency";
   label: string;
 };
 
@@ -254,6 +268,7 @@ export type WorkboardAutomation = {
   tenant?: string;
   boardId?: string;
   createdByCardId?: string;
+  decompositionMode?: WorkboardDecompositionMode;
   idempotencyKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;

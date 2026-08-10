@@ -51,13 +51,14 @@ import {
   normalizeArtifact,
   normalizeAutomation,
   normalizeBoundedString,
+  normalizeDecompositionMode,
   normalizeOptionalString,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
-import { WorkboardPromoteStore } from "./store-promote.js";
+import { WorkboardRepairStore } from "./store-repair.js";
 
 function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
   const token = normalizeOptionalString(input.token);
@@ -70,7 +71,7 @@ function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInp
   }
 }
 
-export class WorkboardWorkflowStore extends WorkboardPromoteStore {
+export class WorkboardWorkflowStore extends WorkboardRepairStore {
   async claim(
     id: string,
     input: WorkboardClaimInput,
@@ -240,6 +241,13 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       throw new Error(`card not found: ${id}`);
     }
     assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+    const parentIds = cardParentIds(existing);
+    if (parentIds.length > 0) {
+      const parents = await Promise.all(parentIds.map((parentId) => this.get(parentId)));
+      if (!parents.every((parent) => parent?.status === "done")) {
+        throw new Error("card dependencies are not done.");
+      }
+    }
     const now = Date.now();
     const createdCardIds = normalizeStringList(input.createdCardIds, "created card ids", 120);
     const childIds = cardChildIds(existing);
@@ -250,7 +258,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
       const linkedFromParent =
         childIds.includes(createdCardId) && cardParentIds(createdCard).includes(existing.id);
-      if (!linkedFromParent) {
+      const orchestratedFromParent =
+        createdCard.metadata?.automation?.createdByCardId === existing.id &&
+        createdCard.metadata?.automation?.decompositionMode === "orchestration";
+      if (!linkedFromParent && !orchestratedFromParent) {
         throw new Error(`created card is not linked to this card: ${createdCardId}`);
       }
     }
@@ -274,6 +285,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
     const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+    const decompositionMode =
+      input.decompositionMode !== undefined
+        ? normalizeDecompositionMode(input.decompositionMode)
+        : metadata.automation?.decompositionMode;
     const notification: WorkboardNotification = {
       id: randomUUID(),
       kind: "completed",
@@ -302,6 +317,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
               ...metadata.automation,
               summary,
               createdCardIds,
+              ...(decompositionMode ? { decompositionMode } : {}),
             },
             metadata.automation,
           ),
@@ -553,6 +569,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error("at most 20 children can be created at once.");
       }
       const parentAutomation = parent.metadata?.automation;
+      const decompositionMode = normalizeDecompositionMode(input.decompositionMode, "hard");
       const existingCardIds = new Set((await this.list()).map((card) => card.id));
       const children: WorkboardCard[] = [];
       const reusedChildSnapshots = new Map<string, WorkboardCard>();
@@ -565,28 +582,50 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           const created = await this.createDirect(
             {
               ...child,
-              parents: [parent.id],
+              parents: decompositionMode === "hard" ? [parent.id] : undefined,
               boardId: child.boardId ?? parentAutomation?.boardId,
               tenant: child.tenant ?? parentAutomation?.tenant,
               createdByCardId: parent.id,
+              decompositionMode,
               idempotencyKey:
                 child.idempotencyKey ??
                 deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
             },
             scope === null ? undefined : scope,
           );
-          const reusedUnlinkedChild =
-            existingCardIds.has(created.id) && !cardParentIds(created).includes(parent.id);
-          if (reusedUnlinkedChild) {
+          const existingDecompositionMode = created.metadata?.automation?.decompositionMode;
+          const hasHardDependency = cardParentIds(created).includes(parent.id);
+          if (
+            existingCardIds.has(created.id) &&
+            existingDecompositionMode !== undefined &&
+            existingDecompositionMode !== decompositionMode
+          ) {
+            throw new Error(
+              `idempotent child ${created.id} already uses decompositionMode "${existingDecompositionMode}" and cannot be reused with "${decompositionMode}".`,
+            );
+          }
+          if (
+            existingCardIds.has(created.id) &&
+            decompositionMode === "orchestration" &&
+            (parentAutomation?.decompositionMode !== "orchestration" ||
+              existingDecompositionMode !== "orchestration" ||
+              created.metadata?.automation?.createdByCardId !== parent.id ||
+              hasHardDependency)
+          ) {
+            throw new Error(
+              `idempotent child ${created.id} does not prove matching orchestration provenance and cannot be reused.`,
+            );
+          }
+          if (existingCardIds.has(created.id) && !hasHardDependency) {
             reusedChildSnapshots.set(created.id, created);
           }
           children.push(
-            cardParentIds(created).includes(parent.id)
-              ? created
-              : await this.linkCardsDirect(parent.id, created.id, Date.now(), {
+            decompositionMode === "hard" && !hasHardDependency
+              ? await this.linkCardsDirect(parent.id, created.id, Date.now(), {
                   allowStatusOnlyActiveChild: true,
                   scope: scope === null ? undefined : scope,
-                }),
+                })
+              : created,
           );
         }
         const summary = normalizeBoundedString(input.summary, undefined, 2000, "decompose summary");
@@ -594,7 +633,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         const updatedParent = completeParent
           ? await this.completeDirect(
               parent.id,
-              { summary, createdCardIds: children.map((child) => child.id) },
+              {
+                summary,
+                createdCardIds: children.map((child) => child.id),
+                decompositionMode,
+              },
               scope,
             )
           : await (async () => {
@@ -613,6 +656,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                         ...latestParent.metadata?.automation,
                         summary,
                         createdCardIds: children.map((child) => child.id),
+                        decompositionMode,
                       },
                       latestParent.metadata?.automation,
                     ),
