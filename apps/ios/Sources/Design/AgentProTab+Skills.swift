@@ -745,7 +745,8 @@ extension AgentProTab {
         clawHubErrorText = nil
         defer { self.clawHubInstallSlug = nil }
         do {
-            let params = ClawHubInstallParams(slug: result.slug)
+            let targetSlug = result.ownerHandle.map { "@\($0)/\(result.slug)" } ?? result.slug
+            let params = ClawHubInstallParams(slug: targetSlug)
             _ = try await self.requestGateway(method: "skills.install", params: params, timeoutSeconds: 125)
             await appModel.refreshGatewayOverviewIfConnected()
             await refreshOverview(force: true)

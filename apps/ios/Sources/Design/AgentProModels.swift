@@ -266,6 +266,7 @@ struct ClawHubSearchResultLite: Decodable {
     let displayName: String
     let summary: String?
     let version: String?
+    let ownerHandle: String?
 }
 
 struct ClawHubInstallParams: Encodable {
