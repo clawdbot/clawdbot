@@ -97,6 +97,34 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
 }
 
 describe("chat pane header state", () => {
+  it("forks through the shared session organizer flow and selects the new session", async () => {
+    const create = vi.fn(async () => "agent:main:forked");
+    const sessions = {
+      create,
+      state: { error: null },
+    } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    Object.assign(pane.context.gateway.snapshot.hello?.features ?? {}, {
+      methods: ["sessions.patch", "sessions.create"],
+    });
+    const onPaneSessionChange = vi.fn();
+    pane.onPaneSessionChange = onPaneSessionChange;
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    await pane.handleHeaderSessionAction({ kind: "fork" }, session);
+
+    expect(create).toHaveBeenCalledWith({
+      parentSessionKey: session.key,
+      fork: true,
+      agentId: "main",
+    });
+    expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
+  });
+
   it("commits a trimmed label and clears with null", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;

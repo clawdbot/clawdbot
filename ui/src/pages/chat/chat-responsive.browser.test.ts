@@ -272,14 +272,6 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      <div class="chat-view-menu-wrapper">
-        <wa-dropdown class="chat-view-menu" aria-label="View">
-          <button slot="trigger" class="chat-view-menu-trigger" type="button" aria-label="View">
-            ${iconSvg()}
-          </button>
-          <wa-dropdown-item class="chat-view-menu__item" type="checkbox">Reasoning</wa-dropdown-item>
-        </wa-dropdown>
-      </div>
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <details class="chat-controls__inline-select chat-controls__model-picker">
@@ -2071,8 +2063,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           model: rectFor(".chat-composer-model-control"),
           context: rectFor(".context-ring"),
           send: rectFor(".chat-send-btn"),
-          settings: rectFor(".chat-view-menu-trigger"),
-          settingsIcon: rectFor(".chat-view-menu-trigger svg"),
           shell: rectFor(".agent-chat__composer-shell"),
           textarea:
             textareaNode && textareaRect
@@ -2097,9 +2087,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const model = expectControlRect(layout.model, "model selector");
       const context = expectControlRect(layout.context, "context control");
       const send = expectControlRect(layout.send, "primary action");
-      const settings = expectControlRect(layout.settings, "settings control");
       const attach = expectControlRect(layout.attach, "attachment control");
-      const settingsIcon = expectControlRect(layout.settingsIcon, "settings icon");
       const attachIcon = expectControlRect(layout.attachIcon, "attachment icon");
       const textareaRect = expectControlRect(layout.textarea, "composer textarea");
       const textareaMetrics = layout.textarea;
@@ -2121,17 +2109,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(shell.x).toBeLessThanOrEqual(8);
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeLessThanOrEqual(8);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
-      expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
       expect(context.x).toBeGreaterThanOrEqual(model.x + model.width - 1);
       expect(input.x + input.width - (send.x + send.width)).toBeLessThanOrEqual(8);
-      for (const control of [model, settings, context]) {
+      for (const control of [model, context]) {
         expect(
-          Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+          Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
         ).toBeLessThanOrEqual(2);
       }
-      expect(meta.y).toBeGreaterThanOrEqual(settings.y - 1);
-      expect(settingsIcon.width).toBeGreaterThanOrEqual(18);
-      expect(settingsIcon.height).toBeGreaterThanOrEqual(18);
+      expect(meta.y).toBeGreaterThanOrEqual(model.y - 1);
       expect(attachIcon.width).toBeGreaterThanOrEqual(18);
       expect(attachIcon.height).toBeGreaterThanOrEqual(18);
     } finally {
@@ -2200,7 +2185,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
             context: rectFor(".context-ring"),
-            settings: rectFor(".chat-view-menu-trigger"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
@@ -2215,11 +2199,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
         const context = expectControlRect(controls.context, "composer context control");
-        const settings = expectControlRect(controls.settings, "composer settings control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [footer, textarea, meta, model, context, settings, attach, send]) {
+        for (const control of [footer, textarea, meta, model, context, attach, send]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
@@ -2229,37 +2212,30 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         }
         expect(model.y).toBeGreaterThanOrEqual(footer.y - 1);
         expect(model.y + model.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
-        expect(settings.y).toBeGreaterThanOrEqual(footer.y - 1);
-        expect(settings.y + settings.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
         expect(model.y).toBeGreaterThanOrEqual(textarea.y);
         expect(context.y).toBeGreaterThanOrEqual(textarea.y);
         expect(
           Math.abs(attach.y + attach.height / 2 - (send.y + send.height / 2)),
         ).toBeLessThanOrEqual(2);
         expect(attach.x + attach.width).toBeLessThanOrEqual(textarea.x + 1);
-        expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        expect(rectsOverlap(model, settings)).toBe(false);
         expect(rectsOverlap(model, send)).toBe(false);
-        expect(rectsOverlap(settings, send)).toBe(false);
         const composerFontSize = await page
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
         if (width <= 768) {
           expect(composerFontSize).toBe(16);
-          expect(model.width).toBeGreaterThanOrEqual(width === 320 ? 32 : 64);
+          expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, settings, context]) {
+          for (const control of [model, context]) {
             expect(
-              Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+              Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
             ).toBeLessThanOrEqual(2);
           }
           expect(footer.height).toBeLessThanOrEqual(49.1);
-          expect(settings.width).toBeGreaterThanOrEqual(36);
-          expect(settings.height).toBeGreaterThanOrEqual(36);
         } else {
           expect(composerFontSize).toBe(14);
           expect(send.width).toBeCloseTo(36, 2);
@@ -2580,7 +2556,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
-          settings: rectFor(".chat-view-menu-trigger"),
           send: rectFor(".chat-send-btn"),
         };
       });
@@ -2590,7 +2565,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [label, control] of [
         ["composer metadata", scrolled.meta],
         ["composer model control", scrolled.model],
-        ["composer settings control", scrolled.settings],
       ] as const) {
         const rect = expectControlRect(control, label);
         expect(rect.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
@@ -2682,70 +2656,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
-
-  it.each([
-    [320, 568],
-    [393, 852],
-    [568, 320],
-  ] as const)(
-    "keeps mobile model and settings popovers inside the viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        const modelTrigger = page.locator('[data-chat-composer-model="true"]');
-        await modelTrigger.evaluate((node) => {
-          node.parentElement?.setAttribute("open", "");
-        });
-
-        const modelMenu = await getRect(page, ".chat-controls__model-menu");
-        expect(modelMenu.left).toBeGreaterThanOrEqual(0);
-        expect(modelMenu.right).toBeLessThanOrEqual(width);
-        expect(modelMenu.top).toBeGreaterThanOrEqual(0);
-        expect(modelMenu.bottom).toBeLessThanOrEqual(height);
-
-        await modelTrigger.evaluate((node) => {
-          node.parentElement?.removeAttribute("open");
-        });
-        await page.locator(".chat-view-menu").evaluate((node) => {
-          node.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page);
-
-        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
-        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.right).toBeLessThanOrEqual(width);
-        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  it.each([
-    [768, 900],
-    [1024, 768],
-    [1366, 900],
-  ] as const)(
-    "keeps the left-aligned desktop settings popover inside the viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        await page.locator(".chat-view-menu").evaluate((node) => {
-          node.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page);
-
-        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
-        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.right).toBeLessThanOrEqual(width);
-        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
 
   describe("slash command keyboard navigation", () => {
     let page: Page;

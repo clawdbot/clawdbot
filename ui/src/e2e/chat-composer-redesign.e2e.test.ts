@@ -100,7 +100,7 @@ suite.define(() => {
       );
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
-      const settings = composer.getByRole("button", { name: "View", exact: true });
+      const settings = page.locator(".chat-header-session-menu__trigger");
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
@@ -329,11 +329,15 @@ suite.define(() => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const viewMenu = page.getByRole("menu", { name: "View" });
-      const viewDropdown = composer.locator("wa-dropdown.chat-view-menu");
+      const viewDropdown = page.locator("wa-dropdown.chat-header-session-menu");
+      const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await expect
-        .poll(() => viewDropdown.locator(".chat-view-menu__text").allTextContents())
+        .poll(() =>
+          viewMenu
+            .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
+            .allTextContents(),
+        )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
@@ -342,7 +346,7 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => viewMenu.isVisible()).toBe(false);
+      await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
 
       await textarea.fill("Send this message");
       await expect

@@ -2374,15 +2374,6 @@ openclaw-chat-video-player {
   min-width: 0;
 }
 
-.chat-view-menu-wrapper {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  margin-left: 0;
-  min-width: 0;
-  order: 0;
-}
-
 .chat-composer-model-control {
   display: inline-flex;
   flex: 0 0 auto;
@@ -2394,76 +2385,6 @@ openclaw-chat-video-player {
 
 .chat-composer-model-control .chat-controls__model {
   width: 100%;
-}
-
-.chat-view-menu-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.chat-view-menu-trigger:hover,
-.chat-view-menu-trigger--open {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-
-.chat-view-menu-trigger svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-view-menu {
-  display: inline-flex;
-  z-index: 60;
-}
-
-.chat-view-menu::part(menu) {
-  min-width: 200px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 94%, var(--card));
-  box-shadow: var(--shadow-lg);
-}
-
-.chat-view-menu__item {
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-}
-
-.chat-view-menu__text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-view-menu__provenance {
-  margin: 4px 6px 2px;
-  padding-top: 7px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
 }
 
 .agent-chat__stt-interim {
@@ -3548,22 +3469,6 @@ openclaw-chat-video-player {
     max-height: min(440px, calc(100vh - 116px - var(--safe-area-bottom)));
   }
 
-  .chat-view-menu-wrapper {
-    width: 40px;
-    margin-left: 0;
-    justify-self: start;
-  }
-
-  .chat-view-menu-trigger {
-    width: 36px;
-    min-width: 36px;
-    max-width: 36px;
-    height: 44px;
-    min-height: 44px;
-    justify-content: center;
-    padding: 0;
-  }
-
   .agent-chat__composer-shell {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
@@ -3583,7 +3488,6 @@ openclaw-chat-video-player {
   }
 
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(wa-dropdown.chat-view-menu[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
   }
@@ -3619,7 +3523,6 @@ openclaw-chat-video-player {
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(wa-dropdown.chat-view-menu[open]),
   .agent-chat__input:has(.context-usage details[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
