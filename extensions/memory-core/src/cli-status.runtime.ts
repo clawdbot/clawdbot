@@ -502,7 +502,9 @@ export async function runMemoryStatus(
             ? ` · provider job ${submission.batchName}`
             : " · create result unknown";
           lines.push(
-            `${label("Batch submission")} ${info(submission.submissionId)}${muted(resource)}`,
+            `${label("Batch submission")} ${info(submission.submissionId)}${muted(
+              `${resource} · started ${submission.startedAt}`,
+            )}`,
           );
         }
         lines.push(`${label("Batch recovery")} ${warn(quarantine.recoveryAction)}`);

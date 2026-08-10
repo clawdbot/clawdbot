@@ -315,13 +315,15 @@ async function submitGeminiBatch(params: {
   });
   await params.submissionLifecycle?.started({ submissionId });
   const createSignal = createGeminiBatchStageSignal(params);
+  let createOperationStarted = false;
   try {
     const operation = await executeProviderOperationWithRetry({
       provider: "gemini",
       stage: "create",
       signal: createSignal,
-      operation: async () =>
-        await withRemoteHttpResponse({
+      operation: async () => {
+        createOperationStarted = true;
+        return await withRemoteHttpResponse({
           url: batchEndpoint,
           ssrfPolicy: params.gemini.ssrfPolicy,
           signal: createSignal,
@@ -344,7 +346,8 @@ async function submitGeminiBatch(params: {
               "gemini.batch-create",
             )) as GeminiBatchOperation;
           },
-        }),
+        });
+      },
     });
     const batchName = operation.name;
     if (!batchName) {
@@ -353,7 +356,7 @@ async function submitGeminiBatch(params: {
     await params.submissionLifecycle?.accepted({ submissionId, batchName });
     return operation;
   } catch (error) {
-    if (isDefinitiveGeminiBatchCreateRejection(error)) {
+    if (!createOperationStarted || isDefinitiveGeminiBatchCreateRejection(error)) {
       await params.submissionLifecycle?.rejected({ submissionId });
     }
     throw error;

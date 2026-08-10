@@ -162,7 +162,7 @@ export abstract class MemoryManagerSyncBase {
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
-  protected readonly batchSubmissionIdsPendingCommit = new Set<string>();
+  protected readonly batchSubmissionKeysPendingCommit = new Set<string>();
   /** Override when full reindexes temporarily swap `db` to a shadow database. */
   protected getBatchSubmissionDatabase(): DatabaseSync {
     return this.db;

@@ -134,6 +134,10 @@ type MemoryBatchSubmissionQuarantineStatus = {
   recoveryAction: string;
 };
 
+function buildBatchSubmissionKey(provider: string, submissionId: string): string {
+  return `${provider}\u0000${submissionId}`;
+}
+
 function isNonEmptyBoundedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
@@ -621,7 +625,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const result = this.getBatchSubmissionDatabase()
       .prepare(`DELETE FROM memory_index_meta WHERE key = ?`)
       .run(BATCH_SUBMISSION_QUARANTINE_META_KEY);
-    this.batchSubmissionIdsPendingCommit.clear();
+    this.batchSubmissionKeysPendingCommit.clear();
     return result.changes > 0;
   }
 
@@ -668,7 +672,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           (entry) => entry.provider !== provider || entry.submissionId !== submissionId,
         ),
       );
-      this.batchSubmissionIdsPendingCommit.delete(submissionId);
+      this.batchSubmissionKeysPendingCommit.delete(buildBatchSubmissionKey(provider, submissionId));
     };
     return {
       started: async ({ submissionId }) => {
@@ -676,6 +680,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           throw new Error("memory embedding provider supplied an invalid batch submission id");
         }
         this.updateBatchSubmissionQuarantine((current) => {
+          const foreignReservation = current.find(
+            (entry) =>
+              !this.batchSubmissionKeysPendingCommit.has(
+                buildBatchSubmissionKey(entry.provider, entry.submissionId),
+              ),
+          );
+          if (foreignReservation) {
+            throw new Error(
+              "memory embedding batch submission is already reserved by another sync",
+            );
+          }
           if (
             current.some(
               (entry) => entry.provider === provider && entry.submissionId === submissionId,
@@ -692,7 +707,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             },
           ];
         });
-        this.batchSubmissionIdsPendingCommit.add(submissionId);
+        this.batchSubmissionKeysPendingCommit.add(buildBatchSubmissionKey(provider, submissionId));
       },
       accepted: async ({ submissionId, batchName }) => {
         if (!isNonEmptyBoundedString(batchName, 500)) {
@@ -721,13 +736,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected commitBatchSubmissionQuarantine(): void {
-    if (this.batchSubmissionIdsPendingCommit.size === 0) {
+    if (this.batchSubmissionKeysPendingCommit.size === 0) {
       return;
     }
     this.updateBatchSubmissionQuarantine((current) =>
-      current.filter((entry) => !this.batchSubmissionIdsPendingCommit.has(entry.submissionId)),
+      current.filter(
+        (entry) =>
+          !this.batchSubmissionKeysPendingCommit.has(
+            buildBatchSubmissionKey(entry.provider, entry.submissionId),
+          ),
+      ),
     );
-    this.batchSubmissionIdsPendingCommit.clear();
+    this.batchSubmissionKeysPendingCommit.clear();
   }
 
   private async embedChunksWithBatch(

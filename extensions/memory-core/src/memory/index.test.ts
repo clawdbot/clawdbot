@@ -1338,6 +1338,52 @@ describe("memory index", () => {
     }
   });
 
+  it("allows only one manager to reserve a native batch submission", async () => {
+    const cfg = createCfg({ provider: "batch-wide-test", batchEnabled: true });
+    const manager = await getFreshManager(cfg);
+    const contender = await getFreshManager(cfg, "cli");
+    type SubmissionLifecycle = {
+      started: (params: { submissionId: string }) => Promise<void>;
+      accepted: (params: { submissionId: string; batchName: string }) => Promise<void>;
+      rejected: (params: { submissionId: string }) => Promise<void>;
+    };
+    const createManagerLifecycle = (target: MemoryIndexManager): SubmissionLifecycle => {
+      const factory = Reflect.get(target, "createBatchSubmissionLifecycle") as (
+        provider: string,
+      ) => SubmissionLifecycle;
+      return factory.call(target, "batch-wide-test");
+    };
+    const ownerLifecycle = createManagerLifecycle(manager);
+    const contenderLifecycle = createManagerLifecycle(contender);
+
+    try {
+      await ownerLifecycle.started({ submissionId: "openclaw-memory-owner" });
+      await ownerLifecycle.accepted({
+        submissionId: "openclaw-memory-owner",
+        batchName: "batches/owner-job",
+      });
+      await expect(
+        contenderLifecycle.started({ submissionId: "openclaw-memory-contender" }),
+      ).rejects.toThrow("memory embedding batch submission is already reserved by another sync");
+      expect(contender.status().batch?.submissionQuarantine).toMatchObject({
+        malformed: false,
+        submissions: [
+          {
+            provider: "batch-wide-test",
+            submissionId: "openclaw-memory-owner",
+            batchName: "batches/owner-job",
+          },
+        ],
+      });
+
+      await ownerLifecycle.rejected({ submissionId: "openclaw-memory-owner" });
+      expect(manager.status().batch?.submissionQuarantine).toBeUndefined();
+    } finally {
+      await manager.close?.();
+      await contender.close?.();
+    }
+  });
+
   it("keeps accepted batch ownership until local embeddings commit, then clears it", async () => {
     providerRuntimeBatchFailureMode = "error";
     providerRuntimeSubmissionMode = "accepted";

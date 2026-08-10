@@ -542,6 +542,7 @@ describe("memory cli", () => {
     expectLogged(log, "Batch quarantine: active (1 submission)");
     expectLogged(log, "openclaw-memory-test-safe-id");
     expectLogged(log, "batches/provider-job-1");
+    expectLogged(log, "started 2026-08-10T00:00:00.000Z");
     expectLogged(log, "--clear-batch-quarantine");
     expect(close).toHaveBeenCalled();
   });

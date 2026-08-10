@@ -441,6 +441,36 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(lifecycle.rejected).not.toHaveBeenCalled();
   });
 
+  it("releases durable ownership when cancellation prevents create from starting", async () => {
+    const controller = new AbortController();
+    const lifecycle = createSubmissionLifecycle();
+    lifecycle.started.mockImplementation(async () => {
+      controller.abort(new Error("manager closing"));
+    });
+    const fetchMock = stubBatchFetch();
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini: makeGeminiClient(),
+        agentId: "main",
+        requests: singleRequest(),
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1,
+        timeoutMs: 5_000,
+        signal: controller.signal,
+        submissionLifecycle: lifecycle,
+      }),
+    ).rejects.toThrow("manager closing");
+
+    const submissionId = lifecycle.started.mock.calls[0]?.[0].submissionId;
+    expect(fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)))).toEqual([
+      "upload",
+    ]);
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).toHaveBeenCalledWith({ submissionId });
+  });
+
   it("rejects disabled waiting before any remote side effect", async () => {
     const fetchMock = stubBatchFetch();
 
