@@ -161,7 +161,8 @@ function inspectAuthProfileJsonCell(
   }
 }
 
-function closeAuthProfileReadDatabase(pathname: string): void {
+function closeAuthProfileReadDatabase(databasePath: string): void {
+  const pathname = path.resolve(databasePath);
   const db = authProfileReadDatabases.get(pathname);
   if (!db) {
     return;
@@ -177,16 +178,16 @@ function closeAuthProfileReadDatabase(pathname: string): void {
   }
 }
 
-/** Internal lifecycle close for process-local pooled auth-profile readers. */
-export function closeAuthProfileReadPoolForSnapshotInvalidation(): void {
+/** Internal lifecycle close for one or all process-local pooled auth-profile readers. */
+export function closeAuthProfileReadPool(databasePath?: string): void {
+  if (databasePath !== undefined) {
+    closeAuthProfileReadDatabase(databasePath);
+    return;
+  }
   unregisterReadHandleExitClose?.();
   unregisterReadHandleExitClose = null;
-  for (const [pathname, db] of authProfileReadDatabases) {
-    authProfileReadDatabases.delete(pathname);
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    if (db.isOpen) {
-      db.close();
-    }
+  for (const pathname of authProfileReadDatabases.keys()) {
+    closeAuthProfileReadDatabase(pathname);
   }
 }
 
@@ -241,9 +242,7 @@ function acquireAuthProfileReadDatabase(
     return { status: "unreadable" };
   }
   authProfileReadDatabases.set(resolvedPath, db);
-  unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(
-    closeAuthProfileReadPoolForSnapshotInvalidation,
-  );
+  unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
   return { status: "readable", db };
 }
 
@@ -261,7 +260,7 @@ function inspectAuthProfileJsonCellReadOnly(
   try {
     return inspectAuthProfileJsonCell(acquired.db, target);
   } catch {
-    closeAuthProfileReadDatabase(path.resolve(pathname));
+    closeAuthProfileReadDatabase(pathname);
     return { status: "unreadable" };
   }
 }

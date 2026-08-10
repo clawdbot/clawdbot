@@ -10,10 +10,7 @@ import {
   clearAllRuntimeAuthMaterializations,
   clearRuntimeAuthMaterializations,
 } from "./runtime-materializations.js";
-import {
-  closeAuthProfileReadPoolForSnapshotInvalidation,
-  resolveAuthProfileDatabasePath,
-} from "./sqlite.js";
+import { closeAuthProfileReadPool, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, RuntimeAuthProfileStore>();
@@ -47,7 +44,7 @@ const persistedMutationRecords = new Map<string, PersistedMutationRecord>();
 
 function advanceRuntimeAuthStoreSnapshotsRevision(): void {
   // Readers must close before consumers can observe the new snapshot generation.
-  closeAuthProfileReadPoolForSnapshotInvalidation();
+  closeAuthProfileReadPool();
   runtimeAuthStoreSnapshotsRevision += 1;
 }
 
@@ -334,7 +331,7 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   if (snapshotsChanged) {
     advanceRuntimeAuthStoreSnapshotsRevision();
   } else {
-    closeAuthProfileReadPoolForSnapshotInvalidation();
+    closeAuthProfileReadPool();
   }
   runtimeAuthStoreSnapshots.clear();
   clearAllRuntimeAuthMaterializations();
