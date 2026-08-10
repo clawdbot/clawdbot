@@ -43,7 +43,7 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   addSession,
   appendOutput,
-  createSessionSlug,
+  isProcessSessionIdTaken,
   markExited,
   recordNotifyOnExitRemoval,
   tail,
@@ -60,6 +60,7 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
 
@@ -639,7 +640,7 @@ export async function runExecProcess(opts: {
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
-  const sessionId = createSessionSlug();
+  const sessionId = createSessionSlug(isProcessSessionIdTaken);
   const execCommand = opts.execCommand ?? opts.command;
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
