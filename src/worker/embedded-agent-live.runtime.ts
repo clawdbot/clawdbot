@@ -43,9 +43,7 @@ function boundLiveValue(value: unknown): unknown {
 
 function redactLiveText(value: string): string {
   const redacted = redactAgentDiagnosticPayload(value);
-  return truncateLiveText(
-    typeof redacted === "string" ? redacted : "[unreadable diagnostic text]",
-  );
+  return truncateLiveText(typeof redacted === "string" ? redacted : "[unreadable diagnostic text]");
 }
 
 function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
