@@ -438,6 +438,8 @@ describe("AppSidebar catalog session rows", () => {
         catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
         ["agent:main:main"],
       );
+      const navigated: Array<[string, unknown]> = [];
+      sidebar.onNavigate = (routeId, options) => navigated.push([routeId, options]);
       const header = sidebar.querySelector<HTMLElement>(
         '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
       );
@@ -464,12 +466,21 @@ describe("AppSidebar catalog session rows", () => {
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
 
-      // Hiding must announce its own outcome: the section name, undo, and the standing
-      // recovery path for after the toast times out.
+      // Hiding must announce its own outcome: the section name, undo, and a recovery
+      // path that opens the settings block instead of only naming it.
       await toastHost.updateComplete;
       const message = toastHost.querySelector(".app-toast__message")?.textContent ?? "";
       expect(message).toContain("Codex");
       expect(message).toContain("Settings > Appearance > Sidebar");
+
+      const recovery = toastHost.querySelector<HTMLAnchorElement>(".app-toast__message a");
+      expect(recovery?.getAttribute("href")).toBe(
+        "/settings/appearance?section=__appearance__#settings-appearance-sidebar",
+      );
+      recovery?.click();
+      expect(navigated).toEqual([
+        ["appearance", { search: "?section=__appearance__", hash: "#settings-appearance-sidebar" }],
+      ]);
 
       toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
       await sidebar.updateComplete;

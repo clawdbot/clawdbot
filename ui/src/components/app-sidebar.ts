@@ -1,7 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
@@ -14,10 +14,12 @@ import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
@@ -360,12 +362,29 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
       catalogId;
     setStoredSessionCatalogHidden(catalogId, true);
+    // Reuse the settings-search destination for the Sidebar preferences block so the
+    // toast opens the same place the rest of the app calls "Appearance > Sidebar".
+    const recovery = SETTINGS_SEARCH_TARGETS.appearanceSidebar;
+    const recoveryHref =
+      pathForRoute(recovery.routeId, this.basePath) + recovery.search + recovery.hash;
     // The section disappears instantly and its only standing recovery lives on another
-    // page, so the outcome is announced where the action happened: undo here, plus the
-    // Settings path in the text for after the toast is gone. Longer than the 6s default
-    // because that text is a recovery instruction, not an acknowledgement.
+    // page, so the outcome is announced where the action happened: undo here, plus a
+    // link that opens the re-enable block for after the toast is gone. Longer than the
+    // 6s default because that text is a recovery instruction, not an acknowledgement.
     showToast({
-      message: t("chat.sidebar.sectionHidden", { section: label }),
+      message: html`${t("chat.sidebar.sectionHidden", { section: label })}
+        <a
+          class="session-link"
+          href=${recoveryHref}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
+          }}
+          >${t("chat.sidebar.sectionHiddenRecovery")}</a
+        >`,
       actionLabel: t("common.undo"),
       onAction: () => setStoredSessionCatalogHidden(catalogId, false),
       durationMs: 12_000,
