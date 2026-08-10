@@ -184,7 +184,6 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
       >
         <div class="secrets-store-dialog__header">
           <h2>${editing ? t("secretsStore.edit") : t("secretsStore.add")}</h2>
-          <p>${t("secretsStore.hint")}</p>
         </div>
         <label class="secrets-store-field">
           <span>${t("secretsStore.name")}</span>
@@ -275,7 +274,9 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
           ></textarea>
         </label>
         <div class="secrets-store-bulk__summary" aria-live="polite">
-          ${t("secretsStore.detected", { count: String(props.bulkSecretCount) })}
+          ${t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
+            count: String(props.bulkSecretCount),
+          })}
         </div>
         <label class="secrets-store-checkbox">
           <input

@@ -142,7 +142,7 @@ suite.define(() => {
         await bulkDialog
           .getByRole("textbox", { name: "Value", exact: true })
           .fill('BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test');
-        await bulkDialog.getByText("1 secrets detected").waitFor();
+        await bulkDialog.getByText("1 secret detected").waitFor();
         await capture(page, "03-bulk-add-dialog.png");
         await bulkDialog.getByRole("button", { name: "Save", exact: true }).click();
         await page.getByRole("status").getByText("Saved 2 entries.").waitFor();

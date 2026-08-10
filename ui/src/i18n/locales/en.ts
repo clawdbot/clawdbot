@@ -5480,6 +5480,7 @@ export const en: TranslationMap = {
     required: "Enter a value.",
     detect: "Auto-detect secrets",
     detected: "{count} secrets detected",
+    detectedOne: "{count} secret detected",
     unavail: "Gateway/admin required.",
     badName: "Use SERVICE_API_KEY.",
     tooLarge: "Max 64 KiB.",
