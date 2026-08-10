@@ -494,6 +494,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("steers ordered current-turn images with the active prompt", async () => {
+    const onHostStagingOwnershipTransferred = vi.fn();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -513,6 +514,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        onHostStagingOwnershipTransferred,
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -537,6 +539,8 @@ describe("runReplyAgent media path normalization", () => {
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledOnce();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledWith();
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
   });
@@ -580,6 +584,7 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     operation.setPhase("running");
+    const onHostStagingOwnershipTransferred = vi.fn();
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
@@ -591,6 +596,7 @@ describe("runReplyAgent media path normalization", () => {
     await runReplyAgent(
       makeRunReplyAgentParams({
         replyOperation: operation,
+        onHostStagingOwnershipTransferred,
         sessionKey: "agent:main:whatsapp:direct:chat-1",
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
@@ -618,13 +624,18 @@ describe("runReplyAgent media path normalization", () => {
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledOnce();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledWith(operation.ownerSettlement);
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
   });
 
   it("queues active prompts in followup mode without steering", async () => {
+    const onHostStagingOwnershipTransferred = vi.fn();
+    enqueueFollowupRunMock.mockReturnValueOnce(true);
     await runReplyAgent(
       makeRunReplyAgentParams({
+        onHostStagingOwnershipTransferred,
         resolvedQueue: { mode: "followup" } as QueueSettings,
         shouldSteer: false,
         shouldFollowup: true,
@@ -637,9 +648,36 @@ describe("runReplyAgent media path normalization", () => {
     expect(parkSteerCandidateMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledOnce();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledWith();
+  });
+
+  it("keeps host staging with the caller when followup enqueue rejects", async () => {
+    const onHostStagingOwnershipTransferred = vi.fn();
+    enqueueFollowupRunMock.mockReturnValueOnce(false);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        onHostStagingOwnershipTransferred,
+        resolvedQueue: { mode: "followup" } as QueueSettings,
+        shouldSteer: false,
+        shouldFollowup: true,
+        isActive: true,
+      }),
+    );
+
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(onHostStagingOwnershipTransferred).not.toHaveBeenCalled();
   });
 
   it("falls back to a queued followup when active steering is rejected", async () => {
+    const operation = createRegisteredReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const onHostStagingOwnershipTransferred = vi.fn();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: false,
       sessionId,
@@ -650,6 +688,8 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        replyOperation: operation,
+        onHostStagingOwnershipTransferred,
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -667,6 +707,8 @@ describe("runReplyAgent media path normalization", () => {
     expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
     expect(parkedSteerConsumeMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledOnce();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledWith();
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {

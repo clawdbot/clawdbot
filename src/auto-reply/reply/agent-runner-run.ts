@@ -226,6 +226,7 @@ export async function runReplyAgent(
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     await runActiveReplySteer({
       followupRun,
+      onHostStagingOwnershipTransferred: params.onHostStagingOwnershipTransferred,
       opts,
       providedReplyOperation,
       queueKey,
@@ -275,6 +276,7 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
+    params.onHostStagingOwnershipTransferred?.();
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "accepted", mode: "followup" };
     }

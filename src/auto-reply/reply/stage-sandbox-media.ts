@@ -29,6 +29,8 @@ const SCP_STDERR_TAIL_CHARS = 16_384;
 // partial failures without matching rewritten strings back to source paths.
 export type StageSandboxMediaResult = {
   staged: ReadonlyMap<number, string>;
+  /** Host-only directory eligible for non-recursive cleanup after the reply settles. */
+  hostWorkspaceStagingDir?: string;
 };
 
 const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
@@ -88,6 +90,9 @@ export async function stageSandboxMedia(params: {
     !sandbox && !ctx.MediaRemoteHost
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
+  const hostWorkspaceStagingPath = hostWorkspaceStagingDir
+    ? path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir)
+    : undefined;
 
   for (const entry of pathEntries) {
     const source = await resolveStageableMediaSource(entry.path);
@@ -158,6 +163,7 @@ export async function stageSandboxMedia(params: {
   }
 
   if (staged.size === 0) {
+    await cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingPath);
     return { staged };
   }
 
@@ -178,7 +184,54 @@ export async function stageSandboxMedia(params: {
     applyStagedMediaContext(sessionCtx, nextMedia);
   }
 
-  return { staged };
+  return {
+    staged,
+    ...(hostWorkspaceStagingPath ? { hostWorkspaceStagingDir: hostWorkspaceStagingPath } : {}),
+  };
+}
+
+export async function cleanupEmptyHostWorkspaceStagingDir(stagingDir?: string): Promise<void> {
+  if (!stagingDir) {
+    return;
+  }
+  await fs.rmdir(stagingDir).catch((error: unknown) => {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST") {
+      return;
+    }
+    logVerbose(
+      `Failed to clean empty host media staging directory ${stagingDir}: ${String(error)}`,
+    );
+  });
+}
+
+export async function cleanupHostWorkspaceStagingFiles(params: {
+  stagingDir?: string;
+  stagedFiles: Iterable<string>;
+}): Promise<void> {
+  const stagingDir = params.stagingDir;
+  if (!stagingDir) {
+    return;
+  }
+  const normalizedStagingDir = path.resolve(stagingDir);
+  const ownedFiles = [
+    ...new Set(
+      [...params.stagedFiles]
+        .map((filePath) => path.resolve(filePath))
+        .filter((filePath) => path.dirname(filePath) === normalizedStagingDir),
+    ),
+  ];
+  await Promise.all(
+    ownedFiles.map(async (filePath) => {
+      await fs.unlink(filePath).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return;
+        }
+        logVerbose(`Failed to clean staged host media file ${filePath}: ${String(error)}`);
+      });
+    }),
+  );
+  await cleanupEmptyHostWorkspaceStagingDir(stagingDir);
 }
 
 async function isUrlAliasForStagedSource(params: {

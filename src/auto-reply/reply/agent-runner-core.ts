@@ -530,6 +530,7 @@ export type RunReplyAgentParams = {
   queueAdmissionState?: "empty" | "steering" | "ready";
   isActive: boolean;
   isRunActive?: () => boolean;
+  onHostStagingOwnershipTransferred?: (settlement?: PromiseLike<void>) => void;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;

@@ -308,6 +308,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
+    onQueueSettled: params.onQueuedFollowupSettled,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
@@ -456,6 +457,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldFollowup,
     queueAdmissionState,
     isActive,
+    onHostStagingOwnershipTransferred: params.onHostStagingOwnershipTransferred,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
       const latestActiveSessionId =
