@@ -197,19 +197,6 @@ async function checkSnapshots() {
     }
     if (actual !== file.content) {
       mismatches.push(`${file.path}: differs from generated output`);
-      let differenceIndex = 0;
-      while (
-        differenceIndex < actual.length &&
-        differenceIndex < file.content.length &&
-        actual[differenceIndex] === file.content[differenceIndex]
-      ) {
-        differenceIndex += 1;
-      }
-      const contextStart = Math.max(0, differenceIndex - 200);
-      console.error(`actual: ${JSON.stringify(actual.slice(contextStart, differenceIndex + 500))}`);
-      console.error(
-        `expected: ${JSON.stringify(file.content.slice(contextStart, differenceIndex + 500))}`,
-      );
     }
   }
   for (const snapshotPath of await listCommittedSnapshotArtifactPaths(repoRoot)) {
