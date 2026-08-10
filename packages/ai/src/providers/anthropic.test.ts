@@ -1,6 +1,6 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import { configureAiTransportHost, type AiModelTransportEvent } from "../host.js";
 import type { Context, Model, Tool } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
@@ -151,6 +151,17 @@ function configureTestAnthropicImageNormalizer(): void {
       content.map((block) =>
         block.type === "image" ? { ...block, mimeType: "image/jpeg" } : block,
       ),
+  });
+}
+
+function configureFallbackPayloadTestHost(): void {
+  configureAiTransportHost({
+    buildModelFetchWithBlockingDispatchGuard: () => ({
+      fetch: async () => {
+        throw new Error("unexpected network dispatch");
+      },
+      provenance: "dispatch_attested",
+    }),
   });
 }
 
@@ -397,6 +408,167 @@ describe("Anthropic provider", () => {
     });
     expect(result.usage.cost.input).toBeCloseTo(0.00006, 10);
     expect(result.usage.cost.total).toBeGreaterThan(0);
+  });
+
+  it("keeps injected Anthropic client authority explicitly partial", async () => {
+    const events: AiModelTransportEvent[] = [];
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_injected",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    configureAiTransportHost({
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        client: client as never,
+        requestId: "call-injected",
+      },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "coverage",
+          callId: "call-injected",
+          scope: "transport_semantics",
+          state: "unverified",
+          reason: "transport_endpoint_authority_partial",
+          transport: "sse",
+        }),
+        expect.objectContaining({
+          type: "coverage",
+          callId: "call-injected",
+          scope: "transport_semantics",
+          state: "unverified",
+          reason: "transport_submission_authority_partial",
+        }),
+      ]),
+    );
+  });
+
+  it("accepts an injected boundary-free direct iteration without fallback coverage", async () => {
+    const events: AiModelTransportEvent[] = [];
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_injected_direct_iteration",
+          model: "claude-fable-5",
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          iterations: [{ type: "message" }],
+        },
+      },
+      { type: "message_stop" },
+    ]);
+    configureAiTransportHost({
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        client: client as never,
+        requestId: "call-injected-direct-iteration",
+      },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "coverage",
+        callId: "call-injected-direct-iteration",
+        scope: "transport_semantics",
+        reason: "transport_submission_authority_partial",
+      }),
+      expect.objectContaining({
+        type: "coverage",
+        callId: "call-injected-direct-iteration",
+        scope: "transport_semantics",
+        reason: "transport_endpoint_authority_partial",
+      }),
+    ]);
+  });
+
+  it("rejects fallback added by an unauthorized SDK payload replacement", async () => {
+    const events: AiModelTransportEvent[] = [];
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_injected_payload_fallback",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    configureAiTransportHost({
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        client: client as never,
+        requestId: "call-injected-payload-fallback",
+        onPayload: (payload) => ({
+          ...(payload as Record<string, unknown>),
+          fallbacks: "default",
+        }),
+      },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Anthropic server fallback requires a supported model, first-party endpoint, beta header, and guarded dispatch",
+    );
+    expect(client.messages.create).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "attempt" }),
+        expect.objectContaining({ type: "provider_fallback" }),
+        expect.objectContaining({
+          type: "coverage",
+          scope: "provider_fallbacks",
+        }),
+      ]),
+    );
   });
 
   it("prices reported 1-hour cache writes at twice the input rate", async () => {
@@ -1574,6 +1746,7 @@ describe("Anthropic provider", () => {
   ])(
     "sends default server-side fallback params for direct $name API-key requests",
     async (model) => {
+      configureFallbackPayloadTestHost();
       let capturedPayload: unknown;
       const stream = streamAnthropic(
         makeAnthropicModel(model),
@@ -1599,11 +1772,104 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it("rejects an SDK payload hook that replaces the authorized fallback list", async () => {
+    configureFallbackPayloadTestHost();
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = {
+            ...(payload as Record<string, unknown>),
+            fallbacks: ["claude-opus-5"],
+          };
+          return capturedPayload;
+        },
+      },
+    );
+    const result = await stream.result();
+
+    expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toEqual(["claude-opus-5"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Anthropic server fallback requires a supported model, first-party endpoint, beta header, and guarded dispatch",
+    );
+    expect(anthropicMockState.requestOptions).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "preserves custom beta tokens across header casing",
+      headers: { "Anthropic-Beta": "custom-beta" } as Record<string, string>,
+      expectedCustom: true,
+    },
+    {
+      label: "restores a removed fallback beta",
+      headers: { "anthropic-beta": "" } as Record<string, string>,
+      expectedCustom: false,
+    },
+  ])("$label for authorized SDK fallback", async ({ expectedCustom, headers }) => {
+    configureFallbackPayloadTestHost();
+    await streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        headers,
+        onPayload: () => {
+          throw new Error("stop before network");
+        },
+      },
+    ).result();
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      defaultHeaders?: Record<string, string>;
+    };
+    expect(config.defaultHeaders?.["anthropic-beta"]).toContain("server-side-fallback-2026-07-01");
+    expect(config.defaultHeaders?.["anthropic-beta"]?.includes("custom-beta")).toBe(expectedCustom);
+    expect(config.defaultHeaders?.["Anthropic-Beta"]).toBeUndefined();
+  });
+
+  it("rejects an authorized SDK fallback payload whose wire model is replaced", async () => {
+    configureFallbackPayloadTestHost();
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => ({
+          ...(payload as Record<string, unknown>),
+          model: "claude-sonnet-4-6",
+        }),
+      },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Anthropic server fallback requires a supported model, first-party endpoint, beta header, and guarded dispatch",
+    );
+    expect(anthropicMockState.requestOptions).toEqual([]);
+  });
+
   it.each([
     { label: "OAuth tokens", overrides: {}, apiKey: "sk-ant-oat01-token" },
     {
       label: "custom proxy endpoints",
       overrides: { baseUrl: "https://proxy.example.com/v1" },
+      apiKey: "sk-ant-provider",
+    },
+    {
+      label: "insecure Anthropic public endpoints",
+      overrides: { baseUrl: "http://api.anthropic.com" },
+      apiKey: "sk-ant-provider",
+    },
+    {
+      label: "noncanonical Anthropic public ports",
+      overrides: { baseUrl: "https://api.anthropic.com:8443" },
       apiKey: "sk-ant-provider",
     },
     {
@@ -1696,7 +1962,14 @@ describe("Anthropic provider", () => {
       {
         type: "message_delta",
         delta: { stop_reason: "end_turn" },
-        usage: { input_tokens: 5, output_tokens: 9 },
+        usage: {
+          input_tokens: 5,
+          output_tokens: 9,
+          iterations: [
+            { type: "message", model: "claude-fable-5" },
+            { type: "fallback_message", model: "claude-opus-4-8" },
+          ],
+        },
       },
       { type: "message_stop" },
     ]);
@@ -1744,6 +2017,250 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.total).toBeCloseTo(0.00025, 10);
   });
 
+  it("preserves injected-client fallback semantics when request accounting is enabled", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_accounted_injected_fallback",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "continued" },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          input_tokens: 5,
+          output_tokens: 9,
+          iterations: [
+            { type: "message", model: "claude-fable-5" },
+            { type: "fallback_message", model: "claude-opus-4-8" },
+          ],
+        },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        client: client as never,
+        requestId: "call-accounted-injected-fallback",
+      },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "continued" }]);
+    expect(result.responseModel).toBe("claude-opus-4-8");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_fallback",
+        details: {
+          provider: "anthropic",
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+        },
+      }),
+    ]);
+    expect(result.usage.cost.input).toBeCloseTo(0.000025, 10);
+    expect(result.usage.cost.output).toBeCloseTo(0.000225, 10);
+    expect(result.usage.cost.total).toBeCloseTo(0.00025, 10);
+  });
+
+  it("does not trust an injected fallback boundary when terminal iterations are malformed", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_malformed_fallback_usage",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "continued" },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 5, output_tokens: 9, iterations: [{}] },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.responseModel).toBe("claude-fable-5");
+    expect(result.diagnostics).toBeUndefined();
+    expect(result.usage.cost.total).toBeCloseTo(0.0005, 10);
+  });
+
+  it("does not trust an injected fallback boundary when the stream ends incomplete", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_incomplete_fallback",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "partial" },
+      },
+      { type: "content_block_stop", index: 1 },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.responseModel).toBe("claude-fable-5");
+    expect(result.diagnostics).toBeUndefined();
+    expect(result.usage.cost.input).toBeCloseTo(0.00005, 10);
+  });
+
+  it("retains fallback serving identity and pricing on a terminal refusal", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_fallback_refusal",
+          model: "claude-fable-5",
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "fallback",
+          from: { model: "claude-fable-5" },
+          to: { model: "claude-opus-4-8" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: {
+          stop_reason: "refusal",
+          stop_details: {
+            type: "refusal",
+            category: "cyber",
+            explanation: "This request is not allowed.",
+          },
+        },
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          iterations: [
+            { type: "message", model: "claude-fable-5" },
+            { type: "fallback_message", model: "claude-opus-4-8" },
+          ],
+        },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.responseModel).toBe("claude-opus-4-8");
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider_fallback" }),
+        expect.objectContaining({ type: "provider_refusal" }),
+      ]),
+    );
+    expect(result.usage.cost.total).toBeCloseTo(0.000075, 10);
+  });
+
   it("records a pre-output server-side fallback and keeps the continuation", async () => {
     const client = createAnthropicSseClient([
       {
@@ -1778,7 +2295,14 @@ describe("Anthropic provider", () => {
       {
         type: "message_delta",
         delta: { stop_reason: "end_turn" },
-        usage: { input_tokens: 5, output_tokens: 2 },
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          iterations: [
+            { type: "message", model: "claude-fable-5" },
+            { type: "fallback_message", model: "claude-opus-4-8" },
+          ],
+        },
       },
       { type: "message_stop" },
     ]);

@@ -39,6 +39,13 @@ type GuardedModelFetchResult = {
   provenance?: AiModelFetchResult["provenance"];
 };
 
+export function snapshotProviderEndpointResolver(): (baseUrl?: string) => {
+  endpointClass: string;
+} {
+  const host = getAiTransportHost();
+  return (baseUrl) => ({ endpointClass: host.resolveProviderEndpointClass(baseUrl) });
+}
+
 class AiTransportDispatchGuardUnavailableError extends Error {
   constructor() {
     super("blocking model fetch dispatch guard is unavailable");

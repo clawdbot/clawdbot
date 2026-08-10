@@ -66,6 +66,7 @@ const compatibility = {
       "resolveAnthropicFallbackServingModelCost",
       "readAnthropicFallbackBoundary",
       "applyAnthropicFallbackBoundary",
+      "withAnthropicTransportAccountingPhase",
       "ANTHROPIC_OMITTED_REASONING_TEXT",
       "findActiveAnthropicToolTurnAssistantIndex",
       "projectAnthropicTools",

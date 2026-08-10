@@ -1,6 +1,7 @@
 /**
  * Sanitizes reasoning/thinking blocks for replay and recovery.
  */
+import { withAnthropicTransportAccountingPhase } from "@openclaw/ai/internal/anthropic";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -724,6 +725,9 @@ export function wrapAnthropicStreamWithRecovery(
   sessionMeta: RecoverySessionMeta,
 ): StreamFn {
   return (model, context, options) => {
+    const initialOptions = withAnthropicTransportAccountingPhase(options, "initial") as
+      | typeof options
+      | undefined;
     const requestMeta: RecoverySessionMeta = {
       id: sessionMeta.id,
       onRecoveredAnthropicThinking: sessionMeta.onRecoveredAnthropicThinking,
@@ -738,7 +742,11 @@ export function wrapAnthropicStreamWithRecovery(
         ...(context as unknown as Record<string, unknown>),
         messages: cleanedMessages,
       } as typeof context;
-      return innerStreamFn(model, nextContext, options);
+      return innerStreamFn(
+        model,
+        nextContext,
+        withAnthropicTransportAccountingPhase(initialOptions, "payload_recovery") as typeof options,
+      );
     };
     const notify = () =>
       notifyRecoveredAnthropicThinking(requestMeta, {
@@ -746,7 +754,7 @@ export function wrapAnthropicStreamWithRecovery(
         cleanedMessages: stripAllThinkingBlocks(originalMessages),
       });
 
-    const stream = innerStreamFn(model, context, options);
+    const stream = innerStreamFn(model, context, initialOptions);
     if (stream instanceof Promise) {
       return stream.then(
         (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),

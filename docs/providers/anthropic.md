@@ -211,6 +211,20 @@ OpenClaw release:
   </Tab>
 </Tabs>
 
+## Server-side safety fallback
+
+For supported Claude models on Anthropic's public API, OpenClaw can opt into
+Anthropic's server-side safety fallback. The request keeps the configured model
+identity while Anthropic may serve a refusal through an allowed fallback model.
+OpenClaw records the serving model and applies its pricing only after the
+completed stream provides matching terminal usage.
+
+The fallback beta is enabled only for API-key requests dispatched through
+OpenClaw's blocking host guard. Custom endpoints, OAuth/Claude CLI requests,
+directly injected SDK clients, and standalone `@openclaw/ai` consumers without
+that guard omit the fallback field and beta header. Their normal Anthropic
+request path remains available.
+
 ## Claude sessions across computers
 
 The bundled Anthropic plugin adds a **Claude Code** group to the normal sessions

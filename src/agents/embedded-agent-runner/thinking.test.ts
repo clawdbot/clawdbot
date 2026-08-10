@@ -1,8 +1,14 @@
 // Thinking sanitization tests cover reasoning-block retention, stripping, and
 // recovery behavior for provider transcripts and active assistant turns.
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  type AiModelTransportEvent,
+} from "@openclaw/ai";
+import { createAnthropicMessagesTransportStreamFn } from "@openclaw/ai/transports";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
   assessLastAssistantMessage,
@@ -15,6 +21,11 @@ import {
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
+const initialAiTransportHost = getAiTransportHost();
+
+afterEach(() => {
+  configureAiTransportHost(initialAiTransportHost);
+});
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   // Single-assistant fixture exercises the "latest assistant turn" path where
@@ -534,6 +545,137 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
     expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
+  });
+
+  it("accounts stripped-thinking recovery as a payload-recovery attempt", async () => {
+    const events: AiModelTransportEvent[] = [];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          `event: error\ndata: ${JSON.stringify({
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "Invalid signature in thinking block",
+            },
+          })}\n\n`,
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          [
+            {
+              type: "message_start",
+              message: {
+                id: "msg_recovered",
+                model: "claude-sonnet-4-6",
+                usage: { input_tokens: 1, output_tokens: 0 },
+              },
+            },
+            {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+            { type: "message_stop" },
+          ]
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    const buildRecoveryFetch: typeof initialAiTransportHost.buildModelFetch =
+      (_model, _timeout, options) => async (input, init) => {
+        options?.onFetchDispatch?.();
+        return await fetchMock(input, init);
+      };
+    configureAiTransportHost({
+      ...initialAiTransportHost,
+      buildModelFetch: buildRecoveryFetch,
+      buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
+        fetch: async (input, init) => {
+          const dispatch = {
+            url: typeof input === "string" || input instanceof URL ? String(input) : input.url,
+            init: init ?? {},
+          };
+          options.observeFetchDispatch?.(dispatch);
+          options.onFetchDispatch?.();
+          return await fetchMock(input, init);
+        },
+        provenance: "dispatch_attested",
+      }),
+      buildModelFetchWithBlockingDispatchGuard: (_model, _timeout, options) => ({
+        fetch: async (input, init) => {
+          const dispatch = {
+            url: typeof input === "string" || input instanceof URL ? String(input) : input.url,
+            init: init ?? {},
+          };
+          options.beforeFetchDispatch(dispatch);
+          options.observeFetchDispatch?.(dispatch);
+          options.onFetchDispatch?.();
+          return await fetchMock(input, init);
+        },
+        provenance: "dispatch_attested",
+      }),
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+    const wrapped = wrapAnthropicStreamWithRecovery(createAnthropicMessagesTransportStreamFn(), {
+      id: "test-session",
+    });
+
+    const stream = await Promise.resolve(
+      wrapped(
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 4096,
+        } as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+            },
+            { role: "user", content: "continue" },
+          ]),
+        } as never,
+        {
+          apiKey: "sk-ant-provider",
+          requestId: "call-thinking-recovery",
+        } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason, result.errorMessage).toBe("stop");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "attempt",
+        callId: "call-thinking-recovery",
+        ordinal: 1,
+        reason: "initial",
+        outcome: "failed",
+        statusCode: 200,
+      }),
+      expect.objectContaining({
+        type: "attempt",
+        callId: "call-thinking-recovery",
+        ordinal: 2,
+        reason: "payload_recovery",
+        outcome: "completed",
+        statusCode: 200,
+      }),
+    ]);
   });
 
   it("notifies recovery only after a rejected request retry succeeds", async () => {

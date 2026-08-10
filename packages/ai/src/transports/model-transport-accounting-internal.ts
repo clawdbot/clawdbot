@@ -31,7 +31,7 @@ type ModelTransportCoverage =
       transport: string;
     };
 
-type PendingTransportEvent = {
+export type PendingTransportEvent = {
   finish(outcome: ModelTransportOutcome, statusCode?: number): void;
 };
 

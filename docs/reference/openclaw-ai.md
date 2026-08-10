@@ -78,11 +78,16 @@ A runnable version lives in the repository at `examples/ai-chat`.
   phase consumes it. A server-side serving-model fallback is in-stream
   submission evidence and does not rewrite the requested provider/model/API
   identity.
-  Scoped coverage can mark only provider-fallback identity lower-bound when
-  terminal metadata is unavailable; dispatched attempt and event totals remain
-  exact. The library default observer is inert; OpenClaw installs its collector
-  in its stream facade. Provider coverage depends on which adapters emit these
-  facts.
+  Directly injected provider SDK clients remain supported, but their endpoint
+  and transport authority is partial/unverified because OpenClaw cannot attest
+  the client's physical hops.
+  Scoped coverage can mark provider-fallback identity lower-bound when terminal
+  metadata is unavailable, or mark transport semantics unverified when endpoint
+  authority or terminal completion is ambiguous. Emitted event totals and
+  dispatch-attested attempt totals remain exact; attempt totals behind directly
+  injected clients remain lower-bound or unavailable. The library default
+  observer is inert; OpenClaw installs its collector in its stream facade.
+  Provider coverage depends on which adapters emit these facts.
 - **One event-stream identity.** `@openclaw/ai/event-stream` is the canonical
   `EventStream` constructor shared by OpenClaw core, agent-core, and external
   consumers.
