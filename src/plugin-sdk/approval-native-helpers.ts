@@ -670,6 +670,9 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     ((left: TTarget, right: TTarget) =>
       nativeApprovalTargetsMatch({ channel: params.channel, left, right }));
 
+  const listEligibleAccountIds = (cfg: OpenClawConfig) =>
+    params.listAccountIds(cfg).filter((accountId) => params.isTransportEnabled({ cfg, accountId }));
+
   const targetAccountMatchesChannelAccount = (input: {
     cfg: OpenClawConfig;
     targetAccountId?: string | null;
@@ -685,7 +688,11 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     }
     const normalizedAccountId = normalizeAccountId(accountId);
     const defaultAccountId = normalizeAccountId(params.resolveDefaultAccountId(input.cfg));
-    return normalizedAccountId === defaultAccountId;
+    if (normalizedAccountId === defaultAccountId) {
+      return true;
+    }
+    const eligibleAccountIds = listEligibleAccountIds(input.cfg).map(normalizeAccountId);
+    return eligibleAccountIds.length === 1 && eligibleAccountIds[0] === normalizedAccountId;
   };
 
   const hasMatchingChannelTarget = (input: {
@@ -773,10 +780,9 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     approvalKind: ApprovalKind;
     request: ApprovalRequest;
   }): boolean => {
-    const accountId = input.accountId ?? params.resolveDefaultAccountId(input.cfg);
-    const eligibleAccountIds = params.isTransportEnabled({ cfg: input.cfg, accountId })
-      ? [accountId]
-      : [];
+    // accountId names the evaluating runtime, not request ownership. Use the full enabled set so
+    // an unbound request cannot appear uniquely owned inside every per-account evaluator.
+    const eligibleAccountIds = listEligibleAccountIds(input.cfg);
     if (
       !doesApprovalRequestSelectChannelAccount({
         cfg: input.cfg,
