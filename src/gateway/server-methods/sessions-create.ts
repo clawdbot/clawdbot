@@ -14,14 +14,12 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
@@ -30,7 +28,6 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveUserPath } from "../../utils.js";
 import { generateDashboardSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
@@ -44,6 +41,7 @@ import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
 import { chatHandlers } from "./chat.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { prepareSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
@@ -53,31 +51,6 @@ import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
-
-async function prepareOperatorSessionDiffBaseline(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<SessionEntry> {
-  const workspace = await ensureAgentWorkspace({
-    dir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
-    ensureBootstrapFiles: !params.cfg.agents?.defaults?.skipBootstrap,
-    skipOptionalBootstrapFiles: params.cfg.agents?.defaults?.skipOptionalBootstrapFiles,
-  });
-  return await ensureSessionDiffBaseline({
-    cwd:
-      normalizeOptionalString(params.entry.spawnedCwd) ??
-      normalizeOptionalString(params.entry.spawnedWorkspaceDir) ??
-      workspace.dir,
-    entry: params.entry,
-    force: true,
-    isNewSession: true,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-}
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
@@ -544,7 +517,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       try {
         Object.assign(
           created.entry,
-          await prepareOperatorSessionDiffBaseline({
+          await prepareSessionDiffBaseline({
             agentId: created.agentId,
             cfg,
             entry: created.entry,
