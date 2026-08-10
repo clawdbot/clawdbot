@@ -36,6 +36,7 @@ function createParams(): EmbeddedRunAttemptParams {
   const hostCapabilities: AgentHarnessHostCapabilities = {
     kind: "agent-harness-host-capability",
     version: 1,
+    assertActive: () => {},
     bindToolSurface: (tools) => tools,
     runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
     requestApproval: async (request) =>
@@ -43,7 +44,7 @@ function createParams(): EmbeddedRunAttemptParams {
         "plugin.approval.request",
         { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
         {
-          pluginId: "openclaw-codex-app-server",
+          pluginId: "codex",
           ...request,
           timeoutMs: request.timeoutMs,
           twoPhase: true,

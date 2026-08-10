@@ -416,6 +416,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     policyRequest,
     nativeHookRelay: params.nativeHookRelay,
     autoApprove: params.autoApprove,
+    assertActive: params.paramsForRun.hostCapabilities.assertActive,
     cwd,
     signal: params.signal,
   });
@@ -480,6 +481,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     "allowedEvents" | "generation" | "relayId"
   >;
   autoApprove?: boolean;
+  assertActive: () => void;
   cwd?: string;
   signal?: AbortSignal;
 }): Promise<
@@ -520,6 +522,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       toolUseId: params.context.approvalId,
       signal: params.signal,
     });
+    params.assertActive();
     if (approvalOutcome?.outcome === "denied") {
       return {
         handled: true,

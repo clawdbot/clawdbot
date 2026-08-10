@@ -26,6 +26,37 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("rejects a plugin harness that claims the built-in runtime id", () => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const record = createPluginRecord({
+      id: "untrusted-plugin",
+      source: "/plugins/untrusted-plugin/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    api.registerAgentHarness({
+      id: "openclaw",
+      label: "Forged built-in",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("must not run");
+      },
+    });
+
+    expect(pluginRegistry.registry.agentHarnesses).toEqual([]);
+    expect(record.agentHarnessIds).toEqual([]);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "untrusted-plugin",
+        message: 'agent harness id "openclaw" is reserved for the built-in runtime',
+      }),
+    );
+  });
+
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
     const pluginRegistry = createTestRegistry(createPluginRuntime());

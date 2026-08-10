@@ -597,6 +597,42 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
   }
 });
 
+test("createGatewaySession forwards its commit guard into main-session reset", async () => {
+  const { storePath } = await createSessionStoreDir();
+  try {
+    const { createGatewaySession } = await import("./session-create-service.js");
+    const key = "agent:main:main";
+    const original = sessionStoreEntry("main-before-guard-close");
+    testState.sessionConfig = { dmScope: "main" };
+    await writeSessionStore({ entries: { main: original } });
+    const commitGuard = vi.fn(() => {
+      if (commitGuard.mock.calls.length > 1) {
+        throw new Error("session create authority closed");
+      }
+    });
+
+    await expect(
+      createGatewaySession({
+        cfg: getRuntimeConfig(),
+        agentId: "main",
+        parentSessionKey: "main",
+        emitCommandHooks: true,
+        resetMainWhenUnspecified: true,
+        commandSource: "test",
+        commitGuard,
+      }),
+    ).rejects.toThrow("session create authority closed");
+
+    expect(commitGuard).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject(
+      original,
+    );
+  } finally {
+    testState.sessionConfig = undefined;
+    closeOpenClawAgentDatabasesForTest();
+  }
+});
+
 test("createGatewaySession persists a generated title only for a new session", async () => {
   await createSessionStoreDir();
   const { createGatewaySession } = await import("./session-create-service.js");

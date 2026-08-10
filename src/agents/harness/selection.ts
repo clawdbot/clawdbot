@@ -38,7 +38,7 @@ import {
 } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
-import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import { AgentHarnessPreflightError, MissingAgentHarnessError } from "./errors.js";
@@ -51,7 +51,11 @@ import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
   type AgentHarnessPolicy,
 } from "./policy.js";
-import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
+import {
+  getRegisteredAgentHarness,
+  listRegisteredAgentHarnesses,
+  resolveAgentHarnessOwnerPluginId,
+} from "./registry.js";
 import {
   buildAgentHarnessSupportContext,
   compareHarnessSupport,
@@ -117,6 +121,9 @@ type AgentHarnessSelectionCandidate = {
 
 type AgentHarnessSelectionDecision = {
   harness: AgentHarness;
+  builtIn: boolean;
+  /** Registry-owned identity; absent only for the built-in runtime. */
+  ownerPluginId?: string;
   policy: AgentHarnessPolicy;
   selectedHarnessId: string;
   selectedReason:
@@ -492,6 +499,7 @@ export async function runAgentHarnessSettledTurnFinalization(
       operation: "settled-tool-finalization",
     },
     harness,
+    isBuiltInOpenClawAgentHarness(harness),
   );
   return await runAgentHarnessOperation(harness, params, () =>
     runWithAgentRingZeroTools([], () =>
@@ -545,7 +553,12 @@ async function runSelectedAgentHarnessAttempt(
       ]
     : [];
   const attemptParams = withoutHarnessSetupAuthority(internalParams);
-  const pluginAttempt = withoutInternalHarnessAuthority(attemptParams, harness);
+  const pluginAttempt = withoutInternalHarnessAuthority(
+    attemptParams,
+    harness,
+    selection.builtIn,
+    selection.ownerPluginId,
+  );
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -561,10 +574,9 @@ async function runSelectedAgentHarnessAttempt(
         const hostOpenClawAuthority =
           isHostScopedAgentToolActive("openclaw") &&
           isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
-        const preparedParams =
-          harness.id === "openclaw"
-            ? pluginAttempt.params
-            : preparePluginHarnessParams(pluginAttempt.params);
+        const preparedParams = selection.builtIn
+          ? pluginAttempt.params
+          : preparePluginHarnessParams(pluginAttempt.params);
         const attemptParams =
           hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
             ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
@@ -652,7 +664,7 @@ async function runAgentHarnessOperation<T>(
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  if (harness.id === "openclaw") {
+  if (isBuiltInOpenClawAgentHarness(harness)) {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   }
 
@@ -687,11 +699,13 @@ function withoutHarnessSetupAuthority(
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
   harness: AgentHarness,
+  builtIn: boolean,
+  ownerPluginId: string | undefined,
 ): {
   params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
 } {
-  if (harness.id === "openclaw") {
+  if (builtIn) {
     return {
       // The built-in harness is the internal owner of this authority. Only
       // plugin handoffs receive the projected public attempt shape below.
@@ -706,7 +720,11 @@ function withoutInternalHarnessAuthority(
   } = params;
   const host = createAgentHarnessHostCapabilities({
     attempt: params,
-    pluginId: harness.pluginId ?? harness.id,
+    pluginId:
+      ownerPluginId ??
+      (() => {
+        throw new Error(`Agent harness ${harness.id} has no authoritative registry owner.`);
+      })(),
   });
   return {
     params: { ...pluginParams, hostCapabilities: host.capabilities },
@@ -717,6 +735,7 @@ function withoutInternalHarnessAuthority(
 function prepareHarnessFinalizationParams(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
   harness: AgentHarness,
+  builtIn: boolean,
 ): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
   import("./types.js").AgentHarnessAttemptParamsV2
 > {
@@ -725,7 +744,7 @@ function prepareHarnessFinalizationParams(
     systemAgentTool: _systemAgentTool,
     ...withoutCapabilities
   } = params;
-  if (harness.id === "openclaw") {
+  if (builtIn) {
     return withoutCapabilities;
   }
   const {
@@ -988,8 +1007,11 @@ function buildSelectionDecision(params: {
   selectedReason: AgentHarnessSelectionDecision["selectedReason"];
   candidates: AgentHarnessSelectionCandidate[];
 }): AgentHarnessSelectionDecision {
+  const builtIn = isBuiltInOpenClawAgentHarness(params.harness);
   return {
     harness: params.harness,
+    builtIn,
+    ...(!builtIn ? { ownerPluginId: resolveAgentHarnessOwnerPluginId(params.harness) } : {}),
     policy: params.policy,
     selectedHarnessId: params.harness.id,
     selectedReason: params.selectedReason,

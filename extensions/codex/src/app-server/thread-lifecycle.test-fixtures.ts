@@ -22,6 +22,7 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
   const capabilities: EmbeddedRunAttemptParams["hostCapabilities"] = Object.freeze({
     kind: "agent-harness-host-capability",
     version: 1,
+    assertActive,
     bindToolSurface: (tools) => {
       assertActive();
       return tools.map((tool) => {

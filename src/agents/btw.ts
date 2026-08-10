@@ -38,6 +38,7 @@ import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-ru
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
+import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import {
   resolveAvailableAgentHarnessPolicy,
@@ -1007,7 +1008,7 @@ export async function runBtwSideQuestion(
           currentThreadTs:
             params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
         },
-        pluginId: selectedHarness.pluginId ?? selectedHarness.id,
+        pluginId: resolveAgentHarnessOwnerPluginId(selectedHarness),
       });
       const sideParams = {
         ...params,

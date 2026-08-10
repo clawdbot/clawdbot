@@ -138,7 +138,12 @@ describe("agent harness host capability", () => {
       approvalMode: "deny" as const,
       ctx: { agentId: "forged" },
     };
-    await host.capabilities.runBeforeToolCall(forgedRequest);
+    // Plain-JavaScript plugins can still supply removed policy fields at runtime.
+    await host.capabilities.runBeforeToolCall(
+      forgedRequest as unknown as Parameters<
+        typeof host.capabilities.runBeforeToolCall
+      >[0],
+    );
     expect(mockRunBefore).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalMode: "request",
@@ -146,9 +151,20 @@ describe("agent harness host capability", () => {
       }),
     );
 
+    await host.capabilities.runBeforeToolCall({
+      toolName: "exec",
+      params: { command: "true" },
+      approvalMode: "defer",
+    });
+    expect(mockRunBefore).toHaveBeenLastCalledWith(
+      expect.objectContaining({ approvalMode: "defer" }),
+    );
+    expect(() => host.capabilities.assertActive()).not.toThrow();
+
     host.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(authority);
     expect(() => host.capabilities.bindToolSurface([tool])).toThrow("no longer active");
+    expect(() => host.capabilities.assertActive()).toThrow("no longer active");
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
 

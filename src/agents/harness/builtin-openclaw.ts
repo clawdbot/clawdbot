@@ -10,10 +10,13 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type {
+  AgentHarness,
   AgentHarnessAttemptParamsV2,
   AgentHarnessSettledTurnFinalizationAttemptParams,
   AgentHarnessV2,
 } from "./types.js";
+
+const builtInOpenClawHarnesses = new WeakSet<object>();
 
 function buildRestrictedFinalizationAttempt(
   attempt: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
@@ -76,7 +79,7 @@ function buildRestrictedFinalizationAttempt(
 
 /** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
 export function createOpenClawAgentHarness(): AgentHarnessV2 {
-  return {
+  const harness: AgentHarnessV2 = {
     id: "openclaw",
     label: "OpenClaw embedded agent",
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
@@ -112,4 +115,11 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
       return projectSettledTurnFinalizationAttemptResult(result);
     },
   };
+  builtInOpenClawHarnesses.add(harness);
+  return harness;
+}
+
+/** Distinguishes the internal runtime from an untrusted harness that copies its public id. */
+export function isBuiltInOpenClawAgentHarness(harness: AgentHarness): boolean {
+  return builtInOpenClawHarnesses.has(harness);
 }

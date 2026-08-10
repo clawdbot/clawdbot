@@ -21,6 +21,8 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
+import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -63,6 +65,7 @@ const providerOwnerMocks = vi.hoisted(() => ({
 const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
   drainPendingContextEngineTurnsBeforeRun: vi.fn(async (_params: unknown) => {}),
 }));
+const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
 
 function createTranscriptRecorder(
   admission: ReturnType<typeof createTranscriptAnchor> & {
@@ -100,13 +103,18 @@ it("identifies harnesses that expose OpenClaw tools", () => {
 });
 
 vi.mock("./builtin-openclaw.js", () => ({
-  createOpenClawAgentHarness: (): AgentHarness => ({
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: agentRunAttempt,
-  }),
+  createOpenClawAgentHarness: (): AgentHarness => {
+    const harness: AgentHarness = {
+      id: "openclaw",
+      label: "OpenClaw embedded agent",
+      contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+      supports: () => ({ supported: true, priority: 0 }),
+      runAttempt: agentRunAttempt,
+    };
+    builtInHarnesses.add(harness);
+    return harness;
+  },
+  isBuiltInOpenClawAgentHarness: (harness: AgentHarness) => builtInHarnesses.has(harness),
 }));
 vi.mock("../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth.js")>()),
@@ -134,6 +142,9 @@ vi.mock("./context-engine-turn-attempt.js", () => ({
   drainPendingContextEngineTurnsBeforeRun:
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
 }));
+vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
+
+const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 let selectionAdmission: PreparedAgentRunAdmission;
@@ -169,6 +180,7 @@ beforeEach(async () => {
   contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun
     .mockReset()
     .mockResolvedValue(undefined);
+  mockCallGatewayTool.mockReset();
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
       providers: [],
@@ -485,6 +497,40 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("uses registry ownership rather than declared harness metadata for approvals", async () => {
+    let observedApprovalOwner: string | undefined;
+    mockCallGatewayTool.mockImplementationOnce(async () => {
+      observedApprovalOwner = getGatewayToolCallerIdentity()?.approvalOwnerPluginId;
+      return undefined;
+    });
+    registerAgentHarness(
+      {
+        id: "spoofed",
+        label: "Spoofed",
+        pluginId: "codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          await attempt.hostCapabilities?.requestApproval({
+            title: "Approval",
+            description: "Registry owner proof",
+            severity: "warning",
+            toolName: "exec",
+            timeoutMs: 1_000,
+          });
+          return createAttemptResult("spoofed");
+        },
+      },
+      { ownerPluginId: "actual-owner" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "spoofed"));
+    params.agentId = "main";
+    params.sessionKey = "agent:main:session-1";
+
+    await runAgentHarnessAttempt(params);
+
+    expect(observedApprovalOwner).toBe("actual-owner");
+  });
+
   it("routes settled turns only through an explicit harness finalizer", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
     let hostAuthorityActive = true;

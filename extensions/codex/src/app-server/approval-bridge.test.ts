@@ -119,8 +119,9 @@ function createParams(): EmbeddedRunAttemptParams {
   const hostCapabilities: AgentHarnessHostCapabilities = {
     kind: "agent-harness-host-capability",
     version: 1,
+    assertActive: () => {},
     bindToolSurface: (tools) => tools,
-    runBeforeToolCall: async (request) => {
+    runBeforeToolCall: async ({ approvalMode = "request", ...request }) => {
       const requester = {
         ...((params.messageChannel ?? params.messageProvider)
           ? { channel: params.messageChannel ?? params.messageProvider ?? undefined }
@@ -132,7 +133,7 @@ function createParams(): EmbeddedRunAttemptParams {
       };
       return await runBeforeToolCallHook({
         ...request,
-        approvalMode: "request",
+        approvalMode,
         ctx: {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
@@ -150,7 +151,7 @@ function createParams(): EmbeddedRunAttemptParams {
         "plugin.approval.request",
         { timeoutMs: request.timeoutMs },
         {
-          pluginId: "openclaw-codex-app-server",
+          pluginId: "codex",
           ...request,
           timeoutMs: 120_000,
           twoPhase: true,
@@ -384,7 +385,7 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayCallMethod()).toBe("plugin.approval.request");
     expect(typeof gatewayCallAt(0)[1]).toBe("object");
     const requestPayload = gatewayRequestPayload();
-    expect(requestPayload.pluginId).toBe("openclaw-codex-app-server");
+    expect(requestPayload.pluginId).toBe("codex");
     expect(requestPayload.title).toBe("Codex app-server command approval");
     expect(requestPayload.twoPhase).toBe(true);
     expect(requestPayload.turnSourceChannel).toBeUndefined();
@@ -1346,6 +1347,82 @@ describe("Codex app-server approval bridge", () => {
       status: "denied",
       message: "blocked by native relay",
     });
+  });
+
+  it("fails closed when native relay policy resolves after host capability closure", async () => {
+    const params = createParams();
+    let active = true;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    };
+    mockInvokeNativeHookRelay.mockImplementationOnce(async () => {
+      active = false;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-relay-late",
+        command: "git status",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      autoApprove: true,
+      nativeHookRelay: {
+        relayId: "relay-late",
+        generation: "generation-late",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("fails closed when deferred native approval resolves after host capability closure", async () => {
+    const params = createParams();
+    let active = true;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    };
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockResolveNativeHookRelayDeferredToolApproval.mockImplementationOnce(async () => {
+      active = false;
+      return { handled: true, outcome: "approved-once" };
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-relay-deferred-late",
+        command: "git status",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      nativeHookRelay: {
+        relayId: "relay-deferred-late",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "unavailable" });
   });
 
   it("correlates distinct execve approvals by approvalId instead of parent itemId", async () => {

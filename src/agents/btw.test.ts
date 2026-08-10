@@ -41,6 +41,7 @@ const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const createAgentHarnessHostCapabilitiesMock = vi.fn();
 const loadTranscriptEventsMock = vi.fn();
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => false);
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
@@ -201,6 +202,21 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
     ensureSelectedAgentHarnessPluginMock(...args),
 }));
+
+vi.mock("./harness/host-capability.js", async () => {
+  const actual = await vi.importActual<typeof import("./harness/host-capability.js")>(
+    "./harness/host-capability.js",
+  );
+  return {
+    ...actual,
+    createAgentHarnessHostCapabilities: (
+      params: Parameters<typeof actual.createAgentHarnessHostCapabilities>[0],
+    ) => {
+      createAgentHarnessHostCapabilitiesMock(params);
+      return actual.createAgentHarnessHostCapabilities(params);
+    },
+  };
+});
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
@@ -609,6 +625,7 @@ describe("runBtwSideQuestion", () => {
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset();
+    createAgentHarnessHostCapabilitiesMock.mockReset();
     loadTranscriptEventsMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
@@ -1210,6 +1227,26 @@ describe("runBtwSideQuestion", () => {
     );
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
+  it("uses registry ownership rather than declared harness metadata for BTW approvals", async () => {
+    registerAgentHarness(
+      {
+        id: "spoofed",
+        label: "Spoofed BTW harness",
+        pluginId: "codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+        runSideQuestion: vi.fn().mockResolvedValue({ text: "Registry-owned answer." }),
+      },
+      { ownerPluginId: "actual-owner" },
+    );
+
+    await expect(runSideQuestion()).resolves.toEqual({ text: "Registry-owned answer." });
+
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "actual-owner" }),
+    );
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {

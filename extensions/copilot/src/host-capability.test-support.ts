@@ -5,6 +5,7 @@ export function createCopilotTestHostCapabilities(): AgentHarnessAttemptParamsV2
   return Object.freeze({
     kind: "agent-harness-host-capability",
     version: 1,
+    assertActive: () => {},
     bindToolSurface: (tools) => tools,
     runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
     requestApproval: async () => undefined,

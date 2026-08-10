@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import {
   captureNodeWakeLifecycle,
@@ -2285,6 +2286,99 @@ describe("node.invoke APNs wake path", () => {
         actions: [],
       },
     );
+  });
+
+  it("does not persist agent-runtime authority into a later foreground pull", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const nodeId = "ios-node-agent-runtime-no-queue";
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-1");
+    const client = {
+      ...createOperatorClient(),
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime" as const,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          delegatedAuthority: {
+            kind: "local" as const,
+            operationalRunInstance,
+            lifecycleGeneration: "generation-1",
+            claimId: "claim-1",
+          },
+        },
+      },
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client,
+      validateAgentRuntimeApprovalAuthority: () => true,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-agent-runtime-no-queue",
+      },
+    });
+
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        details: { nodeError: { code: "NODE_BACKGROUND_UNAVAILABLE" } },
+      },
+    ]);
+    const pullPayload = requireRespondPayload(
+      firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+      "agent runtime empty pull",
+    );
+    expect(pullPayload.actions).toEqual([]);
+  });
+
+  it("does not persist forwarded approval authority into a later foreground pull", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const nodeId = "ios-node-approval-no-queue";
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+    mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
+      ok: true,
+      params: { url: "https://example.com" },
+      approvalAuthority: { recordId: "approval-1", decision: "allow-once" },
+    });
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient(),
+      execApprovalManager: {
+        projectDecisionIfActive: (_id, decision) => decision,
+      },
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-approval-no-queue",
+      },
+    });
+
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        details: { nodeError: { code: "NODE_BACKGROUND_UNAVAILABLE" } },
+      },
+    ]);
+    const pullPayload = requireRespondPayload(
+      firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+      "approval authority empty pull",
+    );
+    expect(pullPayload.actions).toEqual([]);
   });
 
   it("drops queued actions that are no longer allowed at pull time", async () => {

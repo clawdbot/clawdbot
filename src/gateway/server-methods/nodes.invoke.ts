@@ -568,7 +568,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               platform: nodeSession.platform,
               command,
               error: res.error,
-            })
+            }) &&
+            // Pending actions outlive this RPC. Closure-bound agent or approval
+            // authority cannot be transferred to a later device pull.
+            !client?.internal?.agentRuntimeIdentity &&
+            !forwardedParams.approvalAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
             // of failing permanently while the device is locked/backgrounded.

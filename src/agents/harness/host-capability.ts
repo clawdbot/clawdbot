@@ -198,6 +198,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
+    assertActive,
     bindToolSurface: (tools, options) => {
       assertActive();
       const bindingCwd =
@@ -222,8 +223,9 @@ export function createAgentHarnessHostCapabilities(params: {
           .map((tool) => gateBoundTool(tool, assertActive))
       );
     },
-    runBeforeToolCall: async ({ nativeOperation, ...request }) => {
+    runBeforeToolCall: async ({ nativeOperation, approvalMode, ...request }) => {
       assertActive();
+      const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
       const actionCwd =
         nativeOperation?.cwd !== undefined
           ? normalizeNativeOperationCwd(nativeOperation.cwd, hookContext.cwd)
@@ -237,7 +239,7 @@ export function createAgentHarnessHostCapabilities(params: {
         async () =>
           await runBeforeToolCallHook({
             ...request,
-            approvalMode: "request",
+            approvalMode: hostApprovalMode,
             ctx: actionHookContext,
           }),
       );

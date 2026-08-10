@@ -328,6 +328,7 @@ type SideQuestionParams = Parameters<typeof runCodexAppServerSideQuestion>[0];
 const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.freeze({
   kind: "agent-harness-host-capability",
   version: 1,
+  assertActive: () => {},
   bindToolSurface: (tools) => tools,
   runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
   requestApproval: async () => undefined,
