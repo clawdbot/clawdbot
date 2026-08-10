@@ -236,11 +236,16 @@ describe("cron stream trigger composition", () => {
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
         consecutiveErrors: 1,
+        // The raw failure stays on the job record; the chat alert no longer
+        // repeats it, so this is where the detail has to remain provable.
+        lastError: expect.stringContaining("boom"),
       });
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
         expect.objectContaining({
-          payload: expect.objectContaining({ text: expect.stringContaining("boom") }),
+          payload: expect.objectContaining({
+            text: expect.stringMatching(/^Automation "failing stream payload" failed \d+ times/u),
+          }),
         }),
       );
     } finally {

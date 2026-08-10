@@ -36,6 +36,10 @@ describe("Control UI managed media under a UI base path", () => {
     const page = await context.newPage();
     const mediaPath =
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full";
+    // The message carries the full-size URL, but the transcript renders the
+    // bounded thumbnail variant, so that is the path the page actually requests.
+    // Either one still has to stay at the origin root, outside the /rosita prefix.
+    const thumbnailPath = mediaPath.replace(/\/full$/u, "/thumbnail");
     const imageBytes = await readFile(
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
@@ -43,7 +47,7 @@ describe("Control UI managed media under a UI base path", () => {
 
     await page.route("**/api/chat/media/outgoing/**", async (route) => {
       const requestPath = new URL(route.request().url()).pathname;
-      if (requestPath === mediaPath) {
+      if (requestPath === mediaPath || requestPath === thumbnailPath) {
         requests.push({ contentType: "image/png", path: requestPath });
         await route.fulfill({ body: imageBytes, contentType: "image/png", status: 200 });
         return;
@@ -90,7 +94,7 @@ describe("Control UI managed media under a UI base path", () => {
       const naturalWidth = await image.evaluate((node) =>
         node instanceof HTMLImageElement ? node.naturalWidth : 0,
       );
-      expect(requests).toEqual([{ contentType: "image/png", path: mediaPath }]);
+      expect(requests).toEqual([{ contentType: "image/png", path: thumbnailPath }]);
       expect(naturalWidth).toBeGreaterThan(0);
       expect(await page.getByText("Managed attachment proof", { exact: true }).count()).toBe(1);
       expect(await page.getByText("Distinct second reply", { exact: true }).count()).toBe(1);

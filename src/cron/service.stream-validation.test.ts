@@ -168,9 +168,12 @@ describe("cron stream schedule validation", () => {
         consecutiveErrors: 5,
         streamStatus: "error",
         streamRestartExhausted: true,
+        // The exhaustion reason stays on the job record; the announced text is
+        // the sanitized failure alert, which the system event mirrors.
+        lastError: expect.stringContaining("stream source exhausted restarts"),
       });
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        expect.stringContaining("stream source exhausted restarts"),
+        expect.stringMatching(/^Automation "stream" failed \d+ times/u),
         expect.any(Object),
       );
     } finally {
