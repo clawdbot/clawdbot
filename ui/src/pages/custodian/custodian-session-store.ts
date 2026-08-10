@@ -172,11 +172,11 @@ export class CustodianSessionStore {
   }
 
   get wizardCancelAvailable(): boolean {
-    const snapshot = this.context?.gateway.snapshot;
     return (
-      snapshot !== undefined &&
-      isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL) ===
-        true
+      isGatewayCapabilityAdvertised(
+        this.context?.gateway.snapshot ?? {},
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+      ) ?? false
     );
   }
 
