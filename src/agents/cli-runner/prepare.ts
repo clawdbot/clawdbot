@@ -120,7 +120,7 @@ import {
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
+import { getClaudeGeneration } from "./claude-live-registry.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   resolveBundledCliBackendAuthPolicy,
@@ -188,7 +188,7 @@ const prepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
-  getClaudeLiveSessionGenerationForOwner,
+  getClaudeGeneration,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
@@ -1371,7 +1371,7 @@ export async function prepareCliRunContext(
       preparedBackendFinal.backend.liveSession === "claude-stdio" &&
       preparedBackendFinal.backend.output === "jsonl" &&
       preparedBackendFinal.backend.input === "stdin" &&
-      prepareDeps.getClaudeLiveSessionGenerationForOwner({
+      prepareDeps.getClaudeGeneration({
         backendId: backendResolved.id,
         agentAccountId: params.agentAccountId,
         agentId: params.agentId,
