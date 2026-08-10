@@ -4,6 +4,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/error-text.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -26,6 +27,25 @@ export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
+
+type TestFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
+
+export function createTestFallbackSummaryError(params: {
+  message: string;
+  attempts: TestFallbackAttempt[];
+  soonestCooldownExpiry?: number | null;
+  cause?: unknown;
+}): FailoverError {
+  const lastAttempt = params.attempts.at(-1);
+  return new FailoverError(params.message, {
+    reason: lastAttempt?.reason ?? "unknown",
+    provider: lastAttempt?.provider,
+    model: lastAttempt?.model,
+    attempts: params.attempts,
+    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    cause: params.cause,
+  });
+}
 
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
@@ -153,26 +173,10 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     ...actual,
     BILLING_ERROR_USER_MESSAGE: "billing",
     formatBillingErrorMessage: actual.formatBillingErrorMessage,
-    formatRateLimitOrOverloadedErrorCopy: (message: string) => {
-      if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
-        return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
-      }
-      if (/rate.limit|too many requests|429/i.test(message)) {
-        return "⚠️ API rate limit reached. Please try again later.";
-      }
-      if (/overloaded/i.test(message)) {
-        return "The AI service is temporarily overloaded. Please try again in a moment.";
-      }
-      return undefined;
-    },
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
-    isBillingErrorMessage: actual.isBillingErrorMessage,
     isLikelyContextOverflowError: (message?: string) =>
       state.isLikelyContextOverflowErrorMock(message),
-    isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-    isRateLimitErrorMessage: (message: string) =>
-      /rate.limit|too many requests|429|usage limit/i.test(message),
     isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };
