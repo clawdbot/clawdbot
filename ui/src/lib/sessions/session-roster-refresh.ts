@@ -437,6 +437,21 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     refresh,
     refreshReplacement,
+    /** Republishes every held list through `decorate` so a UI-owned overlay
+     * reaches the archived/all snapshots too, not just the primary state. */
+    redecorateLists() {
+      const state = host.readState();
+      const result = host.decorate(state.result);
+      if (result !== state.result) {
+        host.publish({ ...state, result });
+      }
+      for (const entry of filteredLists.values()) {
+        const decorated = host.decorate(entry.snapshot.result);
+        if (decorated !== entry.snapshot.result) {
+          publishFilteredList(entry, { ...entry.snapshot, result: decorated });
+        }
+      }
+    },
     setCreatorFilter(creatorId: string | null) {
       const options = { ...lastListOptions, creatorId: creatorId?.trim() || undefined };
       delete options.offset;

@@ -35,6 +35,7 @@ type SessionMutationsHost = {
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
+  redecorateLists: () => void;
   notifyCreated: (key: string) => void;
   retirePullRequestSummary: (key: string) => void;
 };
@@ -230,7 +231,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         previous: pendingPinPatch?.previous ?? pinRowFields(row?.pinned === true, row?.pinnedAt),
         next,
       });
-      patchRowLocal(normalizedKey, next);
+      host.redecorateLists();
     };
     const startOptimisticPatch = () => {
       startModelPatch();
@@ -260,16 +261,21 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (pendingPinPatch.token !== pinPatchToken) {
         // A newer pin intent owns this row; republishing it is the canonical
         // overlay's job. Hand that intent the baseline this patch just
-        // confirmed so its own rollback lands on Gateway truth.
+        // confirmed. The Gateway stamps `pinnedAt` with its own clock, so this
+        // baseline is a round trip off — accurate enough to order a row the
+        // Gateway pinned moments ago, and the next list replaces it outright.
         if (completed) {
           pendingPinPatch.previous = pinRowFields(nextPinned, undefined);
         }
         return;
       }
-      pendingPinPatches.delete(normalizedKey);
       if (!completed && host.connection.isCurrent(scope)) {
-        patchRowLocal(normalizedKey, pendingPinPatch.previous);
+        // Roll back through the same overlay that published the intent so the
+        // primary state and every filtered snapshot land on one value.
+        pendingPinPatch.next = pendingPinPatch.previous;
+        host.redecorateLists();
       }
+      pendingPinPatches.delete(normalizedKey);
     };
     const settleOptimisticPatch = (completed: boolean) => {
       settleModelOverride(completed);
@@ -428,7 +434,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       let changed = false;
       const sessions = result.sessions.map((row) => {
         const pendingPinPatch = pendingPinPatches.get(row.key);
-        // Once the Gateway agrees, its own `pinnedAt` is authoritative again.
+        // Once the Gateway agrees on `pinned`, its own `pinnedAt` wins again.
+        // A row predating a rapid unpin/repin can keep the older stamp for the
+        // patch window; that beats overwriting confirmed stamps with our clock.
         if (!pendingPinPatch || (row.pinned === true) === pendingPinPatch.next.pinned) {
           return row;
         }

@@ -8,6 +8,7 @@ import {
   deferred,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import type { SessionListSnapshot } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 
@@ -123,22 +124,34 @@ describe("session pin mutations", () => {
     }
   });
 
-  it("rolls a rejected unpin back to the pinned row and publishes the error", async () => {
+  it("rolls a rejected unpin back across the primary and filtered lists", async () => {
     const { gateway, key } = pinHarness({
       patchResponse: () => Promise.reject(new Error("pin rejected")),
       serverPinned: () => true,
     });
     const sessions = createSessionCapability(gateway);
+    // The archived/all sidebar reads its own snapshot, so the intent has to
+    // reach that list and leave it on the same value the primary state shows.
+    const filtered: SessionListSnapshot[] = [];
+    const stopFiltered = sessions.subscribeList({ archivedFilter: "all" }, (snapshot) => {
+      filtered.push(snapshot);
+    });
+    const filteredRowPinned = () => rowPinned(filtered.at(-1)?.result ?? null, key);
 
     await sessions.refresh({ force: true });
+    await sessions.refreshList({ archivedFilter: "all", force: true });
     expect(rowPinned(sessions.state.result, key)).toBe(true);
+    expect(filteredRowPinned()).toBe(true);
 
     const operation = sessions.patch(key, { pinned: false });
     expect(rowPinned(sessions.state.result, key)).toBe(false);
+    expect(filteredRowPinned()).toBe(false);
 
     await expect(operation).rejects.toThrow("pin rejected");
     expect(rowPinned(sessions.state.result, key)).toBe(true);
+    expect(filteredRowPinned()).toBe(true);
     expect(sessions.state.error).toContain("pin rejected");
+    stopFiltered();
     sessions.dispose();
   });
 
