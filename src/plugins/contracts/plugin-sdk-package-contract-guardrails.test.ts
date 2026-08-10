@@ -36,7 +36,6 @@ const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
 const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
 const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
   /\b(?:imessage|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
-const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
 const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk",
   // Bundled code uses the canonical channel-config-schema subpath; the
