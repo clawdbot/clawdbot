@@ -70,6 +70,7 @@ describe("skill collection review", () => {
       reviewResult = reconciliation.details;
       return {};
     });
+    const onError = vi.fn();
 
     await runScheduledSkillCollectionReviews({
       config: {
@@ -86,7 +87,9 @@ describe("skill collection review", () => {
         skills: { workshop: { autonomous: { mode: "auto" } } },
       },
       env: testState.env,
+      onError,
     });
+    expect(onError).not.toHaveBeenCalled();
     expect(reviewResult).toMatchObject({ kept: ["useful"], written: [], dropped: [] });
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -133,6 +136,7 @@ describe("skill collection review", () => {
       });
       return {};
     });
+    const onError = vi.fn();
 
     await runScheduledSkillCollectionReviews({
       config: {
@@ -140,7 +144,9 @@ describe("skill collection review", () => {
         skills: { workshop: { autonomous: { mode: "auto" } } },
       },
       env: testState.env,
+      onError,
     });
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("persists the daily boundary per workspace", async () => {
@@ -192,6 +198,7 @@ describe("skill collection review", () => {
       });
       return {};
     });
+    const onError = vi.fn();
 
     await runScheduledSkillCollectionReviews({
       config: {
@@ -204,7 +211,9 @@ describe("skill collection review", () => {
         },
       },
       env: testState.env,
+      onError,
     });
+    expect(onError).not.toHaveBeenCalled();
 
     expect((await fs.readdir(path.join(workspaceDir, "skills"))).toSorted()).toEqual([
       "agent-filtered",
