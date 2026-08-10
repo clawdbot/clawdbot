@@ -328,6 +328,7 @@ describe("worker live events", () => {
         phase: "fallback_step",
         fallbackStepType: "fallback_step",
         fallbackStepFromModel: "openai/gpt-primary",
+        fallbackStepFromFailureReason: "tls_certificate",
         fallbackStepFinalOutcome: "next_fallback",
       }),
     ];
@@ -340,6 +341,9 @@ describe("worker live events", () => {
     expect(events[4]?.data).toMatchObject({
       name: "exec",
       result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
+    });
+    expect(events[8]?.data).toMatchObject({
+      fallbackStepFromFailureReason: "tls_certificate",
     });
     expect(JSON.stringify(events)).not.toContain(credential);
   });
