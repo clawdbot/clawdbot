@@ -49,6 +49,18 @@ export type {
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
 
+export function forEachOwnerInRefreshScope(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  agentIds: ReadonlySet<string> | undefined,
+  callback: (key: string, owner: PreparedModelRuntimeOwner) => void,
+): void {
+  for (const [key, owner] of owners) {
+    if (isOwnerInRefreshScope(owner.input.agentId, agentIds)) {
+      callback(key, owner);
+    }
+  }
+}
+
 export function rebindOwnerConfigGeneration(
   owners: Map<string, PreparedModelRuntimeOwner>,
   agentId: string | undefined,

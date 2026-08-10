@@ -15,6 +15,7 @@ import {
   hasConfiguredOwnerMatching,
   hasSameLifecycleInput,
   isOwnerInRefreshScope,
+  forEachOwnerInRefreshScope,
   listConfiguredOwnerInputs,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -470,7 +471,6 @@ export function markPreparedModelRuntimeSnapshotsStale(
   options: {
     waitForReplacement?: boolean;
     preserveReplacementWait?: boolean;
-    /** Restrict invalidation to these agent ids; undefined invalidates every owner. */
     agentIds?: ReadonlySet<string>;
   } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
@@ -487,22 +487,19 @@ export function markPreparedModelRuntimeSnapshotsStale(
   }
   refreshRequestEpoch += 1;
   const staleError = new Error(reason);
-  for (const [key, owner] of owners) {
-    if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
-      continue;
-    }
+  forEachOwnerInRefreshScope(owners, options.agentIds, (key, owner) => {
     // Standalone owners have no publication controller to rebuild them. Retire them so the next
     // standalone lifecycle boundary can activate a fresh generation after publication changes.
     if (owner.provenance === "standalone") {
       owner.generation += 1;
       owners.delete(key);
-      continue;
+      return;
     }
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
     owner.pluginGeneration = undefined;
-  }
+  });
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   if (!pendingModelRuntimeReplacement) {
     notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
@@ -536,14 +533,11 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
-  for (const owner of owners.values()) {
-    if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
-      continue;
-    }
+  forEachOwnerInRefreshScope(owners, options.agentIds, (_, owner) => {
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
-  }
+  });
   const entries: Array<{ owner?: PreparedModelRuntimeOwner; input: PreparedModelRuntimeInput }> =
     [];
   const knownKeys = new Set<string>();
@@ -576,14 +570,11 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     const owner = owners.get(key);
     entries.push({ owner, input });
   }
-  for (const [key, owner] of owners) {
+  forEachOwnerInRefreshScope(owners, options.agentIds, (key, owner) => {
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
-      if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
-        continue;
-      }
       owners.delete(key);
     }
-  }
+  });
   const candidates = entries.map(({ owner: existing, input }) => {
     // Dynamic and standalone owners have different lifetime contracts. A configured publication
     // must replace them so an older lease release cannot remove the committed generation.
