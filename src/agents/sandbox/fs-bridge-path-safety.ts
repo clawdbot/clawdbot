@@ -16,6 +16,18 @@ import {
 
 type BoundaryAllowedType = "file" | "directory";
 
+const NON_BLOCKING_READ_FLAG = process.platform === "win32" ? 0 : fs.constants.O_NONBLOCK;
+const nonBlockingBoundaryFs = {
+  closeSync: fs.closeSync,
+  constants: fs.constants,
+  fstatSync: fs.fstatSync,
+  lstatSync: fs.lstatSync,
+  openSync: (filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) =>
+    fs.openSync(filePath, typeof flags === "number" ? flags | NON_BLOCKING_READ_FLAG : flags, mode),
+  readFileSync: fs.readFileSync,
+  realpathSync: fs.realpathSync,
+};
+
 /** Caller-provided path safety requirements for one fs bridge operation. */
 type PathSafetyOptions = {
   action: string;
@@ -176,6 +188,9 @@ export class SandboxFsPathGuard {
       rejectSymlinks: false,
       aliasPolicy: options?.aliasPolicy,
       allowedType: options?.allowedType,
+      // Type validation happens after open; nonblocking prevents a raced FIFO
+      // or device from stalling before the descriptor can be rejected.
+      ioFs: nonBlockingBoundaryFs,
     });
     return guarded;
   }
