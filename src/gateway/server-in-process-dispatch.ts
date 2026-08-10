@@ -81,7 +81,7 @@ async function waitForDispatch<T>(
     const cancellation = new Promise<never>((_resolve, reject) => {
       if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
-          reject(new Error(`gateway timeout for ${method}`));
+          reject(new Error(`gateway request timeout for ${method}`));
         }, remainingTimeoutMs);
       }
       if (signal) {

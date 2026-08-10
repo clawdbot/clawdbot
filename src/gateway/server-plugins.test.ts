@@ -899,7 +899,7 @@ describe("loadGatewayPlugins", () => {
         { key: "stuck-session" },
         { timeoutMs: 5 },
       ),
-    ).rejects.toThrow("gateway timeout for sessions.delete");
+    ).rejects.toThrow("gateway request timeout for sessions.delete");
   });
 
   test("does not dispatch or clean up a pre-aborted in-process request", async () => {
@@ -1044,7 +1044,7 @@ describe("loadGatewayPlugins", () => {
           { sessionKey: "s-deadline" },
           { expectFinal: true, timeoutMs: 10 },
         ),
-      ).rejects.toThrow("gateway timeout for agent");
+      ).rejects.toThrow("gateway request timeout for agent");
 
       await vi.advanceTimersByTimeAsync(10);
       await result;

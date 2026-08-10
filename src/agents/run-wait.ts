@@ -394,7 +394,10 @@ export async function waitForAgentRun(params: {
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
-      status: error.includes("gateway timeout") ? "timeout" : "error",
+      status:
+        error.includes("gateway timeout") || error.includes("gateway request timeout")
+          ? "timeout"
+          : "error",
       error,
     };
   }
