@@ -489,7 +489,7 @@ Per-agent overrides use the same model-scoped shape:
 
 Legacy whole-agent runtime examples like this are ignored:
 
-```json
+```json validate=false
 {
   "agents": {
     "defaults": {

@@ -57,7 +57,6 @@ function resolveDiscordDeliveryOptions(
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
-    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
   };
 }
 

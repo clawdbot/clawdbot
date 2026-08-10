@@ -1,6 +1,7 @@
 // Tests direct runtime config overrides passed into agent runner execution.
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
@@ -566,7 +567,13 @@ describe("runReplyAgent runtime config", () => {
     });
     const codexMessage =
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
-    runPreflightCompactionIfNeededMock.mockRejectedValue(new Error(codexMessage));
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new FailoverError(codexMessage, {
+        reason: "rate_limit",
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
 
     const result = await runReplyAgent(replyParams);

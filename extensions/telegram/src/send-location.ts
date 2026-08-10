@@ -72,9 +72,8 @@ async function sendLocationTelegramWithContext(
   const delivery = await withTelegramNativeQuoteFallback({
     label,
     requestParams: commonParams,
-    request: async (effectiveParams, retryLabel) => {
-      await opts.onPlatformSendDispatch?.();
-      return await prepared.request(
+    request: (effectiveParams, retryLabel) =>
+      prepared.request(
         () =>
           hasName
             ? api.sendVenue(
@@ -92,8 +91,7 @@ async function sendLocationTelegramWithContext(
                   : {}),
               } as TelegramSendLocationParams),
         retryLabel,
-      );
-    },
+      ),
   });
   const result = delivery.result;
   const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);

@@ -231,16 +231,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 16284
   },
   "openClawDeveloperInstructions": {
-    "chars": 3410,
-    "roughTokens": 853
+    "chars": 3281,
+    "roughTokens": 821
   },
   "totalTextOnly": {
-    "chars": 27422,
-    "roughTokens": 6856
+    "chars": 27293,
+    "roughTokens": 6824
   },
   "totalWithDynamicToolsJson": {
-    "chars": 92558,
-    "roughTokens": 23140
+    "chars": 92429,
+    "roughTokens": 23108
   },
   "userInputText": {
     "chars": 929,
@@ -433,7 +433,7 @@ Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other 
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.
+Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
 
 Credentials and secrets include authentication and pairing codes; never ask or request users to report, share, or provide them in chat, conversation messages, replies, or transcripts.
 Never echo or repeat credentials or secrets in chat, conversation messages, replies, or any other transcript.

@@ -1,6 +1,7 @@
 // Read tool tests cover bounded file reads, continuation hints, and shell-safe
 // fallback commands in agent sessions.
 import { Buffer } from "node:buffer";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +12,9 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 
-const decodeWindowsTextFileBufferMock = vi.hoisted(() => vi.fn(() => ""));
+const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
+  vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
+);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
@@ -61,6 +64,7 @@ function renderReadCall(args: { path: string; offset?: number; limit?: number })
 describe("read tool", () => {
   beforeEach(() => {
     decodeWindowsTextFileBufferMock.mockReset();
+    decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
   });
 
   it("reads managed inbound media refs as image files", async () => {
@@ -128,6 +132,210 @@ describe("read tool", () => {
     ).rejects.toThrow(
       "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
     );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a FIFO without waiting for a writer",
+    async () => {
+      const tempDir = tempDirs.make("openclaw-read-fifo-");
+      const fifoPath = path.join(tempDir, "live.pipe");
+      expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
+      const tool = createReadToolDefinition(tempDir);
+      const read = tool.execute("call-fifo", { path: fifoPath }, undefined, undefined, {} as never);
+      let timer: NodeJS.Timeout | undefined;
+      const outcome = await Promise.race([
+        read.then(
+          () => ({ kind: "resolved" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timer = setTimeout(() => resolve({ kind: "timeout" }), 1_000);
+        }),
+      ]);
+      if (timer) {
+        clearTimeout(timer);
+      }
+
+      if (outcome.kind === "timeout") {
+        const writer = spawn(
+          "/bin/sh",
+          ["-c", 'while :; do printf x > "$1"; done', "openclaw-read-fifo", fifoPath],
+          { stdio: "ignore" },
+        );
+        const writerExit = new Promise<void>((resolve) => {
+          writer.once("exit", () => resolve());
+        });
+        await Promise.race([
+          read.catch(() => undefined),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 2_000);
+          }),
+        ]);
+        writer.kill("SIGKILL");
+        await writerExit;
+      }
+
+      expect(outcome).toMatchObject({
+        kind: "rejected",
+        error: { message: expect.stringMatching(/regular file/i) },
+      });
+    },
+  );
+
+  it("describes empty files instead of returning blank content", async () => {
+    const tempDir = tempDirs.make("openclaw-read-empty-");
+    await fs.writeFile(path.join(tempDir, "empty.txt"), "");
+    const tool = createReadToolDefinition(tempDir);
+
+    const result = await tool.execute(
+      "call-empty",
+      { path: "empty.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("File is empty (0 bytes).");
+  });
+
+  it("reports the byte count when a BOM-only file decodes to empty text", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from([0xef, 0xbb, 0xbf]),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-bom-only",
+      { path: "bom.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("File contains no readable text (3 bytes).");
+  });
+
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ])("describes %s-only files instead of returning blank content", async (_label, contents) => {
+    const tempDir = tempDirs.make("openclaw-read-blank-line-");
+    await fs.writeFile(path.join(tempDir, "blank.txt"), contents);
+    const tool = createReadToolDefinition(tempDir);
+
+    const result = await tool.execute(
+      "call-blank-line",
+      { path: "blank.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("File contains 1 blank line.");
+  });
+
+  it("applies line limits before describing blank-only content", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from("\n\n"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-blank-range",
+      { path: "blank.txt", limit: 1 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe(
+      "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
+    );
+  });
+
+  it("does not classify plaintext from a custom backend by its extension", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from("plain text"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-custom-png",
+      { path: "report.png" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("plain text");
+  });
+
+  it("resolves one Unicode-equivalent filename and names the correction", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-");
+    const storedName = "re\u0301sume\u0301 3.04\u202fPM d\u2019accord.txt";
+    await fs.writeFile(path.join(tempDir, storedName), "matched");
+    const tool = createReadToolDefinition(tempDir);
+
+    const result = await tool.execute(
+      "call-unicode",
+      { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toContain("Resolved filename");
+    expect(textContent(result)).toContain("matched");
+  });
+
+  it("keeps an exact Unicode spelling ahead of equivalent filenames", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-exact-");
+    await fs.writeFile(path.join(tempDir, "report\u00a0.txt"), "exact");
+    await fs.writeFile(path.join(tempDir, "report .txt"), "equivalent");
+    const tool = createReadToolDefinition(tempDir);
+
+    const result = await tool.execute(
+      "call-unicode-exact",
+      { path: "report\u00a0.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("exact");
+  });
+
+  it("refuses ambiguous Unicode-equivalent filenames", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-ambiguous-");
+    await fs.writeFile(path.join(tempDir, "d'accord.txt"), "straight");
+    await fs.writeFile(path.join(tempDir, "d\u2019accord.txt"), "curly");
+    const tool = createReadToolDefinition(tempDir);
+
+    await expect(
+      tool.execute(
+        "call-unicode-ambiguous",
+        { path: "d\u2018accord.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow(/ambiguous.*d'accord\.txt.*d\u2019accord\.txt/i);
+  });
+
+  it("suggests a close filename without reading it", async () => {
+    const tempDir = tempDirs.make("openclaw-read-suggestion-");
+    await fs.writeFile(path.join(tempDir, "AGENTS.md"), "instructions");
+    const tool = createReadToolDefinition(tempDir);
+
+    await expect(
+      tool.execute("call-suggestion", { path: "AGENT.md" }, undefined, undefined, {} as never),
+    ).rejects.toThrow(/Did you mean: AGENTS\.md\?/);
   });
 
   it("shell-quotes the long-first-line fallback path", async () => {

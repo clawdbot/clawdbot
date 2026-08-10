@@ -216,7 +216,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
   <Accordion title="Config file example">
     ```json5
     {
-      env: { VENICE_API_KEY: "vapi_..." },
+      env: { vars: { VENICE_API_KEY: "vapi_..." } },
       agents: { defaults: { model: { primary: "venice/zai-org-glm-4.7" } } },
       models: {
         mode: "merge",

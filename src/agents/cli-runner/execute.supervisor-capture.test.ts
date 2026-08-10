@@ -444,6 +444,51 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
   });
 
+  it("surfaces a local Claude synthetic empty terminal through the output error path", async () => {
+    const stdout = [
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          model: "<synthetic>",
+          role: "assistant",
+          content: [{ type: "text", text: "No response requested." }],
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        session_id: "claude-synthetic-empty",
+        result: "",
+      }),
+      "",
+    ].join("\n");
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      code: "cli_synthetic_no_response",
+      rawError: "Claude CLI returned a synthetic no-response result.",
+    });
+  });
+
   it("surfaces Claude max-turn results with run and session recovery context", async () => {
     const stdout = `${JSON.stringify({
       type: "result",

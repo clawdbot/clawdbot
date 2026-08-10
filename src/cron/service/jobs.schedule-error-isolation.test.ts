@@ -154,6 +154,9 @@ describe("cron schedule error isolation", () => {
       expect.stringContaining("openclaw automations enable bad-job"),
       expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
     );
+    const notification = vi.mocked(state.deps.enqueueSystemEvent).mock.calls[0]?.[0];
+    expect(notification).toContain("Check automation history for details.");
+    expect(notification).not.toContain("invalid configuration format");
   });
 
   it("clears scheduleErrorCount when schedule computation succeeds", () => {

@@ -125,7 +125,7 @@ export function createDiscordDraftPreviewController(params: {
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
     buildProgressEventLine: (input, options) =>
-      input.event === "tool" || input.event === "item"
+      input.event === "tool" || input.event === "item" || input.event === "command-output"
         ? buildChannelProgressDraftLineForEntry(params.discordConfig, input, options)
         : buildChannelProgressDraftLine(input, options),
     update: async (previewText, options) => {

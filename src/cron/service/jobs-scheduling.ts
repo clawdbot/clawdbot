@@ -394,7 +394,6 @@ export function recordScheduleComputeError(params: {
       reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
-      error: errText,
       deferredNotifications: params.deferredNotifications,
     });
     state.deps.log.error(

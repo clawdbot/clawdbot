@@ -41,14 +41,12 @@ describe("WebChat message tool internal source reply", () => {
 
     const embeddedPayloads = buildEmbeddedRunPayloads({
       assistantTexts: ["Visible automatic final reply."],
-      toolMetas: [],
       lastAssistant: undefined,
       currentAssistant: undefined,
       sessionKey: "agent:main:webchat:dm:dashboard",
       sourceReplyDeliveryMode: "automatic",
       messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
       runId: "webchat-run",
-      inlineToolResultsAllowed: false,
       verboseLevel: "off",
       reasoningLevel: "off",
       toolResultFormat: "plain",

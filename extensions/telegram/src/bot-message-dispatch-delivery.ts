@@ -208,10 +208,7 @@ export function createTelegramDeliveryController(params: {
     ) {
       return payload;
     }
-    return {
-      ...payload,
-      replyToId: implicitQuoteReplyTargetId,
-    };
+    return { ...payload, replyToId: implicitQuoteReplyTargetId };
   };
   const usesNativeTelegramQuote = (payload: ReplyPayload): boolean =>
     params.replyQuoteText != null ||
@@ -226,8 +223,6 @@ export function createTelegramDeliveryController(params: {
       mirrorTranscript?: boolean;
       promptContextSequence?: TelegramPromptContextProjectionSequence;
       textMode?: "html";
-      onPlatformSendDispatch?: () => Promise<void>;
-      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
     },
   ) => {
     if (params.isDispatchSuperseded()) {
@@ -258,13 +253,10 @@ export function createTelegramDeliveryController(params: {
             )
           : undefined,
       );
-    const projectedPayload = withTelegramPromptContextSource(
+    const effectivePayload = withTelegramPromptContextSource(
       deliverablePayload,
       projectionSequence.source,
     );
-    const effectivePayload = options?.bindPendingFinalDelivery
-      ? options.bindPendingFinalDelivery(projectedPayload)
-      : projectedPayload;
     const silent =
       options?.silent ??
       (params.telegramCfg.silentErrorReplies === true && payload.isError === true);
@@ -324,7 +316,6 @@ export function createTelegramDeliveryController(params: {
         silent,
         mediaLoader: params.telegramDeps.loadWebMedia,
         promptContextSequence: projectionSequence,
-        onPlatformSendDispatch: options?.onPlatformSendDispatch,
         ...(options?.textMode ? { textMode: options.textMode } : {}),
       });
       if (!result.delivered) {
@@ -441,8 +432,6 @@ export function createTelegramDeliveryController(params: {
     payload: ReplyPayload,
     text: string,
     promptContextSequence: TelegramPromptContextProjectionSequence,
-    onPlatformSendDispatch?: () => Promise<void>,
-    bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
   ): Promise<LaneDeliveryResult> => {
     const afterAcceptedDraft = params.draft.answerLane.stream?.hasConsumedReplyTarget?.() === true;
     if (payload.isError === true) {
@@ -452,8 +441,6 @@ export function createTelegramDeliveryController(params: {
         afterAcceptedDraft,
         durable: true,
         promptContextSequence,
-        onPlatformSendDispatch,
-        bindPendingFinalDelivery,
       });
       if (!delivered) {
         return { kind: "skipped" };
@@ -467,8 +454,6 @@ export function createTelegramDeliveryController(params: {
       afterAcceptedDraft,
       durable: true,
       promptContextSequence,
-      onPlatformSendDispatch,
-      bindPendingFinalDelivery,
     });
     if (barLine) {
       await params.progress.applyCollapseSummary(barLine, postCosmeticSummaryBar);
@@ -487,8 +472,6 @@ export function createTelegramDeliveryController(params: {
     answerPayload: ReplyPayload,
     text: string,
     buttons?: TelegramInlineButtons,
-    onPlatformSendDispatch?: () => Promise<void>,
-    bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
   ): Promise<LaneDeliveryResult> => {
     const transcriptFinal = await resolveCurrentTurnTranscriptFinal();
     const finalText = await resolveTranscriptBackedChannelFinalText({
@@ -508,8 +491,6 @@ export function createTelegramDeliveryController(params: {
         answerPayload,
         finalText,
         promptContextSequence,
-        onPlatformSendDispatch,
-        bindPendingFinalDelivery,
       );
     } else {
       if (isFollowUp) {
@@ -525,8 +506,6 @@ export function createTelegramDeliveryController(params: {
         buttons,
         allowStream: !usesNativeTelegramQuote(answerPayload),
         promptContextSequence,
-        onPlatformSendDispatch,
-        bindPendingFinalDelivery,
       });
       if (!isFollowUp && result.kind !== "skipped") {
         params.progress.markFinalDelivered();

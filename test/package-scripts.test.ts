@@ -355,4 +355,11 @@ describe("package scripts", () => {
     expect(script).toContain("src/agents/sandbox/fs-paths.test.ts");
     expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
   });
+
+  it("runs MCP environment and native doctor coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/infra/process-env.test.ts");
+    expect(script).toContain("src/cli/mcp-cli.path-case.windows.test.ts");
+  });
 });

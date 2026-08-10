@@ -789,7 +789,7 @@ describe("Default engine selection", () => {
       lease,
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
       operation: "agent-run",
-      recorder: { getAdmissionReceipt: () => admission },
+      recorder: { getAdmissionReceipt: () => admission, hasPersisted: () => true },
     });
 
     expect(selected).toMatchObject({ registeredId: "legacy", mode: "configured" });
@@ -807,7 +807,6 @@ describe("Default engine selection", () => {
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
       operation: "agent-run" as const,
       requiresDurableCommit: true,
-      hasAdmissionFence: true,
     };
 
     const first = lease.selectForHost(selection);
@@ -828,7 +827,7 @@ describe("Default engine selection", () => {
       lease,
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
       operation: "agent-run" as const,
-      recorder: { getAdmissionReceipt: () => undefined },
+      recorder: { getAdmissionReceipt: () => undefined, hasPersisted: () => true },
     };
 
     const first = selectContextEngineForTranscriptHost(selection);
@@ -851,7 +850,7 @@ describe("Default engine selection", () => {
         lease,
         host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
         operation: "agent-run",
-        recorder: { getAdmissionReceipt: () => undefined },
+        recorder: { getAdmissionReceipt: () => undefined, hasPersisted: () => true },
       }),
     ).toThrow("context-engine logical turn selection is already pinned");
   });
@@ -971,7 +970,7 @@ describe("Default engine selection", () => {
       lease,
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
       operation: "agent-run",
-      recorder: { getAdmissionReceipt: testAdmissionReceipt },
+      recorder: { getAdmissionReceipt: testAdmissionReceipt, hasPersisted: () => true },
     });
 
     expect(selected).toMatchObject({ registeredId: "legacy", mode: "legacy-degraded" });
@@ -1067,7 +1066,6 @@ describe("Default engine selection", () => {
       },
       operation: "agent-run",
       requiresDurableCommit: true,
-      hasAdmissionFence: true,
     });
     lease.begin();
 
@@ -1080,7 +1078,6 @@ describe("Default engine selection", () => {
         },
         operation: "agent-run",
         requiresDurableCommit: true,
-        hasAdmissionFence: true,
       }),
     ).toThrow(
       'context-engine logical turn cannot change to incompatible agent harness "fallback": host "agent-harness:fallback" is missing thread-bootstrap-projection',
@@ -1089,14 +1086,38 @@ describe("Default engine selection", () => {
     await lease.dispose();
   });
 
-  it("degrades before start when the current turn has no admission receipt", async () => {
-    const engineId = uniqueEngineId("logical-turn-admission");
+  it.each([
+    {
+      label: "persisted without a receipt",
+      persisted: true,
+      declaresFence: true,
+      expectedEngine: "legacy",
+      expectedReason: "current-turn transcript admission receipt is unavailable",
+    },
+    {
+      label: "not yet persisted",
+      persisted: false,
+      declaresFence: true,
+      expectedEngine: "configured",
+      expectedReason: undefined,
+    },
+    {
+      label: "not yet persisted without declared fencing",
+      persisted: false,
+      declaresFence: false,
+      expectedEngine: "legacy",
+      expectedReason: "current-turn transcript fencing is not declared",
+    },
+  ])("selects $expectedEngine for a turn $label", async (testCase) => {
+    const engineId = uniqueEngineId("logical-turn-recorder-state");
     registerTestContextEngine(engineId, () => ({
       info: {
         id: engineId,
-        name: "Admission Fence",
+        name: "Recorder State",
         transcriptSemantics: {
-          currentTurnFence: "before-current-turn-entry-v1",
+          ...(testCase.declaresFence
+            ? { currentTurnFence: "before-current-turn-entry-v1" as const }
+            : {}),
           turnAdvancementIdempotency: "atomic-idempotent-v1",
         },
       },
@@ -1123,15 +1144,22 @@ describe("Default engine selection", () => {
       lease,
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
       operation: "agent-run",
-      recorder: { getAdmissionReceipt: () => undefined },
+      recorder: {
+        getAdmissionReceipt: () => undefined,
+        hasPersisted: () => testCase.persisted,
+      },
     });
     lease.begin();
 
-    expect(selected.engine.info.id).toBe("legacy");
-    expect(lease.degradedReason).toBe("current-turn transcript admission receipt is unavailable");
-    expect(warn).toHaveBeenCalledWith(
-      `[context-engine] Context engine "${engineId}" degraded to "legacy" for this logical turn: current-turn transcript admission receipt is unavailable. The "legacy" engine will handle only this turn; configuration is unchanged, and "${engineId}" will be retried next turn.`,
+    expect(selected.engine.info.id).toBe(
+      testCase.expectedEngine === "configured" ? engineId : "legacy",
     );
+    expect(lease.degradedReason).toBe(testCase.expectedReason);
+    if (testCase.expectedReason) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(testCase.expectedReason));
+    } else {
+      expect(warn).not.toHaveBeenCalled();
+    }
     await lease.dispose();
   });
 });

@@ -564,6 +564,7 @@ export type PluginHookReplyDispatchEvent = {
   originatingThreadId?: string | number;
   originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
+  shouldSendFullToolDetails: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;
 };

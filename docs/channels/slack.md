@@ -848,7 +848,7 @@ Socket Mode configuration:
 {
   channels: {
     slack: {
-      identity: "user",
+      postAs: "user",
       userToken: "<xoxp>",
       appToken: "<xapp>",
     },
@@ -862,7 +862,7 @@ HTTP Request URL configuration:
 {
   channels: {
     slack: {
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "<xoxp>",
       signingSecret: "<signing-secret>",
@@ -1242,7 +1242,7 @@ Status snapshot behavior:
   `userTokenStatus` + `appTokenStatus` for user identity.
 
 <Tip>
-For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `identity: "user"`, reads and writes always use `userToken`.
+For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `postAs: "user"`, reads and writes always use `userToken`.
 </Tip>
 
 ## Actions and gates
@@ -1487,7 +1487,7 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 - `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
-- `streaming.preview.commandText` / `streaming.progress.commandText`: set to `status` to keep compact tool-progress lines while hiding raw command/exec text (default: `raw`).
+- `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
 Hide raw command/exec text while keeping compact progress lines:
 

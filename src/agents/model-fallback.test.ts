@@ -2427,7 +2427,7 @@ describe("runWithModelFallback", () => {
         }),
       ),
     );
-    expect(error.name).toBe("FallbackSummaryError");
+    expect(error.name).toBe("FailoverError");
     expect(error.message).toContain(rawError);
     const attempt = error.attempts.find((candidate) => candidate.error === rawError);
     if (!attempt) {
@@ -2535,7 +2535,7 @@ describe("runWithModelFallback", () => {
       }),
     );
     const summary = requireFallbackSummaryError(err);
-    expect(summary.name).toBe("FallbackSummaryError");
+    expect(summary.name).toBe("FailoverError");
     expect(summary.sessionId).toBe("session:browser-42713");
     expect(summary.lane).toBe("answer");
     const cause = requireFailoverError(summary.cause);
@@ -3855,7 +3855,7 @@ describe("runWithModelFallback", () => {
           }),
         ),
       );
-      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.name).toBe("FailoverError");
       expect(error.soonestCooldownExpiry).toBe(expiry);
     });
   });
@@ -3912,7 +3912,7 @@ describe("runWithModelFallback", () => {
           }),
         ),
       );
-      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.name).toBe("FailoverError");
       expect(error.soonestCooldownExpiry).toBe(relevantExpiry);
     });
   });

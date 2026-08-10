@@ -5,7 +5,7 @@ import {
   fetchClawHubPromotions,
   fetchClawHubPromotionsFeed,
   parseClawHubPromotionsFeed,
-} from "./clawhub.js";
+} from "./clawhub-promotions.js";
 
 const CLAWHUB_URL = "https://clawhub.ai";
 const mockHttp = useMockHttp();

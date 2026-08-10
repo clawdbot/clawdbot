@@ -226,7 +226,7 @@ a terminal handshake failure.
 
 When a device token is issued, `hello-ok.auth` adds it:
 
-```json
+```json validate=false
 {
   "auth": {
     "deviceToken": "…",
@@ -240,7 +240,7 @@ Built-in QR/setup-code bootstrap is a mobile handoff path. A successful
 baseline setup-code connect returns a primary node token plus one bounded
 operator token:
 
-```json
+```json validate=false
 {
   "auth": {
     "deviceToken": "…",

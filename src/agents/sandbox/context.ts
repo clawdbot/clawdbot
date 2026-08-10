@@ -162,15 +162,6 @@ function resolveSandboxSession(params: {
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
-  if (cfg.backend === "ssh") {
-    // Never let an unresolved inline SSH credential silently fall through to
-    // ambient host SSH identities for this agent.
-    assertSshSandboxSecretOwnerAvailable({
-      config: params.config,
-      scope: cfg.scope,
-      agentId: runtime.agentId,
-    });
-  }
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -203,6 +194,22 @@ type ResolveSandboxContextParams = {
 };
 
 type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
+
+function assertSandboxSessionSecretOwnerAvailable(
+  config: OpenClawConfig | undefined,
+  resolved: ResolvedSandboxSession,
+): void {
+  if (resolved.cfg.backend !== "ssh") {
+    return;
+  }
+  // Never let an unresolved inline SSH credential silently fall through to
+  // ambient host SSH identities for this agent.
+  assertSshSandboxSecretOwnerAvailable({
+    config,
+    scope: resolved.cfg.scope,
+    agentId: resolved.runtime.agentId,
+  });
+}
 
 async function resolveProvisionedSandboxContext(
   params: ResolveSandboxContextParams,
@@ -351,6 +358,7 @@ export async function resolveSandboxContext(params: {
   // provisioning. Preserve that owner boundary across backend, browser,
   // registry, and filesystem-bridge setup so model fallback never retries it.
   try {
+    assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
     return await resolveProvisionedSandboxContext(params, resolved);
   } catch (error) {
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
@@ -366,6 +374,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   if (!resolved) {
     return null;
   }
+  assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
   const { rawSessionKey, cfg, runtime } = resolved;
 
   const {

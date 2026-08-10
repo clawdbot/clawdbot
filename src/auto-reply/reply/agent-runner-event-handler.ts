@@ -195,6 +195,7 @@ export function createAgentRunEventHandler(params: {
         summary: readStringValue(evt.data.summary),
         progressText: readStringValue(evt.data.progressText),
         meta: readStringValue(evt.data.meta),
+        commandBearing: evt.data.commandBearing === true,
         approvalId: readStringValue(evt.data.approvalId),
         approvalSlug: readStringValue(evt.data.approvalSlug),
       });

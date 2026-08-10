@@ -21,7 +21,8 @@ import {
 } from "./dispatch-from-config.payloads.js";
 import {
   clearPendingFinalDeliveryAfterSuccess,
-  suppressPendingFinalDelivery,
+  capturePendingFinalDeliveryIdentity,
+  reconcilePendingFinalDeliveryAfterSettlement,
 } from "./dispatch-from-config.pending-final.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
@@ -47,15 +48,26 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     sendPolicyDenied,
     sessionAgentId,
     sessionKey,
+    sessionStoreEntry,
     suppressDelivery,
     throwIfDispatchOperationAborted,
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-  const pendingFinalDeliveryIdentity = replies
-    .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
-    .find((completion) => completion !== undefined);
+  const pendingFinalDelivery = {
+    storePath: sessionStoreEntry.storePath,
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+  };
+  const replyPendingIntentIds = new Set(
+    replies
+      .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryIntentId)
+      .filter((intentId): intentId is string => Boolean(intentId)),
+  );
+  const pendingFinalDeliveryIdentity = capturePendingFinalDeliveryIdentity({
+    ...pendingFinalDelivery,
+    intentId: replyPendingIntentIds.size === 1 ? [...replyPendingIntentIds][0] : undefined,
+  });
   // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
   // has at least started so a delayed tool/reasoning transition cannot appear after the final.
   if (state.preserveProgressCallbackStartOrder) {
@@ -72,7 +84,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let routedFinalCount = 0;
   let attemptedFinalDelivery = false;
   let finalDeliveryFailed = false;
-  const finalDeliveries: Promise<ReplyDispatchDeliveryOutcome>[] = [];
+  const finalDeliveries: Array<{
+    outcome: Promise<ReplyDispatchDeliveryOutcome>;
+    payload: ReplyPayload;
+  }> = [];
   let allQueuedFinalsObserved = true;
   const sentFinalPayloadDedupeKeys = new Set<string>();
   let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
@@ -81,11 +96,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // Durable reasoning is a channel-owned lane; generic channels keep the
     // historical suppression unless they explicitly opt in.
     if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
-      await suppressPendingFinalDelivery(reply);
       continue;
     }
     if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
-      await suppressPendingFinalDelivery(reply);
       continue;
     }
     if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply, state)) {
@@ -103,12 +116,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           ].join(" "),
         );
       }
-      await suppressPendingFinalDelivery(reply);
       continue;
     }
     const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
     if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
-      await suppressPendingFinalDelivery(reply);
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
@@ -130,7 +141,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
     if (finalReply.dedupedAgainstBlock) {
       // The delivering block already settled into the turn ledger.
-      await suppressPendingFinalDelivery(reply);
       continue;
     }
     attemptedFinalDelivery = true;
@@ -138,7 +148,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     routedFinalCount += finalReply.routedFinalCount;
     if (finalReply.queuedFinal) {
       if (finalReply.dispatcherOutcome) {
-        finalDeliveries.push(finalReply.dispatcherOutcome);
+        finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
       } else {
         allQueuedFinalsObserved = false;
       }
@@ -152,9 +162,19 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     if (queuedFinal && allQueuedFinalsObserved) {
       // Delivery observers run from the queue itself, so direct low-level callers
       // reconcile too; the settle task only makes lifecycle owners await it.
-      const reconcilePendingFinal = Promise.all(finalDeliveries)
-        .then(async () => {
-          await clearPendingFinalDeliveryAfterSuccess(pendingFinalDeliveryIdentity);
+      const reconcilePendingFinal = Promise.all(
+        finalDeliveries.map(async (delivery) => ({
+          outcome: await delivery.outcome,
+          payload: delivery.payload,
+        })),
+      )
+        .then(async (deliveries) => {
+          await reconcilePendingFinalDeliveryAfterSettlement({
+            ...pendingFinalDelivery,
+            deliveries,
+            identity: pendingFinalDeliveryIdentity,
+            replies,
+          });
         })
         .catch((error: unknown) => {
           logVerbose(
@@ -165,7 +185,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     } else {
       // Routed delivery has a transport result already. Custom dispatchers that
       // do not expose the core observer retain the legacy queue-admission behavior.
-      await clearPendingFinalDeliveryAfterSuccess(pendingFinalDeliveryIdentity);
+      await clearPendingFinalDeliveryAfterSuccess({
+        ...pendingFinalDelivery,
+        identity: pendingFinalDeliveryIdentity,
+      });
     }
     // Register successful queued cleanup before honoring a late abort. The
     // outer settle owner still runs it from finally (#89115).
