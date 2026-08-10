@@ -265,7 +265,7 @@ describe("memory runtime handles", () => {
     });
   });
 
-  it("wires each legacy resolution through shadow inspection without changing legacy resolution", () => {
+  it("inspects a legacy selected registry once without changing legacy resolution", () => {
     const { registry, runtime } = createRegistry();
     mocks.loadPluginRegistryHandle.mockReturnValue(registry);
 
@@ -276,7 +276,7 @@ describe("memory runtime handles", () => {
       backend: "builtin",
     });
 
-    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledTimes(2);
+    expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledOnce();
     expect(mocks.observeMemoryAuthorizationShadowSurface).toHaveBeenCalledWith({
       capability: expect.objectContaining({
         authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
