@@ -6,10 +6,9 @@ export const MEMORY_AUTHORIZATION_PATH_DISPOSITIONS = [
   "operator-only-authenticated",
 ] as const;
 
-export type MemoryAuthorizationPathDisposition =
-  (typeof MEMORY_AUTHORIZATION_PATH_DISPOSITIONS)[number];
-export type MemoryAuthorizationPathDirection = "control" | "ingress" | "egress" | "derive";
-export type MemoryAuthorizationPathOwner =
+type MemoryAuthorizationPathDisposition = (typeof MEMORY_AUTHORIZATION_PATH_DISPOSITIONS)[number];
+type MemoryAuthorizationPathDirection = "control" | "ingress" | "egress" | "derive";
+type MemoryAuthorizationPathOwner =
   | "core-access-host"
   | "core-agent-runtime"
   | "core-session-runtime"
