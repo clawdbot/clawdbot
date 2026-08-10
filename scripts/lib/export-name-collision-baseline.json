@@ -888,13 +888,6 @@
     ]
   },
   {
-    "name": "nodePendingHandlers",
-    "files": [
-      "src/gateway/server-methods/nodes-pending.ts",
-      "src/gateway/server-methods/nodes.pending.ts"
-    ]
-  },
-  {
     "name": "normalizeChannelId",
     "files": [
       "src/channels/plugins/registry.ts",
@@ -1055,13 +1048,6 @@
     "files": [
       "src/config/io.observe-recovery.ts",
       "src/config/io.runtime.ts"
-    ]
-  },
-  {
-    "name": "primeConfiguredBindingRegistry",
-    "files": [
-      "src/channels/plugins/binding-registry.ts",
-      "src/channels/plugins/configured-binding-registry.ts"
     ]
   },
   {
@@ -1293,27 +1279,6 @@
     ]
   },
   {
-    "name": "resolveConfiguredBinding",
-    "files": [
-      "src/channels/plugins/binding-registry.ts",
-      "src/channels/plugins/configured-binding-registry.ts"
-    ]
-  },
-  {
-    "name": "resolveConfiguredBindingRecord",
-    "files": [
-      "src/channels/plugins/binding-registry.ts",
-      "src/channels/plugins/configured-binding-registry.ts"
-    ]
-  },
-  {
-    "name": "resolveConfiguredBindingRecordBySessionKey",
-    "files": [
-      "src/channels/plugins/binding-registry.ts",
-      "src/channels/plugins/configured-binding-registry.ts"
-    ]
-  },
-  {
     "name": "resolveConfiguredFallbackModel",
     "files": [
       "src/agents/embedded-agent-runner/model.configured-fallback.ts",
@@ -1444,13 +1409,6 @@
     "sdk": true
   },
   {
-    "name": "resolveQueueSettings",
-    "files": [
-      "src/auto-reply/reply/queue/settings-runtime.ts",
-      "src/auto-reply/reply/queue/settings.ts"
-    ]
-  },
-  {
     "name": "resolveSecretInputString",
     "files": [
       "src/config/types.secrets.ts",
@@ -1478,14 +1436,6 @@
     "files": [
       "src/config/sessions/paths.ts",
       "src/plugin-sdk/session-store-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "resolveSessionKey",
-    "files": [
-      "src/acp/session-mapper.ts",
-      "src/config/sessions/session-key.ts"
     ],
     "sdk": true
   },
