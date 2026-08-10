@@ -13,19 +13,21 @@ export type {
 export {
   calculateCost,
   clampThinkingLevel,
+  createStreamingJsonPreview,
   getApiProvider,
   getApiProviders,
   getEnvApiKey,
   parseStreamingJson,
   sanitizeSurrogates,
+  type StreamingJsonPreview,
 } from "@openclaw/ai/internal/runtime";
-// Incremental streaming-preview helpers (`createStreamingJsonPreviewState`,
-// `pushStreamingJsonPreview`, `finalizeStreamingJsonPreview`, and
-// `StreamingJsonPreviewState`) intentionally stay OFF this public subpath.
-// They are mutable/stateful internals for first-party stream adapters
-// (Amazon Bedrock + Worker inference) and must be imported from
-// `@openclaw/ai/internal/runtime` until a maintainer explicitly adopts them
-// as a documented Plugin SDK contract.
+// `createStreamingJsonPreview` is the supported seam for provider plugins that
+// stream tool-call arguments (see docs/plugins/sdk-provider-plugins.md). It is
+// deliberately the only streaming-preview export here: the underlying
+// `*StreamingJsonPreviewState` helpers are mutable host internals whose fields
+// must stay free to change, so they remain importable only from
+// `@openclaw/ai/internal/runtime`, by first-party core code (Worker inference)
+// that ships in lockstep with them - never across the plugin boundary.
 export {
   adjustMaxTokensForThinking,
   buildBaseOptions,

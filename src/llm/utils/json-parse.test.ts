@@ -7,6 +7,7 @@ import {
   pushStreamingJsonPreview,
   repairJson,
   repairJsonChunk,
+  STREAMING_JSON_REPARSE_WORK_BUDGET_FACTOR,
 } from "@openclaw/ai/internal/runtime";
 // JSON parse tests cover tolerant parsing of partial model JSON output.
 import { describe, expect, it } from "vitest";
@@ -183,7 +184,7 @@ describe("repairJsonChunk incremental/non-incremental equivalence (fuzz)", () =>
   });
 });
 
-describe("streaming JSON preview (incremental repair + growth-gated reparse)", () => {
+describe("streaming JSON preview (incremental repair + budgeted reparse)", () => {
   it("resolves large multi-chunk arguments correctly via finalizeStreamingJsonPreview", () => {
     const content = "The quarterly value exchange report. ".repeat(1500); // ~57KB
     const expected = { filename: "report.docx", content };
@@ -214,41 +215,50 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     }
     // The old size-threshold design froze after 8_000 chars and produced a
     // single stale value for the rest of a ~57KB stream; an intermediate
-    // growth-gated-only design only refreshed on a logarithmic cadence. The
-    // hot path (see the "genuinely live on every delta" test below) means
-    // this now refreshes on essentially every delta once streaming reaches
-    // the `content` field, so almost every chunk should produce a distinct
-    // length.
+    // growth-gated-only design only refreshed on a logarithmic cadence.
+    // Tracking the structure incrementally (see the "genuinely live on every
+    // delta" test below) means this now refreshes on essentially every delta
+    // once streaming reaches the `content` field, so almost every chunk
+    // should produce a distinct length.
     expect(distinctContentLengths.size).toBeGreaterThan(fullJson.length / chunkSize / 2);
   });
 
-  it("keeps the previewed value genuinely live on every single delta once inside a large top-level string field (hot path, zero staleness)", () => {
+  it("keeps the previewed value genuinely live on every single delta once inside a large top-level string field (zero staleness)", () => {
     const content = "The quarterly value exchange report. ".repeat(1500); // ~57KB
     const fullJson = JSON.stringify({ filename: "report.docx", content });
 
     const state = createStreamingJsonPreviewState();
     const chunkSize = 40;
+    let previous = "";
     let sawContentField = false;
+    let deltasThatDidNotGrowThePreview = 0;
     for (let i = 0; i < fullJson.length; i += chunkSize) {
-      const before = state.lastParsedValue.content;
-      const value = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
-      const after = value.content;
-      if (typeof before === "string" && typeof after === "string" && after.length > 0) {
-        sawContentField = true;
-        // Once inside the `content` field, *every* delta must grow the
-        // exposed preview by exactly what was just appended - no cached,
-        // unchanged value in between, regardless of the growth gate.
-        expect(after.length).toBeGreaterThanOrEqual(before.length);
-        expect(after.startsWith(before)).toBe(true);
+      const after = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize)).content;
+      if (typeof after !== "string") {
+        continue;
       }
+      if (sawContentField) {
+        // Once inside the `content` field, every delta must extend the
+        // exposed preview - never replace, truncate, or repeat it.
+        expect(after.startsWith(previous)).toBe(true);
+        if (after.length === previous.length) {
+          deltasThatDidNotGrowThePreview += 1;
+        }
+      }
+      sawContentField = true;
+      previous = after;
     }
     expect(sawContentField).toBe(true);
+    // Only the last delta (which carries the closing `"}` rather than more
+    // content) may leave the previewed value unchanged; a cached/stale value
+    // anywhere else in the stream would show up here.
+    expect(deltasThatDidNotGrowThePreview).toBeLessThanOrEqual(1);
     const finalValue = finalizeStreamingJsonPreview(state);
     expect(finalValue).toEqual({ filename: "report.docx", content });
-    // The hot path keeps this small regardless of payload size: only field
-    // boundaries (filename open/close, content open, final resolution)
-    // trigger a real JSON.parse/partial-json pass.
-    expect(state.fullReparseCount).toBeLessThan(10);
+    // The incremental tracker materializes every string member on its own,
+    // so the only JSON.parse/partial-json pass in this whole stream is the
+    // one `finalizeStreamingJsonPreview` forces.
+    expect(state.fullReparseCount).toBe(1);
   });
 
   it("bounds the number of full reparses regardless of delta granularity (cadence-independent cost)", () => {
@@ -261,8 +271,8 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     // version of this gate only bounded cost for deltas arriving faster
     // than its interval - deltas spaced further apart (an entirely ordinary
     // network cadence) still triggered a full reparse every time. Neither
-    // the growth gate nor the hot-path field-boundary reparses have any
-    // time input at all, so cadence can't affect them; the closest analog
+    // the structural tracker nor the reparse budget has any time input at
+    // all, so cadence can't affect them; the closest analog
     // we can exercise deterministically is delta *granularity* (the same
     // payload split into far more, far smaller deltas), which this must not
     // multiply the reparse count for.
@@ -277,26 +287,81 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     const reparsesAtChunk40 = countFullReparses(40);
     const reparsesAtChunk1 = countFullReparses(1);
 
-    // With the hot path handling every interior delta of the large `content`
-    // field directly, only field boundaries (filename open/close, content
-    // open) trigger a real reparse - a small constant, not proportional to
-    // payload size or delta count at all.
+    // With the tracker materializing this flat object's members directly
+    // from the deltas, nothing here needs a whole-buffer pass at all - the
+    // count is a small constant, not proportional to payload size or delta
+    // count.
     expect(reparsesAtChunk40).toBeLessThan(10);
     expect(reparsesAtChunk1).toBeLessThan(10);
   });
 
-  it("keeps the previewed string live via the hot path instead of reusing a stale cached value", () => {
+  it("stays linear for a wide object of many short string fields streamed one character at a time", () => {
+    // The shape an earlier revision regressed on: it only avoided the
+    // whole-buffer re-parse for the interior of a single large string, and
+    // re-parsed on every string boundary. Here a boundary is crossed every
+    // few characters, so "re-parse on each boundary" is just the original
+    // O(n^2) behavior wearing a different hat.
+    const expected = Object.fromEntries(
+      Array.from({ length: 400 }, (_, i) => [`field${i}`, `value${i}`]),
+    );
+    const fullJson = JSON.stringify(expected); // ~9KB across 400 fields
+
+    const state = createStreamingJsonPreviewState();
+    let raw = "";
+    for (let i = 0; i < fullJson.length; i++) {
+      raw += fullJson.charAt(i);
+      const value = pushStreamingJsonPreview(state, fullJson.charAt(i));
+      // Bounding the cost must not cost correctness: the preview still has
+      // to match a full re-parse of the raw buffer at every single delta.
+      expect(trimTrailingWhitespaceOnStrings(value)).toEqual(
+        trimTrailingWhitespaceOnStrings(parseStreamingJson(raw)),
+      );
+    }
+    expect(finalizeStreamingJsonPreview(state)).toEqual(expected);
+
+    // The tracker materializes string members itself, so boundaries cost
+    // nothing extra and the only whole-buffer pass is the forced final one.
+    expect(state.fullReparseCount).toBe(1);
+    expect(state.reparsedCharsTotal).toBe(fullJson.length);
+  });
+
+  it("keeps total re-parsed bytes linear even for shapes the tracker cannot model", () => {
+    // Nested containers and numeric members are handed to the whole-buffer
+    // fallback by design. That fallback is the one thing here with no
+    // incremental form, so its *total* cost is what has to stay bounded -
+    // and it must hold for the worst cadence (one character per delta).
+    const fullJson = JSON.stringify({
+      counts: Array.from({ length: 400 }, (_, i) => i),
+      meta: { note: "x".repeat(500) },
+    });
+
+    const state = createStreamingJsonPreviewState();
+    for (let i = 0; i < fullJson.length; i++) {
+      pushStreamingJsonPreview(state, fullJson.charAt(i));
+    }
+    expect(finalizeStreamingJsonPreview(state)).toEqual(JSON.parse(fullJson));
+
+    // Without a bound this would be ~n^2/2 (about 2 million characters for
+    // this payload) instead of a small multiple of n. The budget caps the
+    // streaming passes at FACTOR * n; the `+ 1` is the final forced parse,
+    // which is unconditional by design.
+    expect(state.reparsedCharsTotal).toBeLessThanOrEqual(
+      (STREAMING_JSON_REPARSE_WORK_BUDGET_FACTOR + 1) * fullJson.length,
+    );
+  });
+
+  it("keeps the previewed string live incrementally instead of reusing a stale cached value", () => {
     const state = createStreamingJsonPreviewState();
     const first = pushStreamingJsonPreview(state, '{"a":"1');
     expect(first).toEqual({ a: "1" });
     const reparsesAfterFirst = state.fullReparseCount;
 
-    // Even a single extra byte - far below the old growth-gate floor - must
-    // be reflected immediately via the hot path, not silently dropped.
+    // Even a single extra byte - far below any reparse threshold - must be
+    // reflected immediately by the tracker, not silently dropped.
     const second = pushStreamingJsonPreview(state, "2");
     expect(second).toEqual({ a: "12" });
     expect(second).not.toBe(first);
-    expect(state.fullReparseCount).toBe(reparsesAfterFirst); // hot path, no extra reparse
+    expect(state.fullReparseCount).toBe(reparsesAfterFirst); // tracked, no extra reparse
 
     const third = pushStreamingJsonPreview(state, '3"}', { force: true });
     expect(third).toEqual({ a: "123" });
@@ -305,13 +370,13 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     expect(fourth).toEqual({ a: "123" });
   });
 
-  it("preserves whitespace `partial-json` withheld on an open string once the hot path resumes after a full reparse", () => {
+  it("preserves whitespace `partial-json` withheld on an open string once the tracker resumes after a full reparse", () => {
     // Regression for a real bug: a full reparse (forced here for a
-    // deterministic repro; the growth gate triggers the same reparse path
+    // deterministic repro; an untracked shape reaches the same reparse path
     // for a large real payload) that lands with an open string ending in
     // whitespace used to cache partial-json's *trimmed* view of that value.
-    // The next hot-path delta then appended its decoded content onto that
-    // stale, shortened cache instead of the true accumulated text, silently
+    // The next delta then appended its decoded content onto that stale,
+    // shortened cache instead of the true accumulated text, silently
     // dropping the whitespace - e.g. "hi " + "x" became "hix" instead of
     // "hi x" in the value exposed via `toolcall_delta.partial.arguments`.
     const state = createStreamingJsonPreviewState();
@@ -323,11 +388,11 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     // the repaired buffer, so the space must already be present here too.
     expect(afterForcedReparse).toEqual({ a: "hi " });
 
-    // Pure interior string content for the same still-open field: must hit
-    // the hot path and append onto the *true* value above, not a trimmed
-    // one, or the space between "hi" and "x" is lost.
-    const afterHotPathAppend = pushStreamingJsonPreview(state, "x");
-    expect(afterHotPathAppend).toEqual({ a: "hi x" });
+    // Pure interior string content for the same still-open field: the
+    // tracker must append onto the *true* value above, not a trimmed one,
+    // or the space between "hi" and "x" is lost.
+    const afterTrackedAppend = pushStreamingJsonPreview(state, "x");
+    expect(afterTrackedAppend).toEqual({ a: "hi x" });
 
     pushStreamingJsonPreview(state, '"}');
     const finalValue = finalizeStreamingJsonPreview(state);
@@ -340,7 +405,7 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     // included a *speculative* "as if the stream ended now" resolution of
     // a still-pending, ambiguous escape (state.repairState.pendingRaw) -
     // e.g. a lone trailing "\" that might turn into "\uXXXX" once the next
-    // characters arrive. Baking that guess into the hot path's baseline
+    // characters arrive. Baking that guess into the tracker's baseline
     // meant the backslash got counted once speculatively and then again
     // for real once repairJsonChunkCore's own carryover resolved the escape
     // properly, producing e.g. "\A" instead of "A" for a "\u0041" split
@@ -366,11 +431,11 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     expect(finalValue).toEqual({ field0: "x", field1: "A" });
   });
 
-  it("falls back to the growth-gated path (not the hot path) for a nested object/array value", () => {
-    // Nested containers are explicitly out of scope for the flat-object hot
-    // path (see computeOpenTopLevelStringValueKey); this must still resolve
-    // correctly via the existing growth-gated/full-reparse fallback, just
-    // without the same zero-staleness guarantee for the nested field.
+  it("falls back to the whole-buffer reparse for a nested object/array value", () => {
+    // Nested containers are explicitly out of scope for the flat-object
+    // tracker (see `advanceTopLevelObjectTracker`); this must still resolve
+    // correctly via the budgeted full-reparse fallback, just without the
+    // same zero-staleness guarantee for the nested field.
     const inner = "x".repeat(2000);
     const expected = { meta: { note: inner } };
     const fullJson = JSON.stringify(expected);
@@ -383,7 +448,7 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     expect(finalValue).toEqual(expected);
   });
 
-  it("falls back safely for a large flat array of many small scalars (hot path does not apply, growth gate still bounds cost)", () => {
+  it("falls back safely for a large flat array of many small scalars (tracker does not apply, budget still bounds cost)", () => {
     const numbers = Array.from({ length: 5000 }, (_, i) => i);
     const expected = { numbers };
     const fullJson = JSON.stringify(expected);
@@ -395,7 +460,7 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     const finalValue = finalizeStreamingJsonPreview(state);
     expect(finalValue).toEqual(expected);
     // Not the point of this test to assert an exact bound (arrays of
-    // scalars aren't the hot path's target), just that it stays a small
+    // scalars aren't what the tracker models), just that it stays a small
     // fraction of the delta count rather than scaling with it.
     expect(state.fullReparseCount).toBeLessThan(fullJson.length / 10);
   });
@@ -415,8 +480,8 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
 // {a:"hi "} - since it can't know yet whether that whitespace is meaningful
 // content or just formatting before the string closes. This is a
 // pre-existing property of the `partial-json` fallback these tests use as
-// their "ground truth" oracle, not something introduced by the hot path -
-// and the hot path is arguably *more* correct here, since it preserves the
+// their "ground truth" oracle, not something introduced by the tracker -
+// and the tracker is arguably *more* correct here, since it preserves the
 // literal bytes seen so far instead of guessing. Trim trailing whitespace
 // before comparing so this one known, harmless oracle quirk doesn't produce
 // false failures; it does not mask any other divergence.
@@ -430,7 +495,7 @@ function trimTrailingWhitespaceOnStrings(value: Record<string, unknown>): Record
 
 describe("streaming JSON preview matches ground truth on every delta (fuzz)", () => {
   it("matches a full parseStreamingJson(raw-so-far) after every single delta, across random chunk boundaries and fragment mixes", () => {
-    // This is the direct regression test for the hot path: it must never
+    // This is the direct regression test for the tracker: it must never
     // diverge from what a straightforward (if quadratic) full re-parse of
     // the raw buffer would produce at that exact point in the stream, for
     // any field - not just the one being hot-appended.

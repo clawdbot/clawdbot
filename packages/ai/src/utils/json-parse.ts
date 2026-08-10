@@ -218,29 +218,10 @@ function appendStringValuePrefix(prefix: string, addition: string): string {
  * `repairJson` uses for a complete string, instead of being held back
  * forever waiting for input that will never arrive.
  */
-export interface RepairJsonChunkResult {
-  repaired: string;
-  /**
-   * True if an (unescaped) `"` was processed during this call - i.e. a
-   * string value/key either opened or closed (or both) somewhere within
-   * this delta. Used by `pushStreamingJsonPreview` to detect when a
-   * previously-tracked "currently open string" location may no longer be
-   * valid and a structural re-check is needed, versus a delta that is pure
-   * interior string content and safe to append incrementally. Does not
-   * count escaped quotes (`\"`), since those never toggle `state.inString`.
-   */
-  stringBoundaryCrossed: boolean;
-}
-
-function repairJsonChunkCore(
-  delta: string,
-  state: RepairJsonState,
-  isFinal: boolean,
-): RepairJsonChunkResult {
+function repairJsonChunkCore(delta: string, state: RepairJsonState, isFinal: boolean): string {
   const input = state.pendingRaw + delta;
   state.pendingRaw = "";
   let repaired = "";
-  let stringBoundaryCrossed = false;
   let index = 0;
 
   while (index < input.length) {
@@ -251,7 +232,6 @@ function repairJsonChunkCore(
       if (char === '"') {
         state.inString = true;
         state.stringValuePrefix = "";
-        stringBoundaryCrossed = true;
       }
       index += 1;
       continue;
@@ -261,7 +241,6 @@ function repairJsonChunkCore(
       repaired += char;
       state.inString = false;
       state.stringValuePrefix = "";
-      stringBoundaryCrossed = true;
       index += 1;
       continue;
     }
@@ -271,7 +250,7 @@ function repairJsonChunkCore(
       if (!nextChar) {
         if (!isFinal) {
           state.pendingRaw = input.slice(index);
-          return { repaired, stringBoundaryCrossed };
+          return repaired;
         }
         repaired += "\\\\";
         index += 1;
@@ -292,7 +271,7 @@ function repairJsonChunkCore(
         const seenSoFar = input.length - (index + 2);
         if (!isFinal && seenSoFar < 4 && /^[0-9a-fA-F]*$/.test(available)) {
           state.pendingRaw = input.slice(index);
-          return { repaired, stringBoundaryCrossed };
+          return repaired;
         }
         // A \u not followed by four hex digits is an invalid escape: double the
         // backslash like the other invalid escapes below. Falling through would
@@ -335,11 +314,11 @@ function repairJsonChunkCore(
     index += 1;
   }
 
-  return { repaired, stringBoundaryCrossed };
+  return repaired;
 }
 
 export function repairJsonChunk(delta: string, state: RepairJsonState, isFinal = false): string {
-  return repairJsonChunkCore(delta, state, isFinal).repaired;
+  return repairJsonChunkCore(delta, state, isFinal);
 }
 
 /**
@@ -350,9 +329,9 @@ export function repairJsonChunk(delta: string, state: RepairJsonState, isFinal =
  * carried-over state, because `repairJsonChunkCore` never returns a fragment
  * ending in a dangling `\` or a partial `\uXXXX`: anything it can't fully
  * resolve yet is held back in `state.pendingRaw` and excluded from the
- * returned text until a later call resolves it. Used by the streaming-preview
- * hot path (see `pushStreamingJsonPreview`) to append newly-arrived string
- * content directly onto the in-progress value instead of a full re-parse.
+ * returned text until a later call resolves it. Used by the streaming
+ * preview's structural tracker (see `advanceTopLevelObjectTracker`) to build
+ * keys and values from the deltas themselves instead of re-parsing.
  */
 function decodeRepairedStringFragment(fragment: string): string {
   let decoded = "";
@@ -409,137 +388,231 @@ function decodeRepairedStringFragment(fragment: string): string {
 
 const JSON_WHITESPACE = /[ \t\n\r]/;
 
-function scanJsonStringSpan(text: string, start: number): number | null {
-  let index = start + 1;
+/**
+ * Reads a run of *already-repaired* JSON string content starting at `start`
+ * (which must be inside a string), stopping at the closing quote or the end
+ * of the fragment - whichever comes first. Escape pairs are skipped whole so
+ * an escaped quote never looks like a terminator.
+ *
+ * No carried-over state is needed across calls because
+ * `repairJsonChunkCore` never returns a fragment ending mid-escape: a lone
+ * trailing `\` or a partial `\uXXXX` is held back in `state.pendingRaw`
+ * until later input resolves it.
+ */
+function readRepairedStringRun(
+  text: string,
+  start: number,
+): { text: string; next: number; closed: boolean } {
+  let index = start;
   while (index < text.length) {
     const char = text.charAt(index);
     if (char === "\\") {
-      index += 2;
+      index += text.charAt(index + 1) === "u" ? 6 : 2;
       continue;
     }
     if (char === '"') {
-      return index + 1;
+      return { text: text.slice(start, index), next: index + 1, closed: true };
     }
     index += 1;
   }
-  return null;
+  return { text: text.slice(start), next: text.length, closed: false };
 }
 
-/**
- * The top-level object key whose string *value* is currently open
- * (streaming, not yet closed), together with that value's *authoritative*
- * content decoded directly from the repaired buffer - not from
- * `partial-json`, which deliberately trims trailing whitespace off an
- * unterminated string (it can't tell whether that whitespace is meaningful
- * content or an artifact of the cut ending mid-stream). Recomputing the
- * value this way after every full reparse is what makes the hot path in
- * `pushStreamingJsonPreview` safe to build on: its baseline is always the
- * true accumulated content, so appending further decoded deltas can never
- * silently drop whitespace `partial-json` chose to withhold.
- */
-interface OpenTopLevelStringValue {
-  key: string;
-  value: string;
-}
+type TopLevelObjectPhase =
+  | "beforeRoot"
+  | "beforeKey"
+  | "inKey"
+  | "afterKey"
+  | "beforeValue"
+  | "inStringValue"
+  | "inLiteralValue"
+  | "afterValue"
+  | "afterRoot"
+  | "unsupported";
 
 /**
- * Finds the top-level object key/value described above, restricted to the
- * common flat-object shape this fast path targets: a single top-level
- * `{ ... }` whose members are strings/numbers/booleans/null (the shape of
- * essentially every real tool-call-arguments schema, including the
- * large-single-string-field case #53408 and this module exist to fix).
+ * Resumable structural scan of the top-level object, advanced by the same
+ * repaired characters `repairJsonChunkCore` has just committed and never by
+ * re-reading the buffer. It exists so that *nothing* about a streaming
+ * preview needs a whole-buffer pass in the common case.
  *
- * Returns `null` whenever that doesn't confidently hold: not an object, a
- * *key* string is still open (only value strings are appendable), a nested
- * object/array member is encountered (out of scope for this fast path - the
- * growth-gated fallback in `pushStreamingJsonPreview` still handles it
- * safely, just without the same zero-staleness guarantee for that nested
- * value), the buffer is between tokens, complete, or malformed.
+ * `JSON.parse`/`partial-json` have no incremental API, so calling them per
+ * delta is inherently O(buffer) each time - the quadratic behavior this
+ * module exists to remove. A previous iteration of this file avoided that
+ * only for the interior of one large string value, and still fell back to a
+ * full re-parse every time a quote opened or closed a field. That is fine
+ * for one huge argument, but it silently restores the quadratic cost for an
+ * equally ordinary shape - a wide object of many short string fields
+ * (`{"a":"1","b":"2",...}`), where a boundary is crossed every few
+ * characters.
  *
- * `text` must already be repaired JSON text (see `repairJson`), so any
- * escape sequences within it are well-formed pairs.
+ * Tracking the structure incrementally removes that asymmetry: string keys
+ * and string values are materialized directly from the decoded deltas, so a
+ * flat object of string fields - the shape of essentially every real
+ * tool-call argument schema - is handled end to end in O(delta) per call
+ * with no whole-buffer pass at all, and no staleness at any point.
+ *
+ * Shapes it deliberately does not model are handed back to the (bounded)
+ * full re-parse fallback rather than guessed at:
+ * - `unsupported` (a non-object root, a nested object/array, or malformed
+ *   input): `fields` is abandoned entirely and the fallback owns the value.
+ * - `sawUntrackedValue` (a number/boolean/null member): those members are
+ *   skipped structurally so string members keep streaming live, but the
+ *   fallback still has to supply their parsed values.
  */
-function computeOpenTopLevelStringValue(text: string): OpenTopLevelStringValue | null {
-  let index = 0;
-  const skipWhitespace = () => {
-    while (index < text.length && JSON_WHITESPACE.test(text.charAt(index))) {
-      index += 1;
-    }
+interface TopLevelObjectTracker {
+  phase: TopLevelObjectPhase;
+  /** Repaired (still-escaped) text of the key currently being read. */
+  keyRepaired: string;
+  /** Decoded key whose string value is open right now, else `null`. */
+  openKey: string | null;
+  /** Decoded values of every top-level string member seen so far. */
+  fields: Map<string, string>;
+  /** A non-string member was skipped, so `fields` alone is incomplete. */
+  sawUntrackedValue: boolean;
+}
+
+function createTopLevelObjectTracker(): TopLevelObjectTracker {
+  return {
+    phase: "beforeRoot",
+    keyRepaired: "",
+    openKey: null,
+    fields: new Map(),
+    sawUntrackedValue: false,
   };
+}
 
-  skipWhitespace();
-  if (text.charAt(index) !== "{") {
-    return null;
-  }
-  index += 1;
-
-  for (;;) {
-    skipWhitespace();
-    if (index >= text.length || text.charAt(index) === "}") {
-      return null;
-    }
-
-    if (text.charAt(index) !== '"') {
-      return null;
-    }
-    const keyEnd = scanJsonStringSpan(text, index);
-    if (keyEnd === null) {
-      return null; // the key itself is truncated, not a value
-    }
-    let key: string;
-    try {
-      key = JSON.parse(text.slice(index, keyEnd)) as string;
-    } catch {
-      return null;
-    }
-    index = keyEnd;
-
-    skipWhitespace();
-    if (text.charAt(index) !== ":") {
-      return null;
-    }
-    index += 1;
-    skipWhitespace();
-    if (index >= text.length) {
-      return null;
-    }
-
-    if (text.charAt(index) === '"') {
-      const valueStart = index + 1;
-      const valueEnd = scanJsonStringSpan(text, index);
-      if (valueEnd === null) {
-        // The open, truncated string value: everything after the opening
-        // quote to the end of the (repaired) buffer is its raw content so
-        // far, since it hasn't closed yet.
-        return { key, value: decodeRepairedStringFragment(text.slice(valueStart)) };
+/**
+ * Advances the tracker over one freshly-repaired fragment. Only ever scans
+ * `repaired`, never the accumulated buffer.
+ */
+function advanceTopLevelObjectTracker(tracker: TopLevelObjectTracker, repaired: string): void {
+  let index = 0;
+  while (index < repaired.length) {
+    const char = repaired.charAt(index);
+    switch (tracker.phase) {
+      case "beforeRoot": {
+        if (JSON_WHITESPACE.test(char)) {
+          index += 1;
+        } else if (char === "{") {
+          tracker.phase = "beforeKey";
+          index += 1;
+        } else {
+          tracker.phase = "unsupported";
+          return;
+        }
+        break;
       }
-      index = valueEnd;
-    } else if (text.charAt(index) === "{" || text.charAt(index) === "[") {
-      return null; // nested container - out of scope for this fast path
-    } else {
-      const literalStart = index;
-      while (
-        index < text.length &&
-        text.charAt(index) !== "," &&
-        text.charAt(index) !== "}" &&
-        !JSON_WHITESPACE.test(text.charAt(index))
-      ) {
-        index += 1;
+      case "beforeKey": {
+        if (JSON_WHITESPACE.test(char)) {
+          index += 1;
+        } else if (char === "}") {
+          tracker.phase = "afterRoot";
+          index += 1;
+        } else if (char === '"') {
+          tracker.phase = "inKey";
+          tracker.keyRepaired = "";
+          index += 1;
+        } else {
+          tracker.phase = "unsupported";
+          return;
+        }
+        break;
       }
-      if (index >= text.length || index === literalStart) {
-        return null; // literal itself truncated
+      case "inKey": {
+        const run = readRepairedStringRun(repaired, index);
+        tracker.keyRepaired += run.text;
+        index = run.next;
+        if (run.closed) {
+          tracker.phase = "afterKey";
+        }
+        break;
       }
+      case "afterKey": {
+        if (JSON_WHITESPACE.test(char)) {
+          index += 1;
+        } else if (char === ":") {
+          tracker.phase = "beforeValue";
+          index += 1;
+        } else {
+          tracker.phase = "unsupported";
+          return;
+        }
+        break;
+      }
+      case "beforeValue": {
+        if (JSON_WHITESPACE.test(char)) {
+          index += 1;
+          break;
+        }
+        if (char === '"') {
+          const key = decodeRepairedStringFragment(tracker.keyRepaired);
+          tracker.openKey = key;
+          tracker.fields.set(key, "");
+          tracker.phase = "inStringValue";
+          index += 1;
+          break;
+        }
+        if (char === "{" || char === "[") {
+          tracker.phase = "unsupported";
+          return;
+        }
+        // A number/boolean/null: skipped structurally below, without
+        // consuming this character.
+        tracker.sawUntrackedValue = true;
+        tracker.phase = "inLiteralValue";
+        break;
+      }
+      case "inStringValue": {
+        const run = readRepairedStringRun(repaired, index);
+        const key = tracker.openKey;
+        if (key !== null && run.text !== "") {
+          tracker.fields.set(
+            key,
+            (tracker.fields.get(key) ?? "") + decodeRepairedStringFragment(run.text),
+          );
+        }
+        index = run.next;
+        if (run.closed) {
+          tracker.openKey = null;
+          tracker.phase = "afterValue";
+        }
+        break;
+      }
+      case "inLiteralValue": {
+        if (char === "," || char === "}" || JSON_WHITESPACE.test(char)) {
+          tracker.phase = "afterValue"; // re-read this character as a separator
+        } else {
+          index += 1;
+        }
+        break;
+      }
+      case "afterValue": {
+        if (JSON_WHITESPACE.test(char)) {
+          index += 1;
+        } else if (char === ",") {
+          tracker.phase = "beforeKey";
+          index += 1;
+        } else if (char === "}") {
+          tracker.phase = "afterRoot";
+          index += 1;
+        } else {
+          tracker.phase = "unsupported";
+          return;
+        }
+        break;
+      }
+      case "afterRoot": {
+        if (JSON_WHITESPACE.test(char)) {
+          index += 1;
+          break;
+        }
+        tracker.phase = "unsupported";
+        return;
+      }
+      default:
+        return;
     }
-
-    skipWhitespace();
-    if (index >= text.length) {
-      return null;
-    }
-    if (text.charAt(index) === ",") {
-      index += 1;
-      continue;
-    }
-    return null; // "}" (object already fully closed - nothing open) or malformed
   }
 }
 
@@ -593,6 +666,29 @@ function peekPendingRepairedTail(state: RepairJsonState): string {
 export const STREAMING_JSON_REPARSE_GROWTH_FACTOR = 0.5;
 export const STREAMING_JSON_REPARSE_MIN_GROWTH_BYTES = 256;
 
+/**
+ * Second, independent bound on the same full-reparse fallback, expressed as
+ * total work rather than spacing: the sum of all bytes ever re-scanned by the
+ * fallback is kept at or below this multiple of the buffer's current size.
+ *
+ * The growth gate above bounds cost by making reparses *rare* as the buffer
+ * grows, but it can only do that by refusing to refresh, which costs
+ * liveness. That trade is wrong while the buffer is still small (a reparse of
+ * 40 bytes is free, yet the gate would withhold it for the next 256 bytes)
+ * and it is wrong again after a long stretch carried entirely by the
+ * incremental tracker, since no reparse budget was actually spent during
+ * that stretch.
+ *
+ * So a reparse also runs whenever this budget still has room, regardless of
+ * spacing. The bound holds by construction: a reparse is only admitted while
+ * `reparsedCharsTotal <= (FACTOR - 1) * length`, and it then adds exactly
+ * `length`, so `reparsedCharsTotal` can never exceed `FACTOR * n` for a
+ * final buffer of size `n`. Total fallback work is therefore O(n) for every
+ * input shape - there is no delta, and no structural event, that can opt out
+ * of both bounds.
+ */
+export const STREAMING_JSON_REPARSE_WORK_BUDGET_FACTOR = 8;
+
 export interface StreamingJsonPreviewState {
   raw: string;
   repairedSoFar: string;
@@ -600,23 +696,27 @@ export interface StreamingJsonPreviewState {
   lastParsedLength: number;
   lastParsedValue: Record<string, unknown>;
   /**
-   * Top-level object key whose string value is presently open (streaming)
-   * and known to be exactly `lastParsedValue[openStringKey]` so far, or
-   * `null` when there is no such confidently-known appendable value right
-   * now (see `computeOpenTopLevelStringValueKey`). Drives the hot path in
-   * `pushStreamingJsonPreview`.
+   * Incremental structural view of the buffer, and the authoritative source
+   * for every top-level string member (see `TopLevelObjectTracker`).
    */
-  openStringKey: string | null;
+  tracker: TopLevelObjectTracker;
   /**
    * Counts calls to the full JSON.parse/partial-json fallback (i.e. actual
-   * `parseStreamingJsonFromParts` invocations), as opposed to hot-path
-   * appends or cached-value reuse. Exists so callers/tests can observe the
-   * O(n)-total cost guarantee directly instead of inferring it from object
-   * identity (the hot path below also returns a fresh object on every call,
-   * so identity alone no longer distinguishes "cheap update" from "full
-   * reparse" the way it did before this field existed).
+   * `parseStreamingJsonFromParts` invocations), as opposed to deltas served
+   * entirely from the incremental tracker. Exists so callers/tests can
+   * observe the cost guarantee directly instead of inferring it from object
+   * identity (a fresh object is returned on every call that changes the
+   * value, so identity alone says nothing about which path ran).
    */
   fullReparseCount: number;
+  /**
+   * Total characters re-scanned by the full fallback so far, i.e. the sum of
+   * the buffer sizes it has been handed. Drives the work budget described on
+   * `STREAMING_JSON_REPARSE_WORK_BUDGET_FACTOR`, and lets tests assert the
+   * O(n) total-work guarantee directly rather than inferring it from a
+   * reparse count (which says nothing about how large each reparse was).
+   */
+  reparsedCharsTotal: number;
 }
 
 export function createStreamingJsonPreviewState(): StreamingJsonPreviewState {
@@ -626,111 +726,107 @@ export function createStreamingJsonPreviewState(): StreamingJsonPreviewState {
     repairState: createRepairJsonState(),
     lastParsedLength: 0,
     lastParsedValue: {},
-    openStringKey: null,
+    tracker: createTopLevelObjectTracker(),
     fullReparseCount: 0,
+    reparsedCharsTotal: 0,
   };
 }
 
+/**
+ * The value to expose right now: the tracker's live string members layered
+ * over whatever the last full reparse produced.
+ *
+ * The tracker wins on conflicts, and deliberately so. `partial-json` trims
+ * trailing whitespace off a string it can see is unterminated, because it
+ * cannot tell meaningful content from formatting before the close; the
+ * tracker knows the literal characters that actually arrived, so `"hi "`
+ * stays `"hi "` instead of collapsing to `"hi"` mid-stream. The reparse
+ * still supplies everything the tracker does not model (numbers, booleans,
+ * null, nested containers).
+ */
+function materializeStreamingJsonPreview(
+  state: StreamingJsonPreviewState,
+): Record<string, unknown> {
+  if (state.tracker.phase === "unsupported") {
+    return state.lastParsedValue;
+  }
+  const value: Record<string, unknown> = { ...state.lastParsedValue };
+  for (const [key, text] of state.tracker.fields) {
+    value[key] = text;
+  }
+  return value;
+}
+
+/**
+ * True when the tracker alone cannot account for the whole buffer, so the
+ * exposed value depends on a `JSON.parse`/`partial-json` pass being
+ * reasonably fresh.
+ */
+function needsFullReparse(state: StreamingJsonPreviewState): boolean {
+  return state.tracker.phase === "unsupported" || state.tracker.sawUntrackedValue;
+}
+
 function runFullReparse(state: StreamingJsonPreviewState, previewRepaired: string): void {
+  // Note this is handed `previewRepaired` rather than `state.repairedSoFar`:
+  // it may include a *speculative* "as if the stream ended right now"
+  // resolution of an ambiguous escape still held in
+  // `state.repairState.pendingRaw` (a lone trailing `\` that may yet become
+  // `\n`, `\uXXXX`, ...). That is safe here precisely because nothing
+  // incremental is seeded from the result - the tracker advances only on
+  // committed characters and overwrites every string member it owns in
+  // `materializeStreamingJsonPreview`, so a speculative resolution can never
+  // become the baseline for a later append and be counted twice.
   state.lastParsedLength = previewRepaired.length;
   state.lastParsedValue = parseStreamingJsonFromParts(state.raw, previewRepaired);
   state.fullReparseCount += 1;
-
-  // Deliberately read from `state.repairedSoFar` (only ever committed,
-  // fully-resolved characters - see `repairJsonChunkCore`'s contract) and
-  // never from `previewRepaired`, which may additionally include a
-  // *speculative* "as if the stream ended right now" resolution of a still
-  // -pending, ambiguous escape sequence held in `state.repairState.pendingRaw`
-  // (e.g. a lone trailing `\` that might become `\n`, `\uXXXX`, etc. once
-  // the next character(s) arrive). Baking that speculative guess into
-  // `lastParsedValue` would make it the hot path's baseline; when the
-  // pending escape later resolves for real via `repairJsonChunkCore`'s own
-  // carryover, the hot path would append the correctly-decoded character on
-  // top of the earlier speculative one instead of replacing it, duplicating
-  // content. Using only the committed buffer avoids this class of bug
-  // entirely, since it can never contain an unresolved escape by construction.
-  const open = state.repairState.inString
-    ? computeOpenTopLevelStringValue(state.repairedSoFar)
-    : null;
-  if (open === null) {
-    state.openStringKey = null;
-    return;
+  state.reparsedCharsTotal += previewRepaired.length;
+  if (state.tracker.phase !== "inLiteralValue") {
+    // Every non-string member seen so far is now materialized in
+    // `lastParsedValue`, so the tracker's gap is closed until the next one.
+    state.tracker.sawUntrackedValue = false;
   }
-  state.openStringKey = open.key;
-  // `parseStreamingJsonFromParts` above may have gone through `partial-json`
-  // (needed for the rest of the object - fields other than the open string
-  // aren't handled by this fast path), which deliberately trims trailing
-  // whitespace off an unterminated string. Overwrite that with the
-  // authoritative value derived directly from the repaired buffer we own,
-  // so both the value returned right now and the hot path's baseline for
-  // subsequent deltas are always the true accumulated content - never
-  // silently missing whitespace/content partial-json's incomplete-string
-  // heuristics withheld.
-  state.lastParsedValue = { ...state.lastParsedValue, [open.key]: open.value };
 }
 
 /**
  * Incremental, always-live replacement for `buffer += delta;
- * parseStreamingJson(buffer)`.
+ * parseStreamingJson(buffer)`, whose total cost is quadratic in the
+ * argument size because every delta re-scans the entire buffer.
  *
- * Every delta is incorporated into the repaired buffer immediately (cheap -
- * see `repairJsonChunk`). From there, two mechanisms keep the returned value
- * both current on every delta *and* bounded in total cost:
+ * Two layers replace that:
  *
- * 1. **Hot path** - when this delta is pure interior content for an
- *    already-located, still-open top-level string value (no quote opened or
- *    closed during this delta), the newly-decoded characters are appended
- *    directly onto that field in a shallow-cloned copy of the last
- *    materialized object: O(delta) per call, and the returned value's
- *    content genuinely changes on *every* such delta (no staleness window at
- *    all). This is the dominant case for the shape this module exists to
- *    fix - one large string tool-call argument (e.g. a document body) - and
- *    is why a naive read of "the preview goes stale between full reparses"
- *    no longer applies to it.
- * 2. **Growth-gated full reparse** - for everything the hot path doesn't
- *    cover (a string/key boundary was just crossed, or there is no known
- *    open top-level string value at all - e.g. numbers, nested
- *    objects/arrays, or before the first field starts), a full
- *    JSON.parse/partial-json resolution runs immediately if a string
- *    boundary was crossed (rare relative to payload size for the shapes
- *    this fix targets, so cheap in aggregate) or once the repaired buffer
- *    has grown enough since the last full parse (see the growth-gate
- *    comment above); the previous value is reused otherwise. This keeps the
- *    non-hot-path cases (e.g. a large flat array of many small scalars)
- *    safe from the O(n^2) behavior this module exists to remove, at the
- *    cost of a small, bounded staleness window for *those* cases only.
+ * 1. **Incremental tracking** - the delta is repaired resuming from the
+ *    saved repair state (`repairJsonChunk`), then fed to the structural
+ *    tracker (`advanceTopLevelObjectTracker`). Both are O(delta). For a flat
+ *    top-level object of string members - the shape of essentially every
+ *    real tool-call argument schema, whether that is one huge document body
+ *    or fifty short fields - this alone produces the complete, exact value,
+ *    so no whole-buffer pass runs at all and there is no staleness window
+ *    anywhere in the stream.
+ * 2. **Bounded full reparse** - only for what the tracker deliberately does
+ *    not model (numbers/booleans/null, nested objects or arrays, non-object
+ *    or malformed roots). Those still need `JSON.parse`/`partial-json`,
+ *    which has no incremental API, so the pass is admitted only when the
+ *    cumulative-growth gate or the linear work budget allows it (see the two
+ *    constants above); otherwise the previous value is reused. No delta and
+ *    no structural event can opt out of both bounds, so total fallback work
+ *    is O(n) for every input shape - the price being a bounded staleness
+ *    window for those unmodelled members only.
  *
- * Pass `force: true` (e.g. once streaming for this value has ended) to
- * bypass both and guarantee a fresh full parse.
+ * Pass `force: true` to bypass the bounds and guarantee a fresh full parse.
  */
 export function pushStreamingJsonPreview(
   state: StreamingJsonPreviewState,
   delta: string,
   options?: { force?: boolean },
 ): Record<string, unknown> {
-  const force = options?.force ?? false;
-  const hotPathKey = !force && state.repairState.inString ? state.openStringKey : null;
-
   state.raw += delta;
-  const { repaired: repairedThisCall, stringBoundaryCrossed } = repairJsonChunkCore(
-    delta,
-    state.repairState,
-    false,
-  );
+  const repairedThisCall = repairJsonChunkCore(delta, state.repairState, false);
   state.repairedSoFar += repairedThisCall;
+  advanceTopLevelObjectTracker(state.tracker, repairedThisCall);
 
-  if (hotPathKey !== null && !stringBoundaryCrossed) {
-    const addition = decodeRepairedStringFragment(repairedThisCall);
-    const existing = state.lastParsedValue[hotPathKey];
-    state.lastParsedValue = {
-      ...state.lastParsedValue,
-      [hotPathKey]: (typeof existing === "string" ? existing : "") + addition,
-    };
-    // Approximate, growth-gate-only bookkeeping (not relied on for
-    // correctness): keeps the gate's math sane for whatever field(s) it
-    // ends up covering once this hot streak ends and the slow path resumes.
-    state.lastParsedLength += repairedThisCall.length;
-    return state.lastParsedValue;
+  const force = options?.force ?? false;
+  if (!force && !needsFullReparse(state)) {
+    return materializeStreamingJsonPreview(state);
   }
 
   const previewRepaired = state.repairedSoFar + peekPendingRepairedTail(state.repairState);
@@ -740,26 +836,62 @@ export function pushStreamingJsonPreview(
   );
   const growthGateSatisfied =
     state.lastParsedLength === 0 || previewRepaired.length - state.lastParsedLength >= growthNeeded;
+  const workBudgetAvailable =
+    state.reparsedCharsTotal <=
+    (STREAMING_JSON_REPARSE_WORK_BUDGET_FACTOR - 1) * previewRepaired.length;
 
-  if (!force && !stringBoundaryCrossed && !growthGateSatisfied) {
-    return state.lastParsedValue;
+  if (force || growthGateSatisfied || workBudgetAvailable) {
+    runFullReparse(state, previewRepaired);
   }
-
-  runFullReparse(state, previewRepaired);
-  return state.lastParsedValue;
+  return materializeStreamingJsonPreview(state);
 }
 
 /**
  * Forces a final, unthrottled resolution from the complete buffer,
  * definitively resolving any still-pending escape sequence. Call this once
  * streaming for the value has ended (e.g. at content-block-stop /
- * toolcall_end) to guarantee correctness regardless of the hot path or
- * growth gate in `pushStreamingJsonPreview`.
+ * toolcall_end) to guarantee correctness regardless of the reparse bounds
+ * applied while streaming.
  */
 export function finalizeStreamingJsonPreview(
   state: StreamingJsonPreviewState,
 ): Record<string, unknown> {
-  state.repairedSoFar += repairJsonChunk("", state.repairState, true);
+  const finalRepaired = repairJsonChunk("", state.repairState, true);
+  state.repairedSoFar += finalRepaired;
+  advanceTopLevelObjectTracker(state.tracker, finalRepaired);
   runFullReparse(state, state.repairedSoFar);
-  return state.lastParsedValue;
+  return materializeStreamingJsonPreview(state);
+}
+
+/**
+ * The supported, provider-plugin-facing form of the streaming preview: one
+ * opaque object per streamed tool call, with no mutable state struct crossing
+ * the boundary. This is what `openclaw/plugin-sdk/llm` re-exports; the
+ * `*StreamingJsonPreviewState` functions above stay host-internal so their
+ * fields remain free to change without breaking installed plugins.
+ */
+export interface StreamingJsonPreview {
+  /**
+   * Accumulates one streamed fragment of a tool call's JSON arguments and
+   * returns the arguments as they stand now. Replaces the
+   * `buffer += delta; parseStreamingJson(buffer)` pattern, whose total cost
+   * is quadratic in the argument size; the returned object is a fresh value
+   * each call and must not be mutated.
+   */
+  push(delta: string): Record<string, unknown>;
+  /**
+   * Resolves the complete buffer once streaming for this tool call has ended
+   * (e.g. at content-block-stop). Always performs a full, unthrottled parse,
+   * so the final arguments never depend on the bounds applied while
+   * streaming. Call exactly once, after the last `push`.
+   */
+  finalize(): Record<string, unknown>;
+}
+
+export function createStreamingJsonPreview(): StreamingJsonPreview {
+  const state = createStreamingJsonPreviewState();
+  return {
+    push: (delta) => pushStreamingJsonPreview(state, delta),
+    finalize: () => finalizeStreamingJsonPreview(state),
+  };
 }

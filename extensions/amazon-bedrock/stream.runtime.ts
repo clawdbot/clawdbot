@@ -25,12 +25,6 @@ import {
   type ToolResultContentBlock,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import {
-  createStreamingJsonPreviewState,
-  finalizeStreamingJsonPreview,
-  pushStreamingJsonPreview,
-  type StreamingJsonPreviewState,
-} from "@openclaw/ai/internal/runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -41,6 +35,7 @@ import {
   calculateCost,
   clampReasoning,
   createHttpProxyAgentsForTarget,
+  createStreamingJsonPreview,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
@@ -53,6 +48,7 @@ import {
   type SimpleStreamOptions,
   type StopReason,
   type StreamFunction,
+  type StreamingJsonPreview,
   type TextContent,
   type ThinkingContent,
   type ThinkingLevel,
@@ -84,7 +80,7 @@ import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 type Block = (TextContent | ThinkingContent | ToolCall) & {
   index?: number;
   partialJson?: string;
-  jsonPreview?: StreamingJsonPreviewState;
+  jsonPreview?: StreamingJsonPreview;
 };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 
@@ -99,31 +95,26 @@ type BedrockEventSink = { push(event: AssistantMessageEvent): void };
  * stack - this has been observed to correlate with tool-call arguments
  * silently resolving to `{}` on large payloads.
  *
- * `pushStreamingJsonPreview` (see packages/ai/src/utils/json-parse.ts) fixes
- * this at the root instead of trading it off. The JSON-repair step is
- * genuinely incremental (O(delta) per call, proven byte-identical to the
- * non-incremental repair via a differential fuzz test). On top of that, once
- * a top-level string argument (e.g. this `write_file`-style document body)
- * is located, further deltas are appended directly onto it via a hot path -
- * O(delta) per call, and the exposed value changes on *every* delta with no
- * staleness window at all, not just "refreshes often". The remaining
- * JSON.parse/partial-json fallback - which has no incremental API and must
- * scan the whole buffer - is reserved for cases the hot path doesn't cover
- * (a string/key boundary just closed, or the shape isn't a flat top-level
- * string field - e.g. numbers or nested containers): it runs immediately on
- * those boundary deltas (rare relative to payload size for the shapes this
- * fix targets) or once the buffer has grown by
- * `STREAMING_JSON_REPARSE_GROWTH_FACTOR` since the last full parse otherwise
- * (a cumulative-work/amortized-doubling bound, not a wall-clock interval -
- * see that constant's doc comment for why gating on elapsed time doesn't
- * actually bound total cost regardless of delta cadence). `handleContentBlockStop`
+ * `createStreamingJsonPreview` - the supported Plugin SDK seam over
+ * packages/ai/src/utils/json-parse.ts - fixes this at the root instead of
+ * trading it off. The JSON-repair step is genuinely incremental (O(delta)
+ * per call, proven byte-identical to the non-incremental repair via a
+ * differential fuzz test). On top of that, a small state machine tracks the
+ * structure of a flat top-level object as the deltas arrive, materializing
+ * its keys and string values from the deltas themselves - O(delta) per call,
+ * and the exposed value changes on *every* delta with no staleness window at
+ * all, not just "refreshes often". The remaining JSON.parse/partial-json
+ * fallback - which has no incremental API and must scan the whole buffer -
+ * is reserved for shapes that state machine cannot model (numbers, nested
+ * containers), and draws on a work budget proportional to the payload so its
+ * *total* cost stays linear for every input shape. `handleContentBlockStop`
  * still forces one final, unthrottled resolution (see below) so correctness
- * never depends on either the hot path or the growth gate.
+ * never depends on either the tracker or that budget.
  */
 
-function getOrCreateJsonPreview(block: Block): StreamingJsonPreviewState {
+function getOrCreateJsonPreview(block: Block): StreamingJsonPreview {
   if (!block.jsonPreview) {
-    block.jsonPreview = createStreamingJsonPreviewState();
+    block.jsonPreview = createStreamingJsonPreview();
   }
   return block.jsonPreview;
 }
@@ -615,7 +606,7 @@ function handleContentBlockDelta(
   } else if (delta?.toolUse && block?.type === "toolCall") {
     const input = delta.toolUse.input || "";
     block.partialJson = (block.partialJson || "") + input;
-    block.arguments = pushStreamingJsonPreview(getOrCreateJsonPreview(block), input);
+    block.arguments = getOrCreateJsonPreview(block).push(input);
     stream.push({
       type: "toolcall_delta",
       contentIndex: index,
@@ -741,11 +732,11 @@ function handleContentBlockStop(
       break;
     case "toolCall":
       // Always force one final, unthrottled resolution from the complete
-      // buffer here, regardless of the hot path or reparse growth gate
+      // buffer here, regardless of the tracker or the reparse budget
       // applied to the live preview above - this is what guarantees
       // correctness independent of stream timing.
       block.arguments = block.jsonPreview
-        ? finalizeStreamingJsonPreview(block.jsonPreview)
+        ? block.jsonPreview.finalize()
         : parseStreamingJson(block.partialJson);
       // Finalize in-place and strip scratch buffers so replay only carries
       // parsed arguments.
