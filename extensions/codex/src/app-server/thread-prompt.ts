@@ -54,19 +54,24 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
+  const deferredToolDiscoveryGuidance =
+    deferredToolNames.size > 0 || nativeDelegationAvailable
+      ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+      : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     deferredToolNames.size > 0
       ? `Deferred searchable OpenClaw dynamic tools available: ${[...deferredToolNames]
           .toSorted((left, right) => left.localeCompare(right))
-          .join(", ")}. Use \`tool_search\` to load exact callable specs before use.`
+          .join(", ")}.`
       : undefined,
+    deferredToolDiscoveryGuidance,
     hasSkillWorkshop ? buildSkillWorkshopPromptSection().join("\n") : undefined,
     // Codex defers native collab tools behind tool_search on search-capable
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred: when \`spawn_agent\` is not directly listed, load it with \`tool_search\` before spawning.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`." : ""}`
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`." : ""}`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."

@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
+import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
+import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
@@ -34,6 +36,135 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
+  it("gives an isolated collection review only read and reconcile", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-tool-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "duplicate", description: "Duplicate procedure" },
+    ]);
+    const collectionReconcile = { approvedSkillNames: new Set(["duplicate"]) };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      collectionReconcile,
+    });
+
+    expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
+    await tool.execute("read", { action: "read", skill_name: "duplicate" });
+    await tool.execute("reconcile", {
+      action: "reconcile",
+      collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
+    });
+
+    expect(collectionReconcile).toMatchObject({
+      result: { kept: [], written: [], dropped: [{ name: "duplicate", reason: "redundant" }] },
+    });
+    await expect(fs.access(path.join(workspaceDir, "skills", "duplicate"))).rejects.toThrow();
+
+    const foregroundTool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
+    const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
+    expect(restored.details).toMatchObject({ restored: ["duplicate"], removed: [] });
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "duplicate", "SKILL.md"), "utf8"),
+    ).resolves.toContain("Duplicate procedure");
+  });
+
+  it("reserves the one reconciliation before awaiting its commit", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-concurrent-tool-");
+    await writeWorkspaceSkills(workspaceDir, [{ name: "procedure", description: "Procedure" }]);
+    const collectionReconcile = { approvedSkillNames: new Set(["procedure"]) };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      collectionReconcile,
+    });
+    await tool.execute("read", { action: "read", skill_name: "procedure" });
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+
+    const first = tool.execute("first", {
+      action: "reconcile",
+      collection: [{ action: "keep", name: "procedure" }],
+    });
+    await expect(
+      tool.execute("second", {
+        action: "reconcile",
+        collection: [{ action: "drop", name: "procedure", reason: "duplicate" }],
+      }),
+    ).rejects.toThrow("already been reconciled");
+
+    releaseLock?.();
+    await heldLock;
+    await first;
+  });
+
+  it("bounds total collection text returned to the reviewer", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-budget-");
+    await writeWorkspaceSkills(workspaceDir, [
+      {
+        name: "oversized",
+        description: "Oversized procedure",
+        body: "x".repeat(240_001),
+      },
+    ]);
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { maxSkillBytes: 300_000 } } },
+      collectionReconcile: { approvedSkillNames: new Set(["oversized"]) },
+    });
+
+    await expect(tool.execute("read", { action: "read", skill_name: "oversized" })).rejects.toThrow(
+      "review limit",
+    );
+  });
+
+  it("reads a full skill above the ordinary 40KB Workshop limit", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-full-read-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "large", description: "Large procedure", body: "x".repeat(40_001) },
+    ]);
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      collectionReconcile: { approvedSkillNames: new Set(["large"]) },
+    });
+
+    const read = await tool.execute("read", { action: "read", skill_name: "large" });
+    expect(read.details).toMatchObject({ skillKey: "large", truncated: false });
+    await expect(
+      tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [{ action: "keep", name: "large" }],
+      }),
+    ).resolves.toMatchObject({ details: { kept: ["large"] } });
+  });
+
+  it("keeps reconcile unavailable to ordinary off and propose sessions", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-policy-");
+    for (const mode of ["off", "propose"] as const) {
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { workshop: { autonomous: { mode } } } },
+      });
+      await expect(
+        tool.execute("reconcile", { action: "reconcile", collection: [] }),
+      ).rejects.toThrow("only an isolated collection review");
+    }
+  });
+
   it("describes action selection and pending-proposal discovery in its schema", () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);

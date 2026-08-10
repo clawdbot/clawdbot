@@ -250,21 +250,24 @@ describe("resolveApprovalOverGateway", () => {
 
   it("sends channel custody to an injected canonical runtime", async () => {
     const injectedRequest = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
-    const scopedRequest = vi.fn(async (method: string) => {
-      if (method === "exec.approval.list") {
-        return [
-          {
-            id: "approval-1",
-            request: {
-              command: "printf approval",
-              turnSourceChannel: "imessage",
-              turnSourceAccountId: "personal",
-            },
-          },
-        ];
-      }
-      return { applied: true, approval: recordedApproval };
-    });
+    const scopedRequest: GatewayNativeApprovalRuntime["request"] = vi.fn(
+      async <T = unknown>(method: string): Promise<T> => {
+        const fixture =
+          method === "exec.approval.list"
+            ? [
+                {
+                  id: "approval-1",
+                  request: {
+                    command: "printf approval",
+                    turnSourceChannel: "imessage",
+                    turnSourceAccountId: "personal",
+                  },
+                },
+              ]
+            : { applied: true, approval: recordedApproval };
+        return fixture as T;
+      },
+    ) as GatewayNativeApprovalRuntime["request"];
     const runtime = {
       request: scopedRequest,
       requestRoute: vi.fn(),
