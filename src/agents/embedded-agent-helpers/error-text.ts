@@ -93,62 +93,52 @@ export function formatAssistantErrorText(
       return rewritten;
     }
   }
-
   const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
   if (diskSpaceCopy) {
     return diskSpaceCopy;
   }
-
   if (providerRuntimeFailureKind === "auth_refresh") {
     return "Authentication refresh failed. Re-authenticate this provider and try again.";
   }
-
   if (providerRuntimeFailureKind === "refresh_contention") {
     return (
       "Authentication refresh is already in progress elsewhere and this attempt " +
       "timed out waiting for it. Retry in a moment."
     );
   }
-
   if (providerRuntimeFailureKind === "refresh_timeout") {
     return (
       "Authentication refresh timed out before the provider completed. " +
       "Retry in a moment; re-authenticate only if it keeps failing."
     );
   }
-
   if (providerRuntimeFailureKind === "callback_timeout") {
     return (
       "Browser OAuth did not complete before manual fallback kicked in. " +
       "Retry the login flow and paste the redirect URL if prompted."
     );
   }
-
   if (providerRuntimeFailureKind === "callback_validation") {
     return (
       "Browser OAuth returned an invalid or incomplete callback. " +
       "Retry the login flow and make sure the full redirect URL is pasted if prompted."
     );
   }
-
   if (providerRuntimeFailureKind === "auth_scope") {
     return (
       "Authentication is missing the required OpenAI ChatGPT scopes. " +
       "Re-run OpenAI login and try again."
     );
   }
-
   if (providerRuntimeFailureKind === "auth_html") {
     return (
       "Authentication failed at the provider. " +
       "Re-authenticate and verify your provider credentials and account access."
     );
   }
-
   if (providerRuntimeFailureKind === "auth_invalid_token") {
     return AUTH_INVALID_TOKEN_USER_TEXT;
   }
-
   if (providerRuntimeFailureKind === "upstream_html") {
     return (
       "The provider returned an HTML error page instead of an API response. " +
@@ -156,29 +146,24 @@ export function formatAssistantErrorText(
       "Retry in a moment or check provider status."
     );
   }
-
   if (providerRuntimeFailureKind === "proxy") {
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
   }
-
   if (providerRuntimeFailureKind === "tls_certificate") {
     return (
       "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
       "Check the endpoint hostname, proxy, and local certificate trust."
     );
   }
-
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
-
   if (isContextOverflowError(raw)) {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
     );
   }
-
   if (isReasoningConstraintErrorMessage(raw)) {
     return (
       "Reasoning is required for this model endpoint. " +
