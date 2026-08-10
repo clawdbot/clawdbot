@@ -538,6 +538,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ],
   ],
 ]);
+const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];
 const RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS = [
   ...RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS,
@@ -2949,6 +2950,9 @@ function resolvePreciseChangedTestTargets(
   const cwd = options.cwd ?? process.cwd();
   const mappedTargets =
     SOURCE_TEST_TARGETS.get(changedPath) ??
+    (/^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(changedPath)
+      ? [changedPath, DOCS_CONFIG_EXAMPLES_TEST_TARGET]
+      : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
     resolvePromptSnapshotFixtureTargets(changedPath);
