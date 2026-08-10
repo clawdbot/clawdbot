@@ -487,7 +487,6 @@ async function decideSlackSystemIngress(params: {
 
 export async function authorizeSlackSystemEventSender(params: {
   ctx: SlackMonitorContext;
-  eventScope?: SlackEventScope;
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
