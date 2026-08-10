@@ -4,7 +4,6 @@ import { getAiTransportHost } from "../host.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
-const MAX_SNAPSHOT_DEPTH = 8;
 
 export type ProviderErrorProjection = {
   stopReason: "aborted" | "error";
@@ -26,7 +25,7 @@ function readCauseCode(error: Record<string, unknown>): string | undefined {
   const seen = new Set<Record<string, unknown>>();
   for (
     let cause = asOptionalRecord(error.cause);
-    cause && seen.size < MAX_SNAPSHOT_DEPTH && !seen.has(cause);
+    cause && seen.size < 8 && !seen.has(cause);
     cause = asOptionalRecord(cause.cause)
   ) {
     seen.add(cause);

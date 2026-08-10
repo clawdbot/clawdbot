@@ -22,24 +22,14 @@ type RegisterBuiltIn = (registry: ApiRegistry) => void;
 /** Source id used for built-in API provider registrations. */
 export const BUILT_IN_API_PROVIDER_SOURCE_ID = "core:built-in";
 
-function forwardStream(
+async function forwardStream(
   target: AssistantMessageEventStream,
   source: AsyncIterable<AssistantMessageEvent>,
-  model: Model,
-  signal?: AbortSignal,
-): void {
-  void (async () => {
-    try {
-      for await (const event of source) {
-        target.push(event);
-      }
-      target.end();
-    } catch (error) {
-      const message = createLazyLoadErrorMessage(model, error, signal);
-      target.push({ type: "error", reason: message.stopReason, error: message });
-      target.end(message);
-    }
-  })();
+): Promise<void> {
+  for await (const event of source) {
+    target.push(event);
+  }
+  target.end();
 }
 
 function createLazyLoadErrorMessage<TApi extends Api>(
@@ -74,9 +64,7 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TStr
   return (model, context, options) => {
     const outer = new AssistantMessageEventStream();
     load()
-      .then((streams) =>
-        forwardStream(outer, select(streams)(model, context, options), model, options?.signal),
-      )
+      .then((streams) => forwardStream(outer, select(streams)(model, context, options)))
       .catch((error: unknown) => {
         const message = createLazyLoadErrorMessage(model, error, options?.signal);
         outer.push({ type: "error", reason: message.stopReason, error: message });

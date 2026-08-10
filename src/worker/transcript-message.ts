@@ -14,9 +14,6 @@ import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 type WorkerTranscriptAssistantMessage = Extract<WorkerTranscriptMessage, { role: "assistant" }>;
-type WorkerTranscriptAssistantDiagnostic = NonNullable<
-  WorkerTranscriptAssistantMessage["diagnostics"]
->[number];
 export type WorkerProviderReplayUnavailable = {
   bytes: number;
   limitBytes: number;
@@ -73,9 +70,7 @@ function redactWorkerDiagnosticText(value: string): string {
   return typeof redacted === "string" ? redacted : "[unreadable diagnostic text]";
 }
 
-function projectWorkerDiagnostic(
-  diagnostic: NonNullable<AssistantMessage["diagnostics"]>[number],
-): WorkerTranscriptAssistantDiagnostic {
+function projectWorkerDiagnostic(diagnostic: NonNullable<AssistantMessage["diagnostics"]>[number]) {
   const details = asOptionalRecord(redactAgentDiagnosticPayload(diagnostic.details));
   const error = diagnostic.error;
   return {
@@ -87,9 +82,7 @@ function projectWorkerDiagnostic(
             message: redactWorkerDiagnosticText(error.message),
             ...(error.name ? { name: redactWorkerDiagnosticText(error.name) } : {}),
             ...(error.stack ? { stack: redactWorkerDiagnosticText(error.stack) } : {}),
-            ...(typeof error.code === "string" || typeof error.code === "number"
-              ? { code: error.code }
-              : {}),
+            ...(error.code === undefined ? {} : { code: error.code }),
           },
         }
       : {}),
