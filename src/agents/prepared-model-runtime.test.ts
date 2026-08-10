@@ -17,6 +17,7 @@ import {
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   getPreparedModelRuntimeMocks,
+  getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 
@@ -73,6 +74,46 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/setup-probe-workspace",
     });
     lease.release();
+  });
+
+  it("keeps configured owners outside a scoped refresh untouched while rebuilding the target", async () => {
+    mocks.configuredAgentIds = ["pro", "free"];
+    const initialConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const proInput = {
+      config: initialConfig,
+      agentId: "pro",
+      agentDir: "/tmp/configured-pro",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/workspace-pro",
+    };
+    const freeInput = {
+      config: initialConfig,
+      agentId: "free",
+      agentDir: "/tmp/configured-free",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/workspace-free",
+    };
+
+    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
+    expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
+    const proSnapshot = getPreparedModelRuntimeSnapshot(proInput);
+    const freeSnapshot = getPreparedModelRuntimeSnapshot(freeInput);
+    expect(proSnapshot?.agentId).toBe("pro");
+    expect(freeSnapshot?.agentId).toBe("free");
+
+    // A scoped refresh only invalidates/rebuilds "pro"; "free" keeps its committed owner.
+    // Changing the config object still rebuilds only the in-scope target.
+    const scopedConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(scopedConfig, {
+      gatewayLifecycle: true,
+      agentIds: new Set(["pro"]),
+    });
+
+    expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
+    const freeAfter = getPreparedModelRuntimeSnapshot(freeInput);
+    const proAfter = getPreparedModelRuntimeSnapshot(proInput);
+    expect(freeAfter).toBe(freeSnapshot);
+    expect(proAfter).toBeDefined();
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {

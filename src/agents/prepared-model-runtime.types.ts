@@ -108,6 +108,12 @@ export type PreparedModelRuntimeRefreshOptions = {
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
+  /**
+   * When set, only prepared-model runtime owners for these agent ids are invalidated and
+   * rebuilt on refresh. Configured owners outside the set reuse their committed snapshot.
+   * Undefined refreshes every configured owner (current behavior).
+   */
+  agentIds?: ReadonlySet<string>;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

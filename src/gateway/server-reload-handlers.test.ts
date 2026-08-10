@@ -1174,6 +1174,43 @@ describe("gateway hot reload model state", () => {
     expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
   });
 
+  it("scopes the prepared model runtime refresh to the changed agent entries", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(
+      buildGatewayReloadPlan(["agents.entries.alpha.model", "agents.entries.alpha.name"]),
+      nextConfig,
+    );
+
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+      "prepared model runtime owner is stale before config publication",
+      { waitForReplacement: true, agentIds: new Set(["alpha"]) },
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      agentIds: new Set(["alpha"]),
+    });
+  });
+
+  it("reverts to a full prepared model runtime refresh for global config changes", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(
+      buildGatewayReloadPlan(["agents.entries.alpha.model", "models.providers.openai.api"]),
+      nextConfig,
+    );
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+    });
+  });
+
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
     const newCron = {

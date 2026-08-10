@@ -50,6 +50,29 @@ import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 
+/**
+ * Maps a reload's changed paths to the affected agent ids, or undefined when the change is broader
+ * than a bounded set of agents. Only paths under `agents.entries.<id>.*` scope the prepared-model
+ * runtime refresh to those agents; any more global config change (models, defaults, plugins, ...)
+ * reports undefined so every configured owner is rebuilt as today.
+ */
+function resolveModelRuntimeAgentIdsFromChangedPaths(
+  changedPaths: readonly string[],
+): ReadonlySet<string> | undefined {
+  if (changedPaths.length === 0) {
+    return undefined;
+  }
+  const agentIds = new Set<string>();
+  for (const path of changedPaths) {
+    const match = /^agents\.entries\.([^.]+)(?:\.|$)/.exec(path);
+    if (!match) {
+      return undefined;
+    }
+    agentIds.add(match[1]!);
+  }
+  return agentIds.size > 0 ? agentIds : undefined;
+}
+
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const myGeneration = nextGatewayReloadGeneration();
   const restartRecoveryAvailable =
@@ -103,6 +126,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const nextState = { ...state };
 
     resetPreparedModelRuntimeStateForHotReload();
+
+    // Scope the prepared-model runtime refresh to only the agents this reload actually touched.
+    // Undefined (no-scope / global config change) keeps the current full rebuild of all owners.
+    const modelRuntimeAgentIds = resolveModelRuntimeAgentIdsFromChangedPaths(plan.changedPaths);
+    const modelRuntimeRefreshScope =
+      modelRuntimeAgentIds === undefined ? undefined : { agentIds: modelRuntimeAgentIds };
 
     let hooksReloadResolved = false;
     if (plan.reloadHooks) {
@@ -183,7 +212,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         // retire the prior stores at the commit edge so no request can mix generations.
         preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
           "prepared model runtime owner is stale before config publication",
-          { waitForReplacement: true },
+          { waitForReplacement: true, ...(modelRuntimeRefreshScope ?? {}) },
         );
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
@@ -581,6 +610,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       await refreshPreparedModelRuntimeSnapshots(nextConfig, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
+        ...(modelRuntimeRefreshScope ?? {}),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);

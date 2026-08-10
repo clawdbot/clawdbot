@@ -465,10 +465,15 @@ export async function prepareModelRuntimeSnapshot(
   );
 }
 
-/** Invalidates every published generation before config/plugin runtime replacement. */
+/** Invalidates published generations before config/plugin runtime replacement. */
 export function markPreparedModelRuntimeSnapshotsStale(
   reason = "prepared model runtime owner is stale after config publication",
-  options: { waitForReplacement?: boolean; preserveReplacementWait?: boolean } = {},
+  options: {
+    waitForReplacement?: boolean;
+    preserveReplacementWait?: boolean;
+    /** Restrict invalidation to these agent ids; undefined invalidates every owner. */
+    agentIds?: ReadonlySet<string>;
+  } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   replyDispatchPublication.clear();
   if (options.waitForReplacement) {
@@ -483,7 +488,11 @@ export function markPreparedModelRuntimeSnapshotsStale(
   }
   refreshRequestEpoch += 1;
   const staleError = new Error(reason);
+  const scoped = options.agentIds;
   for (const [key, owner] of owners) {
+    if (scoped && owner.input.agentId && !scoped.has(owner.input.agentId)) {
+      continue;
+    }
     // Standalone owners have no publication controller to rebuild them. Retire them so the next
     // standalone lifecycle boundary can activate a fresh generation after publication changes.
     if (owner.provenance === "standalone") {
@@ -527,9 +536,13 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   retainedGatewayRunOwners.clear(owners);
   const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
   const catalogMode = options.catalogMode ?? "live";
+  const scoped = options.agentIds;
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
   for (const owner of owners.values()) {
+    if (scoped && owner.input.agentId && !scoped.has(owner.input.agentId)) {
+      continue;
+    }
     // Invalidate every prior generation before starting any replacement. A failed reload must
     // never leave an old-config snapshot available beside partially published new owners.
     owner.generation += 1;
@@ -541,6 +554,12 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const knownKeys = new Set<string>();
   for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
     let input = normalizePreparedModelRuntimeInput(rawInput);
+    if (scoped && input.agentId && !scoped.has(input.agentId)) {
+      // A scoped refresh leaves configured owners outside the set completely untouched: they
+      // keep their committed snapshot, are never rebuilt, and are never retired (retirement only
+      // runs for a full refresh).
+      continue;
+    }
     const preservedOwner = [...owners.values()].find(
       (owner) =>
         owner.provenance === "configured" &&
@@ -566,6 +585,12 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   }
   for (const [key, owner] of owners) {
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
+      if (scoped && !(owner.input.agentId && scoped.has(owner.input.agentId))) {
+        // A scoped refresh did not enumerate out-of-scope owners, so their keys are never in
+        // knownKeys. Retire only owners whose agent is in scope (e.g. the prior key of an agent
+        // whose model changed); never retire the untouched out-of-scope owners.
+        continue;
+      }
       owners.delete(key);
     }
   }
@@ -602,7 +627,10 @@ export function refreshPreparedModelRuntimeSnapshots(
   options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
-  markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+  markPreparedModelRuntimeSnapshotsStale(undefined, {
+    waitForReplacement: true,
+    agentIds: options.agentIds,
+  });
   const requestEpoch = refreshRequestEpoch;
   const replacement = pendingModelRuntimeReplacement;
   return enqueuePreparedModelRuntimePublication(async () => {
