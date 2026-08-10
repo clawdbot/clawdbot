@@ -33,10 +33,12 @@ vi.mock("./src/http/registry.js", () => ({
 describe("slack bundled entries", () => {
   it("does not register webhook routes during tool discovery", () => {
     const registerHttpRoute = vi.fn();
+    const openKeyedStore = vi.fn();
     entryContractMocks.registerFull?.(
       createTestPluginApi({
         id: "slack",
         registrationMode: "tool-discovery",
+        runtime: { state: { openKeyedStore } } as never,
         config: {
           channels: {
             slack: {
@@ -49,14 +51,17 @@ describe("slack bundled entries", () => {
     );
 
     expect(registerHttpRoute).not.toHaveBeenCalled();
+    expect(openKeyedStore).not.toHaveBeenCalled();
   });
 
   it("registers each webhook route once during full registration", async () => {
     const registerHttpRoute = vi.fn();
+    const openKeyedStore = vi.fn();
     entryContractMocks.registerFull?.(
       createTestPluginApi({
         id: "slack",
         registrationMode: "full",
+        runtime: { state: { openKeyedStore } } as never,
         config: {
           channels: {
             slack: {
@@ -72,6 +77,14 @@ describe("slack bundled entries", () => {
       }),
     );
 
+    expect(openKeyedStore).toHaveBeenCalledExactlyOnceWith({
+      namespace: "slack.thread-participation",
+      maxEntries: 1000,
+      clearExistingExpiryOnOpen: true,
+    });
+    expect(openKeyedStore.mock.invocationCallOrder[0]!).toBeLessThan(
+      registerHttpRoute.mock.invocationCallOrder[0]!,
+    );
     expect(registerHttpRoute.mock.calls.map((call) => call[0].path)).toEqual([
       "/hooks/ops",
       "/slack/default",
@@ -82,6 +95,30 @@ describe("slack bundled entries", () => {
     const handler = registerHttpRoute.mock.calls[0]?.[0].handler;
     await handler?.({ url: "/hooks/ops" }, {});
     expect(httpRegistryMocks.handleSlackHttpRequest).toHaveBeenCalledOnce();
+  });
+
+  it("registers webhook routes when persistent thread participation cannot open", () => {
+    const registerHttpRoute = vi.fn();
+    const openKeyedStore = vi.fn(() => {
+      throw new Error("sqlite unavailable");
+    });
+    const warn = vi.fn();
+
+    entryContractMocks.registerFull?.(
+      createTestPluginApi({
+        id: "slack",
+        registrationMode: "full",
+        runtime: { state: { openKeyedStore } } as never,
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        config: { channels: { slack: { webhookPath: "/slack/root" } } },
+        registerHttpRoute,
+      }),
+    );
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Slack persistent thread participation state failed: Error: sqlite unavailable",
+    );
+    expect(registerHttpRoute).toHaveBeenCalledOnce();
   });
 
   it("uses the root Slack webhook path when the default account does not override it", () => {

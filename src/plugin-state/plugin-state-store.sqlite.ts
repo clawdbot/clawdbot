@@ -584,6 +584,49 @@ export function resolveMaxPluginStateEntriesPerPlugin(): number {
   return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
+export function pluginStateClearExistingExpiry(params: {
+  pluginId: string;
+  namespace: string;
+  maxEntries: number;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
+  try {
+    runWriteTransaction(
+      "open",
+      (store) => {
+        executeSqliteQuerySync(
+          store.db,
+          getPluginStateKysely(store.db)
+            .updateTable("plugin_state_entries")
+            .set({ expires_at: null })
+            .where("plugin_id", "=", params.pluginId)
+            .where("namespace", "=", params.namespace)
+            .where("expires_at", "is not", null),
+        );
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          maxEntries: params.maxEntries,
+          overflowPolicy: "evict-oldest",
+          now: Date.now(),
+          protectedKey: "",
+        });
+      },
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "open",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to clear existing plugin state expiry.",
+      pathname,
+    );
+  }
+}
+
 export function pluginStateRegister(params: {
   pluginId: string;
   namespace: string;

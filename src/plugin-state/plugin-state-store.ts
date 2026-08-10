@@ -5,6 +5,7 @@ import {
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
+  pluginStateClearExistingExpiry,
   pluginStateConsume,
   pluginStateDelete,
   pluginStateDeleteIf,
@@ -217,7 +218,26 @@ function createSyncKeyedStoreForPluginId<T>(
   const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   const env = options.env;
+  if (
+    options.clearExistingExpiryOnOpen !== undefined &&
+    typeof options.clearExistingExpiryOnOpen !== "boolean"
+  ) {
+    throw invalidInput("plugin state clearExistingExpiryOnOpen must be a boolean", "open");
+  }
+  if (
+    options.clearExistingExpiryOnOpen &&
+    (defaultTtlMs !== undefined || overflowPolicy !== "evict-oldest")
+  ) {
+    throw invalidInput(
+      "plugin state clearExistingExpiryOnOpen requires a non-expiring evict-oldest namespace",
+      "open",
+    );
+  }
   assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
+  if (options.clearExistingExpiryOnOpen) {
+    // This idempotent open-time upgrade does not change the namespace's storage contract.
+    pluginStateClearExistingExpiry({ pluginId, namespace, maxEntries, ...(env ? { env } : {}) });
+  }
 
   return {
     register(key, value, opts) {

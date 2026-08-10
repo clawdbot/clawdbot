@@ -67,7 +67,7 @@ export function createPersistentDedupeCache<TRecord>(params: {
       persistentStore = params.persistent.openStore({
         namespace: params.persistent.namespace,
         maxEntries: params.persistent.maxEntries,
-        defaultTtlMs: params.ttlMs,
+        ...(params.ttlMs > 0 ? { defaultTtlMs: params.ttlMs } : {}),
       });
       return persistentStore;
     } catch (error) {
