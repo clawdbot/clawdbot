@@ -359,7 +359,11 @@ export function renderRecentSession(params: {
       <span class="sidebar-recent-session__aside session-row-aside">
         ${trailingIndicator === nothing
           ? nothing
-          : html`<span class="session-row-state" id=${stateId} aria-label=${trailingDescription}
+          : html`<span
+              class="session-row-state"
+              id=${stateId}
+              role="img"
+              aria-label=${trailingDescription}
               >${trailingIndicator}</span
             >`}
         ${hasTrail
@@ -426,14 +430,25 @@ export function renderSessionTree(params: {
     fullyShownChildSessionKeys: host.fullyShownChildSessionKeys,
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
-  return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
-    ${renderRecentSession({ host, session, listItem })}
+  return html`<div
+    class="sidebar-session-tree"
+    data-session-tree=${session.key}
+    role=${ifDefined(listItem ? "listitem" : undefined)}
+  >
+    ${renderRecentSession({ host, session, listItem: false })}
     ${expanded
-      ? html`<div
-          class="sidebar-session-tree__children"
-          aria-label=${t("sessionsView.childSessions")}
-        >
-          ${visibleChildren.map((child) => renderSessionTree({ host, session: child, listItem }))}
+      ? html`<div class="sidebar-session-tree__children">
+          ${visibleChildren.length > 0
+            ? html`<div
+                class="sidebar-session-tree__list"
+                role=${ifDefined(listItem ? "list" : undefined)}
+                aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
+              >
+                ${visibleChildren.map((child) =>
+                  renderSessionTree({ host, session: child, listItem }),
+                )}
+              </div>`
+            : nothing}
           ${hiddenChildCount > 0
             ? html`<button
                 class="sidebar-session-tree__show-more"

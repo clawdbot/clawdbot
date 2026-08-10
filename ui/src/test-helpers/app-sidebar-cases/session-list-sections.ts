@@ -29,9 +29,11 @@ describe("AppSidebar session section visibility", () => {
       section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
     ).toBe("true");
     expect(list?.firstElementChild?.classList.contains("sidebar-recent-session--draft")).toBe(true);
-    expect(list?.querySelector(".sidebar-recent-session--draft")?.textContent?.trim()).toBe(
-      "New session",
-    );
+    const draft = list?.querySelector(".sidebar-recent-session--draft");
+    expect(list?.getAttribute("role")).toBe("list");
+    expect(draft?.parentElement).toBe(list);
+    expect(draft?.getAttribute("role")).toBe("listitem");
+    expect(draft?.textContent?.trim()).toBe("New session");
     const draftLead = list?.querySelector(
       ".sidebar-recent-session--draft .sidebar-session-indicator",
     );

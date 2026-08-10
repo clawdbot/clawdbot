@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -323,17 +322,13 @@ function renderCatalogHostGroup(
             >
           </div>`
         : nothing}
-      <div
-        class="sidebar-session-catalog-host__sessions"
-        role=${ifDefined(projectGroups ? undefined : "list")}
-        aria-label=${ifDefined(projectGroups ? undefined : host.label)}
-      >
+      <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${projectGroups
           ? html`${projectGroups.groups.map((group) => {
               const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
               const collapsed = params.collapsedSections.has(sectionId);
               return html`
-                <div class="sidebar-session-catalog-project">
+                <div class="sidebar-session-catalog-project" role="listitem">
                   <button
                     type="button"
                     class="sidebar-session-catalog-project__head"
@@ -371,17 +366,9 @@ function renderCatalogHostGroup(
                 </div>
               `;
             })}
-            ${projectGroups.ungrouped.length > 0
-              ? html`<div
-                  class="sidebar-session-catalog-ungrouped"
-                  role="list"
-                  aria-label=${host.label}
-                >
-                  ${projectGroups.ungrouped.map((session) =>
-                    renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-                  )}
-                </div>`
-              : nothing}`
+            ${projectGroups.ungrouped.map((session) =>
+              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+            )}`
           : host.sessions.map((session) =>
               renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
             )}
@@ -492,7 +479,11 @@ function renderCatalogSessionRow(
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
         ${running
-          ? html`<span class="session-row-state" id=${stateId} aria-label=${stateDescription}
+          ? html`<span
+              class="session-row-state"
+              id=${stateId}
+              role="img"
+              aria-label=${stateDescription}
               >${renderSessionRunSpinner(false)}</span
             >`
           : nothing}

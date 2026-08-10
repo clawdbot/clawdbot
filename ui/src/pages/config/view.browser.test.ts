@@ -1555,6 +1555,9 @@ describe("config view", () => {
     expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
       true,
     );
+    expect(
+      [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
+    ).toBe(true);
     expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
   });
 

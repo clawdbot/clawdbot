@@ -161,5 +161,17 @@ describe("Control UI theme contrast", () => {
     expect(buildRule).toMatch(/color:\s*var\(--muted\)/);
     expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
     expect(readOpacity(sessionLabelRule)).toBe(1);
+
+    for (const selector of [
+      ':root[data-theme-mode="light"]',
+      ':root[data-theme="openknot-light"]',
+      ':root[data-theme="dash-light"]',
+    ]) {
+      const theme = readCssVarBlock(baseCss, selector);
+      const muted = requireCssColor(theme, "muted");
+      for (const surface of ["bg", "bg-elevated", "bg-muted", "card"]) {
+        expect(contrastRatio(muted, requireCssColor(theme, surface))).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });

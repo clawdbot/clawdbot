@@ -290,9 +290,15 @@ describe("AppSidebar session accessibility", () => {
 
     const list = sidebar.querySelector('[data-session-section="ungrouped"] [role="list"]');
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
+    const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
     expect(list?.getAttribute("aria-label")).toBe("Sessions");
-    expect(row?.getAttribute("role")).toBe("listitem");
+    expect(tree?.parentElement).toBe(list);
+    expect(tree?.getAttribute("role")).toBe("listitem");
+    expect(row?.hasAttribute("role")).toBe(false);
+    expect(sidebar.querySelector(".sidebar-recent-sessions")?.hasAttribute("aria-label")).toBe(
+      false,
+    );
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
@@ -300,7 +306,10 @@ describe("AppSidebar session accessibility", () => {
     expect(lead).not.toBeNull();
     expect(lead?.childElementCount).toBe(0);
     expect(link?.querySelector(".sidebar-recent-session__text")).not.toBeNull();
-    expect(row?.querySelector(".session-row-state .session-unread-dot")).not.toBeNull();
+    const rowState = row?.querySelector(".session-row-state");
+    expect(rowState?.getAttribute("role")).toBe("img");
+    expect(rowState?.getAttribute("aria-label")).toBe("Unread");
+    expect(rowState?.querySelector(".session-unread-dot")).not.toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );

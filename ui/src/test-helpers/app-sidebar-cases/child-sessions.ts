@@ -83,6 +83,16 @@ describe("AppSidebar agent chip", () => {
       configuredAgentsOnly: true,
     });
     const childRows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session--child")];
+    const parentTree = sidebar.querySelector('[data-session-tree="agent:main:parent"]');
+    const childList = parentTree?.querySelector(
+      ":scope > .sidebar-session-tree__children [role=list]",
+    );
+    const childTrees = [...(childList?.children ?? [])];
+    expect(childList?.getAttribute("aria-label")).toBe("Child sessions");
+    expect(childTrees).toHaveLength(2);
+    expect(childTrees.every((tree) => tree.getAttribute("role") === "listitem")).toBe(true);
+    expect(childRows.every((row) => row.hasAttribute("role") === false)).toBe(true);
+    expect(childRows.every((row) => row.closest("[role=list]") === childList)).toBe(true);
     expect(childRows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Research sources"),
       expect.stringContaining("Check tests"),
