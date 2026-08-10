@@ -11,8 +11,11 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import {
@@ -335,10 +338,12 @@ describe("pending final delivery restart proof", () => {
         messageId: `msg-${ctx.payload.text ?? ""}`,
       }),
     };
-    // Snapshot the process-global registry before installing the fixture adapter so
-    // later tests in the suite inherit the registry their setup established, not an
-    // empty one. Restore in finally so an assertion failure cannot leak the fixture.
-    const priorRegistry = getActivePluginRegistry();
+    // Snapshot the full plugin-runtime state (registry + cache key + subagent
+    // mode + workspace dir) before installing the fixture adapter, and restore it
+    // in a finally. setActivePluginRegistry defaults those metadata fields, so
+    // restoring only the registry object would leak reset metadata into later
+    // tests. restoreActivePluginRegistrySnapshot is the canonical pair.
+    const pluginRuntimeSnapshot = captureActivePluginRegistrySnapshot();
     try {
       setActivePluginRegistry(
         createTestRegistry([
@@ -450,7 +455,7 @@ describe("pending final delivery restart proof", () => {
       expect(retryText).not.toContain("retry A");
       expect(retryText).not.toContain("retry C");
     } finally {
-      setActivePluginRegistry(priorRegistry ?? createEmptyPluginRegistry());
+      restoreActivePluginRegistrySnapshot(pluginRuntimeSnapshot);
     }
   });
 });
