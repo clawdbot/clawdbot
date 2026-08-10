@@ -626,20 +626,28 @@ suite.define(() => {
       await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
-      const groupingCheckBounds = await page
+      const groupingCheck = page
         .getByRole("menuitemradio", { name: "Custom groups" })
-        .locator(".session-menu__check svg")
-        .boundingBox();
+        .locator(".session-menu__check");
       const nativeAutomationCheck = showAutomationSessions.locator('[part="checkmark"]');
       await expect.poll(() => nativeAutomationCheck.count()).toBe(1);
       expect(await nativeAutomationCheck.boundingBox()).toBeNull();
-      const automationCheck = showAutomationSessions.locator(".session-menu__check svg");
+      const automationCheck = showAutomationSessions.locator(".session-menu__check");
       await expect.poll(() => automationCheck.count()).toBe(1);
-      const automationCheckBounds = await automationCheck.boundingBox();
-      if (!groupingCheckBounds || !automationCheckBounds) {
-        throw new Error("Expected visible trailing selection marks in the session sort menu");
-      }
-      expect(Math.abs(automationCheckBounds.x - groupingCheckBounds.x)).toBeLessThanOrEqual(1);
+      await expect
+        .poll(async () => {
+          const [groupingBounds, automationBounds] = await Promise.all([
+            groupingCheck.boundingBox(),
+            automationCheck.boundingBox(),
+          ]);
+          if (!groupingBounds || !automationBounds) {
+            return Number.POSITIVE_INFINITY;
+          }
+          const groupingRight = groupingBounds.x + groupingBounds.width;
+          const automationRight = automationBounds.x + automationBounds.width;
+          return Math.abs(automationRight - groupingRight);
+        })
+        .toBeLessThanOrEqual(1);
       await sortSessionsButton.click();
       await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
