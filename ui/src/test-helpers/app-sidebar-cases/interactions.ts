@@ -4,6 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -272,6 +273,44 @@ describe("AppSidebar multi-select", () => {
       );
       expect(harness.patch).not.toHaveBeenCalled();
       await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+    } finally {
+      restoreDialogPolyfill();
+    }
+  });
+
+  it("does not assign selected sessions that were deleted while the dialog was open", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    try {
+      const { sidebar, harness } = await mountMultiSelect([
+        "sessions.groups.put",
+        "sessions.patchMany",
+      ]);
+      let landCatalogWrite!: () => void;
+      harness.groupsPut.mockReturnValueOnce(
+        new Promise((resolve) => {
+          landCatalogWrite = () => resolve("completed");
+        }),
+      );
+      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      await sidebar.updateComplete;
+      openContextMenu(sidebar, "agent:main:a");
+      await sidebar.updateComplete;
+      const menu = await sessionMenu(sidebar);
+      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
+
+      await waitForInputDialog();
+      await submitInputDialog("Projects");
+      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
+
+      // Both rows disappear while the catalog write is still in flight; patching
+      // their keys now would recreate the sessions that were just removed.
+      harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
+      landCatalogWrite();
+      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]));
+
+      expect(harness.patchMany).not.toHaveBeenCalled();
+      expect(harness.patch).not.toHaveBeenCalled();
     } finally {
       restoreDialogPolyfill();
     }

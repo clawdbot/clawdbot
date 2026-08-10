@@ -399,16 +399,24 @@ export async function createSessionGroup(
   if (remembered !== "completed") {
     return remembered;
   }
-  if (sessions.length === 1) {
-    return patchSession(host, sessions[0]!, { category: name }, scope);
+  // The dialog no longer blocks, so a captured row can be deleted while the
+  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
+  // every target against the current list, as the Sessions-page path does.
+  const targets = sessions.flatMap((session) => {
+    const current = host.findSidebarSessionByKey(session.key);
+    return current ? [current] : [];
+  });
+  if (targets.length === 1) {
+    return patchSession(host, targets[0]!, { category: name }, scope);
   }
-  if (sessions.length > 1) {
-    return patchSessions(host, sessions, { category: name }, scope);
+  if (targets.length > 1) {
+    return patchSessions(host, targets, { category: name }, scope);
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // Header-created groups start empty; re-render so the section shows up.
+  // Nothing left to file: either a header-created group that starts empty, or
+  // every captured row disappeared. Re-render so the section shows up.
   host.requestUpdate();
   return "completed";
 }
