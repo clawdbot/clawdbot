@@ -1,12 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { projectProviderError } from "./provider-error.js";
-
-const initialHost = getAiTransportHost();
-
-beforeEach(() => configureAiTransportHost({}));
-
-afterAll(() => configureAiTransportHost(initialHost));
+import { describe, expect, it } from "vitest";
+import { configureProviderErrorRedactor, projectProviderError } from "./provider-error.js";
 
 describe("projectProviderError", () => {
   it.each([
@@ -462,6 +455,30 @@ describe("projectProviderError", () => {
     expect(serialized).toContain("Bearer <redacted>");
     expect(serialized).toContain("<redacted-jwt>");
     expect(serialized).toContain("session=<redacted>");
+  });
+
+  it.each([
+    ["returns nullish", () => undefined],
+    [
+      "throws",
+      () => {
+        throw new Error("redactor failed");
+      },
+    ],
+  ])("keeps the package-safe snapshot when host strengthening %s", (_name, redactor) => {
+    const secret = "package-owned-fallback-secret";
+    const previous = configureProviderErrorRedactor(redactor);
+    try {
+      const projected = projectProviderError({
+        message: "provider failed",
+        body: { apiKey: secret },
+      });
+
+      expect(projected.errorMessage).toBe("provider failed");
+      expect(JSON.stringify(projected)).not.toContain(secret);
+    } finally {
+      configureProviderErrorRedactor(previous);
+    }
   });
 
   it("preserves ordinary key-value diagnostics", () => {

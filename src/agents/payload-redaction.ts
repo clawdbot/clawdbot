@@ -4,10 +4,7 @@
  * size and digest metadata.
  */
 import crypto from "node:crypto";
-import {
-  projectDiagnosticValue,
-  type DiagnosticProjectionPolicy,
-} from "@openclaw/ai/internal/shared";
+import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
 
 const REDACTED_MEDIA_DATA = "<redacted>";
 

@@ -139,8 +139,6 @@ export interface AiTransportHost {
   resolveSecretSentinel(value: string): string;
   /** Redacts secrets inside structured tool-result payloads. */
   redactSecrets<T>(value: T): T;
-  /** Applies host-owned diagnostic persistence redaction. */
-  redactDiagnosticPayload(value: unknown): unknown;
   /** Redacts secret-bearing text in tool payload strings. */
   redactToolPayloadText(text: string): string;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
@@ -231,7 +229,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
   redactSecrets: (value) => value,
-  redactDiagnosticPayload: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>

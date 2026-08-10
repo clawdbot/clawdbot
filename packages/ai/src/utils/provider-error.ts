@@ -1,6 +1,5 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getAiTransportHost } from "../host.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
@@ -12,6 +11,16 @@ export type ProviderErrorProjection = {
   errorType?: string;
   errorBody?: string;
 };
+
+export type ProviderErrorRedactor = (value: unknown) => unknown;
+let providerErrorRedactor: ProviderErrorRedactor | undefined;
+export function configureProviderErrorRedactor(
+  redactor: ProviderErrorRedactor | undefined,
+): ProviderErrorRedactor | undefined {
+  const previous = providerErrorRedactor;
+  providerErrorRedactor = redactor;
+  return previous;
+}
 
 function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key];
@@ -109,13 +118,13 @@ export function projectProviderError(
 ): ProviderErrorProjection {
   try {
     const localSnapshot = projectDiagnosticValue(error);
+    let snapshot = localSnapshot;
     try {
-      const strengthened = getAiTransportHost().redactDiagnosticPayload(localSnapshot);
-      return buildProjection(strengthened ?? localSnapshot, signal);
+      snapshot = providerErrorRedactor?.(localSnapshot) ?? localSnapshot;
     } catch {
-      // The package-owned snapshot is already safe; host policy is optional strengthening.
+      // Package projection is independently safe when embedding-host strengthening fails.
     }
-    return buildProjection(localSnapshot, signal);
+    return buildProjection(snapshot, signal);
   } catch {
     return {
       stopReason: signal?.aborted ? "aborted" : "error",
