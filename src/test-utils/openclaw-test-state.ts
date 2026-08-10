@@ -314,7 +314,6 @@ export async function createOpenClawTestState(
   const snapshot = captureEnv(uniqueStrings([...ENV_KEYS, ...Object.keys(envVars)]));
   let envApplied = false;
   let cleaned = false;
-  const authProfileDatabasePaths = new Set<string>();
   const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
   const sessionsDir = (agentId = "main") =>
     path.join(paths.stateDir, "agents", agentId, "sessions");
@@ -339,13 +338,11 @@ export async function createOpenClawTestState(
     },
     writeAuthProfiles: (store, agentId = "main") => {
       const targetAgentDir = agentDir(agentId);
-      const databasePath = resolveAuthProfileDatabasePath(targetAgentDir);
-      authProfileDatabasePaths.add(databasePath);
       saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
         filterExternalAuthProfiles: false,
         syncExternalCli: false,
       });
-      return Promise.resolve(databasePath);
+      return Promise.resolve(resolveAuthProfileDatabasePath(targetAgentDir));
     },
     applyEnv: () => {
       resetConfigRuntimeStateForTest();
@@ -372,9 +369,7 @@ export async function createOpenClawTestState(
       }
       cleaned = true;
       await cleanupSessionStateForTest().catch(() => undefined);
-      for (const databasePath of authProfileDatabasePaths) {
-        closeAuthProfileReadPool(databasePath);
-      }
+      closeAuthProfileReadPool({ kind: "root", rootPath: paths.stateDir });
       // Agent close releases leases through shared state; closing shared state first
       // can reopen it during teardown and leave Windows handles under the fixture root.
       for (const database of listOpenClawAgentDatabasesForTest()) {

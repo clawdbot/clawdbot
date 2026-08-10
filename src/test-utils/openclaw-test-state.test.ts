@@ -5,7 +5,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
+import {
+  closeAuthProfileReadPool,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import {
   GATEWAY_STARTUP_MUTATED_ENV_KEYS,
@@ -190,7 +193,12 @@ describe("openclaw test state", () => {
         },
       },
     };
-    const fixtureAuthPath = await state.writeAuthProfiles(authStore, "auth-reader");
+    const fixtureAuthDir = state.agentDir("auth-reader");
+    const fixtureAuthPath = resolveAuthProfileDatabasePath(fixtureAuthDir);
+    saveAuthProfileStore(authStore, fixtureAuthDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
     const unrelatedAgentDir = path.join(unrelatedRoot, "state", "agents", "outside", "agent");
     saveAuthProfileStore(authStore, unrelatedAgentDir, {
       filterExternalAuthProfiles: false,
@@ -262,8 +270,8 @@ describe("openclaw test state", () => {
     } finally {
       state.restoreEnv = restoreEnv;
       restoreEnv();
-      closeAuthProfileReadPool(fixtureAuthPath);
-      closeAuthProfileReadPool(unrelatedAgent.path);
+      closeAuthProfileReadPool({ kind: "database", databasePath: fixtureAuthPath });
+      closeAuthProfileReadPool({ kind: "database", databasePath: unrelatedAgent.path });
       closeOpenClawAgentDatabaseByPath(fixtureAgent.path);
       closeOpenClawAgentDatabaseByPath(unrelatedAgent.path);
       closeOpenClawStateDatabaseByPath(fixtureShared.path);

@@ -16,6 +16,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
@@ -41,6 +42,10 @@ const PRIMARY_ROW_KEY = "primary";
 const AUTH_PROFILE_READ_HANDLE_CAP = 8;
 const authProfileReadDatabases = new Map<string, DatabaseSync>();
 let unregisterReadHandleExitClose: (() => void) | null = null;
+
+type AuthProfileReadPoolCloseScope =
+  | { kind: "database"; databasePath: string }
+  | { kind: "root"; rootPath: string };
 
 function resolveAgentDir(agentDir?: string): string {
   if (agentDir) {
@@ -178,10 +183,18 @@ function closeAuthProfileReadDatabase(databasePath: string): void {
   }
 }
 
-/** Internal lifecycle close for one or all process-local pooled auth-profile readers. */
-export function closeAuthProfileReadPool(databasePath?: string): void {
-  if (databasePath !== undefined) {
-    closeAuthProfileReadDatabase(databasePath);
+/** Internal lifecycle close for scoped or all process-local pooled auth-profile readers. */
+export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope): void {
+  if (scope?.kind === "database") {
+    closeAuthProfileReadDatabase(scope.databasePath);
+    return;
+  }
+  if (scope?.kind === "root") {
+    for (const pathname of authProfileReadDatabases.keys()) {
+      if (isPathInside(scope.rootPath, pathname)) {
+        closeAuthProfileReadDatabase(pathname);
+      }
+    }
     return;
   }
   unregisterReadHandleExitClose?.();
