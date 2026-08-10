@@ -18,6 +18,7 @@ import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-han
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -31,6 +32,8 @@ import { createSessionWorkspaceProps } from "./components/chat-session-workspace
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
+
+vi.mock("../../lib/clipboard.ts", () => ({ copyToClipboard: vi.fn() }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -1030,6 +1033,21 @@ describe("chat pane catalog session lifecycle", () => {
 });
 
 describe("chat pane task suggestion lifecycle", () => {
+  it("surfaces clipboard failure through the pane error path", async () => {
+    vi.mocked(copyToClipboard).mockResolvedValueOnce(false);
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+
+    await pane.copyTaskSuggestionPrompt(suggestion);
+
+    expect(copyToClipboard).toHaveBeenCalledWith(suggestion.prompt);
+    expect(state.lastError).toBe("Couldn't copy the prompt to the clipboard");
+    expect(state.chatError).toBe("Couldn't copy the prompt to the clipboard");
+  });
+
   it("keeps accept ownership when the resolved event arrives before the response", async () => {
     const accepted = createDeferred<TaskSuggestionsAcceptResult>();
     const client = {
