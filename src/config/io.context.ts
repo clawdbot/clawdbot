@@ -12,7 +12,10 @@ import {
 } from "../infra/shell-env.js";
 import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  rebasePluginMetadataSnapshotManifestRegistry,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
@@ -116,6 +119,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     let metadataConfig: OpenClawConfig | undefined;
     let manifestRegistry: PluginManifestRegistry | undefined;
     let snapshot: PluginMetadataSnapshot | undefined;
+    let configWideSnapshot: PluginMetadataSnapshot | undefined;
     const resolvePluginIdScope = (config: OpenClawConfig) =>
       createConfigValidationMetadataPluginIdScope({
         config,
@@ -148,9 +152,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: resolvePluginIdScope(metadataConfig),
         });
-        return manifestRegistry
-          ? { ...snapshot, manifestRegistry, plugins: manifestRegistry.plugins }
+        configWideSnapshot ??= manifestRegistry
+          ? rebasePluginMetadataSnapshotManifestRegistry(snapshot, manifestRegistry)
           : snapshot;
+        return configWideSnapshot;
       },
     };
   }

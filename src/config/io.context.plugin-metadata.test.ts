@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   resolveConfigWidePluginManifestRegistry: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
@@ -77,6 +78,8 @@ describe("config IO plugin metadata snapshots", () => {
     const snapshot = loader.getSnapshot();
 
     expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
+    expect(snapshot?.byPluginId.get("research-chat-plugin")).toBe(secondary);
+    expect(loader.getSnapshot()).toBe(snapshot);
     expect(
       resolveReadOnlyChannelPluginsForConfig(cfg, {
         env: {},

@@ -7,11 +7,21 @@ describe("agent roster ownership", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
   });
 
-  it("accepts sole and multi-agent rosters without a stored default", () => {
+  it("accepts sole and explicitly owned multi-agent rosters without a stored default", () => {
     expect(AgentsSchema.safeParse({ entries: { alpha: {} } }).success).toBe(true);
     expect(
       AgentsSchema.safeParse({ ownership: "explicit", entries: { alpha: {}, beta: {} } }).success,
     ).toBe(true);
+  });
+
+  it("rejects a markerless multi-agent roster without explicit ownership", () => {
+    const result = AgentsSchema.safeParse({ entries: { alpha: {}, beta: {} } });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('agents.ownership="explicit"');
+      expect(result.error.issues[0]?.message).toContain("run openclaw doctor");
+    }
   });
 
   it("accepts one legacy default marker", () => {

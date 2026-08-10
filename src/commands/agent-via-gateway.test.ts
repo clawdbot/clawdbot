@@ -585,6 +585,43 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("uses the local global session through --local despite remote gateway settings", async () => {
+    await withTempStore(
+      async () => {
+        vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
+        const cfg = retainLegacyDefaultAgentId(
+          {
+            ...loadRuntimeConfig(),
+            gateway: { mode: "remote" },
+            agents: {
+              ...loadRuntimeConfig().agents,
+              ownership: "explicit",
+              list: [{ id: "ops" }, { id: "research" }],
+            },
+          },
+          "ops",
+        );
+        loadRuntimeConfig.mockReturnValue(cfg);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", local: true }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops" }),
+          runtime,
+          undefined,
+        );
+        expect(requireFirstCallArg(agentCommand, "embedded agent")).not.toHaveProperty(
+          "sessionKey",
+        );
+      },
+      {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
   it("keeps an ownerless explicit global session fail-closed through --local", async () => {
     await withTempStore(
       async () => {

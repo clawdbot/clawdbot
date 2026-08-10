@@ -61,6 +61,14 @@ export const AgentsSchema = z
         message: "agents.ownership=explicit cannot be combined with a legacy default=true marker",
       });
     }
+    if (entries.length > 1 && marked.length === 0 && value.ownership !== "explicit") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message:
+          'multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor',
+      });
+    }
   })
   .optional();
 

@@ -109,14 +109,13 @@ export function migratePersistedImplicitMainRoster(raw: unknown): MigrationResul
     return { config: raw, changed: false, diagnostics: [] };
   }
 
-  const hasMarker = validIds.some((id) =>
-    Object.hasOwn(roster[id] as Record<string, unknown>, "default"),
+  const markedIds = validIds.filter(
+    (id) => (roster[id] as Record<string, unknown>).default === true,
   );
-  const marked = validIds.find((id) => (roster[id] as Record<string, unknown>).default === true);
+  const hasValidLegacyMarker = agents.ownership !== "explicit" && markedIds.length === 1;
   const legacyDefaultAgentId =
-    validIds.length > 1 && agents.ownership !== "explicit"
-      ? (tryGetLegacyDefaultAgentId(raw as OpenClawConfig) ?? marked ?? validIds[0])
-      : undefined;
+    tryGetLegacyDefaultAgentId(raw as OpenClawConfig) ??
+    (validIds.length > 1 && hasValidLegacyMarker ? markedIds[0] : undefined);
   let nextRoot: Record<string, unknown> = { ...root, agents };
   let insertedPaths: string[][] = [];
   const diagnostics = convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [];
@@ -131,12 +130,9 @@ export function migratePersistedImplicitMainRoster(raw: unknown): MigrationResul
     if (insertedPaths.length > 0) {
       diagnostics.push("Materialized legacy per-surface agent ownership.");
       changed = true;
-    } else if (!hasMarker) {
-      diagnostics.push("Marked the legacy agent roster for explicit ownership persistence.");
-      changed = true;
     }
   }
-  if (hasMarker) {
+  if (hasValidLegacyMarker) {
     const nextAgents = (nextRoot.agents as Record<string, unknown> | undefined) ?? agents;
     const materializedEntries = (nextAgents.entries ?? roster) as Record<string, unknown>;
     nextRoot = {

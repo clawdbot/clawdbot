@@ -602,7 +602,7 @@ async function normalizeSessionKeyOptsForDispatch(
       rawSessionKey === undefined &&
       (remoteGatewayRoster
         ? remoteGatewayRoster.scope === "global"
-        : !usesRemoteGateway(cfg) && cfg.session?.scope === "global");
+        : (opts.local === true || !usesRemoteGateway(cfg)) && cfg.session?.scope === "global");
     const unscopedSession = isUnscopedSessionKeySentinel(rawSessionKey) || implicitGlobalSession;
     const implicitAgentSelection = implicitSoleAgent || implicitCompatibilityDefault;
     agentIdRaw = implicitAgentSelection && unscopedSession ? undefined : selectedAgentId;
