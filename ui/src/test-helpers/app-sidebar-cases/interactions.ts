@@ -7,7 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
-  storeHiddenSessionCatalogIds,
+  setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
@@ -428,13 +428,22 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("opens the catalog view menu from its header and hides that section", async () => {
+  it("opens the catalog view menu from its header and hides that section with undo", async () => {
     vi.useFakeTimers();
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    await toastHost.updateComplete;
     try {
       const { sidebar } = await mountWithCatalog(
         catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
         ["agent:main:main"],
       );
+      const navigated: Array<[string, unknown]> = [];
+      sidebar.onNavigate = (routeId, options) => navigated.push([routeId, options]);
+      let navDrawerCloses = 0;
+      sidebar.onCloseNavDrawer = () => {
+        navDrawerCloses += 1;
+      };
       const header = sidebar.querySelector<HTMLElement>(
         '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
       );
@@ -461,10 +470,33 @@ describe("AppSidebar catalog session rows", () => {
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
 
-      storeHiddenSessionCatalogIds(new Set());
+      // On a phone this menu lives inside the modal navigation drawer, which occludes
+      // and inerts the toast; the outcome only reaches the operator once it closes.
+      expect(navDrawerCloses).toBe(1);
+
+      // Hiding must announce its own outcome: the section name, undo, and a recovery
+      // path that opens the settings block instead of only naming it.
+      await toastHost.updateComplete;
+      const message = toastHost.querySelector(".app-toast__message")?.textContent ?? "";
+      expect(message).toContain("Codex");
+      expect(message).toContain("Settings > Appearance > Sidebar");
+
+      const recovery = toastHost.querySelector<HTMLAnchorElement>(".app-toast__message a");
+      expect(recovery?.getAttribute("href")).toBe(
+        "/settings/appearance?section=__appearance__#settings-appearance-sidebar",
+      );
+      recovery?.click();
+      expect(navigated).toEqual([
+        ["appearance", { search: "?section=__appearance__", hash: "#settings-appearance-sidebar" }],
+      ]);
+
+      toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
       await sidebar.updateComplete;
+      expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(false);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
     } finally {
+      toastHost.remove();
+      setStoredSessionCatalogHidden("codex", false);
       vi.useRealTimers();
     }
   });

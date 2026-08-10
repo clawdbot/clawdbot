@@ -418,15 +418,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       composerControls: catalogKey
         ? nothing
         : renderChatPaneComposerControls({
-            paneId: this.paneId,
             state,
             selectedSession,
             agentDefaultModel,
             modelAccess: mutationAccess.model,
             effortAccess: mutationAccess.effort,
-            preferencesBrowserOnly:
-              this.context.runtimeConfig.state.connected &&
-              this.context.runtimeConfig.canPatch === false,
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,

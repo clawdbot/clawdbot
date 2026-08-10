@@ -4801,6 +4801,8 @@ export const en: TranslationMap = {
       noSessionsForAgent: "No sessions found for this agent",
       catalogViewOptions: "View options",
       hideFromSidebar: "Hide from sidebar",
+      sectionHidden: "{section} hidden.",
+      sectionHiddenRecovery: "Show it again in Settings > Appearance > Sidebar.",
       hiddenSessionSections: "Hidden session sections",
       showSessionSection: "Show",
       catalogGroupByProject: "Project",

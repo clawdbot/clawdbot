@@ -432,13 +432,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       openDetails.forEach((details) => {
         details.open = false;
       });
-      return;
     }
-    if (!state.chatViewMenuOpen) {
-      return;
-    }
-    event.preventDefault();
-    state.setChatViewMenuOpen(false, { restoreFocus: true });
   };
 
   protected readonly handleDocumentPointerdown = (event: PointerEvent) => {
@@ -457,14 +451,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     if (changed) {
       state.requestUpdate();
     }
-    if (!state.chatViewMenuOpen) {
-      return;
-    }
-    const wrapper = this.querySelector(".chat-view-menu-wrapper");
-    if (wrapper && path.includes(wrapper)) {
-      return;
-    }
-    state.setChatViewMenuOpen(false);
   };
 
   override connectedCallback() {
