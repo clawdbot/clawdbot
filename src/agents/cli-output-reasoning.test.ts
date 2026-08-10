@@ -107,7 +107,9 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       {
         text: "Visible answer.",
         delta: "Visible answer.",
-        sessionId: undefined,
+        // Classification defers the flush to the result, after the session id
+        // is known.
+        sessionId: "session-tagged",
         usage: undefined,
       },
     ]);
@@ -146,7 +148,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     expect(parser.getOutput()?.text).toBe("Visible answer.");
   });
 
-  it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
+  it("keeps rejected angle prefixes visible while valid split reasoning stays buffered", () => {
     const visible = createClaudeTaggedReasoningHarness();
     const mixed = createClaudeTaggedReasoningHarness();
     const tagged = createClaudeTaggedReasoningHarness();
@@ -162,11 +164,13 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       );
 
     pushText(visible.parser, "<div>Visible prefix <thi");
+    visible.parser.finish();
     expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
     expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
 
     pushText(mixed.parser, "<div>Visible prefix ");
     pushText(mixed.parser, "<thi");
+    mixed.parser.finish();
     expect(mixed.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
     expect(mixed.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
 
@@ -175,7 +179,10 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     expect(tagged.assistant).toEqual([]);
     expect(tagged.thinking).toEqual([]);
     pushText(tagged.parser, "</thinking>Visible answer.");
+    // Reasoning still streams as soon as its close tag resolves; visible text
+    // waits for the classification flush at finish.
     expect(tagged.thinking.at(-1)?.text).toBe("Private analysis.");
+    tagged.parser.finish();
     expect(tagged.assistant.at(-1)?.text).toBe("Visible answer.");
   });
 
@@ -303,8 +310,9 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     parser.finish();
 
     expect(thinking.map((entry) => entry.text)).toEqual(["First thought.", "Second thought."]);
-    expect(assistant.at(-1)?.text).toBe("Before tool.\n\nFinal answer.");
-    expect(parser.getOutput()?.text).toBe("Before tool.\n\nFinal answer.");
+    // "Before tool." is pre-tool commentary; only the closer message ships.
+    expect(assistant.at(-1)?.text).toBe("Final answer.");
+    expect(parser.getOutput()?.text).toBe("Final answer.");
   });
 
   it.each([

@@ -116,7 +116,7 @@ describe("parseCliJsonl", () => {
     expect(result).toEqual(expected);
   });
 
-  it("keeps streamed pre-tool text over the final-message result in transcript reparses", () => {
+  it("drops pre-tool commentary from transcript reparses so fallbacks match live parses", () => {
     const result = parseCliJsonl(
       [
         JSON.stringify({ type: "init", session_id: "session-reparse" }),
@@ -156,7 +156,7 @@ describe("parseCliJsonl", () => {
     );
 
     expect(result).toEqual({
-      text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      text: "TEST DONE",
       sessionId: "session-reparse",
       usage: undefined,
     });
@@ -216,7 +216,7 @@ describe("parseCliJsonl", () => {
       "local-cli",
     );
 
-    expect(result?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
+    expect(result?.text).toBe("Interim answer.\nDONE");
   });
 
   it.each([

@@ -320,7 +320,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual(expected);
   });
 
-  it("keeps streamed pre-tool text when the result envelope carries only the final message", () => {
+  it("drops unconsumed pre-tool commentary and delivers only the result envelope", () => {
     const deltas: Array<{ text: string; delta?: string }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -367,20 +367,18 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(parser.getOutput()).toEqual({
-      text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      text: "TEST DONE",
       sessionId: "session-tool-split",
       usage: undefined,
     });
-    // Cumulative text must stay reconstructible from deltas for preview streams.
-    expect(deltas.map((entry) => entry.delta).join("")).toBe(
-      "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
-    );
-    expect(deltas.at(-1)?.text).toBe("Marker caribou-lampion-473 explanation.\n\nTEST DONE");
+    // Pre-tool narration is commentary; it must never reach assistant deltas.
+    expect(deltas.map((entry) => entry.delta).join("")).toBe("TEST DONE");
+    expect(deltas.at(-1)?.text).toBe("TEST DONE");
   });
 
   it.each([
     {
-      name: "keeps pre-tool text when text, tool_use, and text share one assistant message",
+      name: "drops pre-tool commentary when text, tool_use, and text share one assistant message",
       frames: [
         { type: "init", session_id: "session-single-message" },
         claudeMessageStart(),
@@ -389,10 +387,10 @@ describe("createCliJsonlStreamingParser", () => {
         claudeTextDelta("TEST DONE"),
         { type: "result", session_id: "session-single-message", result: "TEST DONE" },
       ],
-      expectedText: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      expectedText: "TEST DONE",
     },
     {
-      name: "keeps pre-tool text when a toolless closer message follows a tool-using message",
+      name: "delivers only the result envelope when mid-run summaries precede the closer message",
       frames: [
         { type: "init", session_id: "session-closer" },
         claudeMessageStart(),
@@ -404,7 +402,7 @@ describe("createCliJsonlStreamingParser", () => {
         claudeTextDelta("DONE"),
         { type: "result", session_id: "session-closer", result: "DONE" },
       ],
-      expectedText: "Pre-tool analysis.\n\nPost-tool summary.\n\nDONE",
+      expectedText: "DONE",
     },
   ])("$name", ({ frames, expectedText }) => {
     const parser = createCliJsonlStreamingParser({
@@ -481,43 +479,14 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(parser.getOutput()?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
-    // Preview snapshots stay cumulative across the interim result.
-    expect(deltas.at(-1)?.text).toBe("Interim answer.\n\nPre-tool follow-up.\n\nDONE");
-    expect(deltas.map((entry) => entry.delta).join("")).toBe(
-      "Interim answer.\n\nPre-tool follow-up.\n\nDONE",
-    );
+    expect(parser.getOutput()?.text).toBe("Interim answer.\nDONE");
+    // Preview snapshots stay cumulative across the interim result; the
+    // post-interim pre-tool follow-up is commentary and never streams.
+    expect(deltas.at(-1)?.text).toBe("Interim answer.DONE");
+    expect(deltas.map((entry) => entry.delta).join("")).toBe("Interim answer.DONE");
   });
 
   it.each([
-    {
-      name: "does not duplicate existing newlines at message boundaries",
-      frames: [
-        { type: "init", session_id: "session-newlines" },
-        claudeMessageStart(),
-        claudeTextDelta("Pre-tool explanation.\n\n"),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeMessageStart(),
-        claudeTextDelta("TEST DONE"),
-        { type: "result", session_id: "session-newlines", result: "TEST DONE" },
-      ],
-      expectedText: "Pre-tool explanation.\n\nTEST DONE",
-    },
-    {
-      name: "keeps a later tool split's pre-tool text after an earlier ordinary boundary",
-      frames: [
-        { type: "init", session_id: "session-mixed" },
-        claudeMessageStart(),
-        claudeTextDelta("Superseded draft."),
-        claudeMessageStop(),
-        claudeMessageStart(),
-        claudeTextDelta("Important pre-tool text."),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeTextDelta("DONE"),
-        { type: "result", session_id: "session-mixed", result: "DONE" },
-      ],
-      expectedText: "Important pre-tool text.\n\nDONE",
-    },
     {
       name: "drops an earlier draft when a fresh message starts with a tool call",
       frames: [
@@ -609,7 +578,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual(expected);
   });
 
-  it("keeps pre-tool text in assistant deltas when no commentary consumer is wired", () => {
+  it("classifies pre-tool text as commentary even when no consumer is wired", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -644,9 +613,9 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(deltas).toEqual([
-      { text: "Let me inspect the repo.", delta: "Let me inspect the repo." },
-    ]);
+    // Narration preceding tool_use is dropped from the assistant stream when
+    // nothing consumes commentary (cron/quiet lanes must not deliver it).
+    expect(deltas).toEqual([]);
   });
 
   it.each([

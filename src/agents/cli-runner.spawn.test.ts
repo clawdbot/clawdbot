@@ -1920,9 +1920,10 @@ describe("runCliAgent spawn path", () => {
       const result = await executePreparedCliRun(buildPreparedCliRunContext({}));
 
       expect(result.text).toBe("Hello world");
+      // Commentary classification buffers deltas until a flush boundary; the
+      // streamed text reaches consumers as one merged delta at the result.
       expect(agentEvents).toEqual([
-        { stream: "assistant", text: "Hello", delta: "Hello" },
-        { stream: "assistant", text: "Hello world", delta: " world" },
+        { stream: "assistant", text: "Hello world", delta: "Hello world" },
       ]);
     } finally {
       stop();

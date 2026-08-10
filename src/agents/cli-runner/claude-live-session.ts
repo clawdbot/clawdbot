@@ -1355,8 +1355,8 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   }
   turn.onPhase?.("resolve");
   const raw = turn.rawLines.join("\n");
-  // Reuse the parser that classified pre-tool text as commentary. Reparsing the
-  // transcript loses that boundary when Claude's terminal result is empty.
+  // Prefer the streaming parser's state; the reparse fallback classifies
+  // commentary identically but cannot replay consumer-facing streams.
   const output =
     turn.streamingParser.getOutput() ??
     parseCliOutput({

@@ -32,16 +32,13 @@ import {
   isClaudeStreamJsonResult,
   isGeminiStreamJsonDialect,
   isStreamJsonDialect,
-  missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
   parseClaudeCliStreamingDelta,
   pickCliResumeCheckpointId,
   pickCliSessionId,
   preferGeminiCliStreamJsonError,
-  preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
-  supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
 
 export const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
@@ -154,15 +151,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let assistantText = "";
   let customThinkingText = "";
   let pendingClaudeText = "";
-  let pendingMessageSeparator = false;
-  let currentMessageStart = 0;
   let segmentStart = 0;
-  // Streamed text from this offset on is still a candidate to outrank the
-  // result envelope; every non-tool boundary or interim result restarts it.
-  let preserveFrom = 0;
-  let sawToolUseSinceText = false;
-  let currentMessageHadToolUse = false;
-  let previousMessageHadToolUse = false;
   let sessionId: string | undefined;
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
@@ -178,12 +167,14 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let sawClaudeSyntheticNoResponse = false;
   const toolTracker = createToolUseTracker();
   const outputLimits = CLI_STREAM_JSON_OUTPUT_LIMITS;
-  // Classification is keyed on consumer presence so reclassified pre-tool text
-  // always has a destination; a separate enable flag let it be dropped (#92092).
-  const classifyClaudeCommentary =
-    Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
   const thinkingTracker = createThinkingTracker();
   const claudeStreamJson = isClaudeStreamJsonDialect(params);
+  // Claude's wire format carries no phase metadata, so pre-tool text is always
+  // classified as commentary regardless of consumer wiring; without an
+  // onCommentaryText consumer it is dropped instead of fused into the
+  // deliverable (#121558). The result envelope is the authoritative final
+  // text; streamed text only backfills an empty result.
+  const classifyClaudeCommentary = claudeStreamJson;
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
 
@@ -221,30 +212,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       pendingClaudeText = `${pendingClaudeText}${delta}`;
       return;
     }
-    // A tool_use block starts a new post-tool segment even inside one assistant
-    // message; only tool-split boundaries may later outrank the result envelope.
-    // A message boundary is a tool split only when the PREVIOUS message used a
-    // tool: a tool-first fresh message must not connect an earlier draft, while
-    // a tool-using message keeps its text connected across its own boundary.
-    const boundaryPending = pendingMessageSeparator || sawToolUseSinceText;
-    const isToolSplitBoundary = pendingMessageSeparator
-      ? previousMessageHadToolUse
-      : sawToolUseSinceText;
-    const separator =
-      boundaryPending && assistantText ? missingMessageBoundarySeparator(assistantText, delta) : "";
-    if (boundaryPending && assistantText) {
-      currentMessageStart = assistantText.length + separator.length;
-      // Text before a non-tool boundary may be a superseded draft; only text
-      // connected to the result through tool splits stays a candidate.
-      if (!isToolSplitBoundary) {
-        preserveFrom = currentMessageStart;
-      }
-    }
-    pendingMessageSeparator = false;
-    sawToolUseSinceText = false;
-    const deltaText = `${separator}${delta}`;
-    assistantText = `${assistantText}${deltaText}`;
-    params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
+    assistantText = `${assistantText}${delta}`;
+    params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
   };
 
   const routeTaggedReasoningDeltas = (
@@ -394,11 +363,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (classifyClaudeCommentary && parsed.type === "result") {
+    if (parsed.type === "result") {
       finishTaggedReasoningMessage();
-      flushPendingClaudeAssistantText();
-    } else if (parsed.type === "result") {
-      finishTaggedReasoningMessage();
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeAssistantText();
+      }
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -433,15 +402,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       // Empty terminal result can follow already-streamed text; keep that text.
       const streamedText = assistantText.slice(segmentStart).trim();
-      const preservedCandidate = assistantText.slice(preserveFrom).trim();
-      const keepStreamed = preferStreamedClaudeTextOverResult({
-        streamedText: preservedCandidate,
-        finalMessageText: assistantText.slice(currentMessageStart).trim(),
-        resultText: result.text,
-      });
-      const nextText = (
-        keepStreamed ? preservedCandidate : result.text || streamedText || texts.join("\n").trim()
-      ).trim();
+      const nextText = (result.text || streamedText || texts.join("\n").trim()).trim();
       const previousText = output?.text?.trim() ?? "";
       // Claude Code may emit an interim result while background agents run, then
       // a second result after task-notification. Preserve earlier result text
@@ -476,15 +437,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
-      // An interim result commits its segment. Rebase boundary state so later
-      // text is judged on its own, while delta snapshots stay cumulative.
+      // An interim result commits its segment; later streamed text backfills
+      // only its own segment while delta snapshots stay cumulative.
       segmentStart = assistantText.length;
-      currentMessageStart = segmentStart;
-      preserveFrom = segmentStart;
-      pendingMessageSeparator = false;
-      sawToolUseSinceText = false;
-      currentMessageHadToolUse = false;
-      previousMessageHadToolUse = false;
       return;
     }
 
@@ -498,26 +453,20 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
 
     if (parsed.type === "stream_event" && isRecord(parsed.event)) {
       const evt = parsed.event;
-      // Tool-split turns stream as separate assistant messages. Mark the
-      // boundary so accumulated text joins with a paragraph break instead of
-      // gluing the pre-tool text to the next message's first delta.
       if (evt.type === "message_start") {
         beginTaggedReasoningMessage();
-        pendingMessageSeparator = true;
-        previousMessageHadToolUse = currentMessageHadToolUse;
-        currentMessageHadToolUse = false;
       } else if (evt.type === "message_stop") {
         finishTaggedReasoningMessage();
       }
-      const isToolUseBlockStart =
-        evt.type === "content_block_start" &&
-        isRecord(evt.content_block) &&
-        isClaudeToolUseBlockType(evt.content_block.type);
-      if (isToolUseBlockStart) {
-        sawToolUseSinceText = true;
-        currentMessageHadToolUse = true;
-      }
       if (classifyClaudeCommentary) {
+        // Text still pending when a tool_use block starts is pre-tool
+        // narration; text pending at any other block or message boundary is
+        // (part of) the reply. Misrouting either direction leaks narration
+        // into deliveries or drops answer text.
+        const isToolUseBlockStart =
+          evt.type === "content_block_start" &&
+          isRecord(evt.content_block) &&
+          isClaudeToolUseBlockType(evt.content_block.type);
         if (isToolUseBlockStart) {
           flushPendingClaudeCommentaryText();
         } else if (evt.type === "content_block_start" || evt.type === "message_stop") {

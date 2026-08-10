@@ -881,10 +881,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(spawnInput.captureOutput).toBe(false);
       expect(result.text).toBe("Hello world");
       expect(result.toolSummary).toEqual({ calls: 0, tools: [], failures: 0 });
-      expect(agentEvents).toEqual([
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
-      ]);
+      // Commentary classification buffers deltas until a flush boundary; the
+      // streamed text reaches consumers as one merged delta at the result.
+      expect(agentEvents).toEqual([{ text: "Hello world", delta: "Hello world" }]);
       expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
       expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
         phase: "assistant_output_started",

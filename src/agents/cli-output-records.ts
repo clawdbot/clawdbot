@@ -526,35 +526,6 @@ export function parseClaudeCliJsonlResult(params: {
   return null;
 }
 
-// A tool-split turn streams pre-tool answer text the terminal result envelope
-// omits (it carries only the final message). Prefer the fuller streamed text so
-// final delivery cannot erase already-streamed content (#106760). The result
-// must match the complete final streamed message: a bare suffix match inside a
-// single divergent message defers to the authoritative result envelope.
-export function preferStreamedClaudeTextOverResult(params: {
-  streamedText: string;
-  finalMessageText: string;
-  resultText: string;
-}): boolean {
-  return (
-    Boolean(params.resultText) &&
-    params.streamedText !== params.resultText &&
-    params.finalMessageText === params.resultText
-  );
-}
-
-// Assistant-message boundaries join with one blank line; add only the missing
-// newlines so messages that already end or start with breaks are not
-// double-spaced.
-export function missingMessageBoundarySeparator(previousText: string, nextDelta: string): string {
-  if (!previousText) {
-    return "";
-  }
-  const trailing = previousText.match(/\n*$/u)?.[0].length ?? 0;
-  const leading = nextDelta.match(/^\n*/u)?.[0].length ?? 0;
-  return "\n".repeat(Math.max(0, 2 - trailing - leading));
-}
-
 export function parseClaudeCliStreamingDelta(params: {
   backend: CliBackendConfig;
   providerId: string;

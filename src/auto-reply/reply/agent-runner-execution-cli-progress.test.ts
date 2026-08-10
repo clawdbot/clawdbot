@@ -491,8 +491,8 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     }));
     state.runCliAgentMock.mockImplementationOnce(
       async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        // With no commentary lane or headline consumer, pre-tool text stays in
-        // the assistant stream instead of being split into progress events.
+        // With no commentary lane or headline consumer, pre-tool text is
+        // classified as commentary and dropped; no progress events are emitted.
         expect(params.emitCommentaryText).toBe(false);
         return { payloads: [{ text: "done" }], meta: {} };
       },
