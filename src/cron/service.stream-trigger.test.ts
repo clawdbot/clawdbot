@@ -235,8 +235,8 @@ describe("cron stream trigger composition", () => {
       expect(onTriggerDisposition).not.toHaveBeenCalledWith("fired");
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
-        consecutiveErrors: 1,
         lastError: "boom",
+        consecutiveErrors: 1,
       });
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
