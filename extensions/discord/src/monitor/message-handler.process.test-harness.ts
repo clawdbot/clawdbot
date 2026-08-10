@@ -158,6 +158,7 @@ export type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
+      itemId?: string;
       toolCallId?: string;
       name?: string;
       phase?: string;
