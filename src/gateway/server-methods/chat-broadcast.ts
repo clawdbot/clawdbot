@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import {
   resolveSessionSubscriptionKey,

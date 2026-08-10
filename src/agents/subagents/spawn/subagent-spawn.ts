@@ -40,6 +40,7 @@ import {
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "../../subagent-registry.js";
+import { registerSubagentTraceparentHandoff } from "../../subagent-traceparent-handoff.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
@@ -74,7 +75,6 @@ import {
   emitSessionLifecycleEvent,
   mergeDeliveryContext,
 } from "./subagent-spawn.runtime.js";
-import { registerSubagentTraceparentHandoff } from "../../subagent-traceparent-handoff.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 

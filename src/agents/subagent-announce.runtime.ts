@@ -13,7 +13,10 @@ import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-contex
 import { summarizeSpawnError } from "./spawn-error.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { splitModelRef } from "./subagents/spawn/subagent-spawn-plan.js";
-import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagents/spawn/subagent-spawn.runtime.js";
+import {
+  resolveGatewaySessionStoreTarget,
+  upsertSessionEntry,
+} from "./subagents/spawn/subagent-spawn.runtime.js";
 
 export type ContinuationSpawnParams = Pick<
   SubagentRunRecord,
