@@ -38,6 +38,7 @@ import {
   canonicalizeSlackApiTargetId,
   formatSlackTarget,
   parseSlackTarget,
+  type SlackTarget,
 } from "./target-parsing.js";
 
 export type SlackApprovalKind = "exec" | "plugin";
@@ -55,7 +56,6 @@ type SlackForwardTarget = Parameters<
     NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
   >
 >[0]["target"];
-type SlackApprovalTarget = Parameters<typeof formatSlackTarget>[0];
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
 const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
@@ -456,7 +456,7 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
   });
 }
 
-export function formatSlackApprovalTarget(target: SlackApprovalTarget, id = target.id) {
+function formatSlackApprovalTarget(target: SlackTarget, id = target.id): string {
   return target.teamId
     ? formatSlackTarget({ teamId: target.teamId, kind: target.kind, id })
     : `${target.kind}:${id}`;
