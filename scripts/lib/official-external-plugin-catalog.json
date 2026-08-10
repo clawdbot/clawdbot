@@ -106,7 +106,7 @@
         "install": {
           "npmSpec": "@openclaw/daytona-sandbox",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.8.1"
         }
       }
     },
