@@ -11,6 +11,14 @@ export class SqliteCoordinatorError extends Error {
   }
 }
 
+export function createSqliteLifecycleAggregateError(
+  errors: unknown[],
+  message: string,
+  cause: unknown,
+): AggregateError {
+  return new AggregateError(errors, message, { cause });
+}
+
 export function runWithSqliteCoordinator<T>(
   coordinator: { release: () => void },
   operationLabel: string,
@@ -32,11 +40,10 @@ export function runWithSqliteCoordinator<T>(
       releaseError = error;
     }
     if (releaseFailed) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains both failures and the operation cause.
-      throw new AggregateError(
+      throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         `${operationLabel} and coordinator release both failed`,
-        { cause: operationError },
+        operationError,
       );
     }
     throw operationError;

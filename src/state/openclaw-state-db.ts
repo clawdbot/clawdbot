@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
   repairCanonicalSqliteIndexes,
@@ -589,11 +590,10 @@ export function openOpenClawStateDatabase(
     }
     const cleanup = stateDbCache.closeOpenClawStateDatabaseHandle(unpublished);
     if (cleanup.caught) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains every cleanup failure in its error list and the primary failure as its third-argument cause.
-      throw new AggregateError(
+      throw createSqliteLifecycleAggregateError(
         [error, ...cleanup.errors],
         `Fresh OpenClaw state database open failed releasing access and closing its unpublished handle for ${pathname}.`,
-        { cause: error },
+        error,
       );
     }
     throw error;

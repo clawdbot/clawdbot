@@ -13,6 +13,7 @@ import {
   tryAcquireExclusiveSqliteCoordinator,
 } from "../infra/node-sqlite.js";
 import {
+  createSqliteLifecycleAggregateError,
   ensurePrivateSqliteCoordinatorDirectory,
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
@@ -225,6 +226,19 @@ function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
   if (!existsSync(resolvedPath)) {
     return null;
   }
+  if (existsSync(`${resolvedPath}-journal`)) {
+    // Write admission owns recovery while the coordinator is held. Inspect the
+    // recovered committed view before any caller-specific mutation begins.
+    const database = openNodeSqliteDatabase(resolvedPath);
+    try {
+      database.exec(
+        `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF;`,
+      );
+      return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+    } finally {
+      database.close();
+    }
+  }
   return inspectStablePublicImmutableOwnership(resolvedPath);
 }
 
@@ -314,11 +328,10 @@ function acquireOpenClawStateWriteAccess(options: {
       releaseError = error;
     }
     if (releaseFailed) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains the release failure in its error list and the primary failure as its third-argument cause.
-      throw new AggregateError(
+      throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         "state ownership inspection and coordinator release both failed",
-        { cause: operationError },
+        operationError,
       );
     }
     throw operationError;

@@ -22,6 +22,7 @@ import {
   verifyEd25519Signature,
 } from "./ed25519-signature.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
 
@@ -103,11 +104,10 @@ function withDeviceIdentityCoordinator<T>(
       releaseError = error;
     }
     if (releaseFailed) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains both failures and the operation cause.
-      throw new AggregateError(
+      throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         "device identity operation and coordinator release both failed",
-        { cause: operationError },
+        operationError,
       );
     }
     throw operationError;
