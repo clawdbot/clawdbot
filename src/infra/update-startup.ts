@@ -1,7 +1,6 @@
 // Runs startup update checks and optional auto-update handoff.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -58,6 +57,7 @@ import {
   type UpdateCheckResult,
 } from "./update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
+import { updateInstallRootsMatch } from "./update-install-root.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
 type UpdateCheckState = {
@@ -415,17 +415,6 @@ function resolveStableAutoApplyAtMs(params: {
   return firstSeenMs + baseDelayMs + jitterMs;
 }
 
-function resolveAutoUpdateHandoffRoot(root: string | undefined): string {
-  if (root?.trim()) {
-    return root;
-  }
-  try {
-    return process.cwd();
-  } catch {
-    return os.homedir();
-  }
-}
-
 function resolveManagedAutoUpdateRestartDelayMs(supervisor: RespawnSupervisor): number {
   return supervisor === "systemd" ? MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS : 0;
 }
@@ -442,8 +431,11 @@ async function startManagedServiceAutoUpdateHandoff(params: {
   const restartDelayMs = resolveManagedAutoUpdateRestartDelayMs(params.supervisor);
   const handoffId = randomUUID();
   try {
+    if (!params.root?.trim()) {
+      throw new Error("managed auto-update install root is unavailable");
+    }
     const started = await startManagedServiceUpdateHandoff({
-      root: resolveAutoUpdateHandoffRoot(params.root),
+      root: params.root,
       timeoutMs: params.timeoutMs,
       restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       channel: params.channel,
@@ -590,21 +582,21 @@ function clearAutoState(nextState: UpdateCheckState): void {
 }
 
 async function resolveStartupInstallStatus(fetchGit: boolean) {
-  const root = await resolveOpenClawPackageRoot({
+  const resolvedRoot = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
   const [status, installReceipt] = await Promise.all([
     checkUpdateStatus({
-      root,
+      root: resolvedRoot,
       timeoutMs: 2500,
       fetchGit,
       includeRegistry: false,
     }),
     readUpdateInstallReceipt(),
   ]);
-  return { root, status, installReceipt };
+  return { root: resolvedRoot, status, installReceipt };
 }
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
@@ -622,12 +614,17 @@ function gitCommitsMatch(left: string, right: string): boolean {
 function resolveGitInstalledAtMs(
   git: NonNullable<UpdateCheckResult["git"]>,
   installReceipt: RestartSentinelPayload | null,
+  root: string | null,
 ): number | undefined {
   const receiptSha = installReceipt?.stats?.after?.sha;
+  const receiptRoot = installReceipt?.stats?.root;
   return installReceipt?.kind === "update" &&
     installReceipt.status === "ok" &&
     installReceipt.stats?.mode === "git" &&
     typeof receiptSha === "string" &&
+    typeof receiptRoot === "string" &&
+    root !== null &&
+    updateInstallRootsMatch(root, receiptRoot) &&
     git.sha &&
     gitCommitsMatch(receiptSha, git.sha)
     ? installReceipt.ts
@@ -637,12 +634,13 @@ function resolveGitInstalledAtMs(
 function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: RestartSentinelPayload | null,
+  root: string | null,
 ): GitScheduleStatus | undefined {
   if (update.installKind !== "git") {
     return undefined;
   }
   const git = update.git;
-  const installedAtMs = git ? resolveGitInstalledAtMs(git, installReceipt) : undefined;
+  const installedAtMs = git ? resolveGitInstalledAtMs(git, installReceipt, root) : undefined;
   const metadata = git
     ? {
         ...(git.sha ? { currentSha: git.sha } : {}),
@@ -687,8 +685,9 @@ function withInstallStatus(
   update: UpdateCheckResult,
   includeGitStatus: boolean,
   installReceipt: RestartSentinelPayload | null,
+  root: string | null,
 ): UpdateScheduleState {
-  const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt) : undefined;
+  const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;
   return {
     ...schedule,
     install: {
@@ -704,12 +703,12 @@ export async function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<v
   if (channel !== "dev") {
     return;
   }
-  const { status, installReceipt } = await resolveStartupInstallStatus(true);
+  const { root, status, installReceipt } = await resolveStartupInstallStatus(true);
   const current =
     updateScheduleCache?.channel === channel
       ? updateScheduleCache
       : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
-  setUpdateScheduleCache({ next: withInstallStatus(current, status, true, installReceipt) });
+  setUpdateScheduleCache({ next: withInstallStatus(current, status, true, installReceipt, root) });
 }
 
 async function resolveDevGitCommits(params: {
@@ -971,6 +970,7 @@ export async function runGatewayUpdateCheck(params: {
         installStatus.status,
         configuredChannel === "dev",
         installStatus.installReceipt,
+        installStatus.root,
       ),
       onUpdateScheduleChange: params.onUpdateScheduleChange,
     });
@@ -1062,6 +1062,7 @@ export async function runGatewayUpdateCheck(params: {
       status,
       isDevGit,
       installReceipt,
+      root,
     ),
     onUpdateScheduleChange: params.onUpdateScheduleChange,
   });
