@@ -168,6 +168,7 @@ describe("memory manager configured runtime primary provider recovery", () => {
     vi.useRealTimers();
     previousRegistry = getActivePluginRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    // openclaw-temp-dir: allow extension tests cannot import root test helpers; afterEach removes it.
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-runtime-recovery-"));
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
     const memoryDir = path.join(fixtureRoot, "workspace", "memory");
