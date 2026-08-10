@@ -59,8 +59,12 @@ type TerminalExitInfo = {
 
 type SessionSink = {
   onData: (data: string) => void;
-  /** Clears emulator state before replaying the authoritative ring snapshot. */
-  onReplay?: (data: string, newlyObservedFrom: number) => void;
+  /** Replays a ring snapshot into a fresh sink or replaces a gapped live sink. */
+  onReplay?: (
+    data: string,
+    newlyObservedFrom: number,
+    mode: "initial" | "recovery",
+  ) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
 
@@ -265,7 +269,7 @@ export class TerminalConnection {
     this.lastTerminalActivityAtMs = Date.now();
     if (replay !== undefined) {
       if (sink.onReplay) {
-        sink.onReplay(replay, replay.length);
+        void sink.onReplay(replay, replay.length, "initial");
       } else {
         sink.onData(replay);
       }
@@ -326,7 +330,7 @@ export class TerminalConnection {
     stream.recovering = true;
     void this.client
       .request<TerminalAttachResult>("terminal.attach", { sessionId })
-      .then((result) => {
+      .then(async (result) => {
         if (this.streams.get(sessionId) !== stream) {
           return;
         }
@@ -361,7 +365,7 @@ export class TerminalConnection {
           typeof previouslyObservedThrough === "number"
             ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
             : 0;
-        stream.sink.onReplay(result.buffer, newlyObservedFrom);
+        await stream.sink.onReplay(result.buffer, newlyObservedFrom, "recovery");
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })
