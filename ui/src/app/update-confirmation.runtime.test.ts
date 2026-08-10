@@ -4,6 +4,29 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
+
+/** Drives the dialog the way the shell does: one live lifecycle stream. */
+function createProgressStream() {
+  let emit: ((progress: UpdateProgress) => void) | null = null;
+  let stopped = false;
+  return {
+    get stopped() {
+      return stopped;
+    },
+    watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
+      emit = listener;
+      listener({ busy: false, connected: true, failure: null });
+      return () => {
+        stopped = true;
+      };
+    },
+    async push(progress: UpdateProgress) {
+      emit?.(progress);
+      await Promise.resolve();
+    },
+  };
+}
 
 const UPDATE_AVAILABLE: UpdateAvailable = {
   channel: "stable",
@@ -39,10 +62,14 @@ function startUpdate(
     updateAvailable?: UpdateAvailable | null;
     updateSchedule?: UpdateScheduleState | null;
     viaNativeApp?: boolean;
+    watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   } = {},
 ) {
   const startGatewayUpdate = vi.fn();
   const settled = confirmAndStartUpdateRuntime({
+    ...(overrides.watchUpdateProgress
+      ? { watchUpdateProgress: overrides.watchUpdateProgress }
+      : {}),
     startGatewayUpdate: overrides.startGatewayUpdate ?? startGatewayUpdate,
     updateAvailable:
       overrides.updateAvailable === undefined ? UPDATE_AVAILABLE : overrides.updateAvailable,
@@ -135,4 +162,69 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   findButton("Update and restart").click();
   await first.settled;
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
+});
+
+it("keeps the dialog open and narrates the install, the restart, and the failure", async () => {
+  const stream = createProgressStream();
+  const { settled, startGatewayUpdate } = startUpdate({
+    watchUpdateProgress: stream.watchUpdateProgress,
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+
+  findButton("Update and restart").click();
+  await Promise.resolve();
+  expect(startGatewayUpdate).toHaveBeenCalledOnce();
+  const updating = findButton("Updating…");
+  expect(updating.disabled).toBe(true);
+  expect(modal.textContent).toContain("Installing the update on the Gateway");
+
+  // The Gateway goes away mid-install; the dialog is mounted outside the shell
+  // precisely so it can keep reporting through the disconnect.
+  await stream.push({ busy: true, connected: false, failure: null });
+  expect(modal.textContent).toContain("The Gateway is restarting");
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+
+  await stream.push({
+    busy: false,
+    connected: true,
+    failure: "The update failed at install: ENOSPC: no space left on device, write.",
+  });
+  expect(modal.textContent).toContain("ENOSPC: no space left on device");
+  findButton("Close").click();
+  await settled;
+  expect(stream.stopped).toBe(true);
+});
+
+it("closes itself once a watched update finishes without a failure", async () => {
+  const stream = createProgressStream();
+  const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+  await getRenderedModalDialog(document.body);
+
+  findButton("Update and restart").click();
+  await Promise.resolve();
+  await stream.push({ busy: true, connected: true, failure: null });
+  await stream.push({ busy: false, connected: true, failure: null });
+
+  await settled;
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+});
+
+it("reports a request the Gateway never accepted instead of spinning forever", async () => {
+  // Auto-advancing keeps the modal's own animation frames running while the
+  // grace deadline is fast-forwarded.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stream = createProgressStream();
+    const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+    const { modal } = await getRenderedModalDialog(document.body);
+
+    findButton("Update and restart").click();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(modal.textContent).toContain("The update request went unanswered");
+    findButton("Close").click();
+    await settled;
+  } finally {
+    vi.useRealTimers();
+  }
 });

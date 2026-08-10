@@ -6,10 +6,11 @@ import {
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
-import { confirmAndStartUpdate } from "../app/update-confirmation.ts";
+import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  type ApplicationStatusBanner,
 } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -62,6 +63,10 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
   @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
   @property({ attribute: false }) updateBusy = false;
+  @property({ attribute: false }) statusBanner: ApplicationStatusBanner | null = null;
+  @property({ attribute: false }) watchUpdateProgress:
+    | ((listener: (progress: UpdateProgress) => void) => () => void)
+    | undefined = undefined;
   @property({ attribute: false }) canUpdate = false;
   @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
@@ -130,12 +135,27 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
   }
 
+  private renderStatus() {
+    const statusBanner = this.statusBanner;
+    // The Gateway recorded this outcome; unlike the client's own update
+    // metadata it stays true even when this client is stale.
+    return statusBanner
+      ? html`<div
+          class="sidebar-update-card__status sidebar-update-card__status--${statusBanner.tone}"
+          role="alert"
+        >
+          ${statusBanner.text}
+        </div>`
+      : nothing;
+  }
+
   override render() {
     // A stale client cannot trust its own update metadata, so refresh takes precedence
     // over any available update it may still report.
     if (this.refreshRequired) {
       return html`
         <div class="sidebar-update-card" role="status" aria-live="polite">
+          ${this.renderStatus()}
           <button class="sidebar-update-card__action" type="button" @click=${this.onRefresh}>
             <span class="sidebar-update-card__icon" aria-hidden="true">${icons.refresh}</span>
             <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
@@ -159,9 +179,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // A running update outranks availability: the gateway drops its update
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
+    const statusBanner = this.statusBanner;
     if (
       !campaign &&
       !busy &&
+      !statusBanner &&
       (!update ||
         (!hasVersionUpdate && !hasGitUpdate) ||
         this.dismissedUpdateKey === updateKey(update) ||
@@ -196,62 +218,71 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       !holdActive &&
       this.heldUpdateCampaignId !== campaign.id,
     );
+    // An outcome with nothing left to act on is the whole card: re-offering an
+    // update the operator just ran would bury the reason it failed.
+    const actionable = Boolean(campaign || busy || (update && (hasVersionUpdate || hasGitUpdate)));
     return html`
       <div
         class="sidebar-update-card"
         role=${campaign ? nothing : "status"}
         aria-live=${campaign ? nothing : "polite"}
       >
-        <div class="sidebar-update-card__actions">
-          <button
-            class="sidebar-update-card__action ${campaign
-              ? "sidebar-update-card__action--undismissable"
-              : ""} ${busy ? "sidebar-update-card__action--busy" : ""}"
-            type="button"
-            title=${this.canUpdate ? nothing : t("updates.adminRequired")}
-            ?disabled=${busy || !this.canUpdate}
-            @click=${() => {
-              if (busy || !this.canUpdate) {
-                return;
-              }
-              void confirmAndStartUpdate({
-                startGatewayUpdate: () => this.onUpdate(),
-                updateAvailable: this.updateAvailable,
-                updateSchedule: this.updateSchedule,
-                // Read the bridge at click time: a Mac app that installed it
-                // after the last availability event still owns this update.
-                viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
-              });
-            }}
-          >
-            <span class="sidebar-update-card__icon" aria-hidden="true"
-              >${busy ? icons.refresh : icons.download}</span
-            >
-            <span
-              class="sidebar-update-card__text"
-              role=${countdownActive ? "timer" : nothing}
-              aria-live=${countdownActive ? "off" : nothing}
-              >${text}</span
-            >
-          </button>
-          ${showHold && campaign
-            ? html`
-                <button
-                  class="sidebar-update-card__hold"
-                  type="button"
-                  ?disabled=${this.holdingCampaignId === campaign.id}
-                  @click=${async () => {
-                    this.holdingCampaignId = campaign.id;
-                    await this.onHoldUpdate();
-                    this.holdingCampaignId = null;
-                  }}
+        ${this.renderStatus()}
+        ${actionable
+          ? html`<div class="sidebar-update-card__actions">
+              <button
+                class="sidebar-update-card__action ${campaign
+                  ? "sidebar-update-card__action--undismissable"
+                  : ""} ${busy ? "sidebar-update-card__action--busy" : ""}"
+                type="button"
+                title=${this.canUpdate ? nothing : t("updates.adminRequired")}
+                ?disabled=${busy || !this.canUpdate}
+                @click=${() => {
+                  if (busy || !this.canUpdate) {
+                    return;
+                  }
+                  void confirmAndStartUpdate({
+                    startGatewayUpdate: () => this.onUpdate(),
+                    ...(this.watchUpdateProgress
+                      ? { watchUpdateProgress: this.watchUpdateProgress }
+                      : {}),
+                    updateAvailable: this.updateAvailable,
+                    updateSchedule: this.updateSchedule,
+                    // Read the bridge at click time: a Mac app that installed it
+                    // after the last availability event still owns this update.
+                    viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
+                  });
+                }}
+              >
+                <span class="sidebar-update-card__icon" aria-hidden="true"
+                  >${busy ? icons.refresh : icons.download}</span
                 >
-                  ${t("updates.holdOneHour")}
-                </button>
-              `
-            : nothing}
-        </div>
-        ${campaign || busy || !update
+                <span
+                  class="sidebar-update-card__text"
+                  role=${countdownActive ? "timer" : nothing}
+                  aria-live=${countdownActive ? "off" : nothing}
+                  >${text}</span
+                >
+              </button>
+              ${showHold && campaign
+                ? html`
+                    <button
+                      class="sidebar-update-card__hold"
+                      type="button"
+                      ?disabled=${this.holdingCampaignId === campaign.id}
+                      @click=${async () => {
+                        this.holdingCampaignId = campaign.id;
+                        await this.onHoldUpdate();
+                        this.holdingCampaignId = null;
+                      }}
+                    >
+                      ${t("updates.holdOneHour")}
+                    </button>
+                  `
+                : nothing}
+            </div>`
+          : nothing}
+        ${campaign || busy || !update || statusBanner
           ? nothing
           : html`
               <button

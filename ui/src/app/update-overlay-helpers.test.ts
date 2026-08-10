@@ -10,10 +10,9 @@ import type {
 import {
   createUpdateVerificationController,
   formatUpdateCampaignLabel,
-  readUpdateAvailable,
-  readUpdateSchedule,
   resolveUpdateStatusBanner,
 } from "./update-overlay-helpers.ts";
+import { readUpdateAvailable, readUpdateSchedule } from "./update-schedule-dto.ts";
 
 const translations: Record<string, string> = {
   "updates.status": "Update {status}: {reason}. {guidance}",

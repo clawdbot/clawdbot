@@ -104,23 +104,22 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "1-confirm-dialog.png") });
           await page.getByRole("button", { name: "Update and restart", exact: true }).click();
 
-          // Accepted, still installing: the card stops offering the update and
-          // the callout explains the wait that follows.
-          const updating = page.getByRole("button", { name: /Updating Gateway/ });
+          // The dialog is the primary surface: it stays open and reports the
+          // install rather than closing onto a page with nothing to say.
+          const updating = page.getByRole("button", { name: "Updating…", exact: true });
           await updating.waitFor();
           expect(await updating.isEnabled()).toBe(false);
-          await page
-            .getByText(
-              "Updating the Gateway. It restarts when the install finishes, then this page reconnects on its own.",
-              { exact: true },
-            )
-            .waitFor();
-          expect(await page.getByText("246 commits behind").count()).toBe(0);
+          await page.getByText("Installing the update on the Gateway", { exact: false }).waitFor();
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
-          await page.screenshot({ path: path.join(artifactDir, "2-updating.png") });
+          await page.screenshot({ path: path.join(artifactDir, "2-installing.png") });
 
           await gateway.resolveDeferred("update.run", HANDOFF_STARTED_RESPONSE);
           await gateway.closeLatest(1012, "managed update handoff");
+
+          // The dialog lives on document.body, outside the shell, so losing the
+          // Gateway cannot unmount the only surface still reporting.
+          await page.getByText("The Gateway is restarting", { exact: false }).waitFor();
+          await page.screenshot({ path: path.join(artifactDir, "3-restarting.png") });
 
           // The replacement Gateway reports the installed revision, so the
           // operator gets a result instead of a silently reverted banner. The
@@ -129,7 +128,7 @@ suite.define(() => {
           await page
             .getByText("Gateway updated · now on 9f3c21a.", { exact: true })
             .waitFor({ timeout: 20_000 });
-          await page.screenshot({ path: path.join(artifactDir, "3-success-toast.png") });
+          await page.screenshot({ path: path.join(artifactDir, "4-success-toast.png") });
           expect(pageErrors).toEqual([]);
         },
       );
@@ -193,16 +192,28 @@ suite.define(() => {
 
           await page.getByRole("button", { name: /246 commits behind/ }).click();
           await page.getByRole("button", { name: "Update and restart", exact: true }).click();
-          await page.getByRole("button", { name: /Updating Gateway/ }).waitFor();
+          await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
           await gateway.closeLatest(1012, "managed update handoff");
 
+          // The recorded cause lands in the dialog the operator is still watching.
           await page
+            .locator("openclaw-modal-dialog")
             .getByText(
               "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry.",
               { exact: true },
             )
             .waitFor({ timeout: 20_000 });
-          await page.screenshot({ path: path.join(artifactDir, "4-failure-cause.png") });
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(artifactDir, "5-failure-in-dialog.png") });
+
+          // Closing it leaves the same outcome beside the control that started
+          // the update, for anyone who dismissed the dialog.
+          await page.getByRole("button", { name: "Close", exact: true }).click();
+          await page
+            .locator(".sidebar-update-card__status")
+            .filter({ hasText: "ENOSPC" })
+            .waitFor();
+          await page.screenshot({ path: path.join(artifactDir, "6-failure-in-sidebar.png") });
           expect(pageErrors).toEqual([]);
         },
       );

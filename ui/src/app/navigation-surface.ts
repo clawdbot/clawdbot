@@ -19,6 +19,7 @@ export function renderFloatingUpdateCard(params: {
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
   heldUpdateCampaignId?: string | null;
   updateBusy: boolean;
+  statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
   canUpdate?: boolean;
   canHoldUpdate?: boolean;
   onUpdate: () => void;
@@ -37,6 +38,7 @@ export function renderFloatingUpdateCard(params: {
     .updateSchedule=${params.updateSchedule ?? null}
     .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
     .updateBusy=${params.updateBusy}
+    .statusBanner=${params.statusBanner ?? null}
     .canUpdate=${params.canUpdate ?? false}
     .canHoldUpdate=${params.canHoldUpdate ?? false}
     .onUpdate=${params.onUpdate}

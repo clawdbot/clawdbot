@@ -536,6 +536,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .updateSchedule=${this.updateSchedule}
               .heldUpdateCampaignId=${this.heldUpdateCampaignId}
               .updateBusy=${this.updateBusy}
+              .statusBanner=${this.updateStatusBanner}
+              .watchUpdateProgress=${this.watchUpdateProgress}
               .canUpdate=${this.canUpdate}
               .canHoldUpdate=${this.canHoldUpdate}
               .onUpdate=${this.onUpdate}

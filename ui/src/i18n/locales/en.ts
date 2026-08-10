@@ -392,6 +392,12 @@ export const en: TranslationMap = {
       campaignTarget: "{status} · {target}",
       updating: "Updating Gateway…",
     },
+    dialog: {
+      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
+      notStarted:
+        "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
+    },
     channel: {
       stable: "Stable",
       beta: "Beta",
@@ -489,8 +495,6 @@ export const en: TranslationMap = {
       default: "See the gateway logs for the exact failure and retry once the cause is fixed.",
     },
     failedAtStep: "The update failed at {step}: {cause}.",
-    inProgress:
-      "Updating the Gateway. It restarts when the install finishes, then this page reconnects on its own.",
     succeededVersion: "Gateway updated to v{version}.",
     succeededCommit: "Gateway updated · now on {sha}.",
     succeeded: "Gateway updated and restarted.",

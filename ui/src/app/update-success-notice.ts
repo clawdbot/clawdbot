@@ -2,6 +2,7 @@
 // (`reloadControlUiIfStale`), which destroys any in-memory outcome. Record the
 // result before that navigation so the reloaded document still tells the
 // operator the update finished instead of coming back silently.
+import { reloadControlUiIfStale } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { showToast } from "../lib/toast.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
@@ -21,24 +22,32 @@ function formatUpdateSuccess(identity: UpdateInstallIdentity): string {
   return version ? t("updates.succeededVersion", { version }) : t("updates.succeeded");
 }
 
-export function recordUpdateSuccess(identity: UpdateInstallIdentity): void {
+function takeRecordedUpdateSuccess(): string | null {
+  try {
+    const storage = getSafeSessionStorage();
+    const raw = storage?.getItem(UPDATE_SUCCESS_NOTICE_KEY) ?? null;
+    storage?.removeItem(UPDATE_SUCCESS_NOTICE_KEY);
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/** Records the outcome, then presents it here unless a reload will present it. */
+export function announceVerifiedUpdateInstall(identity: UpdateInstallIdentity): void {
   try {
     getSafeSessionStorage()?.setItem(UPDATE_SUCCESS_NOTICE_KEY, JSON.stringify(identity));
   } catch {
     // Storage is best effort; a document that stays put still announces below.
   }
+  if (!reloadControlUiIfStale(identity)) {
+    announceRecordedUpdateSuccess();
+  }
 }
 
 /** Presents a recorded install outcome once, then forgets it. */
 export function announceRecordedUpdateSuccess(): void {
-  let raw: string | null = null;
-  try {
-    const storage = getSafeSessionStorage();
-    raw = storage?.getItem(UPDATE_SUCCESS_NOTICE_KEY) ?? null;
-    storage?.removeItem(UPDATE_SUCCESS_NOTICE_KEY);
-  } catch {
-    return;
-  }
+  const raw = takeRecordedUpdateSuccess();
   if (!raw) {
     return;
   }

@@ -38,6 +38,7 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
 } from "./settings.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
@@ -125,6 +126,26 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
+  // The update dialog outlives this render and the connection, so it reads live
+  // snapshots rather than the values captured here.
+  const watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
   const terminalAvailable = isTerminalAvailable(
     gatewaySnapshot,
     context.config.current.terminalEnabled ?? false,
@@ -236,6 +257,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
       heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
       updateBusy,
+      updateStatusBanner: overlaySnapshot.updateStatusBanner,
+      watchUpdateProgress,
       canUpdate,
       canHoldUpdate,
       onUpdate: () => void context.overlays.runUpdate(),
@@ -271,6 +294,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateBusy,
+        updateStatusBanner: overlaySnapshot.updateStatusBanner,
+        watchUpdateProgress,
         canUpdate,
         canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
@@ -452,11 +477,6 @@ export function renderApplicationShell(host: ShellViewHost) {
                 }}
               ></openclaw-update-banner>`
           : nothing}
-        <openclaw-update-banner
-          .props=${{
-            statusBanner: overlaySnapshot.updateStatusBanner,
-          }}
-        ></openclaw-update-banner>
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
@@ -464,6 +484,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           updateSchedule: overlaySnapshot.updateSchedule,
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateBusy,
+          statusBanner: overlaySnapshot.updateStatusBanner,
           canUpdate,
           canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),

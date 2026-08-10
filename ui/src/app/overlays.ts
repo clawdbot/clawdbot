@@ -4,7 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
-import { controlUiVersionDiffersFrom, reloadControlUiIfStale } from "../build-info.ts";
+import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -40,26 +40,30 @@ import {
   readOverlayOperatorAccessTransition,
 } from "./overlays-access.ts";
 import {
+  classifyUpdateRunResponse,
   createPendingUpdateReconciliation,
   createUpdateCampaignStatusPoller,
   createUpdateStatusRefresher,
   createUpdateVerificationController,
   projectUpdateStatusResponse,
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
   resolveExpectedUpdateSha,
   resolveUnknownUpdateOutcomeBanner,
-  resolveUpdateInProgressBanner,
   resolveUpdateStatusBanner,
-  UPDATE_HANDOFF_STARTED_REASON,
   type ApplicationStatusBanner,
   type PendingUpdateReconciliation,
   type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
-import { announceRecordedUpdateSuccess, recordUpdateSuccess } from "./update-success-notice.ts";
+import {
+  readUpdateAvailable,
+  readUpdateAvailableValue,
+  readUpdateSchedule,
+  readUpdateScheduleValue,
+} from "./update-schedule-dto.ts";
+import {
+  announceRecordedUpdateSuccess,
+  announceVerifiedUpdateInstall,
+} from "./update-success-notice.ts";
 
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -238,28 +242,15 @@ export function createApplicationOverlays(
     getHello: () => gateway.snapshot.hello,
     publish,
     publishBanner: publishUpdateBanner,
-    // Record before reloading: the reload started here throws this document
-    // away, and the operator must still learn the update finished.
-    onVerifiedInstall: (identity) => {
-      recordUpdateSuccess(identity);
-      if (!reloadControlUiIfStale(identity)) {
-        announceRecordedUpdateSuccess();
-      }
-    },
+    onVerifiedInstall: announceVerifiedUpdateInstall,
   });
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
-    const projected = projectUpdateStatusResponse(response, {
-      updateStatusBanner: snapshot.updateStatusBanner,
-      heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
-    });
     snapshot = {
       ...snapshot,
-      ...projected,
-      // A status poll clears the banner for an in-flight handoff sentinel. The
-      // pending reconciliation, not the sentinel, owns "still updating", so keep
-      // narrating instead of going quiet mid-install.
-      updateStatusBanner:
-        projected.updateStatusBanner ?? (pendingUpdate ? resolveUpdateInProgressBanner() : null),
+      ...projectUpdateStatusResponse(response, {
+        updateStatusBanner: snapshot.updateStatusBanner,
+        heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
+      }),
     };
     publish();
   };
@@ -479,14 +470,7 @@ export function createApplicationOverlays(
         return;
       }
       const generation = ++updateRunGeneration;
-      // The install outlives this RPC and the connection that carries it, so the
-      // banner — the only update surface that survives the restart — narrates the
-      // whole wait until an outcome replaces it.
-      snapshot = {
-        ...snapshot,
-        updateRunning: true,
-        updateStatusBanner: resolveUpdateInProgressBanner(),
-      };
+      snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
       publish();
       try {
         // updateRunning above suspends NEW config writes (bootstrap syncs it
@@ -515,42 +499,22 @@ export function createApplicationOverlays(
         ) {
           return;
         }
-        const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
-        const expectedVersion =
-          response.result?.after?.version?.trim() || pendingUpdate.expectedVersion;
-        const expectedSha = response.result?.after?.sha?.trim() || pendingUpdate.expectedSha;
-        if (
-          response.ok === true &&
-          status === "skipped" &&
-          response.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
-          response.handoff?.status === "started"
-        ) {
-          pendingUpdate = { expectedVersion, expectedSha, kind: "handoff" };
-          return;
-        }
-        if (response.ok === true && status === "ok") {
-          pendingUpdate = { expectedVersion, expectedSha, kind: "restart" };
-          if (response.restart?.coalesced === true) {
-            snapshot = {
-              ...snapshot,
-              updateStatusBanner: {
-                tone: "info",
-                text: t("updates.coalescedRestart"),
-              },
-            };
+        const accepted = classifyUpdateRunResponse(response, pendingUpdate);
+        if (accepted) {
+          pendingUpdate = accepted.pending;
+          if (accepted.banner) {
+            snapshot = { ...snapshot, updateStatusBanner: accepted.banner };
           }
           return;
         }
         pendingUpdate = null;
-        if (response.ok !== true || status !== "ok") {
-          snapshot = {
-            ...snapshot,
-            updateStatusBanner: resolveUpdateStatusBanner({
-              status,
-              reason: response.result?.reason,
-            }),
-          };
-        }
+        snapshot = {
+          ...snapshot,
+          updateStatusBanner: resolveUpdateStatusBanner({
+            status: response.result?.status ?? "error",
+            reason: response.result?.reason,
+          }),
+        };
       } catch (error) {
         if (
           disposed ||
