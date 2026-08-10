@@ -2,12 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import type {
-  CliOutput,
-  CliStreamingDelta,
-  CliTerminalFailure,
-  CliUsage,
-} from "./cli-output-contracts.js";
+import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
@@ -421,7 +416,6 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
   return false;
 }
 
-/** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
 /** Parses a single JSON payload emitted by a CLI backend. */
 export function parseCliJson(
   raw: string,
@@ -565,10 +559,7 @@ export function parseClaudeCliStreamingDelta(params: {
   backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
-  textSoFar: string;
-  sessionId?: string;
-  usage?: CliUsage;
-}): CliStreamingDelta | null {
+}): string | null {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
@@ -586,12 +577,7 @@ export function parseClaudeCliStreamingDelta(params: {
   if (!delta.text) {
     return null;
   }
-  return {
-    text: `${params.textSoFar}${delta.text}`,
-    delta: delta.text,
-    sessionId: params.sessionId,
-    usage: params.usage,
-  };
+  return delta.text;
 }
 
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";

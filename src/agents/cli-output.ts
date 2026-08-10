@@ -47,7 +47,6 @@ export function formatCliOutputError(
   ].join(" ");
 }
 
-/** Parses CLI output according to the backend output mode with text fallback. */
 /** Parses CLI backend output using the configured JSON/JSONL/plain-text mode. */
 export function parseCliOutput(params: {
   raw: string;
@@ -91,7 +90,6 @@ export function parseCliOutput(params: {
   );
 }
 
-/** Extracts the most specific structured CLI error message from mixed or JSON output. */
 /** Extracts a human-readable error message from mixed CLI stderr/stdout text. */
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = decodeCliRecords(raw);

@@ -50,10 +50,10 @@ import {
 } from "../cli-output-contracts.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+  CLI_STREAM_JSON_OUTPUT_LIMITS,
   createCliJsonlStreamingParser,
   frameBoundedCliJsonlChunk,
   normalizeClaudeCliStreamJsonRecord,
-  resolveCliStreamJsonOutputLimits,
 } from "../cli-output-stream.js";
 import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
@@ -1697,7 +1697,7 @@ function createTurn(params: {
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
     abortSignal: params.context.params.abortSignal,
-    outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
+    outputLimits: CLI_STREAM_JSON_OUTPUT_LIMITS,
     startedAtMs: Date.now(),
     rawLines: [],
     noOutputTimer: null,

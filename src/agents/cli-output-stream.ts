@@ -2,14 +2,13 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ReasoningTagTextDelta } from "../../packages/markdown-core/src/reasoning-tags.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
-  CliBackendConfig,
   CliBackendParseJsonlEvent,
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
 import type {
+  CliJsonlStreamingParserOptions,
   CliOutput,
   CliStreamingDelta,
   CliStreamJsonOutputLimits,
@@ -20,6 +19,7 @@ import type {
   CliUsage,
 } from "./cli-output-contracts.js";
 import {
+  type CliEventProjectionState,
   createLeadingTaggedReasoningRouter,
   createThinkingTracker,
   createToolUseTracker,
@@ -30,6 +30,8 @@ import {
   emitToolStartOnce,
   isClaudeToolUseBlockType,
   partitionLeadingTaggedReasoning,
+  projectCliBackendEvent,
+  projectCliTaggedReasoning,
 } from "./cli-output-events.js";
 import {
   decodeCliRecords,
@@ -54,17 +56,11 @@ const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 
-/** Incremental assistant text emitted while parsing a streaming CLI response. */
-
-export function resolveCliStreamJsonOutputLimits(
-  _backend: CliBackendConfig,
-): CliStreamJsonOutputLimits {
-  return {
-    maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-    maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-    maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-  };
-}
+export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
+  maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+  maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+  maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
+} satisfies CliStreamJsonOutputLimits);
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
 export function frameBoundedCliJsonlChunk(
@@ -143,22 +139,7 @@ function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: n
   return `CLI JSONL output exceeded ${limit} characters; refusing to parse output.`;
 }
 
-export function createCliJsonlStreamingParser(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parseJsonlEvent?: CliBackendParseJsonlEvent;
-  onAssistantDelta: (delta: CliStreamingDelta) => void;
-  onThinkingDelta?: (delta: CliThinkingDelta) => void;
-  onThinkingProgress?: (progress: CliThinkingProgress) => void;
-  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
-  onToolResult?: (delta: CliToolResultDelta) => void;
-  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
-  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
-  onCommentaryText?: (text: string) => void;
-  onSessionId?: (sessionId: string) => void;
-  onAssistantMessage?: (message: unknown) => void;
-  onUsage?: (usage: CliUsage, terminal: boolean) => void;
-}) {
+export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOptions) {
   const lineBuffer = { pending: "" };
   let assistantText = "";
   let customThinkingText = "";
@@ -184,7 +165,7 @@ export function createCliJsonlStreamingParser(params: {
   let sawCustomJsonlEvent = false;
   let sawGeminiStructuredOutput = false;
   const toolTracker = createToolUseTracker();
-  const outputLimits = resolveCliStreamJsonOutputLimits(params.backend);
+  const outputLimits = CLI_STREAM_JSON_OUTPUT_LIMITS;
   // Classification is keyed on consumer presence so reclassified pre-tool text
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
@@ -254,30 +235,16 @@ export function createCliJsonlStreamingParser(params: {
     params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
   };
 
-  const emitTaggedReasoning = (delta: string) => {
-    if (!delta) {
-      return;
-    }
-    currentTaggedReasoningText = `${currentTaggedReasoningText}${delta}`;
-    // Native thinking is the provider-authored shape and remains authoritative
-    // when a text block mirrors it with tags.
-    if (!thinkingTracker.emittedText) {
-      params.onThinkingDelta?.({
-        text: currentTaggedReasoningText,
-        delta,
-        isReasoningSnapshot: true,
-      });
-    }
-  };
-
-  const routeTaggedReasoningDeltas = (deltas: readonly ReasoningTagTextDelta[]) => {
-    for (const delta of deltas) {
-      if (delta.kind === "thinking") {
-        emitTaggedReasoning(delta.text);
-      } else {
-        emitClaudeVisibleText(delta.text);
-      }
-    }
+  const routeTaggedReasoningDeltas = (
+    deltas: Parameters<typeof projectCliTaggedReasoning>[0]["deltas"],
+  ) => {
+    currentTaggedReasoningText = projectCliTaggedReasoning({
+      deltas,
+      currentText: currentTaggedReasoningText,
+      hasNativeThinking: Boolean(thinkingTracker.emittedText),
+      onThinkingDelta: params.onThinkingDelta,
+      onVisibleText: emitClaudeVisibleText,
+    });
   };
 
   const finishTaggedReasoningMessage = () => {
@@ -302,87 +269,22 @@ export function createCliJsonlStreamingParser(params: {
   };
 
   const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
-    if (output?.errorText && event.kind !== "sessionId" && event.kind !== "result") {
-      return;
-    }
-    sawCustomJsonlEvent = true;
-    if (event.kind === "sessionId") {
-      updateSessionId(event.sessionId);
-      if (output) {
-        output = { ...output, sessionId };
-      }
-      return;
-    }
-    if (event.kind === "text") {
-      if (!event.text) {
-        return;
-      }
-      assistantText = `${assistantText}${event.text}`;
-      params.onAssistantDelta({
-        text: assistantText,
-        delta: event.text,
-        sessionId,
-        usage,
-      });
-      return;
-    }
-    if (event.kind === "thinking") {
-      if (!event.text || !params.onThinkingDelta) {
-        return;
-      }
-      customThinkingText = `${customThinkingText}${event.text}`;
-      params.onThinkingDelta({
-        text: customThinkingText,
-        delta: event.text,
-        isReasoningSnapshot: true,
-      });
-      return;
-    }
-    if (event.kind === "toolStart") {
-      emitToolStartOnce(
-        toolTracker,
-        event.toolCallId,
-        event.name,
-        "tool_use",
-        event.args ?? {},
-        params.onDisplayToolUseStart ?? params.onToolUseStart,
-      );
-      return;
-    }
-    if (event.kind === "toolResult") {
-      if (event.name) {
-        toolTracker.nameById.set(event.toolCallId, event.name);
-      }
-      emitToolResultOnce(
-        toolTracker,
-        event.toolCallId,
-        event.isError === true,
-        event.result,
-        params.onDisplayToolResult ?? params.onToolResult,
-      );
-      return;
-    }
-    updateSessionId(event.sessionId);
-    if (event.usage) {
-      usage = event.usage;
-      params.onUsage?.(event.usage, true);
-    }
-    const existingErrorText = output?.errorText;
-    const eventText = event.text?.trim() ?? "";
-    const existingText = output?.text.trim() ?? "";
-    const streamedText = assistantText.trim();
-    const delegatedText = texts.join("\n").trim();
-    const resultText = existingErrorText
-      ? existingText || delegatedText || streamedText
-      : eventText || existingText || delegatedText || streamedText;
-    const errorText = existingErrorText || event.errorText;
-    output = {
-      ...output,
-      text: resultText,
+    const state: CliEventProjectionState = {
+      assistantText,
+      customThinkingText,
       sessionId,
       usage,
-      ...(errorText ? { errorText } : {}),
+      output,
+      sawCustomJsonlEvent,
     };
+    projectCliBackendEvent({
+      ...params,
+      event,
+      state,
+      texts,
+      toolTracker,
+    });
+    ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
   };
 
   const accountClaudeJsonlLine = (lineChars: number): boolean => {
@@ -506,8 +408,13 @@ export function createCliJsonlStreamingParser(params: {
             !thinkingTracker.emittedText &&
             taggedResult.reasoningText !== currentTaggedReasoningText
           ) {
-            currentTaggedReasoningText = "";
-            emitTaggedReasoning(taggedResult.reasoningText);
+            currentTaggedReasoningText = projectCliTaggedReasoning({
+              deltas: [{ kind: "thinking", text: taggedResult.reasoningText }],
+              currentText: "",
+              hasNativeThinking: false,
+              onThinkingDelta: params.onThinkingDelta,
+              onVisibleText: emitClaudeVisibleText,
+            });
           }
           result = { ...result, text: taggedResult.visibleText.trim() };
         }
@@ -628,9 +535,6 @@ export function createCliJsonlStreamingParser(params: {
       backend: params.backend,
       providerId: params.providerId,
       parsed,
-      textSoFar: assistantText,
-      sessionId,
-      usage,
     });
     if (!delta) {
       if (
@@ -663,10 +567,10 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
     if (claudeStreamJson) {
-      routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta.delta));
+      routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta));
       return;
     }
-    emitClaudeVisibleText(delta.delta);
+    emitClaudeVisibleText(delta);
   };
 
   const handleJsonlLine = (rawLine: string) => {
@@ -793,6 +697,3 @@ export function createCliJsonlStreamingParser(params: {
     },
   };
 }
-
-/** Parses complete JSONL CLI output into the final assistant result and metadata. */
-/** Parses complete JSONL output from a CLI backend into normalized text and metadata. */

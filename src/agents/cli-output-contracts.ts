@@ -1,3 +1,4 @@
+import type { CliBackendConfig, CliBackendParseJsonlEvent } from "../plugins/cli-backend.types.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -95,4 +96,21 @@ export type CliToolResultDelta = {
   name: string;
   isError: boolean;
   result?: unknown;
+};
+
+export type CliJsonlStreamingParserOptions = {
+  backend: CliBackendConfig;
+  providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
+  onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
+  onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
+  onCommentaryText?: (text: string) => void;
+  onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
 };

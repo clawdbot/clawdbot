@@ -349,8 +349,6 @@ src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
-src/agents/cli-output.test.ts
-src/agents/cli-output.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner.ts

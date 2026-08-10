@@ -4,12 +4,15 @@ import {
   scanReasoningTags,
   type ReasoningTagTextDelta,
 } from "../../packages/markdown-core/src/reasoning-tags.js";
-import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
+import type { CliBackendConfig, CliBackendParsedJsonlEvent } from "../plugins/cli-backend.types.js";
 import type {
+  CliOutput,
+  CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
   CliToolResultDelta,
   CliToolUseStartDelta,
+  CliUsage,
 } from "./cli-output-contracts.js";
 import { isGeminiStreamJsonDialect, supportsCliJsonlToolEvents } from "./cli-output-records.js";
 
@@ -71,6 +74,146 @@ export function emitToolResultOnce(
     isError,
     result,
   });
+}
+
+export type CliEventProjectionState = {
+  assistantText: string;
+  customThinkingText: string;
+  sessionId?: string;
+  usage?: CliUsage;
+  output: CliOutput | null;
+  sawCustomJsonlEvent: boolean;
+};
+
+export function projectCliBackendEvent(params: {
+  event: CliBackendParsedJsonlEvent;
+  state: CliEventProjectionState;
+  texts: string[];
+  toolTracker: ToolUseTracker;
+  onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
+  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+  onSessionId?: (sessionId: string) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+}): void {
+  const { event, state } = params;
+  if (state.output?.errorText && event.kind !== "sessionId" && event.kind !== "result") {
+    return;
+  }
+  state.sawCustomJsonlEvent = true;
+  if (event.kind === "sessionId") {
+    const sessionId = event.sessionId.trim();
+    if (sessionId && sessionId !== state.sessionId) {
+      state.sessionId = sessionId;
+      params.onSessionId?.(sessionId);
+    }
+    if (state.output) {
+      state.output = { ...state.output, sessionId: state.sessionId };
+    }
+    return;
+  }
+  if (event.kind === "text") {
+    if (!event.text) {
+      return;
+    }
+    state.assistantText += event.text;
+    params.onAssistantDelta({
+      text: state.assistantText,
+      delta: event.text,
+      sessionId: state.sessionId,
+      usage: state.usage,
+    });
+    return;
+  }
+  if (event.kind === "thinking") {
+    if (!event.text || !params.onThinkingDelta) {
+      return;
+    }
+    state.customThinkingText += event.text;
+    params.onThinkingDelta({
+      text: state.customThinkingText,
+      delta: event.text,
+      isReasoningSnapshot: true,
+    });
+    return;
+  }
+  if (event.kind === "toolStart") {
+    emitToolStartOnce(
+      params.toolTracker,
+      event.toolCallId,
+      event.name,
+      "tool_use",
+      event.args ?? {},
+      params.onDisplayToolUseStart ?? params.onToolUseStart,
+    );
+    return;
+  }
+  if (event.kind === "toolResult") {
+    if (event.name) {
+      params.toolTracker.nameById.set(event.toolCallId, event.name);
+    }
+    emitToolResultOnce(
+      params.toolTracker,
+      event.toolCallId,
+      event.isError === true,
+      event.result,
+      params.onDisplayToolResult ?? params.onToolResult,
+    );
+    return;
+  }
+  const normalizedSessionId = event.sessionId?.trim();
+  if (normalizedSessionId && normalizedSessionId !== state.sessionId) {
+    state.sessionId = normalizedSessionId;
+    params.onSessionId?.(normalizedSessionId);
+  }
+  if (event.usage) {
+    state.usage = event.usage;
+    params.onUsage?.(event.usage, true);
+  }
+  const existingErrorText = state.output?.errorText;
+  const eventText = event.text?.trim() ?? "";
+  const existingText = state.output?.text.trim() ?? "";
+  const streamedText = state.assistantText.trim();
+  const delegatedText = params.texts.join("\n").trim();
+  const resultText = existingErrorText
+    ? existingText || delegatedText || streamedText
+    : eventText || existingText || delegatedText || streamedText;
+  const errorText = existingErrorText || event.errorText;
+  state.output = {
+    ...state.output,
+    text: resultText,
+    sessionId: state.sessionId,
+    usage: state.usage,
+    ...(errorText ? { errorText } : {}),
+  };
+}
+
+export function projectCliTaggedReasoning(params: {
+  deltas: readonly ReasoningTagTextDelta[];
+  currentText: string;
+  hasNativeThinking: boolean;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
+  onVisibleText: (text: string) => void;
+}): string {
+  let text = params.currentText;
+  for (const delta of params.deltas) {
+    if (delta.kind === "text") {
+      params.onVisibleText(delta.text);
+      continue;
+    }
+    text += delta.text;
+    if (!params.hasNativeThinking) {
+      params.onThinkingDelta?.({
+        text,
+        delta: delta.text,
+        isReasoningSnapshot: true,
+      });
+    }
+  }
+  return text;
 }
 
 export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
