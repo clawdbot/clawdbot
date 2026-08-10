@@ -43,6 +43,7 @@ const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
 const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
+const serviceEnabled = vi.fn();
 const serviceStop = vi.fn();
 const serviceRestart = vi.fn();
 const isDefaultInstallIdentity = vi.hoisted(() =>
@@ -380,6 +381,7 @@ vi.mock("../daemon/service.js", () => ({
   },
   resolveGatewayService: vi.fn(() => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+    isEnabled: (...args: unknown[]) => serviceEnabled(...args),
     readCommand: (...args: unknown[]) => serviceReadCommand(...args),
     readRuntime: (...args: unknown[]) => serviceReadRuntime(...args),
     stop: (...args: unknown[]) => serviceStop(...args),
@@ -1337,6 +1339,7 @@ describe("update-cli", () => {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     restartHealthTestControl.snapshot = undefined;
     vi.clearAllMocks();
+    serviceEnabled.mockResolvedValue(true);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
     restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
@@ -1729,7 +1732,7 @@ describe("update-cli", () => {
       },
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     pathExists.mockImplementation(
       async (candidate: string) =>
         entrypoints.includes(candidate) || candidate.endsWith("package.json"),
@@ -1747,6 +1750,7 @@ describe("update-cli", () => {
     );
 
     expect(serviceStop).not.toHaveBeenCalled();
+    expect(serviceEnabled).not.toHaveBeenCalled();
     expect(spawnCall()?.[2]?.env).toMatchObject({
       OPENCLAW_PROFILE: "personal",
       OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
@@ -4728,6 +4732,34 @@ describe("update-cli", () => {
     expect(packageInstallCallOrder).toBeLessThan(
       requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart call order"),
     );
+  });
+
+  it("leaves a disabled stopped LaunchAgent disabled when package replacement fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const tempDir = await createTrackedTempDir("openclaw-update-disabled-launchagent-failure-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    primeServiceCommand(["node", entryPath, "gateway", "run"]);
+    serviceLoaded.mockResolvedValue(true);
+    serviceEnabled.mockResolvedValue(false);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+        throw new Error("package replacement failed");
+      }
+      return commandResult();
+    });
+
+    try {
+      await expect(updateCommand({ yes: true })).rejects.toThrow("package replacement failed");
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(serviceEnabled).toHaveBeenCalledOnce();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {
