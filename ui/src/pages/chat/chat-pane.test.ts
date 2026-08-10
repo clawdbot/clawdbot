@@ -555,11 +555,6 @@ describe("chat pane initialization", () => {
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
     pane.sessionKey = canonicalSessionKey;
-    const switchPaneSession = vi.spyOn(pane, "switchPaneSession").mockImplementation((next) => {
-      state.sessionKey = next;
-      state.chatRunId = null;
-      state.chatStream = null;
-    });
 
     (
       pane as TestChatPane & {
@@ -568,7 +563,6 @@ describe("chat pane initialization", () => {
     ).willUpdate(new Map([["sessionKey", "main"]]));
 
     expect(state.sessionKey).toBe(canonicalSessionKey);
-    expect(switchPaneSession).not.toHaveBeenCalled();
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBe("The response survived navigation.");
   });

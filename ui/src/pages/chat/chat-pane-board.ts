@@ -351,7 +351,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     patch: Partial<BoardSessionView> & { face?: "chat" | "dashboard" },
   ): void {
     if (patch.face) {
-      this.onFaceChange?.(patch.face);
+      this.onFaceChange?.(this.paneId, this.sessionKey, patch.face);
     }
     const persistedPatch = { ...patch };
     delete persistedPatch.face;

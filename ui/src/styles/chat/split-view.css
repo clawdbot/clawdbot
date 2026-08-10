@@ -46,6 +46,27 @@ openclaw-chat-pane {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
+.chat-pane-cache {
+  display: grid;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-pane-cache__pane {
+  opacity: 0;
+  grid-area: 1 / 1;
+}
+
+.chat-pane-cache__pane--visible {
+  opacity: 1;
+  z-index: 1;
+}
+
+.chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {
+  display: none;
+}
+
 .chat-split-view__pane {
   flex: 1 1 0;
   min-width: 0;
@@ -55,6 +76,12 @@ openclaw-chat-pane {
 
 .chat-split-view--narrow .chat-split-view__cell {
   min-height: 0;
+}
+
+.chat-split-view--narrow .chat-split-view__cell--narrow-hidden,
+.chat-split-view--narrow .chat-split-view__column--narrow-hidden,
+.chat-split-view--narrow resizable-divider {
+  display: none;
 }
 
 /* Narrow mode shows only the active pane; a focus ring is pure noise there. */
