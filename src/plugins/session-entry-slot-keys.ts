@@ -166,13 +166,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingTranscriptRepair",
   "visibility",
 ] as const satisfies ReadonlyArray<
-  | keyof SessionEntry
-  | "__proto__"
-  | "constructor"
-  | "prototype"
-  | "icon"
-  | "sessionFile"
-  | "transcriptPath"
+  keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;
 
 type ReservedSessionEntrySlotKey = Extract<
@@ -189,6 +183,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
+  "icon",
   "channel",
   "origin",
   "route",
