@@ -2637,6 +2637,89 @@ describe("subagent registry lifecycle hardening", () => {
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
   });
 
+  it("suspends permanent delivery failure before stalled announce bookkeeping settles", async () => {
+    const persistOrThrow = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    let releaseAnnounce!: () => void;
+    const announcePending = new Promise<void>((resolve) => {
+      releaseAnnounce = resolve;
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error: "Requester agent completed without required message-tool delivery evidence.",
+          disposition: "permanent_failure",
+        });
+        await announcePending;
+        return false;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    try {
+      await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("suspended"));
+
+      expect(entry.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "permanent_failure",
+        suspendedReason: "permanent_failure",
+        lastError: "Requester agent completed without required message-tool delivery evidence.",
+        payload: {
+          requesterSessionKey: entry.requesterSessionKey,
+          childSessionKey: entry.childSessionKey,
+          childRunId: entry.runId,
+        },
+      });
+      expect(entry.cleanupHandled).toBe(false);
+      expect(entry.cleanupCompletedAt).toBeUndefined();
+      expect(persistOrThrow).toHaveBeenCalledWith(entry.runId);
+      expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+        runId: entry.runId,
+        deliveryStatus: "failed",
+      });
+      expect(persistOrThrow.mock.invocationCallOrder[0]).toBeLessThan(
+        taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mock.invocationCallOrder[0]!,
+      );
+      expectFields(
+        findCallArg(
+          taskExecutorMocks.completeTaskRunByRunId,
+          (arg) => arg.runId === entry.runId && arg.terminalOutcome === "blocked",
+        ),
+        {
+          runId: entry.runId,
+          terminalOutcome: "blocked",
+        },
+      );
+      const blockedTaskCall = taskExecutorMocks.completeTaskRunByRunId.mock.calls.findIndex(
+        ([arg]) =>
+          (arg as { runId?: string; terminalOutcome?: string } | undefined)?.runId ===
+            entry.runId &&
+          (arg as { terminalOutcome?: string } | undefined)?.terminalOutcome === "blocked",
+      );
+      expect(blockedTaskCall).toBeGreaterThanOrEqual(0);
+      expect(persistOrThrow.mock.invocationCallOrder[0]).toBeLessThan(
+        taskExecutorMocks.completeTaskRunByRunId.mock.invocationCallOrder[blockedTaskCall]!,
+      );
+    } finally {
+      releaseAnnounce();
+    }
+
+    await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+  });
+
   it("keeps a late superseded-delivery retirement root-admitted", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true, generation: 1 });
     const runs = new Map([[entry.runId, entry]]);
@@ -3325,6 +3408,38 @@ describe("subagent registry lifecycle hardening", () => {
         "Required completion delivery failed before reaching the requester: gateway request timeout for agent.",
     });
     expect(persistOrThrow).toHaveBeenCalled();
+  });
+
+  it("does not project a suspended task before the registry latch is durable", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      delivery: { status: "pending", lastError: "required delivery failed" },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+    const original = structuredClone(entry);
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow: vi.fn(() => {
+        throw new Error("registry latch failed");
+      }),
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await expect(
+      controller.finalizeResumedAnnounceGiveUp({
+        runId: entry.runId,
+        entry,
+        reason: "permanent_failure",
+      }),
+    ).rejects.toThrow("registry latch failed");
+
+    expect(entry).toEqual(original);
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -85,6 +85,22 @@ describe("resolveDeferredCleanupDecision", () => {
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
 
+  it("suspends a permanent completion delivery failure without another automatic attempt", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        delivery: { status: "pending", disposition: "permanent_failure" },
+      }),
+      activeDescendantRuns: 0,
+    });
+
+    expect(decision).toEqual({
+      kind: "give-up",
+      reason: "permanent_failure",
+      retryCount: 1,
+    });
+  });
+
   it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {
     const decision = resolveDecision({
       entry: makeEntry({

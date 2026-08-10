@@ -563,6 +563,21 @@ export function createSubagentRegistryLifecycleCleanup(
           return;
         }
         recordAnnounceDeliveryResult(entry, delivery);
+        if (
+          !delivery.delivered &&
+          delivery.disposition === "permanent_failure" &&
+          shouldSuspendPendingFinalDelivery(entry)
+        ) {
+          latestDeliveryError = formatAnnounceDeliveryError(delivery);
+          ensureDeliveryState(entry).lastError = latestDeliveryError;
+          suspendPendingFinalDelivery({
+            runId,
+            entry,
+            reason: "permanent_failure",
+            error: latestDeliveryError,
+          });
+          return;
+        }
         if (delivery.delivered) {
           const deliveryState = ensureDeliveryState(entry);
           deliveryState.status = "delivered";

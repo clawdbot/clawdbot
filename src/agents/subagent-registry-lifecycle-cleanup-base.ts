@@ -148,15 +148,6 @@ export function createSubagentRegistryLifecycleCleanupBase(
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
     params.resumedRuns.delete(args.runId);
-    safeSetSubagentTaskDeliveryStatus({
-      entry: args.entry,
-      deliveryStatus: "failed",
-      deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
-    });
-    safeMarkRequiredCompletionDeliveryBlocked({
-      entry: args.entry,
-      reason: getDeliveryLastError(args.entry) ?? args.reason,
-    });
     logAnnounceGiveUp(args.entry, args.reason);
     markRequesterSettleWakePending(args.entry);
     try {
@@ -169,6 +160,15 @@ export function createSubagentRegistryLifecycleCleanupBase(
       Object.assign(args.entry, previousEntry);
       throw error;
     }
+    safeSetSubagentTaskDeliveryStatus({
+      entry: args.entry,
+      deliveryStatus: "failed",
+      deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
+    });
+    safeMarkRequiredCompletionDeliveryBlocked({
+      entry: args.entry,
+      reason: getDeliveryLastError(args.entry) ?? args.reason,
+    });
     // Suspension is terminal for automatic retries, so it settles this child
     // for requester-drain purposes even though cleanup stays incomplete.
     scheduleRequesterSettleWake(args.runId, args.entry);

@@ -180,6 +180,72 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("does not replay a suspended permanent delivery failure after SQLite restart", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const endedAt = Date.now();
+      const run: SubagentRunRecord = {
+        runId: "run-suspended-permanent-failure",
+        childSessionKey: "agent:main:subagent:suspended-permanent-failure",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "preserve replay-safe delivery failure",
+        cleanup: "keep",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 500,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: endedAt },
+        delivery: {
+          status: "suspended",
+          disposition: "permanent_failure",
+          suspendedAt: endedAt,
+          suspendedReason: "permanent_failure",
+          lastError: "completion agent did not use the required message tool",
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            childSessionKey: "agent:main:subagent:suspended-permanent-failure",
+            childRunId: "run-suspended-permanent-failure",
+            task: "preserve replay-safe delivery failure",
+            startedAt: endedAt - 500,
+            endedAt,
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+          },
+        },
+        cleanupHandled: false,
+      };
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: run.childSessionKey,
+        sessionId: "sess-suspended-permanent-failure",
+        defaultSessionId: "sess-suspended-permanent-failure",
+      });
+
+      mod.initSubagentRegistry();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(announceSpy).not.toHaveBeenCalled();
+      expect(callGatewayModule.callGateway).not.toHaveBeenCalled();
+      expect(mod.getSubagentRunByRunId(run.runId)?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "permanent_failure",
+        suspendedReason: "permanent_failure",
+        payload: { childRunId: run.runId },
+      });
+    });
+  });
+
   it.each([false, true])(
     "settles a restored steered requester turn (yielded: %s)",
     async (requesterYielded) => {
