@@ -359,12 +359,29 @@ public enum ExecApprovalsSQLiteStore {
         {
             let statement = try database.prepare(
                 "SELECT 1 FROM agent_deletion_journal WHERE agent_id = ? LIMIT 1")
-            try statement.bindText(agentID, at: 1)
+            try statement.bindText(self.normalizedAgentID(agentID), at: 1)
             if try statement.step() == .row {
                 throw OpenClawNativeStateError(
                     "Exec approvals cannot be changed while agent deletion is in progress; retry.")
             }
         }
+    }
+
+    private static func normalizedAgentID(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "main" }
+        let normalized = trimmed.lowercased()
+        if trimmed.range(
+            of: "^[a-z0-9][a-z0-9_-]{0,63}$",
+            options: [.regularExpression, .caseInsensitive]) != nil
+        {
+            return normalized
+        }
+        let replaced = normalized.replacingOccurrences(
+            of: "[^a-z0-9_-]+", with: "-", options: .regularExpression)
+        let stripped = replaced.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let truncated = String(stripped.prefix(64))
+        return truncated.isEmpty ? "main" : truncated
     }
 
     private static func projectionDocument(

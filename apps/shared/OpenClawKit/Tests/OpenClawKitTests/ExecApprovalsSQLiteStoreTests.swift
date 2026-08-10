@@ -75,7 +75,9 @@ struct ExecApprovalsSQLiteStoreTests {
     @Test
     func `deletion journal fences only the affected agent`() throws {
         try self.withStateDirectory { stateDirectoryURL in
-            let original = Self.document(token: "original", agentCount: 1)
+            var original = Self.document(token: "original", agentCount: 1)
+            let originalAgent = original.agents?.removeValue(forKey: "agent-0")
+            original.agents?["Agent A"] = originalAgent
             try ExecApprovalsSQLiteStore.write(original, stateDirectoryURL: stateDirectoryURL)
             let databaseURL = ExecApprovalsSQLiteStore.databaseURL(
                 stateDirectoryURL: stateDirectoryURL)
@@ -107,12 +109,14 @@ struct ExecApprovalsSQLiteStoreTests {
             ) STRICT;
             INSERT INTO agent_deletion_journal (
               agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, created_at
-            ) VALUES ('agent-0', 'typescript-deletion', '/agent', '/workspace', '/sessions', 1);
+            ) VALUES ('agent-a', 'typescript-deletion', '/agent', '/workspace', '/sessions', 1);
             PRAGMA user_version = 6;
             """)
 
             var replacement = Self.document(token: "replacement", agentCount: 2)
-            replacement.agents?["agent-0"]?.security = .deny
+            let replacementAgent = replacement.agents?.removeValue(forKey: "agent-0")
+            replacement.agents?["Agent A"] = replacementAgent
+            replacement.agents?["Agent A"]?.security = .deny
             do {
                 try ExecApprovalsSQLiteStore.write(
                     replacement,
