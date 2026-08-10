@@ -249,21 +249,31 @@ describe("Code Mode runtime and output limits", () => {
       tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
     } as never);
 
-    const result = await testing.runCodeModeWorker(
-      {
+    const result = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
         config,
         catalog: [],
       },
-      5000,
-    );
+      timeoutMs: 5000,
+    });
 
     expect(result.status).toBe("failed");
     expect(result).toMatchObject({
       code: "snapshot_limit_exceeded",
       error: "code mode snapshot limit exceeded",
+      snapshotAttempt: {
+        disposition: "rejected",
+        rejectionReason: "size",
+        measurement: {
+          bytes: expect.any(Number),
+          serializationMs: expect.any(Number),
+        },
+        coverage: "exact",
+      },
     });
+    expect(result.snapshotAttempt?.measurement?.bytes).toBeGreaterThan(1024);
   });
 
   it("accepts a pending frontier at the configured limit", async () => {
@@ -271,8 +281,8 @@ describe("Code Mode runtime and output limits", () => {
       tools: { codeMode: { enabled: true, maxPendingToolCalls: 3 } },
     } as never);
 
-    const result = await testing.runCodeModeWorker(
-      {
+    const result = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: `return await Promise.all(
           Array.from({ length: 3 }, (_, index) =>
@@ -282,14 +292,22 @@ describe("Code Mode runtime and output limits", () => {
         config,
         catalog: [],
       },
-      10_000,
-    );
+      timeoutMs: 10_000,
+    });
 
     expect(result.status).toBe("waiting");
     if (result.status !== "waiting") {
       return;
     }
     expect(result.pendingRequests).toHaveLength(3);
+    expect(result.snapshotAttempt).toMatchObject({
+      disposition: "accepted",
+      measurement: {
+        bytes: expect.any(Number),
+        serializationMs: expect.any(Number),
+      },
+      coverage: "exact",
+    });
   });
 
   it("rejects one bridge registration above the configured pending limit", async () => {
@@ -524,8 +542,8 @@ describe("Code Mode runtime and output limits", () => {
         },
       },
     } as never);
-    const first = await testing.runCodeModeWorker(
-      {
+    const first = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: `
           const carried = tools.callValue("fake_argument_budget", {
@@ -540,8 +558,8 @@ describe("Code Mode runtime and output limits", () => {
         config,
         catalog: [],
       },
-      30_000,
-    );
+      timeoutMs: 30_000,
+    });
     expect(first.status).toBe("waiting");
     if (first.status !== "waiting") {
       return;
@@ -553,16 +571,16 @@ describe("Code Mode runtime and output limits", () => {
       return;
     }
 
-    const resumed = await testing.runCodeModeWorker(
-      {
+    const resumed = await testing.runCodeModeWorker({
+      workerData: {
         kind: "resume",
         snapshotBytes: first.snapshotBytes,
         config,
         settledRequests: [{ id: gate.id, ok: true, value: {} }],
         pendingRequests: first.pendingRequests.slice(0, -1),
       },
-      30_000,
-    );
+      timeoutMs: 30_000,
+    });
 
     expect(resumed).toMatchObject({
       status: "failed",
@@ -650,16 +668,16 @@ describe("Code Mode runtime and output limits", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
 
-    const result = await testing.runCodeModeWorker(
-      {
+    const result = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: "return 1;",
         config,
         catalog: [],
       },
-      500,
-      missingWorkerUrl,
-    );
+      timeoutMs: 500,
+      workerUrl: missingWorkerUrl,
+    });
 
     expect(result.status).toBe("failed");
     expect(result).toMatchObject({
@@ -671,16 +689,16 @@ describe("Code Mode runtime and output limits", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
 
-    const result = await testing.runCodeModeWorker(
-      {
+    const result = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: "return 1;",
         config,
         catalog: [],
       },
-      500,
-      exitingWorkerUrl,
-    );
+      timeoutMs: 500,
+      workerUrl: exitingWorkerUrl,
+    });
 
     expect(result.status).toBe("failed");
     expect(result).toMatchObject({
@@ -692,16 +710,16 @@ describe("Code Mode runtime and output limits", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const exitingWorkerUrl = new URL("data:text/javascript,");
 
-    const result = await testing.runCodeModeWorker(
-      {
+    const result = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: "return 1;",
         config,
         catalog: [],
       },
-      5_000,
-      exitingWorkerUrl,
-    );
+      timeoutMs: 5_000,
+      workerUrl: exitingWorkerUrl,
+    });
 
     expect(result).toMatchObject({
       status: "failed",
@@ -713,15 +731,15 @@ describe("Code Mode runtime and output limits", () => {
   it("does not classify guest interrupted errors as timeouts", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
-    const result = await testing.runCodeModeWorker(
-      {
+    const result = await testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: 'throw new Error("interrupted");',
         config,
         catalog: [],
       },
-      10_000,
-    );
+      timeoutMs: 10_000,
+    });
 
     expect(result.status).toBe("failed");
     // A guest error whose message happens to be "interrupted" must stay

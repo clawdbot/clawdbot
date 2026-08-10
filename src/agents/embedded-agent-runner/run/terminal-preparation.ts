@@ -120,6 +120,9 @@ export function prepareEmbeddedRunTerminal(input: {
     ...(input.usageAccumulator.bridgeCalls
       ? { bridgeCalls: { ...input.usageAccumulator.bridgeCalls } }
       : {}),
+    ...(input.usageAccumulator.codeModeStats
+      ? { codeModeStats: input.usageAccumulator.codeModeStats }
+      : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts

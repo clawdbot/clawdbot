@@ -15,6 +15,13 @@ import {
   type PendingBridgeRequest,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import {
+  recordCodeModeBridgeCancelRequested,
+  recordCodeModeBridgeRegistered,
+  recordCodeModeBridgeSettled,
+  recordCodeModeBridgeStarted,
+  type CodeModeStats,
+} from "./code-mode-stats.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
@@ -48,6 +55,7 @@ type CodeModeRunState = {
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
+  codeModeStats?: CodeModeStats;
 };
 
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
@@ -252,6 +260,7 @@ export function snapshotState(params: {
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  codeModeStats?: CodeModeStats;
 }) {
   enforceSnapshotStateLimits(params);
   const runId = `cm_${randomUUID()}`;
@@ -320,6 +329,7 @@ export function createPendingBridgeStates(params: {
   activeRunId?: string;
   ctx: ToolSearchToolContext;
   privateAuthority: CodeModePrivateAuthority;
+  codeModeStats?: CodeModeStats;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): PendingBridgeState[] {
@@ -360,6 +370,9 @@ export function createPendingBridgeStates(params: {
     const signal = params.signal
       ? AbortSignal.any([params.signal, abortController.signal])
       : abortController.signal;
+    let cancelRequested = false;
+    recordCodeModeBridgeRegistered(params.codeModeStats, request.method);
+    recordCodeModeBridgeStarted(params.codeModeStats);
     const state: PendingBridgeState = {
       ...request,
       conversationList: conversationListEligible,
@@ -374,6 +387,10 @@ export function createPendingBridgeStates(params: {
         signal,
         onUpdate: params.onUpdate,
       }).then((settled) => {
+        recordCodeModeBridgeSettled(params.codeModeStats, {
+          failed: !settled.ok && !cancelRequested,
+          settledAfterCancel: cancelRequested,
+        });
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
         if (state.method === "agentWait" && params.activeRunId) {
@@ -391,7 +408,14 @@ export function createPendingBridgeStates(params: {
         }
         return settled;
       }),
-      cancel: () => abortController.abort(),
+      cancel: () => {
+        if (state.settled || cancelRequested) {
+          return;
+        }
+        cancelRequested = true;
+        recordCodeModeBridgeCancelRequested(params.codeModeStats);
+        abortController.abort();
+      },
     };
     return state;
   });
@@ -411,6 +435,7 @@ export function storeSnapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   privateAuthority: CodeModePrivateAuthority;
+  codeModeStats?: CodeModeStats;
   output: unknown[];
   deliveredOutputCount?: number;
 }) {
@@ -446,6 +471,7 @@ export function storeSnapshotState(params: {
     agentWaitRetainUntil,
     runtime: params.runtime,
     namespaceRuntime: params.namespaceRuntime,
+    codeModeStats: params.codeModeStats,
   });
   scheduleActiveRunExpiry();
   return {

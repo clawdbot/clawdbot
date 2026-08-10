@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { cloneCodeModeStats } from "./code-mode-stats.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -189,6 +190,20 @@ describe("Code Mode bridge settlement and cancellation", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(bounded.execute).toHaveBeenCalledTimes(2);
     expect(executed).toEqual([0, 1]);
+    expect(
+      cloneCodeModeStats(
+        expectDefined(catalogRef.current?.codeModeStats, "Code Mode stats test invariant"),
+      ),
+    ).toMatchObject({
+      bridgeCalls: { callValue: 2 },
+      bridgeLifecycle: {
+        registered: 2,
+        started: 2,
+        settled: 2,
+        unresolvedAtExtraction: 0,
+      },
+      outcomes: { failed: 1 },
+    });
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -619,6 +634,87 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details.status).toBe("failed");
     expect(details.error).toBe("code mode execution aborted");
     expect(details.code).toBe("aborted");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("accounts for a direct bridge call that settles after cancellation", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const started = createDeferred();
+    const release = createDeferred();
+    let observedAbort = false;
+    const target = pluginToolWithExecute(
+      "fake_late_cancel",
+      "Late cancellation accounting helper",
+      async (_toolCallId, _input, signal) => {
+        signal?.addEventListener("abort", () => (observedAbort = true), { once: true });
+        started.resolve();
+        await release.promise;
+        return jsonResult({ done: true });
+      },
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const controller = new AbortController();
+    const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+      "code-call-late-cancel",
+      { code: 'return await tools.callValue("fake_late_cancel", {});' },
+      controller.signal,
+    );
+    await started.promise;
+    controller.abort();
+    const details = resultDetails(await resultPromise);
+
+    expect(details).toMatchObject({ status: "failed", code: "aborted" });
+    expect(observedAbort).toBe(true);
+    expect(
+      cloneCodeModeStats(
+        expectDefined(catalogRef.current?.codeModeStats, "Code Mode stats test invariant"),
+      ),
+    ).toMatchObject({
+      bridgeCalls: { callValue: 1 },
+      bridgeLifecycle: {
+        registered: 1,
+        started: 1,
+        cancelRequested: 1,
+        unresolvedAtExtraction: 1,
+      },
+      outcomes: { aborted: 1 },
+    });
+
+    release.resolve();
+    await vi.waitFor(() => {
+      expect(
+        cloneCodeModeStats(
+          expectDefined(catalogRef.current?.codeModeStats, "Code Mode stats test invariant"),
+        ).bridgeLifecycle,
+      ).toEqual({
+        registered: 1,
+        started: 1,
+        settled: 1,
+        cancelRequested: 1,
+        settledAfterCancel: 1,
+        unresolvedAtExtraction: 0,
+      });
+    });
     expect(testing.activeRuns.size).toBe(0);
   });
 

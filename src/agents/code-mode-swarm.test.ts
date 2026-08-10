@@ -12,8 +12,8 @@ import {
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
 function workerExec(source: string, swarmEnabled: boolean) {
-  return testing.runCodeModeWorker(
-    {
+  return testing.runCodeModeWorker({
+    workerData: {
       kind: "exec",
       source,
       config,
@@ -22,23 +22,23 @@ function workerExec(source: string, swarmEnabled: boolean) {
       namespaces: [],
       swarmEnabled,
     },
-    10_000,
-  );
+    timeoutMs: 10_000,
+  });
 }
 
 function workerResume(
   waiting: Extract<Awaited<ReturnType<typeof workerExec>>, { status: "waiting" }>,
   settledRequests: Array<{ id: string; ok: true; value: unknown }>,
 ) {
-  return testing.runCodeModeWorker(
-    {
+  return testing.runCodeModeWorker({
+    workerData: {
       kind: "resume",
       snapshotBytes: waiting.snapshotBytes,
       config,
       settledRequests,
     },
-    10_000,
-  );
+    timeoutMs: 10_000,
+  });
 }
 
 function expectWaiting(

@@ -5,7 +5,7 @@ const MAX_CONVERSATION_LIST_ITEMS = 100;
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 const activeConversationAuthority = new AsyncLocalStorage<CodeModePrivateAuthority>();
 
-export type CodeModeConversationAddress = {
+type CodeModeConversationAddress = {
   conversationRef: string;
   channel: string;
   accountId: string;

@@ -15,6 +15,7 @@ import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { CodeModeStats } from "../../code-mode-stats.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
   MessagingToolSend,
@@ -323,6 +324,8 @@ export type EmbeddedRunAttemptResult = {
     describe: number;
     call: number;
   };
+  /** Host-side Code Mode accounting observed during this attempt. */
+  codeModeStats?: CodeModeStats;
   replayMetadata: EmbeddedRunReplayMetadata;
   /**
    * Replay metadata for this attempt before prior session state is accumulated.

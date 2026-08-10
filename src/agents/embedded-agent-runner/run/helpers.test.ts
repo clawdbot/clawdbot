@@ -2,6 +2,7 @@
 // metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { createCodeModeStats } from "../../code-mode-stats.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -338,6 +339,8 @@ describe("buildErrorAgentMeta", () => {
       total: 200,
     } satisfies NormalizedUsage;
     mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+    usageAccumulator.codeModeStats = createCodeModeStats();
+    usageAccumulator.codeModeStats.controlCalls.exec = 1;
 
     const fields = buildErrorAgentMeta({
       sessionId: "session-error",
@@ -355,6 +358,7 @@ describe("buildErrorAgentMeta", () => {
       total: 350,
     });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
+    expect(fields.codeModeStats?.controlCalls.exec).toBe(1);
   });
 
   it("preserves active session file for error exits after transcript rotation", () => {

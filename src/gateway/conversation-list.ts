@@ -30,7 +30,7 @@ type ConversationListDeps = {
   resolveOutboundSessionRoute: typeof resolveOutboundSessionRoute;
 };
 
-export type CompleteConversationListResult = ConversationListResult & {
+type CompleteConversationListResult = ConversationListResult & {
   complete: boolean;
 };
 

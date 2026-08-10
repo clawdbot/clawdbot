@@ -1,19 +1,22 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "call"
-  | "callValue"
-  | "nodes"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "skillsList"
-  | "skillsRead"
-  | "swarmNote";
+export const CODE_MODE_BRIDGE_METHODS = [
+  "search",
+  "describe",
+  "call",
+  "callValue",
+  "nodes",
+  "yield",
+  "namespace",
+  "agentSpawn",
+  "agentWait",
+  "skillsList",
+  "skillsRead",
+  "swarmNote",
+] as const;
+
+export type CodeModeBridgeMethod = (typeof CODE_MODE_BRIDGE_METHODS)[number];
 
 export type CodeModeConfig = {
   timeoutMs: number;
@@ -73,6 +76,16 @@ export type CodeModeSettlementMode =
   | { kind: "draining"; requiredRequestIds: string[] };
 
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
+
+export type CodeModeSnapshotMeasurement = {
+  bytes: number;
+  serializationMs: number;
+};
+
+export type CodeModeWorkerThreadMessage =
+  | { kind: "snapshot_started" }
+  | ({ kind: "snapshot_produced" } & CodeModeSnapshotMeasurement)
+  | { kind: "result"; result: CodeModeWorkerThreadResult };
 
 export type CodeModeWorkerThreadResult =
   | {

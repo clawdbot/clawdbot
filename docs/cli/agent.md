@@ -71,9 +71,35 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "payloads": [{ "text": "The focused tests pass." }],
   "usage": { "input": 120, "output": 8, "total": 128 },
   "costUsd": 0.0021,
-  "codeModeEngaged": false,
+  "codeModeEngaged": true,
   "assistantTurns": 2,
   "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
+  "codeModeStats": {
+    "controlCalls": { "exec": 1 },
+    "bridgeCalls": { "search": 1, "callValue": 3 },
+    "workerRuns": {
+      "exec": { "count": 1, "elapsedMs": 18 },
+      "resume": { "count": 2, "elapsedMs": 12 }
+    },
+    "bridgeLifecycle": {
+      "registered": 4,
+      "started": 4,
+      "settled": 4,
+      "unresolvedAtExtraction": 0
+    },
+    "snapshots": {
+      "attempted": 2,
+      "produced": 2,
+      "accepted": 2,
+      "rejected": 0,
+      "incomplete": 0,
+      "totalBytes": 15704,
+      "maxBytes": 9012,
+      "serializationMs": 3,
+      "coverage": "exact"
+    },
+    "outcomes": { "completed": 1 }
+  },
   "toolSummary": { "calls": 2, "tools": ["read", "write"], "totalToolTimeMs": 48 },
   "model": "gpt-5.6-sol",
   "provider": "openai",
@@ -88,7 +114,8 @@ Run-stat fields are additive and may be absent:
 - `costUsd`: estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.
 - `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false` because OpenClaw code mode never owns their tools.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
-- `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
+- `bridgeCalls`: legacy catalog counters (`search`/`describe`/`call`) retained with their existing semantics. Detailed guest method counts, including `callValue`, live separately in `codeModeStats.bridgeCalls`. These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
+- `codeModeStats`: host-side Code Mode accounting. It separates model-visible `exec`/`wait` controls, all 12 guest bridge methods admitted for direct dispatch, QuickJS `exec`/`resume` worker count and elapsed time, bridge lifecycle facts, snapshot attempts/dispositions, snapshot bytes/serialization time, and control-call result outcomes. Snapshot conservation is `accepted + rejected + incomplete = attempted`; `produced` counts attempts with measured bytes and serialization time. Snapshot `coverage` describes byte/time measurement coverage only: `"lower_bound"` means at least one started attempt ended before those measurements reached the host, while `"exact"` does not turn an `incomplete` terminal disposition into a completed attempt. Cancellation distinguishes requested cancellation from active calls that settle afterward. `unresolvedAtExtraction` is the outstanding bridge count sampled when stats leave one Code Mode attempt; it is not run-wide live state. Once `codeModeStats` exists, omitted sparse subcounters mean observed zero. Absence of the entire object means Code Mode was unobserved or not engaged. This projection covers returned, observed attempts only; thrown or losing fallback candidates require outer run-accounting coverage before the result is comparable evidence.
 - `toolSummary`: outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run.
 
 The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the outer tool summary remains at `meta.toolSummary`.

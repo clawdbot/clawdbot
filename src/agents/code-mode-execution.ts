@@ -44,6 +44,13 @@ import {
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
 } from "./code-mode-state.js";
+import {
+  ensureCodeModeStats,
+  registerCodeModeStatsSource,
+  recordCodeModeSnapshot,
+  recordCodeModeWorkerRun,
+  type CodeModeStats,
+} from "./code-mode-stats.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
@@ -83,6 +90,7 @@ export async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  const codeModeStats = ensureCodeModeStats(params.ctx.catalogRef);
   params.onRuntime?.(runtime);
   const bridgeDispatch = { started: false };
   const replaySafety = { safe: true };
@@ -126,22 +134,21 @@ export async function runExec(params: {
     if (remainingMs <= 0) {
       throw new Error("interrupted");
     }
-    const result = normalizeCodeModeWorkerResult(
-      await runCodeModeWorker(
-        {
-          kind: "exec",
-          source,
-          config: { ...config, timeoutMs: remainingMs },
-          catalog,
-          apiFiles,
-          namespaces: namespaceRuntime.descriptors,
-          swarmEnabled,
-        },
-        remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-        undefined,
-        params.signal,
-      ),
-    );
+    const result = await runTrackedCodeModeWorker({
+      stats: codeModeStats,
+      kind: "exec",
+      workerData: {
+        kind: "exec",
+        source,
+        config: { ...config, timeoutMs: remainingMs },
+        catalog,
+        apiFiles,
+        namespaces: namespaceRuntime.descriptors,
+        swarmEnabled,
+      },
+      timeoutMs: remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+      signal: params.signal,
+    });
     return await settleCodeModeResult({
       result,
       output: result.output,
@@ -155,6 +162,7 @@ export async function runExec(params: {
       runtime,
       namespaceRuntime,
       privateAuthority,
+      codeModeStats,
       bridgeDispatch,
       signal: params.signal,
       onUpdate: params.onUpdate,
@@ -186,6 +194,37 @@ function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): numbe
   const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
   const remaining = deadlineMs - Date.now();
   return remaining >= minimum ? remaining : undefined;
+}
+
+async function runTrackedCodeModeWorker(params: {
+  stats?: CodeModeStats;
+  kind: "exec" | "resume";
+  workerData: unknown;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<CodeModeWorkerResult> {
+  let workerSpawnedAt: number | undefined;
+  try {
+    const result = normalizeCodeModeWorkerResult(
+      await runCodeModeWorker({
+        workerData: params.workerData,
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        onWorkerSpawned: () => {
+          workerSpawnedAt = Date.now();
+        },
+      }),
+    );
+    if (result.snapshotAttempt) {
+      recordCodeModeSnapshot(params.stats, result.snapshotAttempt);
+    }
+    const { snapshotAttempt: _snapshotAttempt, ...settlementResult } = result;
+    return settlementResult as CodeModeWorkerResult;
+  } finally {
+    if (workerSpawnedAt !== undefined) {
+      recordCodeModeWorkerRun(params.stats, params.kind, Date.now() - workerSpawnedAt);
+    }
+  }
 }
 
 async function waitForPending(
@@ -250,6 +289,7 @@ async function settleCodeModeResult(params: {
   deadlineMs: number;
   deliveredOutputCount?: number;
   pending?: PendingBridgeState[];
+  codeModeStats?: CodeModeStats;
   activeRunId?: string;
   reservedActiveRunSlot?: boolean;
   bridgeDispatch: { started: boolean };
@@ -367,6 +407,7 @@ async function settleCodeModeResult(params: {
           activeRunId,
           ctx: params.ctx,
           privateAuthority: params.privateAuthority,
+          codeModeStats: params.codeModeStats,
           signal: params.signal,
           onUpdate: params.onUpdate,
         }),
@@ -404,6 +445,7 @@ async function settleCodeModeResult(params: {
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           privateAuthority: params.privateAuthority,
+          codeModeStats: params.codeModeStats,
           output,
           deliveredOutputCount,
         });
@@ -418,28 +460,27 @@ async function settleCodeModeResult(params: {
       // The resumed guest inherits only the remaining shared budget as its
       // QuickJS interrupt deadline; the extra host margin is watchdog grace,
       // not extra guest run time.
-      result = normalizeCodeModeWorkerResult(
-        await runCodeModeWorker(
-          {
-            kind: "resume",
-            snapshotBytes: result.snapshotBytes,
-            config: {
-              ...params.config,
-              timeoutMs: resumeBudgetMs,
-            },
-            settledRequests,
-            pendingRequests: pending.map(({ id, method, args, argumentBytes }) => ({
-              id,
-              method,
-              args,
-              argumentBytes,
-            })),
+      result = await runTrackedCodeModeWorker({
+        stats: params.codeModeStats,
+        kind: "resume",
+        workerData: {
+          kind: "resume",
+          snapshotBytes: result.snapshotBytes,
+          config: {
+            ...params.config,
+            timeoutMs: resumeBudgetMs,
           },
-          resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-          undefined,
-          params.signal,
-        ),
-      );
+          settledRequests,
+          pendingRequests: pending.map(({ id, method, args, argumentBytes }) => ({
+            id,
+            method,
+            args,
+            argumentBytes,
+          })),
+        },
+        timeoutMs: resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+        signal: params.signal,
+      });
       output.push(...result.output);
       enforceOutputLimit(output, params.config);
     } catch (error) {
@@ -507,6 +548,7 @@ async function settleCodeModeResult(params: {
             activeRunId,
             ctx: params.ctx,
             privateAuthority: params.privateAuthority,
+            codeModeStats: params.codeModeStats,
             signal: params.signal,
             onUpdate: params.onUpdate,
           }),
@@ -525,6 +567,7 @@ async function settleCodeModeResult(params: {
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           privateAuthority: params.privateAuthority,
+          codeModeStats: params.codeModeStats,
           output,
           deliveredOutputCount,
         });
@@ -556,6 +599,7 @@ async function settleCodeModeResult(params: {
       settlementMode: result.settlementMode,
       signal: params.signal,
       onUpdate: params.onUpdate,
+      codeModeStats: params.codeModeStats,
     });
   }
   // Defensive cleanup covers aborts or terminal failures; successful runs have
@@ -607,6 +651,9 @@ export async function runWait(params: {
   if (resumingRunIds.has(state.runId)) {
     throw new ToolInputError("code mode run is already being resumed.");
   }
+  // Adopt the parked source only after the caller proves run/session ownership.
+  // Its late settlements and resume work must leave through this attempt.
+  registerCodeModeStatsSource(params.ctx.catalogRef, state.codeModeStats);
   params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
   // One wait call shares a single wall-clock deadline across draining the prior
@@ -663,28 +710,27 @@ export async function runWait(params: {
     releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
     // The resumed guest inherits only the remaining shared budget as its QuickJS
     // interrupt deadline; the extra host margin is watchdog grace only.
-    const result = normalizeCodeModeWorkerResult(
-      await runCodeModeWorker(
-        {
-          kind: "resume",
-          snapshotBytes: state.snapshotBytes,
-          config: {
-            ...state.config,
-            timeoutMs: resumeBudgetMs,
-          },
-          settledRequests,
-          pendingRequests: pending.map(({ id, method, args, argumentBytes }) => ({
-            id,
-            method,
-            args,
-            argumentBytes,
-          })),
+    const result = await runTrackedCodeModeWorker({
+      stats: state.codeModeStats,
+      kind: "resume",
+      workerData: {
+        kind: "resume",
+        snapshotBytes: state.snapshotBytes,
+        config: {
+          ...state.config,
+          timeoutMs: resumeBudgetMs,
         },
-        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-        undefined,
-        params.signal,
-      ),
-    );
+        settledRequests,
+        pendingRequests: pending.map(({ id, method, args, argumentBytes }) => ({
+          id,
+          method,
+          args,
+          argumentBytes,
+        })),
+      },
+      timeoutMs: resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+      signal: params.signal,
+    });
     const output = [...state.output, ...result.output];
     enforceOutputLimit(output, state.config);
     return await settleCodeModeResult({
@@ -700,6 +746,7 @@ export async function runWait(params: {
       runtime: state.runtime,
       namespaceRuntime: state.namespaceRuntime,
       privateAuthority: state.privateAuthority,
+      codeModeStats: state.codeModeStats,
       bridgeDispatch: { started: true },
       deliveredOutputCount: state.deliveredOutputCount,
       pending,

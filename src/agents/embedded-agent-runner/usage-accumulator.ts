@@ -1,3 +1,4 @@
+import { createCodeModeStats, mergeCodeModeStats, type CodeModeStats } from "../code-mode-stats.js";
 /**
  * Accumulates and normalizes per-call token usage across embedded runs.
  */
@@ -25,6 +26,8 @@ export type UsageAccumulator = {
     describe: number;
     call: number;
   };
+  /** Cumulative host-side Code Mode accounting across every run attempt. */
+  codeModeStats?: CodeModeStats;
 };
 
 export const createUsageAccumulator = (): UsageAccumulator => ({
@@ -83,17 +86,26 @@ export const mergeAttemptRunStatsIntoAccumulator = (
   attempt: {
     assistantTurns?: number;
     bridgeCalls?: { search: number; describe: number; call: number };
+    codeModeStats?: CodeModeStats;
   },
 ) => {
   target.assistantTurns += attempt.assistantTurns ?? 0;
-  if (!attempt.bridgeCalls) {
-    return;
+  if (attempt.bridgeCalls) {
+    const bridgeCalls = target.bridgeCalls ?? { search: 0, describe: 0, call: 0 };
+    bridgeCalls.search += attempt.bridgeCalls.search;
+    bridgeCalls.describe += attempt.bridgeCalls.describe;
+    bridgeCalls.call += attempt.bridgeCalls.call;
+    target.bridgeCalls = bridgeCalls;
   }
-  const bridgeCalls = target.bridgeCalls ?? { search: 0, describe: 0, call: 0 };
-  bridgeCalls.search += attempt.bridgeCalls.search;
-  bridgeCalls.describe += attempt.bridgeCalls.describe;
-  bridgeCalls.call += attempt.bridgeCalls.call;
-  target.bridgeCalls = bridgeCalls;
+  if (attempt.codeModeStats) {
+    const codeModeStats = target.codeModeStats ?? createCodeModeStats();
+    mergeCodeModeStats(codeModeStats, attempt.codeModeStats);
+    target.codeModeStats = codeModeStats;
+  } else if (target.codeModeStats) {
+    // Without an attempt sample the live gauge is unknown, not observed zero.
+    // Keep cumulative lifecycle totals while dropping the stale prior sample.
+    delete target.codeModeStats.bridgeLifecycle.unresolvedAtExtraction;
+  }
 };
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {

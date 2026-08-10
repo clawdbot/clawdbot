@@ -1130,8 +1130,29 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
   `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
-  (`{ search, describe, call }`). These calls never reach the provider;
+  (`{ search, describe, call }`) from the existing catalog counters. Detailed
+  guest method counts, including `callValue`, stay separate in
+  `codeModeStats.bridgeCalls`. These calls never reach the provider;
   provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+- `codeModeStats`: detailed host-side accounting for Code Mode:
+  model-visible `controlCalls` (`exec`/`wait`), all 12 guest `bridgeCalls`,
+  QuickJS `workerRuns` (`exec`/`resume`) with elapsed time, exact
+  `bridgeLifecycle` registration/start/settlement/cancellation facts, snapshot
+  attempts/dispositions/bytes/serialization time, and control-call result
+  `outcomes`. Snapshot conservation is
+  `accepted + rejected + incomplete = attempted`; `produced` counts attempts
+  with measured bytes and serialization time. Snapshot `coverage` applies only
+  to those measurements: `"lower_bound"` means at least one started attempt
+  ended before measurement metadata reached the host, while `"exact"` does not
+  turn an `incomplete` terminal disposition into a completed attempt.
+  `bridgeLifecycle.unresolvedAtExtraction` is the outstanding-request count
+  sampled when stats leave one Code Mode attempt, not run-wide live state or a
+  cumulative retry counter. Once `codeModeStats` exists, omitted sparse
+  subcounters mean observed zero. Absence of the entire object means Code Mode
+  was unobserved or not engaged. The projection covers returned, observed
+  attempts only; thrown or losing fallback candidates require outer
+  run-accounting coverage before comparison. This field measures OpenClaw's
+  adapter work; it is not a provider API-call counter.
 - `costUsd`: estimated USD cost from the run's accumulated usage and the
   model's cost config (cache read/write tiers included); omitted when the
   model has no cost data.

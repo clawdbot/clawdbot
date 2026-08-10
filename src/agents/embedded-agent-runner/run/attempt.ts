@@ -14,6 +14,7 @@ import {
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { drainCodeModeAttemptStats } from "../../code-mode-stats.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -502,6 +503,7 @@ export async function runEmbeddedAttempt(
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;
+      const codeModeStats = drainCodeModeAttemptStats(toolSearchCatalogRef);
       return {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
@@ -514,6 +516,7 @@ export async function runEmbeddedAttempt(
               },
             }
           : {}),
+        ...(codeModeStats ? { codeModeStats } : {}),
       };
     } finally {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);

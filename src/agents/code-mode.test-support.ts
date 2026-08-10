@@ -85,12 +85,13 @@ type CodeModeTestApi = {
     wallClockMs: number,
   ): { signal: AbortSignal; cleanup: () => void };
   normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult;
-  runCodeModeWorker(
-    workerData: unknown,
-    timeoutMs: number,
-    workerUrl?: URL,
-    signal?: AbortSignal,
-  ): Promise<CodeModeWorkerResult>;
+  runCodeModeWorker(options: {
+    workerData: unknown;
+    timeoutMs: number;
+    workerUrl?: URL;
+    signal?: AbortSignal;
+    onWorkerSpawned?: () => void;
+  }): Promise<CodeModeWorkerResult>;
   resolveCodeModeHeadlessConfig(
     ctx: ToolSearchToolContext,
     overrides?: Partial<

@@ -151,22 +151,23 @@ describe("Code Mode worker lifecycle", () => {
     release();
   });
 
-  it("honors an already-aborted execution before starting a worker", async () => {
+  it("honors an already-aborted execution without reporting a spawned worker", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const controller = new AbortController();
     controller.abort();
+    const onWorkerSpawned = vi.fn();
 
-    const result = await runCodeModeWorker(
-      {
+    const result = await runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: "return true;",
         config,
         catalog: [],
       },
-      10_000,
-      undefined,
-      controller.signal,
-    );
+      timeoutMs: 10_000,
+      signal: controller.signal,
+      onWorkerSpawned,
+    });
 
     expect(result).toMatchObject({
       status: "failed",
@@ -174,33 +175,63 @@ describe("Code Mode worker lifecycle", () => {
       error: "code mode execution aborted",
       output: [],
     });
+    expect(result.snapshotAttempt).toBeUndefined();
+    expect(onWorkerSpawned).not.toHaveBeenCalled();
+  });
+
+  it("does not report a worker when construction fails", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const onWorkerSpawned = vi.fn();
+
+    const result = await runCodeModeWorker({
+      workerData: {
+        kind: "exec",
+        source: "return true;",
+        config,
+        catalog: [],
+      },
+      timeoutMs: 10_000,
+      workerUrl: new URL("https://example.invalid/code-mode.worker.js"),
+      onWorkerSpawned,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_unavailable",
+    });
+    expect(onWorkerSpawned).not.toHaveBeenCalled();
   });
 
   it("shares a compiled QuickJS module with isolated worker threads", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const onWorkerSpawned = vi.fn();
     const workerUrl = new URL(
       `data:text/javascript,${encodeURIComponent(`
         import { parentPort, workerData } from "node:worker_threads";
         parentPort.postMessage({
-          status: "completed",
-          value: workerData.wasmModule instanceof WebAssembly.Module,
-          output: [],
+          kind: "result",
+          result: {
+            status: "completed",
+            value: workerData.wasmModule instanceof WebAssembly.Module,
+            output: [],
+          },
         });
       `)}`,
     );
 
     const results = await Promise.all(
       Array.from({ length: 4 }, () =>
-        runCodeModeWorker(
-          {
+        runCodeModeWorker({
+          workerData: {
             kind: "exec",
             source: "return true;",
             config,
             catalog: [],
           },
-          10_000,
+          timeoutMs: 10_000,
           workerUrl,
-        ),
+          onWorkerSpawned,
+        }),
       ),
     );
 
@@ -211,7 +242,363 @@ describe("Code Mode worker lifecycle", () => {
         output: [],
       })),
     );
+    expect(onWorkerSpawned).toHaveBeenCalledTimes(4);
   });
+
+  it.each([
+    {
+      name: "duplicate start",
+      messages: [{ kind: "snapshot_started" }, { kind: "snapshot_started" }],
+      expectedAttempt: {
+        disposition: "rejected",
+        rejectionReason: "schema",
+        coverage: "lower_bound",
+      },
+    },
+    {
+      name: "produced before start",
+      messages: [{ kind: "snapshot_produced", bytes: 64, serializationMs: 2 }],
+      expectedAttempt: {
+        disposition: "rejected",
+        rejectionReason: "schema",
+        measurement: { bytes: 64, serializationMs: 2 },
+        coverage: "exact",
+      },
+    },
+    {
+      name: "invalid production before start",
+      messages: [{ kind: "snapshot_produced", bytes: -1, serializationMs: 2 }],
+      expectedAttempt: {
+        disposition: "rejected",
+        rejectionReason: "schema",
+        coverage: "lower_bound",
+      },
+    },
+    {
+      name: "invalid terminal schema",
+      messages: [
+        { kind: "snapshot_started" },
+        { kind: "snapshot_produced", bytes: 64, serializationMs: 2 },
+        { kind: "result", result: { status: "waiting", output: [] } },
+      ],
+      expectedAttempt: {
+        disposition: "rejected",
+        rejectionReason: "schema",
+        measurement: { bytes: 64, serializationMs: 2 },
+        coverage: "exact",
+      },
+    },
+  ])("rejects $name worker snapshot protocols", async ({ messages, expectedAttempt }) => {
+    const workerUrl = new URL(
+      `data:text/javascript,${encodeURIComponent(`
+        import { parentPort } from "node:worker_threads";
+        for (const message of ${JSON.stringify(messages)}) parentPort.postMessage(message);
+      `)}`,
+    );
+    const result = await runCodeModeWorker({
+      workerData: {},
+      timeoutMs: 1_000,
+      workerUrl,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      error: "invalid code mode worker response",
+    });
+    expect(result.snapshotAttempt).toEqual(expectedAttempt);
+  });
+
+  it.each<{ name: string; terminal: string; maxSnapshotBytes?: number }>([
+    {
+      name: "malformed pending request",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{}],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "awaiting frontier without host work",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "unknown pending request method",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:unknown:1", method: "unknown", args: [], argumentBytes: 2 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "non-array pending request arguments",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:call:1", method: "call", args: {}, argumentBytes: 2 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "negative pending request argument bytes",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:call:1", method: "call", args: [], argumentBytes: -1 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "method-mismatched pending request id",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:search:1", method: "call", args: [], argumentBytes: 2 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "duplicate pending request id",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [
+          { id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 },
+          { id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 },
+        ],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "cyclic pending request arguments",
+      terminal: `(() => {
+        const args = [];
+        args.push(args);
+        return {
+          status: "waiting",
+          snapshotBytes: new Uint8Array(64),
+          pendingRequests: [{ id: "bridge:call:1", method: "call", args, argumentBytes: 2 }],
+          settlementMode: { kind: "awaiting" },
+          output: [],
+        };
+      })()`,
+    },
+    {
+      name: "cyclic worker output",
+      terminal: `(() => {
+        const output = [];
+        output.push(output);
+        return {
+          status: "waiting",
+          snapshotBytes: new Uint8Array(64),
+          pendingRequests: [{ id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 }],
+          settlementMode: { kind: "awaiting" },
+          output,
+        };
+      })()`,
+    },
+    {
+      name: "inexact pending request argument bytes",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:call:1", method: "call", args: [], argumentBytes: 3 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "non-string draining request id",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 }],
+        settlementMode: { kind: "draining", requiredRequestIds: [1] },
+        output: [],
+      }`,
+    },
+    {
+      name: "duplicate draining request id",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [
+          { id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 },
+          { id: "bridge:call:2", method: "call", args: [], argumentBytes: 2 },
+        ],
+        settlementMode: {
+          kind: "draining",
+          requiredRequestIds: ["bridge:call:1", "bridge:call:1"],
+        },
+        output: [],
+      }`,
+    },
+    {
+      name: "unknown draining request id",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [
+          { id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 },
+          { id: "bridge:call:2", method: "call", args: [], argumentBytes: 2 },
+        ],
+        settlementMode: {
+          kind: "draining",
+          requiredRequestIds: ["bridge:call:1", "bridge:search:1"],
+        },
+        output: [],
+      }`,
+    },
+    {
+      name: "unknown failure code",
+      terminal: `{
+        status: "failed",
+        error: "synthetic failure",
+        code: "unknown_failure",
+        failurePhase: "guest",
+        bridgeDispatchStarted: false,
+        output: [],
+      }`,
+    },
+    {
+      name: "mismatched measured snapshot bytes",
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(8),
+        pendingRequests: [{ id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "oversized accepted snapshot",
+      maxSnapshotBytes: 32,
+      terminal: `{
+        status: "waiting",
+        snapshotBytes: new Uint8Array(64),
+        pendingRequests: [{ id: "bridge:call:1", method: "call", args: [], argumentBytes: 2 }],
+        settlementMode: { kind: "awaiting" },
+        output: [],
+      }`,
+    },
+    {
+      name: "false snapshot size rejection",
+      maxSnapshotBytes: 128,
+      terminal: `{
+        status: "failed",
+        error: "synthetic size failure",
+        code: "snapshot_limit_exceeded",
+        failurePhase: "guest",
+        bridgeDispatchStarted: false,
+        output: [],
+      }`,
+    },
+  ])("rejects $name in a terminal worker result", async ({ terminal, maxSnapshotBytes = 128 }) => {
+    const workerUrl = new URL(
+      `data:text/javascript,${encodeURIComponent(`
+        import { parentPort } from "node:worker_threads";
+        parentPort.postMessage({ kind: "snapshot_started" });
+        parentPort.postMessage({ kind: "snapshot_produced", bytes: 64, serializationMs: 2 });
+        parentPort.postMessage({ kind: "result", result: ${terminal} });
+      `)}`,
+    );
+    const result = await runCodeModeWorker({
+      workerData: { config: { maxSnapshotBytes } },
+      timeoutMs: 1_000,
+      workerUrl,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      error: "invalid code mode worker response",
+    });
+    expect(result.snapshotAttempt).toEqual({
+      disposition: "rejected",
+      rejectionReason: "schema",
+      measurement: { bytes: 64, serializationMs: 2 },
+      coverage: "exact",
+    });
+  });
+
+  it.each([
+    {
+      name: "abort",
+      body: "setInterval(() => {}, 1000);",
+      timeoutMs: 1_000,
+      abort: true,
+      code: "aborted",
+    },
+    {
+      name: "timeout",
+      body: "setInterval(() => {}, 1000);",
+      timeoutMs: 25,
+      abort: false,
+      code: "timeout",
+    },
+    {
+      name: "crash",
+      body: 'throw new Error("synthetic worker crash");',
+      timeoutMs: 1_000,
+      abort: false,
+      code: "runtime_unavailable",
+      produced: false,
+    },
+    {
+      name: "crash after production",
+      body: `
+        parentPort.postMessage({ kind: "snapshot_produced", bytes: 64, serializationMs: 2 });
+        throw new Error("synthetic worker crash");
+      `,
+      timeoutMs: 1_000,
+      abort: false,
+      code: "runtime_unavailable",
+      produced: true,
+    },
+  ])(
+    "marks a snapshot $name after start as incomplete",
+    async ({ body, timeoutMs, abort, code, produced = false }) => {
+      const workerUrl = new URL(
+        `data:text/javascript,${encodeURIComponent(`
+        import { parentPort } from "node:worker_threads";
+        parentPort.postMessage({ kind: "snapshot_started" });
+        ${body}
+      `)}`,
+      );
+      const controller = new AbortController();
+      const resultPromise = runCodeModeWorker({
+        workerData: {},
+        timeoutMs,
+        workerUrl,
+        signal: controller.signal,
+      });
+      if (abort) {
+        setTimeout(() => controller.abort(), 50);
+      }
+
+      const result = await resultPromise;
+      expect(result).toMatchObject({ status: "failed", code });
+      expect(result.snapshotAttempt).toEqual({
+        disposition: "incomplete",
+        ...(produced ? { measurement: { bytes: 64, serializationMs: 2 } } : {}),
+        coverage: produced ? "exact" : "lower_bound",
+      });
+    },
+  );
 
   it.each([
     { label: "returned values", source: 'return "x".repeat(2_048);' },
@@ -230,15 +617,15 @@ describe("Code Mode worker lifecycle", () => {
       tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
     } as never);
 
-    const result = await runCodeModeWorker(
-      {
+    const result = await runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source,
         config,
         catalog: [],
       },
-      10_000,
-    );
+      timeoutMs: 10_000,
+    });
 
     expect(result.status).toBe("failed");
     if (result.status !== "failed") {

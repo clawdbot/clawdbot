@@ -3,6 +3,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { createDeferred } from "../shared/deferred.js";
+import {
+  createCodeModeStats,
+  drainCodeModeAttemptStats,
+  mergeCodeModeStats,
+} from "./code-mode-stats.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -13,6 +19,7 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode wait, scope, and suspended runs", () => {
   beforeEach(() => {
@@ -67,6 +74,166 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.value).toBe("done");
     expect(resumed.replaySafe).toBe(true);
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
+  });
+
+  it("carries parked lifecycle deltas into a fresh attempt catalog", async () => {
+    const firstCatalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          timeoutMs: 500,
+        },
+      },
+    } as never;
+    const firstCtx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef: firstCatalogRef,
+    };
+    const firstTools = createCodeModeTools(firstCtx);
+    const bridgeCompletion = createDeferred();
+    const deferredTool = pluginToolWithExecute("fake_deferred", "Deferred helper", async () => {
+      await bridgeCompletion.promise;
+      return jsonResult({ value: "bridge-complete" });
+    });
+    applyCodeModeCatalog({
+      tools: [...firstTools, deferredTool],
+      config,
+      sessionId: firstCtx.sessionId,
+      sessionKey: firstCtx.sessionKey,
+      runId: firstCtx.runId,
+      catalogRef: firstCatalogRef,
+    });
+
+    const suspended = resultDetails(
+      await expectDefined(firstTools[0], "Code Mode exec test invariant").execute(
+        "code-call-cross-attempt",
+        {
+          code: 'return await tools.callValue("fake_deferred", {});',
+        },
+      ),
+    );
+    expect(suspended.status).toBe("waiting");
+    const suspendedRunId = suspended.runId;
+    expect(typeof suspendedRunId).toBe("string");
+    if (typeof suspendedRunId !== "string") {
+      throw new Error("expected a parked Code Mode run");
+    }
+    const parked = testing.activeRuns.get(suspendedRunId);
+    expect(parked?.pending).toHaveLength(1);
+
+    const firstAttemptStats = drainCodeModeAttemptStats(firstCatalogRef);
+    expect(firstAttemptStats?.controlCalls).toEqual({ exec: 1 });
+    expect(firstAttemptStats?.bridgeCalls).toEqual({ callValue: 1 });
+    expect(firstAttemptStats?.workerRuns.exec?.count).toBe(1);
+    expect(firstAttemptStats?.bridgeLifecycle).toEqual({
+      registered: 1,
+      started: 1,
+      unresolvedAtExtraction: 1,
+    });
+    expect(firstAttemptStats?.outcomes).toEqual({ waiting: 1 });
+    const firstSnapshots = firstAttemptStats?.snapshots;
+    expect(firstSnapshots).toMatchObject({
+      attempted: 1,
+      produced: 1,
+      accepted: 1,
+      rejected: 0,
+      incomplete: 0,
+      coverage: "exact",
+    });
+    expect(firstSnapshots?.totalBytes).toBeGreaterThan(0);
+    expect(firstSnapshots?.maxBytes).toBe(firstSnapshots?.totalBytes);
+
+    const foreignCatalogRef = createToolSearchCatalogRef();
+    const foreignCtx = {
+      ...firstCtx,
+      sessionId: "foreign-session",
+      sessionKey: "agent:foreign:main",
+      catalogRef: foreignCatalogRef,
+    };
+    const foreignTools = createCodeModeTools(foreignCtx);
+    applyCodeModeCatalog({
+      tools: [...foreignTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: foreignCtx.sessionId,
+      sessionKey: foreignCtx.sessionKey,
+      runId: foreignCtx.runId,
+      catalogRef: foreignCatalogRef,
+    });
+    await expect(
+      expectDefined(foreignTools[1], "Foreign Code Mode wait test invariant").execute(
+        "code-wait-cross-attempt-foreign",
+        { runId: suspendedRunId },
+      ),
+    ).rejects.toThrow("different session");
+    expect(drainCodeModeAttemptStats(foreignCatalogRef)).toEqual({
+      controlCalls: { wait: 1 },
+      bridgeCalls: {},
+      workerRuns: {},
+      bridgeLifecycle: { unresolvedAtExtraction: 0 },
+      outcomes: { failed: 1 },
+    });
+
+    const secondCatalogRef = createToolSearchCatalogRef();
+    const secondTools = createCodeModeTools({
+      ...firstCtx,
+      catalogRef: secondCatalogRef,
+    });
+    applyCodeModeCatalog({
+      tools: [...secondTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: firstCtx.sessionId,
+      sessionKey: firstCtx.sessionKey,
+      runId: firstCtx.runId,
+      catalogRef: secondCatalogRef,
+    });
+
+    bridgeCompletion.resolve();
+    await parked?.pending[0]?.promise;
+    const completed = resultDetails(
+      await expectDefined(secondTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-cross-attempt",
+        { runId: suspendedRunId },
+      ),
+    );
+    expect(completed).toMatchObject({ status: "completed", value: { value: "bridge-complete" } });
+    const secondAttemptStats = drainCodeModeAttemptStats(secondCatalogRef);
+    expect(secondAttemptStats?.controlCalls).toEqual({ wait: 1 });
+    expect(secondAttemptStats?.bridgeCalls).toEqual({});
+    expect(secondAttemptStats?.workerRuns.resume?.count).toBe(1);
+    expect(secondAttemptStats?.bridgeLifecycle).toEqual({
+      settled: 1,
+      unresolvedAtExtraction: 0,
+    });
+    expect(secondAttemptStats?.snapshots).toBeUndefined();
+    expect(secondAttemptStats?.outcomes).toEqual({ completed: 1 });
+
+    const cumulative = createCodeModeStats();
+    mergeCodeModeStats(cumulative, firstAttemptStats ?? createCodeModeStats());
+    mergeCodeModeStats(cumulative, secondAttemptStats ?? createCodeModeStats());
+    expect(cumulative.controlCalls).toEqual({ exec: 1, wait: 1 });
+    expect(cumulative.bridgeCalls).toEqual({ callValue: 1 });
+    expect(cumulative.workerRuns.exec?.count).toBe(1);
+    expect(cumulative.workerRuns.resume?.count).toBe(1);
+    expect(cumulative.bridgeLifecycle).toEqual({
+      registered: 1,
+      started: 1,
+      settled: 1,
+      unresolvedAtExtraction: 0,
+    });
+    expect(cumulative.snapshots).toEqual(firstSnapshots);
+    expect(cumulative.outcomes).toEqual({ waiting: 1, completed: 1 });
+    expect(drainCodeModeAttemptStats(secondCatalogRef)).toEqual({
+      controlCalls: {},
+      bridgeCalls: {},
+      workerRuns: {},
+      bridgeLifecycle: { unresolvedAtExtraction: 0 },
+      outcomes: {},
+    });
   });
 
   it("keeps a safe suspension clean and wraps network content after wait resumes it", async () => {

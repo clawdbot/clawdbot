@@ -841,8 +841,8 @@ describe("headless Code Mode", () => {
     const ctx = createHeadlessHarness();
     const config = testing.resolveCodeModeHeadlessConfig(ctx);
     const controller = new AbortController();
-    const resultPromise = testing.runCodeModeWorker(
-      {
+    const resultPromise = testing.runCodeModeWorker({
+      workerData: {
         kind: "exec",
         source: "while (true) {}",
         config,
@@ -850,10 +850,9 @@ describe("headless Code Mode", () => {
         apiFiles: [],
         namespaces: [],
       },
-      5000,
-      undefined,
-      controller.signal,
-    );
+      timeoutMs: 5000,
+      signal: controller.signal,
+    });
     setTimeout(() => controller.abort(), 100);
 
     await expect(resultPromise).resolves.toMatchObject({
@@ -926,8 +925,8 @@ describe("headless Code Mode", () => {
     const config = testing.resolveCodeModeHeadlessConfig(ctx);
     const headlessScope = testing.createHeadlessAbortScope(undefined, 100);
     try {
-      const result = await testing.runCodeModeWorker(
-        {
+      const result = await testing.runCodeModeWorker({
+        workerData: {
           kind: "exec",
           source: "while (true) {}",
           config,
@@ -935,10 +934,9 @@ describe("headless Code Mode", () => {
           apiFiles: [],
           namespaces: [],
         },
-        5_000,
-        undefined,
-        headlessScope.signal,
-      );
+        timeoutMs: 5_000,
+        signal: headlessScope.signal,
+      });
 
       expect(result).toMatchObject({
         status: "failed",

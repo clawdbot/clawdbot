@@ -16,7 +16,11 @@ import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
-import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+import type {
+  CodeModeFailurePhase,
+  CodeModeSnapshotMeasurement,
+  CodeModeWorkerThreadResult,
+} from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -70,6 +74,13 @@ export type CodeModeFailureCode =
   | "snapshot_limit_exceeded"
   | "internal_error";
 
+export type CodeModeSnapshotAttempt = {
+  disposition: "accepted" | "rejected" | "incomplete";
+  rejectionReason?: "size" | "schema";
+  measurement?: CodeModeSnapshotMeasurement;
+  coverage: "exact" | "lower_bound";
+};
+
 export type CodeModeHeadlessResult =
   | {
       status: "completed";
@@ -85,7 +96,7 @@ export type CodeModeHeadlessResult =
       toolCallCount: number;
     };
 
-export type CodeModeWorkerResult =
+export type CodeModeWorkerResult = (
   | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
@@ -94,7 +105,8 @@ export type CodeModeWorkerResult =
       failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: boolean;
       output: unknown[];
-    };
+    }
+) & { snapshotAttempt?: CodeModeSnapshotAttempt };
 
 const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
   cacheRejections: true,

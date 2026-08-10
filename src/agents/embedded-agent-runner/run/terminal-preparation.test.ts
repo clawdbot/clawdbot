@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createCodeModeStats, type CodeModeStats } from "../../code-mode-stats.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -117,6 +118,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     };
     assistantTurns?: number;
     bridgeCalls?: { search: number; describe: number; call: number };
+    codeModeStats?: CodeModeStats;
     config?: unknown;
     provider?: string;
     model?: string;
@@ -143,6 +145,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     Object.assign(usageAccumulator, statsInput.usage);
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
+    usageAccumulator.codeModeStats = statsInput.codeModeStats;
     return prepareEmbeddedRunTerminal({
       runParams: {
         sessionId: "session-1",
@@ -216,6 +219,20 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
 
     const withoutBridge = await prepareStats({});
     expect(withoutBridge.agentMeta).not.toHaveProperty("bridgeCalls");
+  });
+
+  it("stamps detailed Code Mode accounting and omits it when absent", async () => {
+    const codeModeStats = createCodeModeStats();
+    codeModeStats.controlCalls.exec = 1;
+    codeModeStats.bridgeCalls.callValue = 2;
+    codeModeStats.workerRuns.exec = { count: 1, elapsedMs: 4 };
+    codeModeStats.outcomes.completed = 1;
+
+    const withStats = await prepareStats({ codeModeStats });
+    expect(withStats.agentMeta.codeModeStats).toEqual(codeModeStats);
+
+    const withoutStats = await prepareStats({});
+    expect(withoutStats.agentMeta).not.toHaveProperty("codeModeStats");
   });
 
   it("computes costUsd from accumulated usage including cache pricing", async () => {

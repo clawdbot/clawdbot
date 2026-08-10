@@ -7,13 +7,16 @@ import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-was
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
 import { toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
-import type {
-  CodeModeConfig,
-  CodeModeNamespaceDescriptor,
-  CodeModeWorkerPayload,
-  CodeModeWorkerThreadResult as CodeModeWorkerResult,
-  PendingBridgeRequest,
-  SettledBridgeRequest,
+import {
+  CODE_MODE_BRIDGE_METHODS,
+  type CodeModeBridgeMethod,
+  type CodeModeConfig,
+  type CodeModeNamespaceDescriptor,
+  type CodeModeWorkerPayload,
+  type CodeModeWorkerThreadMessage,
+  type CodeModeWorkerThreadResult as CodeModeWorkerResult,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 class CodeModeWorkerFailure extends Error {
   readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
@@ -51,6 +54,14 @@ class CodeModeGuestError extends Error {
   }
 }
 
+function postWorkerMessage(message: CodeModeWorkerThreadMessage): void {
+  if (parentPort) {
+    Reflect.apply(Reflect.get(parentPort, "postMessage") as (value: unknown) => void, parentPort, [
+      message,
+    ]);
+  }
+}
+
 function isQuickJsInterruptedError(error: unknown): boolean {
   return error instanceof JSException && error.message === "interrupted";
 }
@@ -65,6 +76,7 @@ const MAX_CODE_MODE_BRIDGE_ARGUMENT_BYTES = 8 * 1024 * 1024;
 const CODE_MODE_PENDING_TOOL_CALLS_ERROR = "too many pending code mode tool calls";
 const CODE_MODE_BRIDGE_ARGUMENT_BYTES_ERROR =
   "code mode bridge arguments exceeded 8388608 bytes; pass references or split the work into smaller batches.";
+const CODE_MODE_BRIDGE_METHOD_SET = new Set<string>(CODE_MODE_BRIDGE_METHODS);
 
 type HostRequestState = {
   pendingRequests: PendingBridgeRequest[];
@@ -148,20 +160,7 @@ function createHostRequestHandler(params: {
       throw new Error(CODE_MODE_PENDING_TOOL_CALLS_ERROR);
     }
     const method = methodHandle.toString();
-    if (
-      method !== "search" &&
-      method !== "describe" &&
-      method !== "call" &&
-      method !== "callValue" &&
-      method !== "nodes" &&
-      method !== "yield" &&
-      method !== "namespace" &&
-      method !== "agentSpawn" &&
-      method !== "agentWait" &&
-      method !== "skillsList" &&
-      method !== "skillsRead" &&
-      method !== "swarmNote"
-    ) {
+    if (!CODE_MODE_BRIDGE_METHOD_SET.has(method)) {
       throw new Error("unsupported code mode bridge method");
     }
     // Snapshotted method counters keep launch identity independent of unrelated bridge traffic.
@@ -195,7 +194,7 @@ function createHostRequestHandler(params: {
     params.state.pendingArgumentBytes += argumentBytes;
     params.state.pendingRequests.push({
       id,
-      method,
+      method: method as CodeModeBridgeMethod,
       args: normalizedArgs,
       argumentBytes,
     });
@@ -407,7 +406,15 @@ function waitingResult(params: {
   output: unknown[];
   config: CodeModeConfig;
 }): CodeModeWorkerResult {
+  postWorkerMessage({ kind: "snapshot_started" });
+  const serializationStartedAt = performance.now();
   const snapshotBytes = QuickJS.serializeSnapshot(params.vm.snapshot());
+  const snapshotSerializationMs = Math.max(0, performance.now() - serializationStartedAt);
+  postWorkerMessage({
+    kind: "snapshot_produced",
+    bytes: snapshotBytes.byteLength,
+    serializationMs: snapshotSerializationMs,
+  });
   if (snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeWorkerFailure("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
@@ -629,7 +636,5 @@ async function main(): Promise<CodeModeWorkerResult> {
 }
 
 if (parentPort) {
-  Reflect.apply(Reflect.get(parentPort, "postMessage") as (message: unknown) => void, parentPort, [
-    await main(),
-  ]);
+  postWorkerMessage({ kind: "result", result: await main() });
 }

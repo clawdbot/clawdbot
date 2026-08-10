@@ -287,6 +287,7 @@ function registerToolSearchCatalog(params: {
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
+    codeModeStats: prior?.codeModeStats,
   };
   catalogFingerprints.set(next, catalogEntriesFingerprint(next.entries));
   params.catalogRef.current = next;

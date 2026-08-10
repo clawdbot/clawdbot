@@ -30,6 +30,11 @@ import {
 } from "./code-mode-runtime.js";
 import { activeRuns, removeExpiredRuns, resumingRunIds } from "./code-mode-state.js";
 import {
+  ensureCodeModeStats,
+  recordCodeModeControlCall,
+  recordCodeModeOutcome,
+} from "./code-mode-stats.js";
+import {
   normalizeCodeModeTimeoutResult,
   normalizeCodeModeWorkerResult,
   resolveCodeModeWorkerUrl,
@@ -204,27 +209,36 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
-      const input = readCode(args);
-      const executionContext = getAgentToolExecutionContext();
-      let runtime: ToolSearchRuntime | undefined;
-      const result = normalizeCodeModeTimeoutResult(
-        await runExec({
-          toolCallId,
-          ctx,
-          code: input.code,
-          assistantTurnId:
-            executionContext?.assistantMessage.responseId?.trim() ||
-            executionContext?.assistantMessage.turnId?.trim(),
-          language: input.language,
-          enforceReplaySafeTools: ctx.forceRestartSafeTools === true,
-          signal,
-          onUpdate,
-          onRuntime: (value) => {
-            runtime = value;
-          },
-        }),
-      );
-      return formatToolSearchControlResult(result, runtime);
+      const stats = ensureCodeModeStats(ctx.catalogRef);
+      recordCodeModeControlCall(stats, "exec");
+      let outcome: "completed" | "waiting" | "failed" | "aborted" = "failed";
+      try {
+        const input = readCode(args);
+        const executionContext = getAgentToolExecutionContext();
+        let runtime: ToolSearchRuntime | undefined;
+        const result = normalizeCodeModeTimeoutResult(
+          await runExec({
+            toolCallId,
+            ctx,
+            code: input.code,
+            assistantTurnId:
+              executionContext?.assistantMessage.responseId?.trim() ||
+              executionContext?.assistantMessage.turnId?.trim(),
+            language: input.language,
+            enforceReplaySafeTools: ctx.forceRestartSafeTools === true,
+            signal,
+            onUpdate,
+            onRuntime: (value) => {
+              runtime = value;
+            },
+          }),
+        );
+        outcome =
+          result.status === "failed" && result.code === "aborted" ? "aborted" : result.status;
+        return formatToolSearchControlResult(result, runtime);
+      } finally {
+        recordCodeModeOutcome(stats, outcome);
+      }
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -241,20 +255,29 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
-      let runtime: ToolSearchRuntime | undefined;
-      const result = normalizeCodeModeTimeoutResult(
-        await runWait({
-          toolCallId,
-          ctx,
-          runId: readRunId(args),
-          signal,
-          onUpdate,
-          onRuntime: (value) => {
-            runtime = value;
-          },
-        }),
-      );
-      return formatToolSearchControlResult(result, runtime);
+      const stats = ensureCodeModeStats(ctx.catalogRef);
+      recordCodeModeControlCall(stats, "wait");
+      let outcome: "completed" | "waiting" | "failed" | "aborted" = "failed";
+      try {
+        let runtime: ToolSearchRuntime | undefined;
+        const result = normalizeCodeModeTimeoutResult(
+          await runWait({
+            toolCallId,
+            ctx,
+            runId: readRunId(args),
+            signal,
+            onUpdate,
+            onRuntime: (value) => {
+              runtime = value;
+            },
+          }),
+        );
+        outcome =
+          result.status === "failed" && result.code === "aborted" ? "aborted" : result.status;
+        return formatToolSearchControlResult(result, runtime);
+      } finally {
+        recordCodeModeOutcome(stats, outcome);
+      }
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

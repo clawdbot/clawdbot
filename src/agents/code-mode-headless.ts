@@ -105,15 +105,14 @@ async function runHeadlessWorkerLeg(params: {
     1,
     Math.min(remainingMs, timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS),
   );
-  return await runCodeModeWorker(
-    {
+  return await runCodeModeWorker({
+    workerData: {
       ...params.input,
       config: { ...params.config, timeoutMs },
     },
-    workerTimeoutMs,
-    undefined,
-    params.signal,
-  );
+    timeoutMs: workerTimeoutMs,
+    signal: params.signal,
+  });
 }
 
 function normalizeHeadlessNamespaceValue(

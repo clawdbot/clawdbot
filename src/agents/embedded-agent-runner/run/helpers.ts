@@ -4,6 +4,7 @@
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { cloneCodeModeStats } from "../../code-mode-stats.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -253,6 +254,9 @@ export function buildErrorAgentMeta(params: {
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
+    ...(params.usageAccumulator.codeModeStats
+      ? { codeModeStats: cloneCodeModeStats(params.usageAccumulator.codeModeStats) }
+      : {}),
   };
 }
 
