@@ -316,6 +316,13 @@ export function resolveAgentContextLimits(
   return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
 }
 
+function tryResolveInheritedWorkspaceAgentId(cfg: OpenClawConfig): string | undefined {
+  const retainedAgentId = getRetainedLegacyDefaultAgentId(cfg);
+  return retainedAgentId && resolveAgentEntry(cfg, retainedAgentId)
+    ? retainedAgentId
+    : tryResolveSoleAgentId(cfg);
+}
+
 export function resolveAgentWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,
@@ -327,11 +334,7 @@ export function resolveAgentWorkspaceDir(
     return stripNullBytes(resolveUserPath(configured, env));
   }
   // Read-time migration removes default:true before write-time workspace pinning can run.
-  const retainedWorkspaceAgentId = getRetainedLegacyDefaultAgentId(cfg);
-  const inheritedWorkspaceAgentId =
-    retainedWorkspaceAgentId && resolveAgentEntry(cfg, retainedWorkspaceAgentId)
-      ? retainedWorkspaceAgentId
-      : tryResolveSoleAgentId(cfg);
+  const inheritedWorkspaceAgentId = tryResolveInheritedWorkspaceAgentId(cfg);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (inheritedWorkspaceAgentId && id === inheritedWorkspaceAgentId) {
     if (fallback) {
@@ -350,9 +353,9 @@ export function tryResolveConfiguredAgentWorkspaceDir(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const soleAgentId = tryResolveSoleAgentId(cfg);
-  if (soleAgentId) {
-    return resolveAgentWorkspaceDir(cfg, soleAgentId, env);
+  const inheritedWorkspaceAgentId = tryResolveInheritedWorkspaceAgentId(cfg);
+  if (inheritedWorkspaceAgentId) {
+    return resolveAgentWorkspaceDir(cfg, inheritedWorkspaceAgentId, env);
   }
   const configured = cfg.agents?.defaults?.workspace?.trim();
   return configured ? stripNullBytes(resolveUserPath(configured, env)) : undefined;

@@ -4,6 +4,7 @@ import {
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
@@ -55,10 +56,36 @@ function isTrackedActiveSessionRunForKey(
   if (!requestedAgentId) {
     return true;
   }
-  const activeAgentId = active.agentId ?? defaultAgentId;
+  const activeAgentId = resolveChatRunOwnerAgentId({
+    agentId: active.agentId,
+    sessionKey: active.sessionKey,
+    defaultAgentId,
+  });
   return activeAgentId
     ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
     : false;
+}
+
+function isTrackedActiveSessionRunForSessionId(
+  active: TrackedActiveSessionRun,
+  sessionId: string,
+  agentId?: string,
+  defaultAgentId?: string,
+): boolean {
+  if (active.sessionId !== sessionId) {
+    return false;
+  }
+  const requestedAgentId = agentId ?? defaultAgentId;
+  if (!requestedAgentId) {
+    return true;
+  }
+  return (
+    resolveChatRunOwnerAgentId({
+      agentId: active.agentId,
+      sessionKey: active.sessionKey,
+      defaultAgentId,
+    }) === normalizeAgentId(requestedAgentId)
+  );
 }
 
 export function hasRegisteredChatRunForSessionKey(params: {
@@ -140,7 +167,13 @@ export function resolveVisibleActiveSessionRunState(params: {
           params.agentId,
           params.defaultAgentId,
         ) ||
-        (sessionId !== undefined && active.sessionId === sessionId),
+        (sessionId !== undefined &&
+          isTrackedActiveSessionRunForSessionId(
+            active,
+            sessionId,
+            params.agentId,
+            params.defaultAgentId,
+          )),
     )
     .map((active) => active.runId)
     .toSorted();

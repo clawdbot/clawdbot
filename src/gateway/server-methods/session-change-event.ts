@@ -62,29 +62,27 @@ function broadcastSessionsChanged(
     : null;
   const cfg = context.getRuntimeConfig();
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
-  let defaultAgentId: string | undefined;
+  let rowAgentId: string | undefined;
   if (sessionRow) {
     try {
-      defaultAgentId = resolveAgentIdFromSessionKey(
+      rowAgentId = resolveAgentIdFromSessionKey(
         sessionRow.key,
-        sessionRow.key === "global"
-          ? compatibilityAgentId
-          : (payload.agentId ?? compatibilityAgentId),
+        payload.agentId ?? compatibilityAgentId,
       );
     } catch {
-      defaultAgentId = undefined;
+      rowAgentId = undefined;
     }
   }
   const activeRunState =
     sessionRow &&
-    (sessionRow.key !== "global" || defaultAgentId !== undefined || payload.agentId !== undefined)
+    (sessionRow.key !== "global" || rowAgentId !== undefined || compatibilityAgentId !== undefined)
       ? resolveVisibleActiveSessionRunState({
           context,
           requestedKey: payload.sessionKey ?? sessionRow.key,
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
-          agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-          defaultAgentId,
+          agentId: rowAgentId,
+          defaultAgentId: compatibilityAgentId,
         })
       : null;
   context.broadcastToConnIds(
