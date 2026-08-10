@@ -1033,6 +1033,25 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each([
+    ["--command-cwd", ""],
+    ["--command-cwd", "   "],
+    ["--command-input", ""],
+    ["--command-input", "   "],
+  ])("rejects blank %s before forging a command payload", async (flag, value) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", flag, value], { from: "user" });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`${flag} must not be blank`));
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
   it("rejects --webhook combined with a delivery clear flag", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);

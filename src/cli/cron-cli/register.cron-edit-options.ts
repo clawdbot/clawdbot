@@ -120,11 +120,24 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Use --account or --clear-account, not both");
   }
 
+  // Blank --command-cwd / --command-input must not count as a command payload
+  // edit: presence-only checks forged `{ kind: "command" }` patches and could
+  // convert agentTurn/script jobs into empty command payloads.
+  const commandCwd = normalizeOptionalString(opts.commandCwd);
+  if (typeof opts.commandCwd === "string" && !commandCwd) {
+    throw new Error("--command-cwd must not be blank");
+  }
+  const commandInput =
+    typeof opts.commandInput === "string" ? String(opts.commandInput) : undefined;
+  if (commandInput !== undefined && commandInput.trim() === "") {
+    throw new Error("--command-input must not be blank");
+  }
+  const hasCommandInput = commandInput !== undefined;
   const hasCommandSpecificPayloadField =
     Boolean(commandShell) ||
     Boolean(commandArgv) ||
-    typeof opts.commandCwd === "string" ||
-    typeof opts.commandInput === "string" ||
+    Boolean(commandCwd) ||
+    hasCommandInput ||
     opts.commandEnv !== undefined ||
     noOutputTimeoutSeconds !== undefined ||
     outputMaxBytes !== undefined;
@@ -228,14 +241,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
     const payload: Record<string, unknown> = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
     assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
-    assignIf(
-      payload,
-      "cwd",
-      normalizeOptionalString(opts.commandCwd),
-      typeof opts.commandCwd === "string",
-    );
+    assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
-    assignIf(payload, "input", opts.commandInput, typeof opts.commandInput === "string");
+    assignIf(payload, "input", commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(
       payload,
