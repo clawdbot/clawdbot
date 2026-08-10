@@ -23,7 +23,7 @@ import {
 } from "./request-error-facets.js";
 import type { FailoverClassification, FailoverReason } from "./signal.js";
 
-export type FailoverUserCopyContext = {
+type FailoverUserCopyContext = {
   raw?: string;
   provider?: string;
   model?: string;
@@ -106,7 +106,7 @@ function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
   return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
-export const FAILOVER_REASON_BASE_COPY = {
+const FAILOVER_REASON_BASE_COPY = {
   auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
   auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
   format: () => "LLM request failed: provider rejected the request schema or tool payload.",
@@ -132,7 +132,7 @@ export const FAILOVER_REASON_BASE_COPY = {
   unknown: () => "LLM request failed with an unknown error.",
 } satisfies Record<FailoverReason, FailoverBaseCopyRenderer>;
 
-export function renderFailoverBaseCopy(
+function renderFailoverBaseCopy(
   reason: FailoverReason,
   context: FailoverUserCopyContext = {},
 ): string | undefined {
@@ -341,12 +341,12 @@ export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
-export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
+const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
-export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
-export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
-export const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
+const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
   "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
 
 const PROVIDER_REQUEST_COPY = {
@@ -356,7 +356,7 @@ const PROVIDER_REQUEST_COPY = {
   "provider-internal-503": PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
 } satisfies Record<ProviderRequestFacet, string>;
 
-export function renderProviderRequestFailureCopy(params: {
+function renderProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;

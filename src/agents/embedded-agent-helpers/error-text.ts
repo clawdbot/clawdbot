@@ -36,7 +36,6 @@ import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.j
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
-export { AUTH_INVALID_TOKEN_USER_TEXT } from "../failover/user-copy.js";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =

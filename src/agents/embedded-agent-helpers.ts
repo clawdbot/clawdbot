@@ -33,7 +33,6 @@ export {
   formatBillingErrorMessage,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-  renderRateLimitOrOverloadedCopy,
 } from "./failover/user-copy.js";
 export {
   formatRawAssistantErrorForUi,
