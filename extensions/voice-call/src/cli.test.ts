@@ -21,6 +21,21 @@ const sleepMock = vi.hoisted(() =>
       }),
   ),
 );
+const tempDirs = new Set<string>();
+
+function makeTempDir(prefix: string) {
+  // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.add(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  tempDirs.clear();
+});
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
@@ -79,6 +94,18 @@ function gatewayCredentialsError(message: string): Error {
     method: "voicecall.status",
     configPath: "/tmp/openclaw.json",
   });
+}
+
+function captureStderr() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stderr.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
 }
 
 describe("voice-call CLI status fallback", () => {
@@ -403,6 +430,14 @@ describe("voice-call CLI status fallback", () => {
 
     readSyncSpy.mockImplementation(((fd, buffer, offset, length, position) => {
       if (
+        shortened &&
+        copyTruncated !== undefined &&
+        typeof position === "number" &&
+        position === initialByteLength + (firstReadBytes ?? 0)
+      ) {
+        return 0;
+      }
+      if (
         !shortened &&
         firstReadBytes !== undefined &&
         typeof position === "number" &&
@@ -516,6 +551,264 @@ describe("voice-call CLI status fallback", () => {
     expect(result.shortened).toBe(false);
     expect(result.output).not.toContain("\ufffd");
     expect(result.output).toContain('{"word":"café"}\n');
+  });
+
+  it("drops a partial leading JSONL record from capped diagnostic reads and warns on stderr", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    const completeRecords = [
+      JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 120 } } }),
+      JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 240 } } }),
+    ];
+    const crossingRecord = JSON.stringify({ padding: "x".repeat(1_000_000) });
+    fs.writeFileSync(file, [crossingRecord, ...completeRecords].join("\n") + "\n", "utf8");
+
+    try {
+      const latencyProgram = buildProgram({});
+      const latencyOutput = captureStdout();
+      const latencyWarnings = captureStderr();
+      try {
+        await latencyProgram.parseAsync(["voicecall", "latency", "--file", file], {
+          from: "user",
+        });
+      } finally {
+        latencyWarnings.restore();
+        latencyOutput.restore();
+      }
+      expect(JSON.parse(latencyOutput.output())).toMatchObject({
+        recordsScanned: 2,
+        turnLatency: { count: 2 },
+      });
+      expect(latencyWarnings.output()).toContain(
+        "of a partial JSONL record at the start of the capped read",
+      );
+
+      sleepMock.mockRejectedValueOnce(new Error("stop tail after initial output"));
+      const tailProgram = buildProgram({});
+      const tailOutput = captureStdout();
+      const tailWarnings = captureStderr();
+      try {
+        await expect(
+          tailProgram.parseAsync(["voicecall", "tail", "--file", file, "--since", "10"], {
+            from: "user",
+          }),
+        ).rejects.toThrow("stop tail after initial output");
+      } finally {
+        tailWarnings.restore();
+        tailOutput.restore();
+      }
+      expect(tailOutput.output().trim().split("\n")).toEqual(completeRecords);
+      expect(tailWarnings.output()).toContain(
+        "of a partial JSONL record at the start of the capped read",
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when capped diagnostic reads omit complete leading records", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-boundary-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    const oldRecord = JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 999 } } });
+    const retainedPrefix = '{"call":{"metadata":{"lastTurnLatencyMs":120},"padding":"';
+    const retainedSuffix = '"}}\n';
+    const retainedRecord = `${retainedPrefix}${"x".repeat(
+      1_000_000 -
+        Buffer.byteLength(retainedPrefix, "utf8") -
+        Buffer.byteLength(retainedSuffix, "utf8"),
+    )}${retainedSuffix}`;
+    fs.writeFileSync(file, `${oldRecord}\n${retainedRecord}`, "utf8");
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    const warnings = captureStderr();
+    try {
+      await program.parseAsync(["voicecall", "latency", "--file", file], {
+        from: "user",
+      });
+    } finally {
+      warnings.restore();
+      output.restore();
+    }
+
+    expect(JSON.parse(output.output())).toMatchObject({
+      recordsScanned: 1,
+      turnLatency: { count: 1 },
+    });
+    expect(warnings.output()).toContain("omitted");
+    expect(warnings.output()).toContain("earlier JSONL bytes");
+    expect(warnings.output()).not.toContain("partial JSONL record");
+  });
+
+  it("keeps discarding an initial oversized JSONL record until its newline", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-initial-discard-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    fs.writeFileSync(file, `{"padding":"${"x".repeat(1_100_000)}`, "utf8");
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, `"}\n${JSON.stringify({ seq: 1 })}\n`, "utf8");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after initial discard output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    const warnings = captureStderr();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "10"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after initial discard output");
+    } finally {
+      warnings.restore();
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toEqual({ seq: 1 });
+    expect(output.output()).not.toContain("padding");
+    expect(warnings.output()).toContain("partial JSONL record at the start of the capped read");
+  });
+
+  it("warns on stderr when a follow-up record exceeds the JSONL read cap", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-discard-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
+    const oversizedRecord = `${JSON.stringify({ seq: 1, padding: "x".repeat(1_100_000) })}\n`;
+    const tailRecord = `${JSON.stringify({ seq: 2 })}\n`;
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, oversizedRecord, "utf8");
+      })
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, tailRecord, "utf8");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after discard output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    const warnings = captureStderr();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after discard output");
+    } finally {
+      warnings.restore();
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0] ?? "")).toEqual({ seq: 0 });
+    expect(JSON.parse(lines[1] ?? "")).toEqual({ seq: 2 });
+    expect(warnings.output()).toContain("discarding a JSONL record larger than");
+    expect(warnings.output()).toContain(String(1_000_000));
+  });
+
+  it("reads follow-up appends in bounded chunks and retains a partial final record", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-follow-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
+    const appendedRecords = Array.from({ length: 2_000 }, (_, index) =>
+      JSON.stringify({ seq: index + 1, padding: "x".repeat(550) }),
+    );
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(
+          file,
+          `${appendedRecords.join("\n")}\n${JSON.stringify({ seq: 2001 }).slice(0, -2)}`,
+        );
+      })
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, "1}\n");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after follow-up output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after follow-up output");
+    } finally {
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines).toHaveLength(2_002);
+    expect(JSON.parse(lines[0] ?? "")).toEqual({ seq: 0 });
+    expect(JSON.parse(lines.at(-1) ?? "")).toEqual({ seq: 2001 });
+  });
+
+  it("preserves a UTF-8 code point split across follow read chunks", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-utf8-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ seq: 0 })}\n`, "utf8");
+    const recordPrefix = '{"seq":1,"text":"';
+    const text = `${"x".repeat(64 * 1024 - 1 - Buffer.byteLength(recordPrefix))}中`;
+    const record = `${recordPrefix}${text}"}`;
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.appendFileSync(file, `${record}\n`, "utf8");
+      })
+      .mockRejectedValueOnce(new Error("stop tail after UTF-8 boundary output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after UTF-8 boundary output");
+    } finally {
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[1] ?? "")).toEqual({ seq: 1, text });
+  });
+
+  it("clears pending follow state when a larger replacement changes file identity", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-rotation-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    const replacement = path.join(tempRoot, "replacement.jsonl");
+    const initial = `${JSON.stringify({ seq: 0 })}\n{"old":"unfinished`;
+    const replacementRecord = JSON.stringify({ seq: 1, padding: "x".repeat(256) });
+    fs.writeFileSync(file, initial, "utf8");
+    expect(Buffer.byteLength(replacementRecord)).toBeGreaterThan(Buffer.byteLength(initial));
+
+    sleepMock
+      .mockImplementationOnce(async () => {
+        fs.writeFileSync(replacement, `${replacementRecord}\n`, "utf8");
+        fs.renameSync(replacement, file);
+      })
+      .mockRejectedValueOnce(new Error("stop tail after replacement output"));
+
+    const program = buildProgram({});
+    const output = captureStdout();
+    try {
+      await expect(
+        program.parseAsync(["voicecall", "tail", "--file", file, "--since", "1"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after replacement output");
+    } finally {
+      output.restore();
+    }
+
+    const lines = output.output().trim().split("\n");
+    expect(lines.map((line) => JSON.parse(line).seq)).toEqual([0, 1]);
   });
 
   it("caps oversized operation timeouts through the start command", async () => {

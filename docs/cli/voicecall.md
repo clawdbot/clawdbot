@@ -174,6 +174,11 @@ openclaw voicecall status --call-id <id>
 Tail the voice-call JSONL log. Prints the last `--since` lines on start, then
 streams new lines as they are written.
 
+For custom diagnostic JSONL paths, startup reads retain only the newest 1 MB to
+avoid loading oversized logs into memory. When older bytes or a leading partial
+record are omitted, the command writes a warning to stderr and then follows new
+complete records from the retained window.
+
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |
 | `--file <path>` | resolved from plugin store | Path to `calls.jsonl`.         |
@@ -184,6 +189,10 @@ streams new lines as they are written.
 
 Summarize turn-latency and listen-wait metrics from `calls.jsonl`. Output is
 JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
+
+For custom diagnostic JSONL paths, only the newest 1 MB is scanned. If the
+retained window omits earlier records, stderr reports that the summary covers
+the retained records rather than the full file history.
 
 | Flag            | Default                    | Description                          |
 | --------------- | -------------------------- | ------------------------------------ |
