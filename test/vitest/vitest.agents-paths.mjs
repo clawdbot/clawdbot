@@ -91,7 +91,7 @@ export const agentVitestProjectOwners = {
     root: agentsRoot,
     dir: agentsRoot,
     include: [`${agentsRoot}/*/**/*.test.ts`],
-    exclude: [`${embeddedRoot}/**`, `${agentsRoot}/tools/**`],
+    exclude: [...coreIsolatedFiles, `${embeddedRoot}/**`, `${agentsRoot}/tools/**`],
   },
   tools: {
     kind: "agentTools",

@@ -1110,14 +1110,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
   });
 
-  it("covers every flat agents-core test exactly once across split shards", () => {
+  it("covers flat agents-core and explicitly nested isolated tests exactly once", () => {
     const actual = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("agentic-agents-core-"))
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
-    const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
-      .toSorted((a, b) => a.localeCompare(b));
+    const expected = [
+      ...listTestFiles("src/agents").filter(
+        (file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"),
+      ),
+      ...agentVitestProjectOwners.coreIsolated.include.filter((file) =>
+        relative("src/agents", file).replaceAll("\\", "/").includes("/"),
+      ),
+    ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);
     expect(new Set(actual).size).toBe(actual.length);
