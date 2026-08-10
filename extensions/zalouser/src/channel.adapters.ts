@@ -436,7 +436,9 @@ export const zalouserAuthAdapter = {
 
 export const zalouserSecurityAdapter = {
   resolveDmPolicy: resolveZalouserDmPolicy,
-  dmRouting: { resolveDmScope: ({ cfg }) => resolveZalouserDmSessionScope(cfg) },
+  dmRouting: {
+    resolveDmScope: ({ cfg }: { cfg: OpenClawConfig }) => resolveZalouserDmSessionScope(cfg),
+  },
   collectAuditFindings: async (params: {
     accountId?: string | null;
     account: ResolvedZalouserAccount;

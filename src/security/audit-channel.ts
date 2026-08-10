@@ -521,9 +521,15 @@ export async function collectChannelSecurityFindings(params: {
     }
   }
 
-  const groupedRoutes = [
-    ...Map.groupBy(principalRoutes, (route) => route.bucketKey).entries(),
-  ].filter(([, routes]) => new Set(routes.map((route) => route.logicalPrincipalKey)).size > 1);
+  const routesByBucket = new Map<string, DmPrincipalRoute[]>();
+  for (const route of principalRoutes) {
+    const routes = routesByBucket.get(route.bucketKey) ?? [];
+    routes.push(route);
+    routesByBucket.set(route.bucketKey, routes);
+  }
+  const groupedRoutes = [...routesByBucket.entries()].filter(
+    ([, routes]) => new Set(routes.map((route) => route.logicalPrincipalKey)).size > 1,
+  );
   const broadWildcardAgents = new Set(
     groupedRoutes
       .filter(
