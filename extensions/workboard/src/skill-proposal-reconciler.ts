@@ -65,31 +65,33 @@ export function createWorkboardSkillProposalReconciler(params: {
     running = true;
     try {
       for (const agentId of listAgentIds(ctx.config)) {
-        if (stopped) {
-          return;
-        }
-        const manifest = await params.api.runtime.gateway.request(
-          "skills.proposals.list",
-          { agentId },
-          {
-            timeoutMs: SKILL_PROPOSAL_RECONCILE_TIMEOUT_MS,
-            scopes: ["operator.read"],
-          },
-        );
-        for (const proposal of parsePendingProposals(manifest)) {
+        try {
           if (stopped) {
             return;
           }
-          await captureWorkboardSkillProposalFollowup({
-            proposal,
-            agentId,
-            store: params.store,
-          });
+          const manifest = await params.api.runtime.gateway.request(
+            "skills.proposals.list",
+            { agentId },
+            {
+              timeoutMs: SKILL_PROPOSAL_RECONCILE_TIMEOUT_MS,
+              scopes: ["operator.read"],
+            },
+          );
+          for (const proposal of parsePendingProposals(manifest)) {
+            if (stopped) {
+              return;
+            }
+            await captureWorkboardSkillProposalFollowup({
+              proposal,
+              agentId,
+              store: params.store,
+            });
+          }
+        } catch (error) {
+          const errorKind = error instanceof Error ? error.name : "UnknownError";
+          ctx.logger.warn(`workboard: skill proposal reconciliation failed error=${errorKind}`);
         }
       }
-    } catch (error) {
-      const errorKind = error instanceof Error ? error.name : "UnknownError";
-      ctx.logger.warn(`workboard: skill proposal reconciliation failed error=${errorKind}`);
     } finally {
       running = false;
     }

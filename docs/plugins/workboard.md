@@ -76,13 +76,16 @@ The live plugin hook creates the card immediately for Gateway-originated
 events. Workboard also reconciles the durable pending-proposal manifest every
 30 seconds for each configured agent, so proposals committed by the standalone
 `openclaw skills workshop` CLI converge on the same card after the Gateway is
-running. Gateway restarts replay current pending state through that same
-idempotent path.
+running. Gateway restarts backfill only current pending proposals through that
+same idempotent path.
 
 Repeated events for the same proposal reuse one card. That card is labeled
-`skill-workshop` and `proposal-review`; it records the proposal kind and source
-when available, but it does not copy mutable proposal content. Terminal or
-non-pending proposal events do not create cards.
+`skill-workshop` and `proposal-review`. Stored review metadata is limited to the
+proposal identifier, skill name, kind, assigned agent, labels, and source when
+available; it does not copy mutable proposal content. Terminal or non-pending
+proposal events do not create cards. These cards are one-way reminders: a later
+terminal proposal state does not automatically move or delete an existing card,
+so operators retain ownership of its Workboard lifecycle.
 
 This integration is review-only. A Workboard card cannot apply, publish,
 reject, quarantine, or otherwise modify a proposal. Those decisions remain in

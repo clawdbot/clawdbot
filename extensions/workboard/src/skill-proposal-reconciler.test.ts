@@ -115,6 +115,37 @@ describe("Workboard Skill Workshop proposal reconciler", () => {
     await service.stop?.(serviceContext(logger));
   });
 
+  it("continues to later agents when an earlier agent fails", async () => {
+    vi.useFakeTimers();
+    const store = new WorkboardStore(createMemoryStore());
+    const request = vi.fn(async (_method: string, params: { agentId: string }) => {
+      if (params.agentId === "main") {
+        throw new Error("provider echoed secret proposal content");
+      }
+      return manifest([pendingProposal("ops-proposal-20260810-abcdef")]);
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const service = createWorkboardSkillProposalReconciler({
+      api: { runtime: { gateway: { request } } } as never,
+      store,
+    });
+
+    void service.start(serviceContext(logger));
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({
+        agentId: "ops",
+        notes: expect.stringContaining("Proposal: ops-proposal-20260810-abcdef"),
+      }),
+    ]);
+    const warning = String(logger.warn.mock.calls[0]?.[0] ?? "");
+    expect(warning).toBe("workboard: skill proposal reconciliation failed error=Error");
+    expect(warning).not.toContain("secret proposal content");
+    await service.stop?.(serviceContext(logger));
+  });
+
   it("sanitizes failures and retries on the next interval", async () => {
     vi.useFakeTimers();
     const store = new WorkboardStore(createMemoryStore());
@@ -134,7 +165,7 @@ describe("Workboard Skill Workshop proposal reconciler", () => {
     expect(warning).toBe("workboard: skill proposal reconciliation failed error=Error");
     expect(warning).not.toContain("secret proposal content");
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(4);
     await service.stop?.(serviceContext(logger));
   });
 });
