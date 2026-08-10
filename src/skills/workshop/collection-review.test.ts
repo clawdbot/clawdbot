@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import {
@@ -16,7 +18,13 @@ import {
 } from "./collection-review.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
+const runWithGatewayIndependentRootWorkAdmission = vi.hoisted(() =>
+  vi.fn(async (run: () => Promise<unknown>) => await run()),
+);
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
+vi.mock("../../process/gateway-work-admission.js", () => ({
+  runWithGatewayIndependentRootWorkAdmission,
+}));
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -30,6 +38,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   runEmbeddedAgent.mockReset();
+  runWithGatewayIndependentRootWorkAdmission.mockClear();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -95,6 +104,52 @@ describe("skill collection review", () => {
     ).toBe(true);
   });
 
+  it("leaves disabled and agent-filtered skills outside the editable collection", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-filtered-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "enabled", description: "Enabled procedure" },
+      { name: "disabled", description: "Disabled procedure" },
+      { name: "agent-filtered", description: "Filtered procedure" },
+    ]);
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      expect(params.prompt).toContain("enabled");
+      expect(params.prompt).not.toContain("disabled");
+      expect(params.prompt).not.toContain("agent-filtered");
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await tool.execute("read", { action: "read", skill_name: "enabled" });
+      await tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [{ action: "keep", name: "enabled" }],
+      });
+      return {};
+    });
+
+    await runSkillCollectionReview({
+      agentId: "main",
+      config: {
+        agents: { list: [{ id: "main", skills: ["enabled", "disabled"] }] },
+        skills: {
+          entries: { disabled: { enabled: false } },
+          workshop: { autonomous: { mode: "auto" } },
+        },
+      },
+      workspaceDir,
+      env: testState.env,
+    });
+
+    expect((await fs.readdir(path.join(workspaceDir, "skills"))).toSorted()).toEqual([
+      "agent-filtered",
+      "disabled",
+      "enabled",
+    ]);
+  });
+
   it("does not dispatch a second review after a gateway-style restart", async () => {
     const workspaceDir = await tempDirs.make("openclaw-collection-review-restart-");
     await writeWorkspaceSkills(workspaceDir, [
@@ -123,6 +178,51 @@ describe("skill collection review", () => {
     await runScheduledSkillCollectionReviews({ config, env: testState.env });
     await runScheduledSkillCollectionReviews({ config, env: testState.env });
 
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits and reports each workspace independently", async () => {
+    const oversizedWorkspace = await tempDirs.make("openclaw-collection-review-failed-");
+    const healthyWorkspace = await tempDirs.make("openclaw-collection-review-healthy-");
+    await writeWorkspaceSkills(oversizedWorkspace, [
+      { name: "oversized", description: "Oversized", body: "x".repeat(240_001) },
+    ]);
+    await writeWorkspaceSkills(healthyWorkspace, [
+      { name: "useful", description: "Useful procedure" },
+    ]);
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await tool.execute("read", { action: "read", skill_name: "useful" });
+      await tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [{ action: "keep", name: "useful" }],
+      });
+      return {};
+    });
+    const onError = vi.fn();
+
+    await runScheduledSkillCollectionReviews({
+      config: {
+        agents: {
+          list: [
+            { id: "failed", default: true, workspace: oversizedWorkspace },
+            { id: "healthy", workspace: healthyWorkspace },
+          ],
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      },
+      env: testState.env,
+      onError,
+    });
+
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), oversizedWorkspace);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 

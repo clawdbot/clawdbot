@@ -177,6 +177,10 @@ export function startGatewayMaintenanceTimers(params: {
         (() =>
           runScheduledSkillCollectionReviews({
             config: params.getRuntimeConfig(),
+            onError: (err, workspaceDir) =>
+              params.logHealth.error(
+                `skill collection review failed for ${workspaceDir}: ${formatError(err)}`,
+              ),
           })),
     });
   }

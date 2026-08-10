@@ -5,6 +5,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
@@ -24,6 +25,7 @@ const COLLECTION_REVIEW_SESSION_SEGMENT = "skill-collection-review";
 const COLLECTION_REVIEW_TIMEOUT_MS = 10 * 60_000;
 const COLLECTION_REVIEW_INITIAL_DELAY_MS = 5 * 60_000;
 const COLLECTION_REVIEW_INTERVAL_MS = 24 * 60 * 60_000;
+const log = createSubsystemLogger("skills/workshop");
 
 export function startSkillCollectionMaintenance(options: {
   onError: (error: unknown) => void;
@@ -122,27 +124,37 @@ export async function runSkillCollectionReview(params: {
 export async function runScheduledSkillCollectionReviews(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  onError?: (error: unknown, workspaceDir: string) => void;
 }): Promise<void> {
   if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
     return;
   }
-  await runWithGatewayIndependentRootWorkAdmission(async () => {
-    const reviewedWorkspaces = new Set<string>();
-    const nowMs = Date.now();
-    for (const agentId of listAgentIds(params.config)) {
-      const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, params.env);
-      if (reviewedWorkspaces.has(workspaceDir)) {
-        continue;
-      }
-      reviewedWorkspaces.add(workspaceDir);
-      const stateOptions = params.env ? { env: params.env } : {};
-      if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
-        continue;
-      }
-      await runSkillCollectionReview({ ...params, agentId, workspaceDir });
-      recordSkillCollectionReviewSuccess(workspaceDir, Date.now(), stateOptions);
+  const reviewedWorkspaces = new Set<string>();
+  const nowMs = Date.now();
+  const reportError =
+    params.onError ??
+    ((error: unknown, workspaceDir: string) => {
+      log.warn(`skill collection review failed for ${workspaceDir}: ${String(error)}`);
+    });
+  for (const agentId of listAgentIds(params.config)) {
+    const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, params.env);
+    if (reviewedWorkspaces.has(workspaceDir)) {
+      continue;
     }
-  });
+    reviewedWorkspaces.add(workspaceDir);
+    const stateOptions = params.env ? { env: params.env } : {};
+    if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
+      continue;
+    }
+    try {
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        await runSkillCollectionReview({ ...params, agentId, workspaceDir });
+        recordSkillCollectionReviewSuccess(workspaceDir, Date.now(), stateOptions);
+      });
+    } catch (error) {
+      reportError(error, workspaceDir);
+    }
+  }
 }
 
 function buildCollectionReviewPrompt(

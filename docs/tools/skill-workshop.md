@@ -57,11 +57,12 @@ rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
 Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval; `propose` and `off` do not run collection review.
 
-Every current skill must be read and receive exactly one `keep`, `write`, or
-`drop` decision. OpenClaw validates and scans every write before changing the
-workspace, serializes collection edits with a workspace lease, and retains one
-backup under the state directory. The changed collection appears in new agent
-runs; running sessions keep their existing skill snapshot.
+Every eligible writable skill must be read and receive exactly one `keep`,
+`write`, or `drop` decision. Disabled and agent-filtered skills stay untouched.
+OpenClaw validates and scans every write before changing the workspace,
+serializes collection edits with a workspace lease, and retains one backup
+under the state directory. The changed collection appears in new agent runs;
+running sessions keep their existing skill snapshot.
 
 The daily boundary is persisted per workspace, so Gateway restarts do not
 repeat a successful review. Review is admitted only for collections of at most

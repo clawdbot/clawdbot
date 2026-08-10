@@ -74,6 +74,9 @@ export function listWritableSkillCollection(
   const status = buildWorkspaceSkillStatus(workspaceDir, options);
   const byFile = new Map<string, WritableSkillCollectionEntry>();
   for (const skill of status.skills) {
+    if (!skill.eligible || skill.blockedByAgentFilter) {
+      continue;
+    }
     try {
       assertWritableSkillTarget(workspaceDir, skill);
     } catch {
