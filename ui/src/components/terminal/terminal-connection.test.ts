@@ -228,7 +228,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -254,7 +256,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot, newlyObservedFrom) => replays.push({ snapshot, newlyObservedFrom }),
+      onReplay: (snapshot, newlyObservedFrom) => {
+        replays.push({ snapshot, newlyObservedFrom });
+      },
     });
     deferRequest(client, "terminal.attach", recovery);
 
@@ -301,7 +305,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -326,7 +332,9 @@ describe("TerminalConnection", () => {
     const recovery = deferred<TestSessionResult>();
     await openSession(conn, {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     deferRequest(client, "terminal.attach", recovery);
@@ -380,7 +388,9 @@ describe("TerminalConnection", () => {
 
     const opening = openSession(conn, {
       onData: () => {},
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     emitData(client, 7, "first");
@@ -635,7 +645,9 @@ describe("TerminalConnection", () => {
 
     const attachPromise = conn.attach("s1", {
       onData: (chunk) => data.push(chunk),
-      onReplay: (snapshot) => replays.push(snapshot),
+      onReplay: (snapshot) => {
+        replays.push(snapshot);
+      },
       onExit: (info) => exits.push(info),
     });
     emitExit(client, { exitCode: null, signal: null, reason: "detached" });

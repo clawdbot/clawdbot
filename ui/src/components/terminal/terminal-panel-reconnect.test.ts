@@ -243,7 +243,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     const externalInput = document.createElement("input");
     panel.renderRoot.append(externalInput);
     externalInput.focus();
-    expect(panel.renderRoot.activeElement).toBe(externalInput);
+    expect(panel.shadowRoot?.activeElement).toBe(externalInput);
 
     listener?.({
       event: "terminal.data",
@@ -256,7 +256,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     const newerExternalInput = document.createElement("input");
     panel.renderRoot.append(newerExternalInput);
     newerExternalInput.focus();
-    expect(panel.renderRoot.activeElement).toBe(newerExternalInput);
+    expect(panel.shadowRoot?.activeElement).toBe(newerExternalInput);
     const previousHost = controllerParents[1];
     if (!previousHost) {
       throw new Error("missing previous terminal host");
@@ -270,7 +270,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
     await waitForFast(() => expect(controllers[1].dispose).toHaveBeenCalledOnce());
     expect(new TextDecoder().decode(controllers[2].write.mock.calls[0]?.[0])).toBe(recoveredReplay);
-    expect(panel.renderRoot.activeElement).toBe(newerExternalInput);
+    expect(panel.shadowRoot?.activeElement).toBe(newerExternalInput);
     expect(controllerParents[2]?.style.display).toBe("none");
 
     listener?.({
@@ -298,7 +298,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     }
     currentHost.style.display = "block";
     currentHost.focus();
-    expect(panel.renderRoot.activeElement).toBe(currentHost);
+    expect(panel.shadowRoot?.activeElement).toBe(currentHost);
     const finishSecondReplacement = resolveSecondReplacement;
     if (!finishSecondReplacement) {
       throw new Error("second replacement controller creation did not start");
@@ -309,7 +309,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(new TextDecoder().decode(controllers[3].write.mock.calls[0]?.[0])).toBe(
       secondRecoveredReplay,
     );
-    expect(panel.renderRoot.activeElement).toBe(controllerParents[3]);
+    expect(panel.shadowRoot?.activeElement).toBe(controllerParents[3]);
     expect(controllers[3].terminal.focus).not.toHaveBeenCalled();
     expect(controllerParents[3]?.style.display).toBe("block");
     expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(3);
