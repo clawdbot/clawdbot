@@ -549,6 +549,21 @@ describe("gateway probe endpoints", () => {
     }
   });
 
+  it("preserves the legacy ready fallback when no checker is supplied", async () => {
+    await withGatewayServer({
+      prefix: "probe-ready-without-checker",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/readyz",
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "ready" });
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,

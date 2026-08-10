@@ -247,11 +247,12 @@ async function handleGatewayProbeRequest(
 
   let statusCode = 503;
   let body: string;
-  if (!getReadiness) {
-    body =
-      status === "status"
-        ? JSON.stringify({ status: "unknown", ready: false })
-        : JSON.stringify({ ready: false });
+  if (!getReadiness && status === "ready") {
+    // Preserve the compatibility fallback for embedders that omit the optional checker.
+    statusCode = 200;
+    body = JSON.stringify({ ok: true, status });
+  } else if (!getReadiness) {
+    body = JSON.stringify({ status: "unknown", ready: false });
   } else {
     try {
       const result = await getReadiness();

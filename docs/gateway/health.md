@@ -67,11 +67,13 @@ Use each HTTP probe for one purpose:
 | `/ready`, `/readyz`   | Traffic admission   | `200` when required conditions pass; otherwise `503`.                             |
 | `/statusz`            | Condition diagnosis | `200` for passing, degraded, failing, or unknown evaluated state.                 |
 
-`/statusz` derives its state from the same selected canonical conditions as
-`/readyz`; it does not run another provider or an active channel probe. Required
-`False` conditions produce `failing`, required `Unknown` conditions produce
-`unknown`, advisory non-passing conditions produce `degraded`, and an otherwise
-passing result produces `passing`.
+`/statusz` derives its state from a canonical readiness evaluation under the
+same rules as `/readyz`; it does not introduce a second evaluator or an active
+channel probe. Selected readiness criteria may still run their bounded checks
+as part of that canonical evaluation. Required `False` conditions produce
+`failing`, required `Unknown` conditions produce `unknown`, advisory non-passing
+conditions produce `degraded`, and an otherwise passing result produces
+`passing`.
 
 Local and authenticated `/statusz` callers receive the non-passing canonical
 conditions, including their bounded `reason`, `message`, and subject references.
@@ -83,9 +85,10 @@ evaluation returns HTTP `200` even when the derived state is failing; use
 Gateway health response. It exits non-zero for `failing` and `unknown`, exits
 zero for `passing` and `degraded`, and prints the canonical messages for
 non-passing conditions. Legacy Gateways that do not return condition health keep
-the previous reachability-only exit behavior. `--verbose` may perform slower
-provider probes for diagnostics, but `/readyz` and `/statusz` read owner-published
-runtime state instead of invoking those probes.
+the previous reachability-only exit behavior. `--verbose` may perform slower live
+channel probes for diagnostics. `/readyz` and `/statusz` do not invoke those
+probes; runtime-owned conditions read published state, while selected readiness
+providers run only under the canonical evaluator's bounds.
 
 Without a `gateway.readiness` section, `/ready` and `/readyz` use the existing
 Gateway lifecycle and channel checks projected into a versioned canonical
