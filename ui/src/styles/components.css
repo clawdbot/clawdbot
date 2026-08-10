@@ -609,12 +609,18 @@ openclaw-session-owner-chip {
   box-shadow: var(--shadow-lg);
 }
 
+/* Toasts carry recovery instructions ("Undo", where to re-enable), so a message
+ * that outgrows one line wraps instead of ellipsing the instruction away. The
+ * clamp still bounds a pathological string. */
 .app-toast__message {
   min-width: 0;
   overflow: hidden;
   font-size: var(--control-ui-text-md);
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .app-toast__action,
