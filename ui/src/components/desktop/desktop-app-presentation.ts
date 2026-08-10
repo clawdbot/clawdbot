@@ -3,7 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 
 export function desktopAppLabel(app: WorkerDesktopAppId): string {
-  return app === "browser" ? t("desktop.browser") : t("desktop.terminal");
+  return app === "browser" ? t("browser.title") : t("terminal.title");
 }
 
 export function desktopAppIcon(app: WorkerDesktopAppId) {

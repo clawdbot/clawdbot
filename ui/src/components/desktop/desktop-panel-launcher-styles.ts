@@ -52,22 +52,6 @@ export const desktopPanelLauncherStyles = css`
   .desktop-app-button__icon--launching {
     animation: desktop-app-launch 900ms linear infinite;
   }
-  .desktop-app-status {
-    overflow: hidden;
-    max-width: 150px;
-    color: var(--muted);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .desktop-app-status--pending {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
   .desktop-connecting {
     position: absolute;
     inset: 0;

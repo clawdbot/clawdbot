@@ -124,7 +124,7 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
       const viewRequest = await gateway.waitForRequest("worker.desktop.observe");
       expect(viewRequest.params).toEqual({ environmentId: "worker-desktop-1", control: false });
-      await panel.getByText("Connecting to worker desktop…", { exact: true }).waitFor();
+      await panel.getByText("Connecting to desktop…", { exact: true }).waitFor();
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
       await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
       expect(await panel.getByText("View only", { exact: true }).count()).toBe(0);
@@ -153,10 +153,10 @@ suite.define(() => {
       await browserButton.click();
       const launchRequest = await gateway.waitForRequest("worker.desktop.launch");
       expect(launchRequest.params).toEqual({ environmentId: "worker-desktop-1", app: "browser" });
-      await panel.getByRole("button", { name: "Opening Browser…", exact: true }).waitFor();
+      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("true");
       expect(await terminalButton.isEnabled()).toBe(true);
       await gateway.resolveDeferred("worker.desktop.launch", { app: "browser", status: "ready" });
-      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
+      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
 
       await gateway.deferNext("worker.desktop.launch");
       await browserButton.click();

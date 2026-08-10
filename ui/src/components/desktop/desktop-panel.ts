@@ -57,7 +57,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @state() private noticeText: string | null = null;
   @state() private disconnectedReason: string | null = null;
   @state() private launchingApp: DesktopAppId | null = null;
-  @state() private appStatusText: string | null = null;
   @state() private launchErrorText: string | null = null;
   @state() private desktopApps: DesktopAppId[] = [];
 
@@ -305,7 +304,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private clearLaunchState(): void {
     this.launchOperationId += 1;
     this.launchingApp = null;
-    this.appStatusText = null;
     this.launchErrorText = null;
   }
 
@@ -453,7 +451,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const operationId = ++this.launchOperationId;
     const label = desktopAppLabel(app);
     this.launchingApp = app;
-    this.appStatusText = t("desktop.openingApp", { app: label });
     this.launchErrorText = null;
     try {
       await client.request<WorkerDesktopLaunchResult>("worker.desktop.launch", {
@@ -464,13 +461,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         return;
       }
       this.launchingApp = null;
-      this.appStatusText = null;
     } catch (error) {
       if (operationId !== this.launchOperationId || environmentId !== this.environmentId) {
         return;
       }
       this.launchingApp = null;
-      this.appStatusText = null;
       this.launchErrorText = t("desktop.errors.launchFailed", {
         app: label,
         error: formatUiError(error),
@@ -576,12 +571,12 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
               ${this.desktopApps.map((app) => {
                 const launching = this.launchingApp === app;
                 const label = desktopAppLabel(app);
-                const buttonLabel = launching ? t("desktop.openingApp", { app: label }) : label;
                 return html`<button
                   class="desktop-app-button"
                   type="button"
-                  title=${buttonLabel}
-                  aria-label=${buttonLabel}
+                  title=${label}
+                  aria-label=${label}
+                  aria-busy=${launching ? "true" : "false"}
                   ?disabled=${!this.environmentId || launching}
                   @click=${() => void this.launchApp(app)}
                 >
@@ -593,20 +588,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
                   >
                     ${desktopAppIcon(app)}
                   </span>
-                  <span>${buttonLabel}</span>
+                  <span>${label}</span>
                 </button>`;
               })}
             </div>`
-          : nothing}
-        ${this.appStatusText
-          ? html`<span
-              class="desktop-app-status ${this.launchingApp ? "desktop-app-status--pending" : ""}"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              ${this.appStatusText}
-            </span>`
           : nothing}
         <span class="desktop-toolbar__spacer"></span>
         ${!this.controlling
