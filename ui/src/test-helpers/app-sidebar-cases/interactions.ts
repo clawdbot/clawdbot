@@ -638,7 +638,19 @@ describe("AppSidebar catalog session rows", () => {
       const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
       expect(items).toHaveLength(2);
       expect(items[1]?.disabled).toBe(true);
-      expect(row.querySelector("[data-catalog-session-menu]")).not.toBeNull();
+      const menuButton = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
+      expect(menuButton).not.toBeNull();
+
+      const keyboardContextMenu = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "F10",
+        shiftKey: true,
+      });
+      row.querySelector("a")?.dispatchEvent(keyboardContextMenu);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector("openclaw-catalog-session-menu")).not.toBeNull();
+      expect(keyboardContextMenu.defaultPrevented).toBe(true);
     } finally {
       vi.useRealTimers();
     }
