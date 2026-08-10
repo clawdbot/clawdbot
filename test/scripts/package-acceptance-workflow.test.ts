@@ -6361,7 +6361,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         profile,
         releasePackagePaths[profile].reduce((total, timeout) => total + timeout, 0),
       ]),
-    );
+    ) as Record<(typeof profiles)[number], number>;
     expect(releasePackageTimeouts).toEqual({ beta: 280, stable: 280, full: 310 });
     for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
       expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(420);

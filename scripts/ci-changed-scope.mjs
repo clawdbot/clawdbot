@@ -73,6 +73,8 @@ const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
   /^src\/media-understanding\/attachments\.(?:cache(?:\.test)?|file-url\.windows\.test|normalize(?:\.test)?)\.ts$/;
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
   /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
+const WINDOWS_MCP_ENV_SCOPE_RE =
+  /^src\/(?:cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
@@ -183,7 +185,8 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_DAEMON_SCOPE_RE.test(path) ||
         WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path) ||
         WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE.test(path) ||
-        WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path)) &&
+        WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
+        WINDOWS_MCP_ENV_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
         WINDOWS_TEST_SCOPE_RE.test(path) ||
         WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
@@ -191,7 +194,8 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_DAEMON_SCOPE_RE.test(path) ||
         WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path) ||
         WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE.test(path) ||
-        WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path))
+        WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
+        WINDOWS_MCP_ENV_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }

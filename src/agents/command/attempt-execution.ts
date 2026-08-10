@@ -22,6 +22,7 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -82,7 +83,6 @@ import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js"
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -527,7 +527,7 @@ export function runAgentAttempt(params: {
   agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
-  sessionTarget?: AgentRunSessionTarget;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
@@ -939,6 +939,7 @@ export function runAgentAttempt(params: {
           runCliAgent({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             sessionEntry: params.sessionEntry,
             chatType: params.sessionEntry?.chatType,
             agentId: params.sessionAgentId,
