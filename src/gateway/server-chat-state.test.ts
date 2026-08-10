@@ -84,15 +84,31 @@ describe("createChatRunState", () => {
       toolCallId: "done",
       result: "x".repeat(256_000),
     });
+    event(6, "item", {
+      kind: "preamble",
+      itemId: "p-1",
+      progressText: "Inspection complete",
+    });
+    event(7, "item", {
+      kind: "preamble",
+      itemId: "p-2",
+      progressText: "Running autoreview",
+    });
     event(3, "tool", { phase: "result", name: "read", toolCallId: "active" });
 
     expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-      { seq: 1, stream: "item", data: { itemId: "p-1", progressText: "Inspecting" } },
       { seq: 2, stream: "tool", data: { phase: "start", toolCallId: "active" } },
       { seq: 3, stream: "tool", data: { phase: "update", toolCallId: "active" } },
+      {
+        seq: 6,
+        stream: "item",
+        ts: 1_001,
+        data: { itemId: "p-1", progressText: "Inspection complete" },
+      },
+      { seq: 7, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
     ]);
 
-    for (let seq = 6; seq <= 70; seq += 1) {
+    for (let seq = 8; seq <= 70; seq += 1) {
       event(seq, "tool", {
         phase: "start",
         name: "read",

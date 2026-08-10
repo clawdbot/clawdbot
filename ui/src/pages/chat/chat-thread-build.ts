@@ -134,7 +134,9 @@ function resolveRunInsertionBounds(
     return findRunTurnBounds(items, runId);
   }
   if (runId === currentRunId) {
-    return currentTurnBounds;
+    // Active runs can span steers: the original prompt is a floor, not a ceiling.
+    const runBounds = findRunTurnBounds(items, runId);
+    return runBounds?.afterKey ? { afterKey: runBounds.afterKey } : currentTurnBounds;
   }
   // Legacy rows may lack the user-run identity needed for exact bounds. Keep
   // their timestamp ordering across historical turns, but never cross the
