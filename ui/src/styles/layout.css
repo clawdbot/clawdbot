@@ -1285,8 +1285,8 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-update-card__status--warn {
-  border-color: color-mix(in srgb, var(--warning, var(--danger)) 40%, var(--border));
-  background: color-mix(in srgb, var(--warning, var(--danger)) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
 .sidebar-update-card__action--undismissable {
