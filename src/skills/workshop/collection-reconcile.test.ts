@@ -452,6 +452,45 @@ describe("skill collection reconciliation", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
   });
 
+  it("invalidates skill snapshots when restore and rollback both fail", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Original procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [
+        {
+          action: "write",
+          name: "procedure",
+          description: "Clean procedure",
+          content: "# Clean\n",
+        },
+      ],
+    });
+    const skillDir = path.join(workspaceDir, "skills", "procedure");
+    const beforeVersion = getSkillsSnapshotVersion();
+    const originalCopy = fs.cp.bind(fs);
+    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      if (path.resolve(String(destination)) === path.resolve(skillDir)) {
+        throw new Error(`forced restore copy failure: ${String(source)}`);
+      }
+      await originalCopy(source, destination, options);
+    });
+
+    try {
+      await expect(
+        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+      ).rejects.toThrow("current collection was not restored");
+    } finally {
+      copySpy.mockRestore();
+    }
+
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(beforeVersion);
+    await expect(fs.access(skillDir)).rejects.toThrow();
+  });
+
   it("restores project-agent skills from their writable root", async () => {
     const skillDir = path.join(workspaceDir, ".agents", "skills", "project-procedure");
     await writeSkill({

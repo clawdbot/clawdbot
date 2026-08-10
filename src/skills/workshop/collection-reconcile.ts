@@ -370,13 +370,16 @@ export async function restoreLatestSkillCollectionBackup(params: {
           );
         }
       }
-      await restoreSkillCollectionBackupTransaction({
-        workspaceDir,
-        backupDir,
-        skillDirs: manifest.skillDirs,
-        resultSkillDirs: manifest.resultSkillDirs,
-      });
-      bumpSkillsSnapshotVersion({ reason: "workshop" });
+      try {
+        await restoreSkillCollectionBackupTransaction({
+          workspaceDir,
+          backupDir,
+          skillDirs: manifest.skillDirs,
+          resultSkillDirs: manifest.resultSkillDirs,
+        });
+      } finally {
+        bumpSkillsSnapshotVersion({ reason: "workshop" });
+      }
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
         for (const relativeDir of affectedDirs) {
