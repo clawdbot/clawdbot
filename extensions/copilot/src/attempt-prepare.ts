@@ -12,16 +12,21 @@ import type {
   CopilotAttemptDeps,
   CopilotAttemptParams,
 } from "./attempt-types.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 export function prepareCopilotAttemptContext(
   params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ) {
   const settledToolFinalization = deps.operation === "settled-tool-finalization";
+  if (!settledToolFinalization) {
+    assertCopilotAttemptHostCapabilities(params);
+  }
+  const { hostCapabilities: _hostCapabilities, ...capabilityFreeParams } = params;
   const input = (
     settledToolFinalization
       ? {
-          ...params,
+          ...capabilityFreeParams,
           disableTools: true,
           images: [],
           imageOrder: [],

@@ -10,7 +10,6 @@ import {
   runAgentHarnessBeforeCompactionHook,
   type AgentHarness,
   type AgentHarnessAttemptParamsV2,
-  type AgentHarnessSettledTurnFinalizationAttemptParams,
   type AgentHarnessV2,
   type AgentHarnessAttemptResult,
   type AgentHarnessCompactParams,
@@ -37,9 +36,18 @@ import type {
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
-type CopilotHarnessAttemptParams =
+type CopilotSettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
+type CopilotHarnessAttemptParams = (
   | AgentHarnessAttemptParamsV2
-  | AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>;
+  | CopilotSettledTurnFinalizationAttemptParams
+) & {
+  initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
+    journalValidated?: boolean;
+    sdkSessionId?: string;
+  };
+};
 
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
@@ -343,7 +351,7 @@ async function compactTrackedSdkSession(params: {
 // the token (see `tokenFingerprint` in `src/auth-bridge.ts`), so
 // rotating the token under the same profile id still invalidates
 // the compat key without ever serializing the raw credential.
-type CopilotSessionCompatParams = AgentHarnessAttemptParamsV2 | AgentHarnessCompactParams;
+type CopilotSessionCompatParams = CopilotHarnessAttemptParams | AgentHarnessCompactParams;
 
 function readAgentIdFromSessionKey(sessionKey: unknown): string | undefined {
   if (typeof sessionKey !== "string") {

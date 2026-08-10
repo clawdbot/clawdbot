@@ -460,17 +460,23 @@ export async function runCopilotExecution(context: {
         resultContentSourceByToolName,
       },
     });
-    activeRunHandleRef = registerCopilotActiveRun({
-      abortActiveSession,
-      bridge,
-      canAcceptSteering: () => initialSdkUserValidated,
-      input,
-      isAborted: () => aborted,
-      isSettled: () => settled,
-      session,
-      transcriptJournal,
-      userInputBridge,
-    });
+    if (!settledToolFinalization) {
+      assertCopilotAttemptHostCapabilities(input);
+      if (!userInputBridge) {
+        throw new Error("[copilot-attempt] ordinary attempts require a user-input bridge");
+      }
+      activeRunHandleRef = registerCopilotActiveRun({
+        abortActiveSession,
+        bridge,
+        canAcceptSteering: () => initialSdkUserValidated,
+        input,
+        isAborted: () => aborted,
+        isSettled: () => settled,
+        session,
+        transcriptJournal,
+        userInputBridge,
+      });
+    }
     const messageOptions = await createMessageOptions(attemptInput, {
       effectiveCwd,
       effectiveWorkspaceDir,

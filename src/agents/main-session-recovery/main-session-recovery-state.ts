@@ -385,6 +385,9 @@ export function transitionMainSessionRecovery(
       if (
         !state ||
         state.cycleId !== command.cycleId ||
+        // Recovery may reuse its public run id. The charged attempt is the
+        // durable admission fence that rejects delayed binds from older work.
+        state.chargedAttempts !== command.attempt ||
         entry.sessionId !== command.sessionId ||
         entry.lifecycleRunId !== command.runId ||
         !entry.restartRecoveryRuns?.some(

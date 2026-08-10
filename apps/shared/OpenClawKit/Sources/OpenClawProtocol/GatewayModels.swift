@@ -2771,6 +2771,7 @@ public struct AgentParams: Codable, Sendable {
     public let acpturnsource: String?
     public let internalruntimehandoffid: String?
     public let internalexecutionidentityretry: Bool?
+    public let internalexecutionidentityrecoveryattempt: Int?
     public let execapprovalfollowupexpectedsessionid: String?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
@@ -2820,6 +2821,7 @@ public struct AgentParams: Codable, Sendable {
         acpturnsource: String? = nil,
         internalruntimehandoffid: String? = nil,
         internalexecutionidentityretry: Bool? = nil,
+        internalexecutionidentityrecoveryattempt: Int? = nil,
         execapprovalfollowupexpectedsessionid: String? = nil,
         internalevents: [[String: AnyCodable]]? = nil,
         inputprovenance: [String: AnyCodable]? = nil,
@@ -2868,6 +2870,7 @@ public struct AgentParams: Codable, Sendable {
         self.acpturnsource = acpturnsource
         self.internalruntimehandoffid = internalruntimehandoffid
         self.internalexecutionidentityretry = internalexecutionidentityretry
+        self.internalexecutionidentityrecoveryattempt = internalexecutionidentityrecoveryattempt
         self.execapprovalfollowupexpectedsessionid = execapprovalfollowupexpectedsessionid
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
@@ -2918,6 +2921,7 @@ public struct AgentParams: Codable, Sendable {
         case acpturnsource = "acpTurnSource"
         case internalruntimehandoffid = "internalRuntimeHandoffId"
         case internalexecutionidentityretry = "internalExecutionIdentityRetry"
+        case internalexecutionidentityrecoveryattempt = "internalExecutionIdentityRecoveryAttempt"
         case execapprovalfollowupexpectedsessionid = "execApprovalFollowupExpectedSessionId"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"

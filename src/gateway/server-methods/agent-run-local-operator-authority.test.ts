@@ -107,6 +107,7 @@ describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
     ["internal handoff", { request: { internalRuntimeHandoffId: "handoff-1" } }],
     ["model-run request", { request: { modelRun: true } }],
     ["identity retry", { request: { internalExecutionIdentityRetry: true } }],
+    ["identity recovery attempt", { request: { internalExecutionIdentityRecoveryAttempt: 1 } }],
     ["exec approval followup", { request: { execApprovalFollowupExpectedSessionId: "session-1" } }],
     ["internal session effects", { request: { sessionEffects: "internal" } }],
     ["suppressed prompt persistence", { request: { suppressPromptPersistence: true } }],

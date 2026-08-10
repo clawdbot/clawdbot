@@ -1308,6 +1308,7 @@ describe("main-session-restart-recovery", () => {
       const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(entry?.mainRestartRecovery?.executionIdentity).toBeUndefined();
       expect(gatewayParams()).not.toHaveProperty("internalExecutionIdentityRetry");
+      expect(gatewayParams().internalExecutionIdentityRecoveryAttempt).toBe(1);
     },
   );
 
@@ -1342,6 +1343,9 @@ describe("main-session-restart-recovery", () => {
     expect((firstRequest!.params as Record<string, unknown>).internalExecutionIdentityRetry).toBe(
       false,
     );
+    expect(
+      (firstRequest!.params as Record<string, unknown>).internalExecutionIdentityRecoveryAttempt,
+    ).toBe(1);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, executionIdentityEnabledConfig);
     const runIds = vi
@@ -1369,6 +1373,10 @@ describe("main-session-restart-recovery", () => {
     expect(
       (agentRequests[1]!.params as Record<string, unknown>).internalExecutionIdentityRetry,
     ).toBe(true);
+    expect(
+      (agentRequests[1]!.params as Record<string, unknown>)
+        .internalExecutionIdentityRecoveryAttempt,
+    ).toBe(2);
   });
 
   it("does not manufacture recovery identity before collection is disabled", async () => {
@@ -1395,6 +1403,9 @@ describe("main-session-restart-recovery", () => {
       .filter((request) => request.method === "agent");
     expect(requests).toHaveLength(2);
     expect(requests[1]?.params).not.toHaveProperty("internalExecutionIdentityRetry");
+    expect(
+      (requests[1]?.params as Record<string, unknown>).internalExecutionIdentityRecoveryAttempt,
+    ).toBe(2);
     expect(
       loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
         ?.executionIdentity,

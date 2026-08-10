@@ -192,6 +192,8 @@ export type AgentCommandOpts = {
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   /** Gateway already consumed this automatic recovery run's durable reservation. */
   mainRestartRecoveryAdmitted?: boolean;
+  /** Exact durable recovery attempt allowed to bind post-admission execution identity. */
+  mainRestartRecoveryAttempt?: number;
   /** Private recovery correlation; public ingress callers cannot author identity evidence. */
   executionIdentityAdmission?: ReturnType<
     (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
@@ -229,6 +231,7 @@ export type AgentCommandIngressOpts = Omit<
   | "allowModelOverride"
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"
+  | "mainRestartRecoveryAttempt"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "onAdmittedRunContext"
@@ -245,6 +248,7 @@ export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
     AgentCommandOpts,
     | "mainRestartRecoveryOwnerLease"
     | "mainRestartRecoveryAdmitted"
+    | "mainRestartRecoveryAttempt"
     | "executionIdentityAdmission"
     | "operationalRunInstance"
     | "onAdmittedRunContext"

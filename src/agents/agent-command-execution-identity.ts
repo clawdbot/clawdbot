@@ -52,6 +52,7 @@ function prepareAgentCommandRunAdmission(params: {
 }
 
 async function bindAgentCommandRecoveryExecutionIdentity(params: {
+  attempt: number;
   cycleId: string;
   lifecycleGeneration: string;
   runId: string;
@@ -64,6 +65,7 @@ async function bindAgentCommandRecoveryExecutionIdentity(params: {
     const bound = await commitMainSessionRecovery({
       command: {
         kind: "bind_admitted_execution_identity",
+        attempt: params.attempt,
         cycleId: params.cycleId,
         lifecycleGeneration: params.lifecycleGeneration,
         runId: params.runId,
@@ -106,6 +108,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
       await opts.onAdmittedRunContext?.(admittedRunContext);
       if (
         opts.mainRestartRecoveryAdmitted !== true ||
+        opts.mainRestartRecoveryAttempt === undefined ||
         !opts.mainRestartRecoveryOwnerLease ||
         !admittedRunContext.executionIdentityToken ||
         !prepared.sessionKey ||
@@ -114,6 +117,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
         return;
       }
       const bindingFailure = await bindAgentCommandRecoveryExecutionIdentity({
+        attempt: opts.mainRestartRecoveryAttempt,
         cycleId: opts.mainRestartRecoveryOwnerLease.cycleId,
         lifecycleGeneration: params.lifecycleGeneration,
         runId: prepared.runId,
@@ -136,6 +140,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     ...opts,
     mainRestartRecoveryOwnerLease: undefined,
     mainRestartRecoveryAdmitted: undefined,
+    mainRestartRecoveryAttempt: undefined,
     executionIdentityAdmission: undefined,
     operationalRunInstance: undefined,
     onAdmittedRunContext: undefined,

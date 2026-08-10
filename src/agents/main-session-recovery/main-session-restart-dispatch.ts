@@ -519,6 +519,7 @@ export async function resumeMainSession(params: {
       ...(isExecutionIdentityCollectionEnabled(params.cfg)
         ? { internalExecutionIdentityRetry: params.recoveryAttempt > 1 }
         : {}),
+      internalExecutionIdentityRecoveryAttempt: params.recoveryAttempt,
       idempotencyKey: recoveryRunId,
       deliver:
         Boolean(deliveryContext) &&

@@ -6,12 +6,16 @@ import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
-  AgentHarnessSettledTurnFinalizationAttemptParams,
+  AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
+
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
 import type { CopilotClientPool } from "./runtime.js";
 
 const liveToolState = vi.hoisted(() => ({
@@ -207,7 +211,7 @@ function createAttemptParams(params: {
 function createFinalizationAttempt(
   attempt: AgentHarnessAttemptParams,
   overrides: Partial<AgentHarnessAttemptParams>,
-): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParams> {
+): SettledTurnFinalizationAttemptParams {
   const { hostCapabilities: _hostCapabilities, ...finalizationAttempt } = {
     ...attempt,
     ...overrides,

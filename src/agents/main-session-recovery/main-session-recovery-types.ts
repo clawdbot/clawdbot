@@ -99,6 +99,7 @@ export type MainSessionRecoveryCommand =
     }
   | ({
       kind: "bind_admitted_execution_identity";
+      attempt: number;
       cycleId: string;
       token: MainSessionRecoveryExecutionIdentity;
     } & RecoveryRunOwner)

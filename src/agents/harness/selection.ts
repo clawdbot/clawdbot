@@ -498,7 +498,6 @@ export async function runAgentHarnessSettledTurnFinalization(
       ...internalParams,
       operation: "settled-tool-finalization",
     },
-    harness,
     isBuiltInOpenClawAgentHarness(harness),
   );
   return await runAgentHarnessOperation(harness, params, () =>
@@ -734,7 +733,6 @@ function withoutInternalHarnessAuthority(
 
 function prepareHarnessFinalizationParams(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-  harness: AgentHarness,
   builtIn: boolean,
 ): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
   import("./types.js").AgentHarnessAttemptParamsV2

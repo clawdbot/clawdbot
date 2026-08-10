@@ -53,13 +53,19 @@ export async function createCopilotSessionSetup(params: {
     settledToolFinalization,
     signal,
   } = params;
-  const workspaceBootstrap = settledToolFinalization
-    ? { instructions: undefined }
-    : await resolveCopilotWorkspaceBootstrapContext({
-        attempt: input,
+  const ordinaryAttemptInput = settledToolFinalization
+    ? undefined
+    : (() => {
+        assertCopilotAttemptHostCapabilities(input);
+        return input;
+      })();
+  const workspaceBootstrap = ordinaryAttemptInput
+    ? await resolveCopilotWorkspaceBootstrapContext({
+        attempt: ordinaryAttemptInput,
         effectiveWorkspaceDir,
         warn: (message) => console.warn(message),
-      });
+      })
+    : { instructions: undefined };
   const originalDeveloperInstructions = settledToolFinalization
     ? ""
     : (createSystemMessageContent(input, workspaceBootstrap.instructions) ?? "");
@@ -81,7 +87,9 @@ export async function createCopilotSessionSetup(params: {
   const promptTools = filterCopilotToolsForAllowlist(
     sdkTools,
     promptBuild.toolsAllow,
-    shouldForceCopilotMessageTool(input) ? { forceToolNames: ["message"] } : undefined,
+    ordinaryAttemptInput && shouldForceCopilotMessageTool(ordinaryAttemptInput)
+      ? { forceToolNames: ["message"] }
+      : undefined,
   );
   // Restricted turns may expose native ask_user only when its policy-filtered
   // OpenClaw equivalent survived the canonical tool catalog.

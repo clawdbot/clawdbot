@@ -493,6 +493,11 @@ export function startAgentRunExecution(params: {
             ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
             : {}),
           ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
+          ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
+            ? {
+                mainRestartRecoveryAttempt: params.request.internalExecutionIdentityRecoveryAttempt,
+              }
+            : {}),
           allowModelOverride: prepared.effectiveAllowModelOverride,
         },
         runId: params.runId,

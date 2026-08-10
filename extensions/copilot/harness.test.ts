@@ -6,7 +6,7 @@ import type {
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
-  AgentHarnessSettledTurnFinalizationAttemptParams,
+  AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -25,6 +25,9 @@ type AgentHarnessIsolatedCompletionParams = Parameters<
 >[0];
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
 
 const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
@@ -70,7 +73,7 @@ function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptPar
 
 function asFinalizationAttempt(
   params: AgentHarnessAttemptParams,
-): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParams> {
+): SettledTurnFinalizationAttemptParams {
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
   return attempt;
 }
