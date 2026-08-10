@@ -32,7 +32,6 @@ import {
   supervisorSpawnMock,
 } from "../cli-runner.test-support.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import { readConfiguredExecPolicy } from "./claude-live-process.js";
 import { runClaudeTurn } from "./claude-live-session.js";
 import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
@@ -88,27 +87,41 @@ afterEach(() => {
 });
 
 describe("Claude live configured exec policy", () => {
-  it("uses the configured default agent for an unscoped legacy session key", () => {
-    const context = {
-      params: {
-        sessionKey: "main",
-        config: {
-          tools: { exec: { security: "full", ask: "off" } },
-          agents: {
-            entries: {
-              main: {},
-              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
-            },
+  it("uses the configured default agent for an unscoped legacy session key", async () => {
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: ({ data, emit }) => {
+        if (data.includes('"control_response"')) return;
+        emit(
+          buildClaudeControlRequestEvents({
+            requestId: "req-default-agent",
+            toolUseId: "tool-default-agent",
+            toolName: "Bash",
+            input: { command: "pwd" },
+            sessionId: "live-default-agent",
+          }),
+        );
+      },
+    });
+    const context = buildClaudeLiveRunContext({
+      sessionKey: "main",
+      config: {
+        tools: { exec: { security: "full", ask: "off" } },
+        agents: {
+          entries: {
+            main: {},
+            ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
           },
         },
-      },
-    } as unknown as PreparedCliRunContext;
-
-    expect(readConfiguredExecPolicy(context)).toEqual({
-      agentId: "ops",
-      security: "deny",
-      ask: "always",
+      } as unknown as PreparedCliRunContext["params"]["config"],
     });
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
+    expectClaudeControlDecision(live, {
+      behavior: "deny",
+      requestId: "req-default-agent",
+      messageIncludes: "security=deny",
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 });
 

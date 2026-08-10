@@ -1,11 +1,11 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { LIVE_SESSION_LIMITS } from "./claude-live-session-policy.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-export type ClaudeLiveSessionOwner = {
+type ClaudeLiveSessionOwner = {
   backendId: string;
   agentAccountId?: string;
   agentId?: string;
@@ -14,10 +14,10 @@ export type ClaudeLiveSessionOwner = {
   sessionKey?: string;
 };
 
-export type ClaudeLiveCloseReason = "idle" | "restart" | "abort";
+type ClaudeLiveCloseReason = "idle" | "restart" | "abort" | "mcp-capture-rotation";
 
 /** Structural process handle kept by the registry without importing its implementation. */
-export type ClaudeLiveProcessHandle = {
+type ClaudeLiveProcessHandle = {
   key: string;
   generation: string;
   providerId: string;
@@ -28,7 +28,7 @@ export type ClaudeLiveProcessHandle = {
   cleanupResources(): Promise<void>;
 };
 
-export type ClaudeLiveSessionCreate = {
+type ClaudeLiveSessionCreate = {
   generation: string;
   promise: Promise<ClaudeLiveProcessHandle>;
 };
@@ -37,24 +37,21 @@ const liveSessions = new Map<string, ClaudeLiveProcessHandle>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
 const liveSessionTurns = new KeyedAsyncQueue();
 
-export function buildClaudeLiveOwnerKey(owner: ClaudeLiveSessionOwner): string {
+function buildClaudeLiveOwnerKey(owner: ClaudeLiveSessionOwner): string {
   return `${owner.backendId}:${buildClaudeOwnerKey(owner)}`;
 }
 
 /** Hashes the account/agent/auth/session tuple shared by queue and registry ownership. */
 export function buildClaudeOwnerKey(input: Omit<ClaudeLiveSessionOwner, "backendId">): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        agentAccountId: input.agentAccountId,
-        agentId: input.agentId,
-        authProfileId: input.authProfileId,
-        sessionId: input.sessionId,
-        sessionKey: input.sessionKey,
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      agentAccountId: input.agentAccountId,
+      agentId: input.agentId,
+      authProfileId: input.authProfileId,
+      sessionId: input.sessionId,
+      sessionKey: input.sessionKey,
+    }),
+  );
 }
 
 export function buildClaudeLiveKey(context: PreparedCliRunContext): string {
@@ -163,10 +160,15 @@ export function ensureClaudeSessionCapacity(key: string, context: PreparedCliRun
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
-export function resetClaudeLiveSessionsForTest(): void {
+function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     session.close("restart");
   }
   liveSessions.clear();
   liveSessionCreates.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveRegistryReset")] =
+    resetClaudeLiveSessionsForTest;
 }

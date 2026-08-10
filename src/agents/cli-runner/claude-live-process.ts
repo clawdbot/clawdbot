@@ -87,7 +87,7 @@ export type ClaudeLiveProcess = ClaudeLiveTurnHost & {
   cleanupResources(): Promise<void>;
 };
 
-export type BeginClaudeTurnParams = {
+type BeginClaudeTurnParams = {
   context: PreparedCliRunContext;
   inputUuid: string;
   useResume: boolean;
@@ -429,7 +429,7 @@ export async function refreshClaudePrompt(params: {
 
 // Known divergence: this live native-tool policy does not yet use canonical exec layering.
 // Follow-up: add a regression and consolidate it with src/agents/exec-defaults.ts.
-export function readConfiguredExecPolicy(context: PreparedCliRunContext): {
+function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   security: ExecSecurity;
   ask: ExecAsk;
   agentId: string;
@@ -547,6 +547,7 @@ export async function spawnClaudeProcess(params: {
     throw error;
   }
   session = {
+    backend: params.context.preparedBackend.backend,
     key: params.key,
     generation: params.generation,
     fingerprint: params.fingerprint,

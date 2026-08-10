@@ -6,6 +6,7 @@ import {
 } from "@openclaw/ai/internal/shared";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
@@ -21,7 +22,6 @@ import {
   abortClaudeTurn,
   beginClaudeTurn,
   createClaudeUserInputMessage,
-  readConfiguredExecPolicy,
   refreshClaudePrompt,
   resolveClaudeLiveExecPermission,
   spawnClaudeProcess,
@@ -34,12 +34,9 @@ import {
   enqueueClaudeTurn,
   ensureClaudeSessionCapacity,
   getClaudeSession,
-  getClaudeSessionCreate,
   registerClaudeSession,
   removeClaudeSession,
-  resetClaudeLiveSessionsForTest,
   setClaudeSessionCreate,
-  closeClaudeSession,
 } from "./claude-live-registry.js";
 import type { ClaudeLiveToolTerminalOutcome } from "./claude-live-turn.js";
 import { cliBackendLog } from "./log.js";
@@ -53,7 +50,7 @@ type ClaudeLiveRunResult = {
   output: import("../cli-output-contracts.js").CliOutput;
 };
 
-export type RunClaudeTurnParams = {
+type RunClaudeTurnParams = {
   context: PreparedCliRunContext;
   args: string[];
   executableCommand?: string;
@@ -83,10 +80,6 @@ export type RunClaudeTurnParams = {
   onPhase?: (phase: "send" | "resolve") => void;
   cleanup: () => Promise<void>;
 };
-
-function sha256(value: string): string {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
 
 function upsertArgValue(args: string[], flag: string, value: string): string[] {
   const normalized: string[] = [];
@@ -168,14 +161,6 @@ function buildClaudeLiveArgs(params: {
     : liveArgs;
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
-    buildClaudeLiveArgs,
-    readConfiguredExecPolicy,
-    resetClaudeLiveSessionsForTest,
-  };
-}
-
 function buildClaudeLiveFingerprint(params: {
   context: PreparedCliRunContext;
   argv: string[];
@@ -188,9 +173,9 @@ function buildClaudeLiveFingerprint(params: {
   const normalizeMcpConfigPath = Boolean(params.context.preparedBackend.mcpConfigHash);
   const skillSnapshot = params.context.params.skillsSnapshot;
   const skillsFingerprint = skillSnapshot
-    ? sha256(
+    ? sha256Hex(
         JSON.stringify({
-          promptHash: sha256(skillSnapshot.prompt),
+          promptHash: sha256Hex(skillSnapshot.prompt),
           skillFilter: skillSnapshot.skillFilter,
           skills: skillSnapshot.skills,
           resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({
@@ -241,15 +226,15 @@ function buildClaudeLiveFingerprint(params: {
   }
   return JSON.stringify({
     command: params.argv[0],
-    workspaceDirHash: sha256(params.context.workspaceDir),
-    cwdHash: params.context.cwdHash ?? sha256(params.context.cwd ?? params.context.workspaceDir),
+    workspaceDirHash: sha256Hex(params.context.workspaceDir),
+    cwdHash: params.context.cwdHash ?? sha256Hex(params.context.cwd ?? params.context.workspaceDir),
     provider: params.context.params.provider,
     model: params.context.normalizedModel,
-    systemPromptHash: sha256(stableSystemPrompt),
+    systemPromptHash: sha256Hex(stableSystemPrompt),
     authProfileIdHash: params.context.effectiveAuthProfileId
-      ? sha256(params.context.effectiveAuthProfileId)
+      ? sha256Hex(params.context.effectiveAuthProfileId)
       : undefined,
-    authEpochHash: params.context.authEpoch ? sha256(params.context.authEpoch) : undefined,
+    authEpochHash: params.context.authEpoch ? sha256Hex(params.context.authEpoch) : undefined,
     extraSystemPromptHash: params.context.extraSystemPromptHash,
     promptToolNamesHash: params.context.promptToolNamesHash,
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
@@ -258,7 +243,7 @@ function buildClaudeLiveFingerprint(params: {
     argv: stableArgv,
     env: Object.keys(params.env)
       .toSorted()
-      .map((key) => [key, params.env[key] ? sha256(params.env[key]) : ""]),
+      .map((key) => [key, params.env[key] ? sha256Hex(params.env[key]) : ""]),
   });
 }
 
@@ -308,13 +293,6 @@ async function abortTurnBeforeStart(
     });
   }
   throw abortError;
-}
-
-/** Close a tainted live process so its replacement gets a fresh MCP capture key. */
-export async function rotateClaudeLiveMcpCaptureKeyForContext(
-  context: PreparedCliRunContext,
-): Promise<void> {
-  await closeClaudeSession(context, "restart");
 }
 
 /** Runs one prompt through a reusable Claude CLI live session. */
@@ -396,7 +374,7 @@ async function runSerializedClaudeTurn(
     argv,
     env: params.env,
   });
-  const systemPromptHash = sha256(stripSystemPromptCacheBoundary(params.context.systemPrompt));
+  const systemPromptHash = sha256Hex(stripSystemPromptCacheBoundary(params.context.systemPrompt));
   let session = getClaudeSession<ClaudeLiveProcess>(key);
   if (
     session &&
@@ -442,14 +420,11 @@ async function runSerializedClaudeTurn(
     session = undefined;
   }
   if (!session && params.requiredSessionGeneration) {
-    const pendingGeneration = getClaudeSessionCreate(key)?.generation;
-    if (pendingGeneration !== params.requiredSessionGeneration) {
-      await cleanup();
-      throw createRequiredLiveSessionError({
-        context: params.context,
-        code: pendingGeneration ? "cli_live_session_changed" : "cli_live_session_missing",
-      });
-    }
+    await cleanup();
+    throw createRequiredLiveSessionError({
+      context: params.context,
+      code: "cli_live_session_missing",
+    });
   }
   const cleanupTurnArtifacts = Boolean(session);
   let notifiedMcpCaptureKey: string | undefined;
@@ -467,101 +442,46 @@ async function runSerializedClaudeTurn(
     throw error;
   }
   if (!session) {
-    const pendingSession = getClaudeSessionCreate<ClaudeLiveProcess>(key);
-    if (pendingSession) {
+    // The owner queue stays held until creation completes, so a same-key turn
+    // cannot observe the pending promise. Pending records serve generation queries and capacity.
+    if (params.requiredSessionGeneration) {
+      await cleanup();
+      throw createRequiredLiveSessionError({
+        context: params.context,
+        code: "cli_live_session_missing",
+      });
+    }
+    const generation = crypto.randomUUID();
+    const mcpCaptureKey = params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined;
+    if (mcpCaptureKey) {
       try {
-        session = await pendingSession.promise;
+        notifyMcpCaptureReady(mcpCaptureKey);
       } catch (error) {
         await cleanup();
-        if (params.requiredSessionGeneration) {
-          throw createRequiredLiveSessionError({
-            context: params.context,
-            code: "cli_live_session_missing",
-            cause: error,
-          });
-        }
         throw error;
-      }
-      if (
-        params.requiredSessionGeneration &&
-        session.generation !== params.requiredSessionGeneration
-      ) {
-        await cleanup();
-        throw createRequiredLiveSessionError({
-          context: params.context,
-          code: "cli_live_session_changed",
-        });
-      }
-      if (params.forceNewSession) {
-        session.close("restart");
-        session = undefined;
-      } else if (session.fingerprint !== fingerprint) {
-        if (params.requiredSessionGeneration) {
-          await cleanup();
-          throw createRequiredLiveSessionError({
-            context: params.context,
-            code: "cli_live_session_changed",
-          });
-        }
-        session.close("restart");
-        session = undefined;
-      } else if (resumeCapable && !params.useResume) {
-        session.close("restart");
-        session = undefined;
-      } else {
-        if (!(await refreshClaudePrompt({ session, context: params.context, systemPromptHash }))) {
-          if (params.requiredSessionGeneration) {
-            await cleanup();
-            throw createRequiredLiveSessionError({
-              context: params.context,
-              code: "cli_live_session_changed",
-            });
-          }
-          session = undefined;
-        }
-        cleanupTurnArtifacts = true;
       }
     }
-    if (!session) {
-      if (params.requiredSessionGeneration) {
-        await cleanup();
-        throw createRequiredLiveSessionError({
-          context: params.context,
-          code: "cli_live_session_missing",
-        });
-      }
-      const generation = crypto.randomUUID();
-      const mcpCaptureKey = params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined;
-      if (mcpCaptureKey) {
-        try {
-          notifyMcpCaptureReady(mcpCaptureKey);
-        } catch (error) {
-          await cleanup();
-          throw error;
-        }
-      }
-      const createSession: Promise<ClaudeLiveProcess> = spawnClaudeProcess({
-        context: params.context,
-        argv,
-        env: params.env,
-        generation,
-        fingerprint,
-        systemPromptHash,
-        key,
-        mcpCaptureKey,
-        noOutputTimeoutMs: params.noOutputTimeoutMs,
-        supervisor: params.getProcessSupervisor(),
-        cleanup,
-        onSpawned: registerClaudeSession,
-        onClosed: removeClaudeSession,
-      }).finally(() => deleteClaudeSessionCreate(key, createSession));
-      setClaudeSessionCreate(key, { generation, promise: createSession });
-      try {
-        session = await createSession;
-      } catch (error) {
-        await cleanup();
-        throw error;
-      }
+    const createSession: Promise<ClaudeLiveProcess> = spawnClaudeProcess({
+      context: params.context,
+      argv,
+      env: params.env,
+      generation,
+      fingerprint,
+      systemPromptHash,
+      key,
+      mcpCaptureKey,
+      noOutputTimeoutMs: params.noOutputTimeoutMs,
+      supervisor: params.getProcessSupervisor(),
+      cleanup,
+      onSpawned: registerClaudeSession,
+      onClosed: removeClaudeSession,
+    }).finally(() => deleteClaudeSessionCreate(key, createSession));
+    setClaudeSessionCreate(key, { generation, promise: createSession });
+    try {
+      session = await createSession;
+    } catch (error) {
+      await cleanup();
+      throw error;
     }
   }
   if (cleanupTurnArtifacts) {

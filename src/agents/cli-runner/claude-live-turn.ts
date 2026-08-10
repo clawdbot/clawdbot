@@ -20,6 +20,7 @@ import type {
   CliToolUseStartDelta,
   CliUsage,
 } from "../cli-output-contracts.js";
+import { pickCliSessionId } from "../cli-output-records.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   CLI_STREAM_JSON_OUTPUT_LIMITS,
@@ -87,6 +88,7 @@ export type ClaudeLiveTurn = {
 };
 
 export type ClaudeLiveTurnHost = {
+  backend: CliBackendConfig;
   providerId: string;
   modelId: string;
   noOutputTimeoutMs: number;
@@ -96,7 +98,7 @@ export type ClaudeLiveTurnHost = {
   outstandingBackgroundTaskIds: Set<string>;
   liveSessionCapabilityReady: boolean;
   closing: boolean;
-  close(reason: "idle" | "restart" | "abort", error?: unknown): void;
+  close(reason: "idle" | "restart" | "abort" | "mcp-capture-rotation", error?: unknown): void;
   scheduleIdleClose(): void;
   acceptControlResponse(parsed: Record<string, unknown>): boolean;
   acceptControlRequest(turn: ClaudeLiveTurn, parsed: Record<string, unknown>): void;
@@ -117,7 +119,7 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
   }
 }
 
-export function finishClaudeTurn(host: ClaudeLiveTurnHost, output: CliOutput): void {
+function finishClaudeTurn(host: ClaudeLiveTurnHost, output: CliOutput): void {
   const turn = host.currentTurn;
   if (!turn) {
     return;
@@ -151,7 +153,7 @@ export function failClaudeTurn(host: ClaudeLiveTurnHost, error: unknown): void {
   turn.reject(error);
 }
 
-export function createClaudeTimeoutError(
+function createClaudeTimeoutError(
   host: ClaudeLiveTurnHost,
   message: string,
   code?: string,
@@ -222,7 +224,7 @@ function summarizeToolInput(input: unknown): DiagnosticToolParamsSummary | undef
   }
 }
 
-export function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: CliToolUseStartDelta): void {
+function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: CliToolUseStartDelta): void {
   if (turn.completedToolCallIds.has(tool.toolCallId) || turn.activeTools.has(tool.toolCallId)) {
     return;
   }
@@ -246,7 +248,7 @@ export function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: CliToolUse
   emitProgress(turn, "cli_live:tool_started");
 }
 
-export function markClaudeLiveToolCompleted(
+function markClaudeLiveToolCompleted(
   turn: ClaudeLiveTurn,
   result: CliToolResultDelta,
   terminalOutcome?: ClaudeLiveToolTerminalOutcome,
@@ -433,16 +435,6 @@ function applyBackgroundTasksChanged(
   }
 }
 
-function parseSessionId(parsed: Record<string, unknown>): string | undefined {
-  const sessionId =
-    typeof parsed.session_id === "string"
-      ? parsed.session_id.trim()
-      : typeof parsed.sessionId === "string"
-        ? parsed.sessionId.trim()
-        : "";
-  return sessionId || undefined;
-}
-
 function pushTurnLine(host: ClaudeLiveTurnHost, turn: ClaudeLiveTurn, line: string): boolean {
   turn.streamingParser.push(`${line}\n`);
   if (!turn.streamingParser.getErrorText()) {
@@ -475,7 +467,7 @@ function acceptClaudeLine(host: ClaudeLiveTurnHost, line: string): void {
     }
     return;
   }
-  const parsedSessionId = parseSessionId(parsed);
+  const parsedSessionId = pickCliSessionId(parsed, host.backend);
   if (parsedSessionId) {
     host.acceptSessionId(parsedSessionId);
     if (parsed.type === "system" && parsed.subtype === "init") {

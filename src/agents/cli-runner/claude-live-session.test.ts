@@ -4,21 +4,21 @@ import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import {
   buildClaudeLiveRunContext,
   buildPreparedCliRunContext,
   createClaudeInputStartedEvent,
   expectRejectsWithFields,
+  mockCallArg,
   mockClaudeLiveRun,
 } from "../cli-runner.test-helpers.js";
 import {
   restoreCliRunnerPrepareTestDeps,
   supervisorSpawnMock,
 } from "../cli-runner.test-support.js";
-import {
-  buildClaudeLiveArgs,
-  resetClaudeLiveSessionsForTest,
-} from "./claude-live-session.test-support.js";
+import { runClaudeTurn } from "./claude-live-session.js";
+import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 
 function emitClaudeInputStarted(stdout: ((chunk: string) => void) | undefined, data: string): void {
@@ -57,12 +57,46 @@ const baseBackend = {
   liveSession: "claude-stdio",
 } as CliBackendConfig;
 
-describe("buildClaudeLiveArgs", () => {
-  it("normalizes the live protocol while retaining resume state", () => {
-    const args = buildClaudeLiveArgs({
+type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
+type SupervisorSpawnFn = ProcessSupervisor["spawn"];
+
+async function captureClaudeLiveArgs(params: {
+  args: string[];
+  backend: CliBackendConfig;
+  useResume: boolean;
+}): Promise<string[]> {
+  mockClaudeLiveRun(supervisorSpawnMock, {
+    events: [
+      { type: "system", subtype: "init", session_id: "live-args" },
+      { type: "result", session_id: "live-args", result: "ok" },
+    ],
+  });
+  const context = buildPreparedCliRunContext({ backend: params.backend });
+  await runClaudeTurn({
+    context,
+    args: params.args,
+    env: {},
+    prompt: "hello",
+    useResume: params.useResume,
+    noOutputTimeoutMs: 1_000,
+    getProcessSupervisor: () => ({
+      spawn: (input: Parameters<SupervisorSpawnFn>[0]) =>
+        supervisorSpawnMock(input) as ReturnType<SupervisorSpawnFn>,
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      getRecord: vi.fn(),
+    }),
+    onAssistantDelta: () => {},
+    cleanup: async () => {},
+  });
+  return (mockCallArg(supervisorSpawnMock) as { argv: string[] }).argv;
+}
+
+describe("Claude live process arguments", () => {
+  it("normalizes the live protocol while retaining resume state", async () => {
+    const args = await captureClaudeLiveArgs({
       args: ["-p", "--resume", "claude-session", "--session-id", "openclaw-session"],
       backend: baseBackend,
-      systemPrompt: "current prompt",
       useResume: true,
     });
 
@@ -88,11 +122,10 @@ describe("buildClaudeLiveArgs", () => {
     { systemPromptWhen: "always", useResume: false, retained: true },
   ] as const)(
     "retains=$retained the prompt file for systemPromptWhen=$systemPromptWhen resume=$useResume",
-    ({ systemPromptWhen, useResume, retained }) => {
-      const args = buildClaudeLiveArgs({
+    async ({ systemPromptWhen, useResume, retained }) => {
+      const args = await captureClaudeLiveArgs({
         args: ["-p", "--append-system-prompt-file", promptFile],
         backend: { ...baseBackend, systemPromptWhen },
-        systemPrompt: "current prompt",
         useResume,
       });
       expect(args.includes("--append-system-prompt-file")).toBe(retained);

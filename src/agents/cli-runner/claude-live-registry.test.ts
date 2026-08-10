@@ -25,9 +25,9 @@ import {
 import {
   buildClaudeOwnerKey,
   getClaudeGeneration,
-  resetClaudeLiveSessionsForTest,
 } from "./claude-live-registry.js";
 import { runClaudeTurn } from "./claude-live-session.js";
+import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
 import { writeCliSystemPromptFile } from "./helpers.js";
