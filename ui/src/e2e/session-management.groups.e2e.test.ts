@@ -1,8 +1,10 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   actionOpacity,
   activateMenuItem,
   captureUiProof,
+  captureUiProofEnabled,
   collapsedSessionSectionsStorageKey,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
@@ -10,6 +12,7 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -77,8 +80,10 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
       await row.getByRole("button", { name: "Open session menu" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
       await page.getByRole("menuitem", { name: "Rename…" }).click();
+      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
+      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
+      await dialog.getByRole("button", { name: "Save" }).click();
       await gateway.waitForRequest("sessions.patch");
       await gateway.rejectDeferred("sessions.patch", {
         code: "INVALID_REQUEST",
@@ -98,6 +103,62 @@ suite.define(() => {
       await expect.poll(() => error.count()).toBe(0);
     } finally {
       await context.close();
+    }
+  });
+
+  it("renames a sidebar session through an in-app dialog", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:rename-me", "Original name", Date.now()),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:rename-me",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator('[data-session-key="agent:main:rename-me"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await page.getByRole("menuitem", { name: "Rename…" }).click();
+
+      await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
+      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
+      const name = dialog.getByRole("textbox", { name: "Rename session" });
+      await name.waitFor({ state: "visible" });
+      await expect.poll(() => name.inputValue()).toBe("Original name");
+      await captureUiProof(page, "sidebar-session-rename-dialog.png");
+      await name.fill("Renamed session");
+      await dialog.getByRole("button", { name: "Save" }).click();
+
+      const patch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:rename-me" && params.label === "Renamed session",
+      );
+      expect(patch.params).toMatchObject({
+        key: "agent:main:rename-me",
+        label: "Renamed session",
+      });
+      await expect.poll(() => row.textContent()).toContain("Renamed session");
+      await captureUiProof(page, "sidebar-session-renamed.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-rename.webm"));
+      }
     }
   });
 
@@ -555,8 +616,38 @@ suite.define(() => {
         "button.sidebar-session-sort:not(.sidebar-session-new)",
       );
       await sortSessionsButton.click();
+      const showAutomationSessions = page.getByRole("menuitemcheckbox", {
+        name: "Show automation sessions",
+      });
+      await activateMenuItem(showAutomationSessions);
+      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+
+      await sortSessionsButton.click();
+      await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
+      const groupingCheck = page
+        .getByRole("menuitemradio", { name: "Custom groups" })
+        .locator(".session-menu__check");
+      const nativeAutomationCheck = showAutomationSessions.locator('[part="checkmark"]');
+      await expect.poll(() => nativeAutomationCheck.count()).toBe(1);
+      expect(await nativeAutomationCheck.boundingBox()).toBeNull();
+      const automationCheck = showAutomationSessions.locator(".session-menu__check");
+      await expect.poll(() => automationCheck.count()).toBe(1);
+      await expect
+        .poll(async () => {
+          const [groupingBounds, automationBounds] = await Promise.all([
+            groupingCheck.boundingBox(),
+            automationCheck.boundingBox(),
+          ]);
+          if (!groupingBounds || !automationBounds) {
+            return Number.POSITIVE_INFINITY;
+          }
+          const groupingRight = groupingBounds.x + groupingBounds.width;
+          const automationRight = automationBounds.x + automationBounds.width;
+          return Math.abs(automationRight - groupingRight);
+        })
+        .toBeLessThanOrEqual(1);
       await sortSessionsButton.click();
       await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);

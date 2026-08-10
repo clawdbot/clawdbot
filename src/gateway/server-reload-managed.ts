@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevision } from "../secrets/runtime-state.js";
+import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import {
   startGatewayConfigReloader,
@@ -438,7 +439,12 @@ export function startManagedGatewayConfigReloader(
         throw error;
       }
     },
-    onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
+    onConfigApplied: (_plan, nextConfig) => {
+      // Applied runtime identity owns config-derived process memos; accepted
+      // source-only changes must not evict caches for the still-active config.
+      resetSkillSnapshotConfigFingerprintCache();
+      params.commitTerminalConfig(nextConfig);
+    },
     onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,

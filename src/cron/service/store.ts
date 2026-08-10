@@ -12,7 +12,8 @@ import {
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
+import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
@@ -142,6 +143,7 @@ export async function ensureLoaded(
     previousJobsById.set(job.id, job);
   }
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
+  const loadNowMs = state.deps.nowMs();
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
@@ -155,6 +157,7 @@ export async function ensureLoaded(
     // Accept old `jobId` rows at the raw boundary only; the in-memory store
     // uses canonical `id` before validation and scheduling.
     normalizeCronJobIdentityFields(raw);
+    const rawInvalidReason = getInvalidPersistedCronJobReason(raw);
     let normalized: Record<string, unknown> | null;
     try {
       normalized = normalizeCronJobInput(raw);
@@ -169,7 +172,19 @@ export async function ensureLoaded(
       );
     }
     const hydratedRaw = normalized ?? raw;
-    const invalidReason = getInvalidPersistedCronJobReason(hydratedRaw);
+    let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
+    const hydratedSchedule = (hydratedRaw.schedule ?? {}) as Record<string, unknown>;
+    if (!invalidReason && hydratedRaw.enabled !== false && hydratedSchedule.kind === "every") {
+      try {
+        assertTimeScheduleSatisfiable(
+          { ...(hydratedRaw as unknown as CronJob), state: {} },
+          loadNowMs,
+          computeJobNextRunAtMs,
+        );
+      } catch {
+        invalidReason = "unsatisfiable-schedule";
+      }
+    }
     if (invalidReason) {
       const quarantineEntry: QuarantinedCronConfigJob = {
         sourceIndex,
@@ -206,7 +221,7 @@ export async function ensureLoaded(
     jobs,
   };
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
-  state.storeLoadedAtMs = state.deps.nowMs();
+  state.storeLoadedAtMs = loadNowMs;
   loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
 
   if (quarantinedConfigJobs.length > 0) {

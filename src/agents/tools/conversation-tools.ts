@@ -11,7 +11,6 @@ import {
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -22,6 +21,10 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -60,11 +63,11 @@ type ConversationToolOptions = {
 };
 
 type ConversationToolDeps = {
-  callGateway: typeof callGateway;
+  callGateway: AgentToolGatewayRequestCaller;
 };
 
 const defaultDeps: ConversationToolDeps = {
-  callGateway,
+  callGateway: callAgentToolGatewayRequest,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {

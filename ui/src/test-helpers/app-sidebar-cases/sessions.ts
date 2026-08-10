@@ -290,9 +290,15 @@ describe("AppSidebar session accessibility", () => {
 
     const list = sidebar.querySelector('[data-session-section="ungrouped"] [role="list"]');
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
+    const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
     expect(list?.getAttribute("aria-label")).toBe("Sessions");
-    expect(row?.getAttribute("role")).toBe("listitem");
+    expect(tree?.parentElement).toBe(list);
+    expect(tree?.getAttribute("role")).toBe("listitem");
+    expect(row?.hasAttribute("role")).toBe(false);
+    expect(sidebar.querySelector(".sidebar-recent-sessions")?.hasAttribute("aria-label")).toBe(
+      false,
+    );
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
@@ -300,7 +306,10 @@ describe("AppSidebar session accessibility", () => {
     expect(lead).not.toBeNull();
     expect(lead?.childElementCount).toBe(0);
     expect(link?.querySelector(".sidebar-recent-session__text")).not.toBeNull();
-    expect(row?.querySelector(".session-row-state .session-unread-dot")).not.toBeNull();
+    const rowState = row?.querySelector(".session-row-state");
+    expect(rowState?.getAttribute("role")).toBe("img");
+    expect(rowState?.getAttribute("aria-label")).toBe("Unread");
+    expect(rowState?.querySelector(".session-unread-dot")).not.toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
@@ -309,17 +318,6 @@ describe("AppSidebar session accessibility", () => {
       `sidebar-session-state-${encodeURIComponent(key)}`,
     );
     expect(row?.querySelector(".session-row-trail")).toBeNull();
-  });
-
-  it("renders no chat rows when only the main session exists", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-    await sidebar.updateComplete;
-
-    // The identity card is the main-session entry; the list stays empty.
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
   });
 });
 
@@ -462,25 +460,6 @@ describe("AppSidebar session mutation feedback", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("patches a session icon from the picker", async () => {
-    const { harness, sidebar } = await mountMutationHarness();
-    const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLElement>('wa-dropdown-item[value="change-icon"]')?.click();
-    await menu.updateComplete;
-
-    menu
-      .querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="spark"]')
-      ?.click();
-
-    await waitForFast(() =>
-      expect(harness.patch).toHaveBeenCalledWith(
-        "agent:main:a",
-        { icon: "name:spark" },
-        { agentId: "main" },
-      ),
-    );
-  });
-
   it("reconciles and stops an idle active cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
     const { gateway, harness, sidebar } = await mountMutationHarness({
@@ -573,26 +552,26 @@ describe("AppSidebar session mutation feedback", () => {
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
     const { harness, sidebar } = await mountMutationHarness();
     harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Rejected rename");
-    try {
-      const menu = await openSessionMenu(sidebar, "agent:main:a");
-      menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
+    const menu = await openSessionMenu(sidebar, "agent:main:a");
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
+    await waitForFast(() => {
+      expect(document.body.querySelector('input[name="value"]')).toBeInstanceOf(HTMLInputElement);
+    });
+    document.body.querySelector<HTMLInputElement>('input[name="value"]')!.value = "Rejected rename";
+    document.body.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
 
-      await waitForFast(() => {
-        expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
-          "rename rejected by Gateway",
-        );
-      });
-      const error = sidebar.querySelector("[data-sidebar-session-error]");
-      expect(error?.parentElement?.classList.contains("sidebar-sessions")).toBe(true);
-      expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
+    await waitForFast(() => {
+      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+        "rename rejected by Gateway",
+      );
+    });
+    const error = sidebar.querySelector("[data-sidebar-session-error]");
+    expect(error?.parentElement?.classList.contains("sidebar-sessions")).toBe(true);
+    expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
 
-      error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
-    } finally {
-      promptSpy.mockRestore();
-    }
+    error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
   });
 
   it("surfaces partial batch-delete errors", async () => {

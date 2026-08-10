@@ -1,5 +1,4 @@
-// API baseline helpers hash public SDK exports for contract drift checks.
-import { createHash } from "node:crypto";
+// API baseline helpers render public SDK exports for contract drift checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,15 +9,15 @@ import {
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
 import {
-  attachPluginSdkDeclarationClosures,
+  diffPluginSdkApiBaselineContract,
+  type PluginSdkApiBaselineContractDiff,
+} from "./api-baseline-contract.js";
+import {
   createDeclarationClosureRenderer,
   formatPluginSdkDiagnostics,
-  type PluginSdkDeclarationClosure,
 } from "./api-baseline-declaration-closure.js";
-import {
-  normalizePluginSdkApiDeclarationText,
-  normalizePluginSdkApiSourcePath as relativePath,
-} from "./api-baseline-normalization.js";
+import { printPluginSdkExportDeclaration } from "./api-baseline-declaration-print.js";
+import { normalizePluginSdkApiSourcePath as relativePath } from "./api-baseline-normalization.js";
 import { publicPluginSdkEntrypoints } from "./entrypoints.ts";
 
 export {
@@ -46,6 +45,8 @@ export type PluginSdkApiSourceLink = {
 
 /** One named export captured from a public SDK entrypoint. */
 export type PluginSdkApiExport = {
+  /** Hash of repo-owned declarations reachable from this export. */
+  closureHash: string | null;
   /** Normalized TypeScript declaration text, or null when TypeScript cannot print it. */
   declaration: string | null;
   /** Exported symbol name as plugin authors import it. */
@@ -90,22 +91,22 @@ export type PluginSdkApiBaselineRender = {
 
 /** Result returned when writing SDK API baseline artifacts. */
 export type PluginSdkApiBaselineWriteResult = {
-  /** True when the generated contract manifest differs from disk. */
+  /** True when the generated JSONL contract differs from disk. */
   changed: boolean;
+  /** Bounded record-level diff when a check finds contract drift. */
+  contractDiff: PluginSdkApiBaselineContractDiff | null;
+  /** Committed JSONL contract path. */
+  contractPath: string;
   /** True when generated artifacts were actually written. */
   wrote: boolean;
   /** JSON baseline artifact path. */
   jsonPath: string;
-  /** JSONL statefile artifact path. */
-  statefilePath: string;
-  /** Per-record SHA-256 contract manifest path. */
-  hashPath: string;
 };
 
 const GENERATED_BY = "scripts/generate-plugin-sdk-api-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.json";
-const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
-const DEFAULT_HASH_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.sha256";
+const DEFAULT_CONTRACT_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
+type DeclarationClosureRenderer = ReturnType<typeof createDeclarationClosureRenderer>;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -238,294 +239,8 @@ function resolveSymbolAndDeclaration(
   return { declaration, resolvedSymbol };
 }
 
-const DECLARATION_TYPE_FORMAT_FLAGS =
-  ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.MultilineObjectLiterals;
-const DECLARATION_NODE_BUILDER_FLAGS = ts.NodeBuilderFlags.NoTruncation;
-
-function declarationModifiers(node: ts.Node): readonly ts.Modifier[] | undefined {
-  return ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
-}
-
-function inferDeclarationTypeNode(
-  checker: ts.TypeChecker,
-  declaration: ts.Declaration,
-  explicitType: ts.TypeNode | undefined,
-): ts.TypeNode | undefined {
-  return (
-    explicitType ??
-    checker.typeToTypeNode(
-      checker.getTypeAtLocation(declaration),
-      declaration,
-      DECLARATION_NODE_BUILDER_FLAGS,
-    )
-  );
-}
-
-function inferDeclarationReturnTypeNode(
-  checker: ts.TypeChecker,
-  declaration: ts.SignatureDeclaration,
-  explicitType: ts.TypeNode | undefined,
-): ts.TypeNode | undefined {
-  if (explicitType) {
-    return explicitType;
-  }
-  const signature = checker.getSignatureFromDeclaration(declaration);
-  return signature
-    ? checker.typeToTypeNode(
-        checker.getReturnTypeOfSignature(signature),
-        declaration,
-        DECLARATION_NODE_BUILDER_FLAGS,
-      )
-    : undefined;
-}
-
-function stripParameterInitializer(parameter: ts.ParameterDeclaration): ts.ParameterDeclaration {
-  return ts.factory.updateParameterDeclaration(
-    parameter,
-    declarationModifiers(parameter),
-    parameter.dotDotDotToken,
-    parameter.name,
-    parameter.questionToken,
-    parameter.type,
-    undefined,
-  );
-}
-
-function stripClassMemberImplementation(
-  checker: ts.TypeChecker,
-  member: ts.ClassElement,
-): ts.ClassElement | null {
-  if (ts.isClassStaticBlockDeclaration(member)) {
-    return null;
-  }
-  if (ts.isConstructorDeclaration(member)) {
-    return ts.factory.updateConstructorDeclaration(
-      member,
-      declarationModifiers(member),
-      member.parameters.map(stripParameterInitializer),
-      undefined,
-    );
-  }
-  if (ts.isMethodDeclaration(member)) {
-    return ts.factory.updateMethodDeclaration(
-      member,
-      declarationModifiers(member),
-      member.asteriskToken,
-      member.name,
-      member.questionToken,
-      member.typeParameters,
-      member.parameters.map(stripParameterInitializer),
-      inferDeclarationReturnTypeNode(checker, member, member.type),
-      undefined,
-    );
-  }
-  if (ts.isGetAccessorDeclaration(member)) {
-    return ts.factory.updateGetAccessorDeclaration(
-      member,
-      declarationModifiers(member),
-      member.name,
-      member.parameters.map(stripParameterInitializer),
-      inferDeclarationReturnTypeNode(checker, member, member.type),
-      undefined,
-    );
-  }
-  if (ts.isSetAccessorDeclaration(member)) {
-    return ts.factory.updateSetAccessorDeclaration(
-      member,
-      declarationModifiers(member),
-      member.name,
-      member.parameters.map(stripParameterInitializer),
-      undefined,
-    );
-  }
-  if (ts.isPropertyDeclaration(member)) {
-    return ts.factory.updatePropertyDeclaration(
-      member,
-      declarationModifiers(member),
-      member.name,
-      member.questionToken ?? member.exclamationToken,
-      inferDeclarationTypeNode(checker, member, member.type),
-      undefined,
-    );
-  }
-  return member;
-}
-
-function stripClassImplementation(
-  checker: ts.TypeChecker,
-  declaration: ts.ClassDeclaration,
-  exportName: string,
-): ts.ClassDeclaration {
-  const members = declaration.members.flatMap((member) => {
-    const stripped = stripClassMemberImplementation(checker, member);
-    return stripped ? [stripped] : [];
-  });
-  return ts.factory.updateClassDeclaration(
-    declaration,
-    declarationModifiers(declaration),
-    ts.factory.createIdentifier(exportName),
-    declaration.typeParameters,
-    declaration.heritageClauses,
-    members,
-  );
-}
-
-function renameStructuredDeclarationForExport(
-  checker: ts.TypeChecker,
-  declaration: ts.Declaration,
-  exportName: string,
-): ts.Declaration {
-  const name = ts.factory.createIdentifier(exportName);
-  if (ts.isClassDeclaration(declaration)) {
-    return stripClassImplementation(checker, declaration, exportName);
-  }
-  if (ts.isInterfaceDeclaration(declaration)) {
-    return ts.factory.updateInterfaceDeclaration(
-      declaration,
-      declarationModifiers(declaration),
-      name,
-      declaration.typeParameters,
-      declaration.heritageClauses,
-      declaration.members,
-    );
-  }
-  if (ts.isEnumDeclaration(declaration)) {
-    return ts.factory.updateEnumDeclaration(
-      declaration,
-      declarationModifiers(declaration),
-      name,
-      declaration.members,
-    );
-  }
-  if (ts.isModuleDeclaration(declaration) && ts.isIdentifier(declaration.name)) {
-    return ts.factory.updateModuleDeclaration(
-      declaration,
-      declarationModifiers(declaration),
-      name,
-      declaration.body,
-    );
-  }
-  return declaration;
-}
-
-function ensureExportedDeclarationText(value: string): string {
-  return /^export\b/u.test(value) ? value : `export ${value}`;
-}
-
-function printTypeParameters(printer: ts.Printer, declaration: ts.TypeAliasDeclaration): string {
-  if (!declaration.typeParameters?.length) {
-    return "";
-  }
-  const sourceFile = declaration.getSourceFile();
-  const parameters = declaration.typeParameters.map((typeParameter) =>
-    printer.printNode(ts.EmitHint.Unspecified, typeParameter, sourceFile).trim(),
-  );
-  return `<${parameters.join(", ")}>`;
-}
-
-/** Render tuple-derived literal unions in declaration order, independent of compiler traversal. */
-export function formatPluginSdkApiTypeAlias(
-  checker: ts.TypeChecker,
-  declaration: ts.TypeAliasDeclaration,
-): string {
-  const type = checker.getTypeAtLocation(declaration);
-  if (
-    type.isUnion() &&
-    ts.isIndexedAccessTypeNode(declaration.type) &&
-    declaration.type.indexType.kind === ts.SyntaxKind.NumberKeyword
-  ) {
-    const tuple = checker.getTypeFromTypeNode(declaration.type.objectType);
-    const members = checker.isTupleType(tuple)
-      ? [...new Set(checker.getTypeArguments(tuple as ts.TypeReference))]
-      : [];
-    if (
-      members.length === type.types.length &&
-      members.every(
-        (member) =>
-          (member.isStringLiteral() || member.isNumberLiteral()) && type.types.includes(member),
-      )
-    ) {
-      return members
-        .map((member) => checker.typeToString(member, declaration, DECLARATION_TYPE_FORMAT_FLAGS))
-        .join(" | ");
-    }
-  }
-  return checker.typeToString(type, declaration, DECLARATION_TYPE_FORMAT_FLAGS);
-}
-
-function printNode(
-  repoRoot: string,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
-  declaration: ts.Declaration,
-  exportName: string,
-): string | null {
-  if (ts.isFunctionDeclaration(declaration)) {
-    const signatures = checker.getTypeAtLocation(declaration).getCallSignatures();
-    if (signatures.length === 0) {
-      return `export function ${exportName}();`;
-    }
-    return normalizePluginSdkApiDeclarationText(
-      repoRoot,
-      signatures
-        .map(
-          (signature) =>
-            `export function ${exportName}${checker.signatureToString(
-              signature,
-              declaration,
-              DECLARATION_TYPE_FORMAT_FLAGS,
-            )};`,
-        )
-        .join("\n"),
-    );
-  }
-
-  if (ts.isVariableDeclaration(declaration)) {
-    const type = checker.getTypeAtLocation(declaration);
-    const prefix =
-      declaration.parent && (ts.getCombinedNodeFlags(declaration.parent) & ts.NodeFlags.Const) !== 0
-        ? "const"
-        : "let";
-    return normalizePluginSdkApiDeclarationText(
-      repoRoot,
-      `export ${prefix} ${exportName}: ${checker.typeToString(
-        type,
-        declaration,
-        DECLARATION_TYPE_FORMAT_FLAGS,
-      )};`,
-    );
-  }
-
-  if (ts.isTypeAliasDeclaration(declaration)) {
-    const typeParameters = printTypeParameters(printer, declaration);
-    return normalizePluginSdkApiDeclarationText(
-      repoRoot,
-      `export type ${exportName}${typeParameters} = ${formatPluginSdkApiTypeAlias(checker, declaration)};`,
-    );
-  }
-
-  const printableDeclaration = renameStructuredDeclarationForExport(
-    checker,
-    declaration,
-    exportName,
-  );
-  const text = printer
-    .printNode(ts.EmitHint.Unspecified, printableDeclaration, declaration.getSourceFile())
-    .trim();
-  if (!text) {
-    return null;
-  }
-  return normalizePluginSdkApiDeclarationText(repoRoot, ensureExportedDeclarationText(text));
-}
-
 function compareText(left: string, right: string): number {
-  if (left < right) {
-    return -1;
-  }
-  if (left > right) {
-    return 1;
-  }
-  return 0;
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function compareDeclarations(
@@ -545,51 +260,55 @@ function compareDeclarations(
 
 function buildExportSurface(params: {
   checker: ts.TypeChecker;
-  declarationClosure: (sourceFile: ts.SourceFile) => PluginSdkDeclarationClosure;
+  declarationClosure: DeclarationClosureRenderer;
   printer: ts.Printer;
   repoRoot: string;
   symbol: ts.Symbol;
-}): { closure: PluginSdkDeclarationClosure; surface: PluginSdkApiExport } {
+}): PluginSdkApiExport {
   const { checker, declarationClosure, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
   const exportName = symbol.getName();
+  const declarationName = declaration ? ts.getNameOfDeclaration(declaration) : undefined;
+  const closureName =
+    declarationName && ts.isIdentifier(declarationName) ? declarationName.text : exportName;
   const declarationText = declaration
-    ? printNode(repoRoot, checker, printer, declaration, exportName)
+    ? printPluginSdkExportDeclaration(repoRoot, checker, printer, declaration, exportName)
     : null;
+  const declarationSource = declaration?.getSourceFile();
   return {
-    closure: declaration ? declarationClosure(declaration.getSourceFile()) : { hash: "" },
-    surface: {
-      declaration: declarationText,
-      exportName,
-      kind: inferExportKind(resolvedSymbol, declaration),
-      source: declaration
-        ? { path: relativePath(repoRoot, declaration.getSourceFile().fileName) }
+    closureHash:
+      declarationSource && declarationText
+        ? (declarationClosure(declarationSource, closureName)?.hash ?? null)
         : null,
-    },
+    declaration: declarationText,
+    exportName,
+    kind: inferExportKind(resolvedSymbol, declaration),
+    source: declarationSource ? { path: relativePath(repoRoot, declarationSource.fileName) } : null,
   };
 }
 
-function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): number {
-  const kindRank: Record<PluginSdkApiExportKind, number> = {
-    function: 0,
-    const: 1,
-    variable: 2,
-    type: 3,
-    interface: 4,
-    class: 5,
-    enum: 6,
-    namespace: 7,
-    unknown: 8,
-  };
+const EXPORT_KIND_SORT_RANK: Record<PluginSdkApiExportKind, number> = {
+  function: 0,
+  const: 1,
+  variable: 2,
+  type: 3,
+  interface: 4,
+  class: 5,
+  enum: 6,
+  namespace: 7,
+  unknown: 8,
+};
 
+function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): number {
   return (
-    kindRank[left.kind] - kindRank[right.kind] || compareText(left.exportName, right.exportName)
+    EXPORT_KIND_SORT_RANK[left.kind] - EXPORT_KIND_SORT_RANK[right.kind] ||
+    compareText(left.exportName, right.exportName)
   );
 }
 
 function buildModuleSurface(params: {
   checker: ts.TypeChecker;
-  declarationClosure: (sourceFile: ts.SourceFile) => PluginSdkDeclarationClosure;
+  declarationClosure: DeclarationClosureRenderer;
   printer: ts.Printer;
   program: ts.Program;
   repoRoot: string;
@@ -607,7 +326,7 @@ function buildModuleSurface(params: {
   const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
   assert(moduleSymbol, `Unable to resolve module symbol for ${importSpecifier}`);
 
-  const builtExports = checker
+  const exports = checker
     .getExportsOfModule(moduleSymbol)
     .filter((symbol) => symbol.getName() !== "__esModule")
     .map((symbol) =>
@@ -619,8 +338,7 @@ function buildModuleSurface(params: {
         symbol,
       }),
     )
-    .toSorted((left, right) => sortExports(left.surface, right.surface));
-  const exports = attachPluginSdkDeclarationClosures(builtExports);
+    .toSorted(sortExports);
 
   return {
     category: metadata?.category ?? null,
@@ -641,20 +359,19 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
         entrypoint: moduleSurface.entrypoint,
         importSpecifier: moduleSurface.importSpecifier,
         recordType: "module",
-        sourcePath: moduleSurface.source.path,
       }),
     );
 
     for (const exportSurface of moduleSurface.exports) {
       lines.push(
         JSON.stringify({
+          closureHash: exportSurface.closureHash,
           declaration: exportSurface.declaration,
           entrypoint: moduleSurface.entrypoint,
           exportName: exportSurface.exportName,
           importSpecifier: moduleSurface.importSpecifier,
           kind: exportSurface.kind,
           recordType: "export",
-          sourcePath: exportSurface.source?.path ?? null,
         }),
       );
     }
@@ -675,7 +392,7 @@ export async function renderPluginSdkApiBaseline(params?: {
     repoRoot,
     entrypoints,
   );
-  const modules = entrypoints.map((entrypoint) =>
+  const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
     buildModuleSurface({
       checker,
       declarationClosure,
@@ -718,22 +435,6 @@ async function loadCurrentFile(filePath: string): Promise<string | null> {
   }
 }
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
-
-/** Build a mergeable per-entrypoint sha256 manifest for the Plugin SDK API contract. */
-export function computePluginSdkApiBaselineHashFileContent(
-  rendered: PluginSdkApiBaselineRender,
-): string {
-  return `${rendered.baseline.modules
-    .map((moduleSurface) => {
-      const label = `module/${encodeURIComponent(moduleSurface.entrypoint)}`;
-      return `${sha256(JSON.stringify(moduleSurface))}  ${label}`;
-    })
-    .join("\n")}\n`;
-}
-
 function validateMetadata(): void {
   const canonicalEntrypoints = new Set<string>(publicPluginSdkEntrypoints);
   const metadataEntrypoints = new Set<string>(Object.keys(pluginSdkDocMetadata));
@@ -746,44 +447,54 @@ function validateMetadata(): void {
   }
 }
 
-/** Write or check SDK API contract artifacts used by CI and release checks. */
-export async function writePluginSdkApiBaselineArtifacts(params?: {
-  repoRoot?: string;
+/** Compare or write an already-rendered SDK API contract. */
+export async function writeRenderedPluginSdkApiBaselineArtifacts(params: {
   check?: boolean;
-  jsonPath?: string;
-  statefilePath?: string;
-  hashPath?: string;
+  contractPath: string;
+  jsonPath: string;
+  rendered: PluginSdkApiBaselineRender;
 }): Promise<PluginSdkApiBaselineWriteResult> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
-  const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
-  const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
-  const rendered = await renderPluginSdkApiBaseline({ repoRoot });
-  const nextHashContent = computePluginSdkApiBaselineHashFileContent(rendered);
-  const currentHashContent = await loadCurrentFile(hashPath);
-  const changed = currentHashContent !== nextHashContent;
+  const currentContract = await loadCurrentFile(params.contractPath);
+  const changed = currentContract !== params.rendered.jsonl;
 
-  if (params?.check) {
+  if (params.check) {
     return {
       changed,
+      contractDiff: changed
+        ? diffPluginSdkApiBaselineContract(currentContract, params.rendered.jsonl)
+        : null,
+      contractPath: params.contractPath,
       wrote: false,
-      jsonPath,
-      statefilePath,
-      hashPath,
+      jsonPath: params.jsonPath,
     };
   }
 
-  await fs.mkdir(path.dirname(hashPath), { recursive: true });
-  await fs.writeFile(hashPath, nextHashContent, "utf8");
-  await fs.mkdir(path.dirname(jsonPath), { recursive: true });
-  await fs.writeFile(jsonPath, rendered.json, "utf8");
-  await fs.writeFile(statefilePath, rendered.jsonl, "utf8");
+  await fs.mkdir(path.dirname(params.contractPath), { recursive: true });
+  await fs.writeFile(params.contractPath, params.rendered.jsonl, "utf8");
+  await fs.mkdir(path.dirname(params.jsonPath), { recursive: true });
+  await fs.writeFile(params.jsonPath, params.rendered.json, "utf8");
 
   return {
     changed,
+    contractDiff: null,
+    contractPath: params.contractPath,
     wrote: true,
-    jsonPath,
-    statefilePath,
-    hashPath,
+    jsonPath: params.jsonPath,
   };
+}
+
+/** Render, then write or check SDK API contract artifacts used by CI and release checks. */
+export async function writePluginSdkApiBaselineArtifacts(params?: {
+  repoRoot?: string;
+  check?: boolean;
+  contractPath?: string;
+  jsonPath?: string;
+}): Promise<PluginSdkApiBaselineWriteResult> {
+  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  return writeRenderedPluginSdkApiBaselineArtifacts({
+    check: params?.check,
+    contractPath: path.resolve(repoRoot, params?.contractPath ?? DEFAULT_CONTRACT_OUTPUT),
+    jsonPath: path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT),
+    rendered: await renderPluginSdkApiBaseline({ repoRoot }),
+  });
 }

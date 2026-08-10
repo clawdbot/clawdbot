@@ -5,6 +5,7 @@ import {
   resolveSlackChannelType,
   resolveSlackConversationInfo,
 } from "./channel-type.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const slackClientMocks = vi.hoisted(() => {
   const conversationsInfo = vi.fn();
@@ -121,6 +122,21 @@ describe("resolveSlackChannelType", () => {
     expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0AEWSDHAQH" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unscoped Enterprise conversation lookup before creating a client", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        resolveSlackConversationInfo({
+          cfg: { channels: { slack: { botToken: "xoxb-test" } } } as never,
+          channelId: "C123",
+        }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(createSlackReadClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("uses conversations.open only for explicit native IM writes", async () => {

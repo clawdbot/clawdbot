@@ -14,7 +14,7 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
-import type { CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
   hasHydratableMediaImages,

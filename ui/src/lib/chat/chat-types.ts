@@ -24,6 +24,19 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+export type ChatComposerDraftRetry = {
+  expectedDraftRevision: number;
+  draftRevision: number;
+};
+
+export type ChatComposerMemoryFallback = {
+  message: string;
+  attachments: ChatAttachment[];
+  storageFailed: boolean;
+  draftRetry?: ChatComposerDraftRetry;
+  sequence: number;
+};
+
 export type ChatQueueSkillWorkshopRevision = {
   proposalId: string;
   agentId?: string;

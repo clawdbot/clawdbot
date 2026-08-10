@@ -39,6 +39,11 @@ const mocks = vi.hoisted(() => ({
     migrated: 0,
     warnings: [],
   }),
+  maybeMigrateModelCatalogCredentials: vi.fn(async () => ({
+    detected: 0,
+    migrated: 0,
+    warnings: [],
+  })),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
@@ -246,6 +251,10 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
 
 vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
   maybeMigrateLegacyPluginModelCatalogs: mocks.maybeMigrateLegacyPluginModelCatalogs,
+}));
+
+vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
+  maybeMigrateModelCatalogCredentials: mocks.maybeMigrateModelCatalogCredentials,
 }));
 
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
@@ -1764,10 +1773,21 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({ cfg });
+    const detectParams = mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as
+      | {
+          legacySessionSurfaces?: unknown;
+        }
+      | undefined;
+    const legacySessionSurfaces = detectParams?.legacySessionSurfaces;
+    expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
+      cfg,
+      legacySessionSurfaces,
+    });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
+      legacySessionSurfaces,
       recoverCorruptTargetStore: false,
     });
   });
@@ -1868,14 +1888,23 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    const detectParams = mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as
+      | {
+          legacySessionSurfaces?: unknown;
+        }
+      | undefined;
+    const legacySessionSurfaces = detectParams?.legacySessionSurfaces;
+    expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
+      legacySessionSurfaces,
       recoverCorruptTargetStore: true,
     });
   });
@@ -1960,6 +1989,11 @@ describe("doctor health contributions", () => {
       mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
     );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
+    });
+    expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
       runtime: ctx.runtime,

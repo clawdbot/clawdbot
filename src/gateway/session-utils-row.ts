@@ -13,7 +13,7 @@ import {
   isSubagentRunLive,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
+import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   buildGroupDisplayName,
@@ -442,7 +442,6 @@ export function buildGatewaySessionRow(params: {
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
-    icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     agentStatus,
@@ -499,7 +498,7 @@ export function buildGatewaySessionRow(params: {
       channel,
     ),
     queueMode: entry?.queueMode,
-    effectiveQueueMode: resolveQueueSettings({
+    effectiveQueueMode: resolveQueueSettingsCore({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,

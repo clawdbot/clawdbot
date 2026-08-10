@@ -120,6 +120,8 @@ export type SessionMcpRuntime = {
   getCatalog: () => Promise<McpToolCatalog>;
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
   peekCatalog: () => McpToolCatalog | null;
+  /** Returns the configured request timeout for a server from the connected session, without touching the catalog. */
+  getServerRequestTimeoutMs?: (serverName: string) => number | undefined;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
   listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;

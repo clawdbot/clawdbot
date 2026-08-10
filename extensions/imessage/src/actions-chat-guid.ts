@@ -72,17 +72,6 @@ function chatListCacheSet(
   }
 }
 
-export function normalizeDirectChatIdentifierForTest(raw: string): string {
-  return normalizeDirectChatIdentifier(raw);
-}
-
-export function findChatGuidForTest(
-  chats: readonly Record<string, unknown>[],
-  target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
-): string | null {
-  return findChatGuid(chats, target);
-}
-
 function findChatGuid(
   chats: readonly Record<string, unknown>[],
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,

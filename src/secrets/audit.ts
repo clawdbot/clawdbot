@@ -20,6 +20,8 @@ import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.j
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { findSecretStorePlaintextResidueFindings } from "./audit-store.js";
+import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
@@ -47,7 +49,12 @@ import {
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 /** Stable finding codes emitted by `openclaw secrets audit`. */
-type SecretsAuditCode = "PLAINTEXT_FOUND" | "REF_UNRESOLVED" | "REF_SHADOWED" | "LEGACY_RESIDUE";
+type SecretsAuditCode =
+  | "PLAINTEXT_FOUND"
+  | "REF_UNRESOLVED"
+  | "REF_SHADOWED"
+  | "STORE_PLAINTEXT_RESIDUE"
+  | "LEGACY_RESIDUE";
 
 /** Audit severity used for CLI output and check-mode exit behavior. */
 type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
@@ -80,6 +87,7 @@ type SecretsAuditReport = {
     plaintextCount: number;
     unresolvedRefCount: number;
     shadowedRefCount: number;
+    storeResidueCount: number;
     legacyResidueCount: number;
   };
   findings: SecretsAuditFinding[];
@@ -109,6 +117,7 @@ type AuditCollector = {
   refAssignments: RefAssignment[];
   configProviderRefPaths: Map<string, string[]>;
   authProviderState: Map<string, ProviderAuthState>;
+  configPlaintextAssignments: PlaintextAssignment[];
   filesScanned: Set<string>;
 };
 
@@ -196,6 +205,24 @@ function collectConfigSecrets(params: {
       refValue: target.refValue,
       defaults,
     });
+    const hasPlaintext = hasConfiguredPlaintextSecretValue(
+      target.value,
+      target.entry.expectedResolvedValue,
+    );
+    const isNonSecretHeader =
+      target.entry.id === "models.providers.*.headers.*" &&
+      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "");
+    const isModelMarker =
+      target.entry.id === "models.providers.*.apiKey" &&
+      typeof target.value === "string" &&
+      isNonSecretApiKeyMarker(target.value);
+    if (hasPlaintext && !isNonSecretHeader && !isModelMarker && typeof target.value === "string") {
+      params.collector.configPlaintextAssignments.push({
+        file: params.configPath,
+        path: target.path,
+        value: target.value,
+      });
+    }
     if (ref) {
       params.collector.refAssignments.push({
         file: params.configPath,
@@ -210,21 +237,10 @@ function collectConfigSecrets(params: {
       continue;
     }
 
-    const hasPlaintext = hasConfiguredPlaintextSecretValue(
-      target.value,
-      target.entry.expectedResolvedValue,
-    );
-    if (
-      target.entry.id === "models.providers.*.headers.*" &&
-      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
-    ) {
+    if (isNonSecretHeader) {
       continue;
     }
-    if (
-      target.entry.id === "models.providers.*.apiKey" &&
-      typeof target.value === "string" &&
-      isNonSecretApiKeyMarker(target.value)
-    ) {
+    if (isModelMarker) {
       continue;
     }
     if (!hasPlaintext) {
@@ -612,11 +628,11 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
     plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
     unresolvedRefCount: findings.filter((entry) => entry.code === "REF_UNRESOLVED").length,
     shadowedRefCount: findings.filter((entry) => entry.code === "REF_SHADOWED").length,
+    storeResidueCount: findings.filter((entry) => entry.code === "STORE_PLAINTEXT_RESIDUE").length,
     legacyResidueCount: findings.filter((entry) => entry.code === "LEGACY_RESIDUE").length,
   };
 }
 
-/** Runs local storage/config audit and returns a structured report. */
 /** Runs a secrets audit over config/auth stores and returns structured findings. */
 export async function runSecretsAudit(
   params: {
@@ -636,6 +652,7 @@ export async function runSecretsAudit(
     refAssignments: [],
     configProviderRefPaths: new Map(),
     authProviderState: new Map(),
+    configPlaintextAssignments: [],
     filesScanned: new Set([configPath]),
   };
 
@@ -679,6 +696,12 @@ export async function runSecretsAudit(
       resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
     };
     collectShadowingFindings(collector);
+    collector.findings.push(
+      ...findSecretStorePlaintextResidueFindings({
+        assignments: collector.configPlaintextAssignments,
+        database: { env },
+      }),
+    );
   } else {
     addFinding(collector, {
       code: "REF_UNRESOLVED",

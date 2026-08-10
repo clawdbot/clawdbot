@@ -65,25 +65,30 @@ openclaw-new-session-page {
   color: var(--muted);
   font: inherit;
   font-size: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
-.new-session-page__visibility:hover:not(:disabled),
-.new-session-page__visibility--active {
+.new-session-page__visibility:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
 }
 
+.new-session-page__composer:hover .new-session-page__visibility,
+.new-session-page__composer:focus-within .new-session-page__visibility,
 .new-session-page__visibility--active {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
-  color: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
-  font-weight: 650;
+  opacity: 1;
+}
+
+/* Active mode stays readable without hover; inactive revealed pills keep the
+   muted resting color until directly hovered. */
+.new-session-page__visibility--active {
+  color: var(--text);
 }
 
 .new-session-page__visibility:disabled {
   cursor: default;
-  opacity: 0.55;
 }
 
 .new-session-page__visibility svg {
@@ -156,7 +161,7 @@ openclaw-new-session-page {
   font-size: 12px;
   color: var(--muted);
   list-style: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   user-select: none;
   border: 0;
   border-radius: 999px;
@@ -338,10 +343,40 @@ wa-popover.new-session-page__place-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
+.new-session-page__start-split {
+  display: inline-flex;
+  align-items: center;
+}
+
+.new-session-page__start-primary {
+  width: 34px;
+  min-width: 34px;
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+wa-dropdown.new-session-page__start-menu {
+  display: inline-flex;
+}
+
+.new-session-page__start-menu-trigger {
+  width: 22px;
+  min-width: 22px;
+  height: 36px;
+  padding: 0 4px 0 2px;
+  border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.new-session-page__start-menu-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  padding-left: var(--chat-box-inset);
   --scrollbar-size: 6px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
@@ -377,7 +412,8 @@ wa-popover.new-session-page__place-popover::part(body) {
 
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__composer::after,
-  .new-session-page__composer > * {
+  .new-session-page__composer > *,
+  .new-session-page__visibility {
     transition-duration: 0ms;
   }
 }
@@ -397,7 +433,7 @@ wa-popover.new-session-page__place-popover::part(body) {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-nav:hover:not(:disabled) {
@@ -463,7 +499,7 @@ wa-popover.new-session-page__place-popover::part(body) {
   color: var(--text);
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-entry:hover {
@@ -553,7 +589,7 @@ wa-popover.new-session-page__place-popover::part(body) {
   color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-use:disabled {

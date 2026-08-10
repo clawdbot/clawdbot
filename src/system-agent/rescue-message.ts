@@ -154,7 +154,8 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
         !isNonEmptyString(operation.path) ||
         (operation.source !== "env" &&
           operation.source !== "file" &&
-          operation.source !== "exec") ||
+          operation.source !== "exec" &&
+          operation.source !== "store") ||
         !isNonEmptyString(operation.id) ||
         !hasOptionalString(operation, "provider")
       ) {

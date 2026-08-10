@@ -4,6 +4,7 @@ import { resumeGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  retainGatewayRootWorkAdmissionContinuation,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -11,7 +12,7 @@ import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptor,
 } from "./methods/registry.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { handleGatewayRequest, runWithGatewayRequestEnvelope } from "./server-methods.js";
 import { suspendHandlers } from "./server-methods/suspend.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
@@ -77,6 +78,47 @@ afterEach(() => {
 });
 
 describe("gateway request suspension admission", () => {
+  it("keeps a facade continuation on the same admitted root", async () => {
+    const methodRegistry = createGatewayMethodRegistry([
+      createPluginGatewayMethodDescriptor({
+        pluginId: "suspend-proof",
+        name: "agent",
+        handler: vi.fn(),
+        scope: "operator.write",
+      }),
+    ]);
+    const context = {
+      logGateway: { warn: vi.fn() },
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+    let releaseContinuation: (() => void) | null = null;
+
+    await runWithGatewayRequestEnvelope(
+      "agent",
+      null,
+      async () => {
+        releaseContinuation = retainGatewayRootWorkAdmissionContinuation();
+      },
+      {
+        context,
+        isWebchatConnect: () => false,
+        methodRegistry,
+        reject: (error) => {
+          throw new Error(error.message);
+        },
+      },
+    );
+
+    expect(releaseContinuation).toBeTypeOf("function");
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    suspension?.rollback();
+    const release = releaseContinuation as (() => void) | null;
+    release?.();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
   it("keeps preparation busy while a previously admitted handler is active", async () => {
     const started = deferred();
     const finish = deferred();

@@ -11,6 +11,7 @@ import { writePackageDistInventoryForPublish } from "./lib/package-dist-inventor
 import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { preparePackageDocsMap } from "./package-docs-map.mjs";
+import { preparePackageManifest } from "./package-manifest.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const requiredPreparedPathGroups = [
@@ -291,6 +292,7 @@ export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.e
   // changelog is touched, so concurrent packs cannot restore each other's files.
   await preparePackageDocsMap(process.cwd());
   try {
+    await preparePackageManifest(process.cwd());
     await preparePackageChangelog(process.cwd(), {
       allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
     });

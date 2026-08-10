@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 /**
  * Session message event indexing and broadcast tests.
  */
@@ -25,7 +26,6 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
-import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -119,6 +119,21 @@ function waitForSessionMessageEvent(
       message.type === "event" &&
       message.event === "session.message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
+  );
+}
+
+function waitForSessionObserverEvent(
+  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
+  runId: string,
+  timeoutMs?: number,
+) {
+  return onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.observer" &&
+      (message.payload as { runId?: string } | undefined)?.runId === runId,
     timeoutMs,
   );
 }
@@ -1993,6 +2008,77 @@ describe("session.message websocket events", () => {
       workWs.close();
       mainWs.close();
       bareWs.close();
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("routes a subscribed global observer event through the real gateway socket once", async () => {
+    const storePath = await createSessionStoreFile();
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    await writeSessionStore({
+      entries: { global: { sessionId: "sess-work-observer", updatedAt: Date.now() } },
+      storePath,
+      agentId: "work",
+    });
+    const workWs = await harness.openWs();
+    const mainWs = await harness.openWs();
+    const runId = "run-work-global-observer";
+    const workEvents: unknown[] = [];
+    const mainEvents: unknown[] = [];
+    const collect = (target: unknown[]) => (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as { event?: string; payload?: unknown };
+      if (message.event === "session.observer") {
+        target.push(message.payload);
+      }
+    };
+    const collectWork = collect(workEvents);
+    const collectMain = collect(mainEvents);
+    workWs.on("message", collectWork);
+    mainWs.on("message", collectMain);
+    try {
+      const caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+      await connectOk(workWs, { scopes: ["operator.read"], caps });
+      await connectOk(mainWs, { scopes: ["operator.read"], caps });
+      expect(
+        await rpcReq(workWs, "sessions.messages.subscribe", {
+          key: " GLOBAL ",
+          agentId: " WORK ",
+        }),
+      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "global", agentId: "main" });
+      await rpcReq(workWs, "sessions.observer.visibility", { visible: true });
+      await rpcReq(mainWs, "sessions.observer.visibility", { visible: true });
+
+      const workEvent = waitForSessionObserverEvent(workWs, runId);
+      const noMainEvent = expectNoMessageWithin({
+        watch: (timeoutMs) => waitForSessionObserverEvent(mainWs, runId, timeoutMs),
+        timeoutMs: 250,
+      });
+      emitAgentEvent({
+        runId,
+        sessionKey: "global",
+        agentId: "work",
+        stream: "item",
+        data: {
+          kind: "preamble",
+          phase: "update",
+          progressText: "Inspecting the work session",
+        },
+      });
+
+      await workEvent;
+      await noMainEvent;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(workEvents).toHaveLength(1);
+      expect(mainEvents).toHaveLength(0);
+    } finally {
+      workWs.off("message", collectWork);
+      mainWs.off("message", collectMain);
+      workWs.close();
+      mainWs.close();
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
     }

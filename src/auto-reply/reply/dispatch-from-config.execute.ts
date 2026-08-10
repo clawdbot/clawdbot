@@ -29,6 +29,7 @@ import {
 } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
+import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
@@ -75,6 +76,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
+  // Bind at the invocation boundary so every public three-argument resolver consumes the same
+  // request-scoped generation without widening its Plugin SDK contract.
+  const replyResolver = bindPreparedReplyDispatchRuntime(
+    params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
+    state.replyResolver,
+  );
+  const resolverConfigOverride =
+    state.preparedReplyDispatchRuntime && !params.configOverride ? undefined : replyConfig;
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
@@ -106,7 +115,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         getDispatchAbortSignal(),
         () =>
           state.traceReplyPhase("reply.run_reply_resolver", () =>
-            state.replyResolver(
+            replyResolver(
               ctx,
               {
                 ...state.getReplyOptions(),
@@ -221,8 +230,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
                     const forceToolResultProgress =
                       params.replyOptions?.forceToolResultProgress === true;
-                    const requiresDurableToolResult =
-                      forceToolResultProgress && requiresDurableToolResultDelivery(payload);
+                    const durableToolResult = requiresDurableToolResultDelivery(payload);
+                    const requiresDurableToolResult = forceToolResultProgress && durableToolResult;
+                    if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
+                      return;
+                    }
                     const shouldForwardToolResultProgress = isFastModeAutoProgress
                       ? shouldForwardProgressCallback({
                           forwardWhenSourceDeliverySuppressed: true,
@@ -585,7 +597,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   return run();
                 },
               },
-              replyConfig,
+              resolverConfigOverride,
             ),
           ),
         trackDispatchLifecycleWork,
@@ -669,6 +681,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   originatingThreadId: state.routeReplyThreadId,
                   originatingChatType: replyRoute.chatType,
                   shouldSendToolSummaries: state.shouldSendToolSummaries,
+                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
                   sendPolicy: state.sendPolicy,
                   isTailDispatch: true,
                 }),

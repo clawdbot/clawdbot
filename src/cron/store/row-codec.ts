@@ -110,28 +110,27 @@ function mergeFailureDestinationProjection(
   }
   // Empty SQLite sentinels preserve explicit undefined fields for failure
   // destination overrides; project them back into the config sidecar shape.
-  const delivery: Record<string, unknown> =
-    isRecord(configJob.delivery) && !Array.isArray(configJob.delivery)
-      ? { ...configJob.delivery }
-      : projectedJob?.delivery
-        ? {
-            mode: projectedJob.delivery.mode,
-            ...(projectedJob.delivery.channel ? { channel: projectedJob.delivery.channel } : {}),
-            ...(projectedJob.delivery.to ? { to: projectedJob.delivery.to } : {}),
-            ...(projectedJob.delivery.threadId !== undefined
-              ? { threadId: projectedJob.delivery.threadId }
-              : {}),
-            ...(projectedJob.delivery.accountId
-              ? { accountId: projectedJob.delivery.accountId }
-              : {}),
-            ...(projectedJob.delivery.bestEffort !== undefined
-              ? { bestEffort: projectedJob.delivery.bestEffort }
-              : {}),
-            ...(projectedJob.delivery.completionDestination
-              ? { completionDestination: projectedJob.delivery.completionDestination }
-              : {}),
-          }
-        : {};
+  const delivery: Record<string, unknown> = isRecord(configJob.delivery)
+    ? { ...configJob.delivery }
+    : projectedJob?.delivery
+      ? {
+          mode: projectedJob.delivery.mode,
+          ...(projectedJob.delivery.channel ? { channel: projectedJob.delivery.channel } : {}),
+          ...(projectedJob.delivery.to ? { to: projectedJob.delivery.to } : {}),
+          ...(projectedJob.delivery.threadId !== undefined
+            ? { threadId: projectedJob.delivery.threadId }
+            : {}),
+          ...(projectedJob.delivery.accountId
+            ? { accountId: projectedJob.delivery.accountId }
+            : {}),
+          ...(projectedJob.delivery.bestEffort !== undefined
+            ? { bestEffort: projectedJob.delivery.bestEffort }
+            : {}),
+          ...(projectedJob.delivery.completionDestination
+            ? { completionDestination: projectedJob.delivery.completionDestination }
+            : {}),
+        }
+      : {};
   const nextFailureDestination = isRecord(delivery.failureDestination)
     ? { ...delivery.failureDestination }
     : {};
@@ -227,7 +226,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+function scheduleFromRow(row: CronJobRow, jobJson: Record<string, unknown>): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
   }
@@ -254,7 +253,7 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
     };
   }
   if (row.schedule_kind === "stream") {
-    const schedule = asOptionalObjectRecord(safeParseJson(row.job_json))?.schedule;
+    const schedule = jobJson.schedule;
     if (!isRecord(schedule) || schedule.kind !== "stream" || !Array.isArray(schedule.command)) {
       return null;
     }
@@ -263,9 +262,9 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   return null;
 }
 
-function pacingFromRow(row: CronJobRow): CronPacing | undefined {
-  const pacing = asOptionalObjectRecord(safeParseJson(row.job_json))?.pacing;
-  if (!isRecord(pacing) || Array.isArray(pacing)) {
+function pacingFromJobJson(jobJson: Record<string, unknown>): CronPacing | undefined {
+  const pacing = jobJson.pacing;
+  if (!isRecord(pacing)) {
     return undefined;
   }
   return {
@@ -274,18 +273,17 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
   };
 }
 
-function rowToCronJob(row: CronJobRow): CronStoredJob | null {
-  const jobJson = asOptionalObjectRecord(safeParseJson(row.job_json)) ?? {};
+function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
     typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
   );
-  const schedule = scheduleFromRow(row);
+  const schedule = scheduleFromRow(row, jobJson);
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
-  const pacing = pacingFromRow(row);
+  const pacing = pacingFromJobJson(jobJson);
   const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
   const toolsAllowProvenance =
     isRecord(jobJson.toolsAllowProvenance) &&
@@ -342,7 +340,7 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
   const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
-  const projected = rowToCronJob(row);
+  const projected = rowToCronJob(row, asOptionalObjectRecord(safeParseJson(row.job_json)) ?? {});
   if (!projected) {
     throw new Error(`cannot project cron job ${job.id} through storage codecs`);
   }
@@ -487,10 +485,11 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   const invalidConfigRows: LoadedCronStore["invalidConfigRows"] = [];
 
   for (const [index, row] of rows.entries()) {
-    const job = rowToCronJob(row);
+    const parsedJobJson = asOptionalObjectRecord(safeParseJson(row.job_json));
+    const jobJson = parsedJobJson ?? {};
+    const job = rowToCronJob(row, jobJson);
     const configJob = mergeFailureDestinationProjection(
-      asOptionalObjectRecord(safeParseJson(row.job_json)) ??
-        (job ? stripJobRuntimeFields(job) : {}),
+      parsedJobJson ?? (job ? stripJobRuntimeFields(job) : {}),
       job,
     );
     const runtimeEntry = {
@@ -504,7 +503,7 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
         sourceIndex: index,
         reason:
           getInvalidPersistedCronJobReason(configJob) ??
-          (scheduleFromRow(row) ? "invalid-payload" : "invalid-schedule"),
+          (scheduleFromRow(row, jobJson) ? "invalid-payload" : "invalid-schedule"),
         job: configJob,
         ...(runtimeEntry.state ? { state: runtimeEntry.state } : {}),
         ...(runtimeEntry.updatedAtMs !== undefined

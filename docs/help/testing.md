@@ -168,17 +168,17 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/default release
-checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
-`full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
-from manual dispatch with the mock parity lane, live Matrix lane,
-Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks run the catalog-derived Matrix
-selection through the shared live adapter. `OpenClaw Release Checks` runs parity plus the
-reusable Matrix live-adapter lane and Telegram lane before release approval. Release
+`rerun_group=qa-parity` or the release-checks QA group. Stable/full,
+soak-enabled, and explicit `qa`/`qa-live` release checks include the QA-live
+Matrix and Telegram lanes. Bounded beta-publish `all` without soak runs parity
+but defers those live lanes to postpublish-confidence. `QA-Lab - All Lanes` runs
+nightly on `main` and from manual dispatch with the mock parity lane, live
+Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
+lane as parallel jobs. Scheduled QA and selected release checks run the
+catalog-derived Matrix selection through the shared live adapter. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
-avoid normal provider-plugin startup. These live transport gateways
-disable memory search; memory behavior stays covered by the QA parity suites.
+avoid normal provider-plugin startup. These live transport gateways disable
+memory search; memory behavior stays covered by the QA parity suites.
 
 Full release live media shards use
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has

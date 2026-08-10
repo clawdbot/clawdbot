@@ -88,7 +88,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
     (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+  const shouldSuppressDefaultToolProgressMessages = () =>
+    params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
   const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
   const notifiedSessionMetadataChangeKeys = new Set<string>();
@@ -637,6 +638,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   originatingThreadId: routeReplyThreadId,
                   originatingChatType: replyRoute.chatType,
                   shouldSendToolSummaries,
+                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
                   sendPolicy: state.sendPolicy,
                 }),
                 {

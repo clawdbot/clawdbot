@@ -112,10 +112,6 @@ vi.mock("./doctor-install-policy.js", () => ({
   noteInstallPolicyHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-session-locks.js", () => ({
-  noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("./doctor-session-transcripts.js", () => ({
   noteSessionTranscriptHealth: vi.fn().mockResolvedValue(undefined),
 }));

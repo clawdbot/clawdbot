@@ -817,18 +817,51 @@ describe("worker turn launcher", () => {
     ).toContainEqual([{ type: "text", text: "Canonical transcript request" }]);
   });
 
-  it("does not replay an already-persisted current user message into worker history", async () => {
+  it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
     seedActivePlacement();
     const manager = openSessionManager();
-    manager.appendMessage(makeAgentUserMessage({ content: "Earlier request", timestamp: 18 }));
     manager.appendMessage(
       makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Earlier reply" }],
+        content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+        timestamp: 16,
+      }),
+    );
+    const firstKeptEntryId = manager.appendMessage(
+      makeAgentUserMessage({ content: "Earlier request", timestamp: 17 }),
+    );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "shared-call",
+      toolName: "read",
+      content: [{ type: "text", text: "Discarded owner result" }],
+      isError: false,
+      timestamp: 18,
+    });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
+        stopReason: "toolUse",
         timestamp: 19,
       }),
     );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "shared-call",
+      toolName: "read",
+      content: [{ type: "text", text: "Kept owner result" }],
+      isError: false,
+      timestamp: 20,
+    });
     manager.appendMessage(
-      makeAgentUserMessage({ content: "Inspect this workspace", timestamp: 20 }),
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Earlier reply" }],
+        timestamp: 21,
+      }),
+    );
+    manager.appendResetBoundary("new", firstKeptEntryId);
+    manager.appendMessage(
+      makeAgentUserMessage({ content: "Inspect this workspace", timestamp: 22 }),
     );
     let descriptor: WorkerLaunchDescriptor | undefined;
     const tunnel: WorkerTunnelHandle = {
@@ -910,8 +943,13 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.initialMessages).toMatchObject([
       { role: "user" },
+      { role: "assistant", content: [{ id: "shared-call" }] },
+      { role: "toolResult", toolCallId: "shared-call" },
       { role: "assistant" },
     ]);
+    expect(JSON.stringify(descriptor?.assignment.initialMessages)).not.toContain(
+      "Discarded owner result",
+    );
     const persistedEntries = openSessionManager().getEntries();
     const persistedCurrentUsers = persistedEntries.filter((entry) => {
       if (typeof entry !== "object" || entry === null || !("message" in entry)) {
@@ -940,6 +978,89 @@ describe("worker turn launcher", () => {
       );
     });
     expect(persistedCurrentUsers).toHaveLength(1);
+  });
+
+  it("retains a cloud result when reconciliation fails after worker finishing", async () => {
+    seedActivePlacement();
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const tunnelFailure = new Error("worker tunnel disconnected before workspace reconcile");
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      remoteSocketPath: "/worker/gateway.sock",
+      quiesceWorkspace: vi.fn(async () => ({
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {}),
+      })),
+      runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
+        const completed = openSessionManager();
+        const leafId = completed.appendMessage(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Remote work completed" }],
+            timestamp: 21,
+          }),
+        );
+        createWorkerSessionPlacementGate(placements).updateAckCursors({
+          sessionId: SESSION_ID,
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: OWNER_EPOCH,
+          runId: "run-reconcile-tunnel-loss",
+          transcriptSeq: 2,
+          workspaceResultPending: true,
+        });
+        return {
+          stdout: JSON.stringify({
+            status: "completed",
+            transcriptLeafId: leafId,
+            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }),
+      syncWorkspace: vi.fn(async () => {
+        throw new Error("unexpected workspace sync");
+      }),
+      reconcileWorkspace: vi.fn(async () => {
+        throw tunnelFailure;
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery: vi.fn(() => true),
+      startTunnel: vi.fn(async () => tunnel),
+      destroy,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-reconcile-tunnel-loss",
+        },
+        turn("run-reconcile-tunnel-loss"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toMatchObject({
+      message:
+        "Cloud worker finished, but its workspace result could not be reconciled: worker tunnel disconnected before workspace reconcile",
+    });
+
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "active",
+      turnClaim: { runId: "run-reconcile-tunnel-loss" },
+    });
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(destroy).not.toHaveBeenCalled();
   });
 
   it("reports canonical multi-call usage and the terminal provider model", async () => {
@@ -1798,8 +1919,30 @@ describe("worker turn launcher", () => {
           const descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
           turnIds.push(descriptor.assignment.turnId);
           if (launchCount === 1) {
+            const completed = openSessionManager();
+            const leafId = completed.appendMessage(
+              makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Remote model failed" }],
+                stopReason: "error",
+                errorMessage: "Cloud worker turn failed",
+                timestamp: 31,
+              }),
+            );
+            createWorkerSessionPlacementGate(placements).updateAckCursors({
+              sessionId: SESSION_ID,
+              environmentId: ENVIRONMENT_ID,
+              ownerEpoch: OWNER_EPOCH,
+              runId: "run-model-failed",
+              transcriptSeq: 2,
+              workspaceResultPending: true,
+            });
             return {
-              stdout: JSON.stringify({ status: "failed", reason: "turn-failed" }),
+              stdout: JSON.stringify({
+                status: "failed",
+                reason: "turn-failed",
+                transcriptLeafId: leafId,
+                transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+              }),
               stderr: "",
               code: 0,
               signal: null,
@@ -1867,6 +2010,7 @@ describe("worker turn launcher", () => {
       ),
     ).rejects.toThrow("Cloud worker turn failed");
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
 
     await expect(
       provider.executeTurn(

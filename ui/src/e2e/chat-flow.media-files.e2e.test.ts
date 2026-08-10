@@ -60,7 +60,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const link = page.getByRole("link", { name: "测试 report.pdf" });
+      const link = page.getByRole("link", { name: "测试 report.pdf", exact: true });
       await link.waitFor({ state: "visible", timeout: 10_000 });
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
 

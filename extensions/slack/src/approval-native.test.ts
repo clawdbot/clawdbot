@@ -10,6 +10,9 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+type SlackInstallationStateRegistration = ReturnType<typeof registerSlackInstallationState>;
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -31,8 +34,12 @@ function buildConfig(
 }
 
 const tempDirs: string[] = [];
+const installationStates: SlackInstallationStateRegistration[] = [];
 
 afterEach(() => {
+  for (const installationState of installationStates.splice(0)) {
+    installationState.release();
+  }
   closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -215,6 +222,50 @@ describe("slack native approval adapter", () => {
       to: "channel:C123",
       threadId: "1712345678.123456",
     });
+  });
+
+  it("preserves the Grid team on approval origin and approver DM targets", async () => {
+    const cfg = buildConfig();
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
+    const request = {
+      ...createExecApprovalRequest(),
+      request: {
+        ...createExecApprovalRequest().request,
+        turnSourceTo: "team:T123:channel:C123",
+      },
+    };
+
+    expect(
+      slackApprovalCapability.native?.resolveOriginTarget?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual({
+      to: "team:T123:channel:C123",
+      threadId: "1712345678.123456",
+    });
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual([{ to: "team:T123:user:U123APPROVER" }]);
+  });
+
+  it("does not enable Grid approval delivery without a trusted team-qualified origin", () => {
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
+    const capabilities = slackApprovalCapability.native?.describeDeliveryCapabilities({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: createExecApprovalRequest(),
+    });
+
+    expect(capabilities?.enabled).toBe(false);
   });
 
   it("resolves approver dm targets", async () => {

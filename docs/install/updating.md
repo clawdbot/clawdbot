@@ -282,8 +282,10 @@ install time until their next verified successful update.
 ### Update campaigns
 
 When an automatic update is due, the campaign waits for active work to finish,
-then starts a one-minute countdown. A 15-minute hard deadline starts the update
-even if work remains, using the normal restart drain and session-recovery path.
+then starts a one-minute countdown. Once that countdown starts, new work does
+not reset it or return the campaign to waiting. A 15-minute hard deadline starts
+the update even if work remains, using the normal restart drain and
+session-recovery path.
 
 An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
 deadline, or choose **Update now** from the sidebar update card or
@@ -318,6 +320,13 @@ manager in-process.
 The Control UI sidebar update card shows **Update Gateway** when it will start
 this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
+
+Manual updates started from the Control UI always ask first. The first click on
+the sidebar update card or on **Settings → Updates → Update now** opens a
+confirmation naming the target, the installed and available versions when known,
+and the restart impact; it sends nothing until you choose **Update and restart**.
+Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
+campaigns, the CLI, and `update.run` API clients are unaffected.
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the

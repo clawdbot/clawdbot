@@ -98,6 +98,7 @@ export function createTelegramInboundMediaGroupRuntime(
   } = params;
   const {
     resolveMediaRuntime,
+    recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
@@ -347,6 +348,7 @@ export function createTelegramInboundMediaGroupRuntime(
           continue;
         }
         if (media) {
+          await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
           allMedia.push({
             path: media.path,
             contentType: media.contentType,

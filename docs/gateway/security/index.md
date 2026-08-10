@@ -287,7 +287,7 @@ Hook payloads are untrusted content even when delivery comes from systems you co
 
 ## Command authorization
 
-Slash commands and directives are honored only for authorized senders, derived from channel allowlists/pairing plus `commands.useAccessGroups` (see [Configuration](/gateway/configuration) and [Slash commands](/tools/slash-commands)). If a channel allowlist is empty or includes `"*"`, commands are effectively open for that channel.
+Slash commands and directives are honored only for authorized senders. Configure an explicit per-provider `commands.allowFrom` list, or let command authorization follow channel allowlists and pairing state. Access-group entries referenced by channel allowlists are resolved automatically; there is no opt-in toggle. If a channel allowlist is empty or includes `"*"`, commands are effectively open for that channel. See [Access groups](/channels/access-groups) and [Slash commands](/tools/slash-commands).
 
 `/exec` is a session-only convenience for authorized operators - it does not write config or change other sessions.
 
@@ -396,9 +396,13 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      { id: "personal", workspace: "~/.openclaw/workspace-personal", sandbox: { mode: "off" } },
-    ],
+    entries: {
+      personal: {
+        default: true,
+        workspace: "~/.openclaw/workspace-personal",
+        sandbox: { mode: "off" },
+      },
+    },
   },
 }
 ```
@@ -408,9 +412,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -418,7 +422,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -427,17 +431,17 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 ```json5
 {
+  // Session tools can reveal transcript data. Default scope is current + spawned;
+  // reads also include same-agent groups watched through ambient group awareness.
+  // Use visibility: "self" to exclude those watched sessions.
+  tools: { sessions: { visibility: "tree" } }, // self | tree | agent | all
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
-          // Session tools can reveal transcript data. Default scope is current + spawned;
-          // reads also include same-agent groups watched through ambient group awareness.
-          // Use visibility: "self" to exclude those watched sessions.
-          sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
             "sessions_history",
@@ -465,7 +469,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -506,7 +510,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
-- In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
+- In strict mode, use wildcard-aware `allowedHostnames` entries for patterns like `*.example.com` and exact host exceptions, including otherwise-blocked names like `localhost`.
 - Direct navigation requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, and some background/subresource paths can bypass it. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
 
@@ -515,8 +519,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
   browser: {
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.example.com", "example.com"],
-      allowedHostnames: ["localhost"],
+      allowedHostnames: ["*.example.com", "example.com", "localhost"],
     },
   },
 }
@@ -760,7 +763,7 @@ Also useful for backup decisions:
 
 - WhatsApp: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
 - Telegram bot token: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
-- Discord bot token: config/env or SecretRef (env/file/exec providers)
+- Discord bot token: config/env or SecretRef (env/file/exec/store providers)
 - Slack tokens: config/env (`channels.slack.*`)
 - Pairing allowlists: `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) / `<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`)

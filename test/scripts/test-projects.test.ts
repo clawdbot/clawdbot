@@ -682,15 +682,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/system-agent/operations.test.ts",
         "src/system-agent/audit.test.ts",
       ],
-      "scripts/e2e/commitments-safety-docker-client.ts": [
-        "src/commitments/runtime.test.ts",
-        "src/commitments/store.test.ts",
-      ],
-      "scripts/e2e/commitments-safety-docker.sh": [
-        "test/scripts/docker-e2e-plan.test.ts",
-        "src/commitments/runtime.test.ts",
-        "src/commitments/store.test.ts",
-      ],
       "scripts/e2e/session-runtime-context-docker-client.ts": [
         "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -1953,6 +1944,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/repo-root.mjs": [
         "test/scripts/ts-guard-utils.test.ts",
         "test/scripts/android-release-signing.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
       "scripts/lib/ts-guard-utils.mts": ["test/scripts/ts-guard-utils.test.ts"],
       "scripts/lib/tsgo-sparse-guard.mts": [
@@ -2963,12 +2955,6 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     {
-      title: "routes misc extensions to the misc extension shard",
-      target: "extensions/thread-ownership",
-      config: "test/vitest/vitest.extension-misc.config.ts",
-      includePattern: "extensions/thread-ownership/**/*.test.ts",
-    },
-    {
       title: "routes explicit plugin-sdk light tests to the lighter plugin-sdk lane",
       target: "src/plugin-sdk/temp-path.test.ts",
       config: "test/vitest/vitest.plugin-sdk-light.config.ts",
@@ -3026,7 +3012,7 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       title: "routes changed source files to sibling tests when present",
-      changedPath: "src/agents/live-model-turn-probes.ts",
+      changedPath: "src/agents/test-helpers/live-model-turn-probes.ts",
       config: "test/vitest/vitest.unit-fast.config.ts",
       testPath: "src/agents/live-model-turn-probes.test.ts",
     },
@@ -3553,18 +3539,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/commands/doctor-memory-search.test.ts",
         "packages/memory-host-sdk/src/host/embeddings.test.ts",
       ],
-    );
-  });
-
-  it("routes commitment model-selection runtime edits away from broad gateway dependents", () => {
-    expectChangedTargets(
-      [
-        "src/agents/model-selection.test.ts",
-        "src/commitments/model-selection.runtime.ts",
-        "src/commitments/runtime.test.ts",
-        "src/commitments/runtime.ts",
-      ],
-      ["src/agents/model-selection.test.ts", "src/commitments/runtime.test.ts"],
     );
   });
 

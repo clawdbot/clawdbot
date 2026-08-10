@@ -90,12 +90,13 @@ title: "Thinking levels"
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
 - Inline directive affects only that message; session/global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
-- When verbose is on, agents that emit structured tool results send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
+- When verbose is on, agents that emit structured tool results send each tool call back as its own safe metadata-only message. Shell tools show their label without command text. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
-- `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels such as `🛠️ Exec: checking JS syntax`; use `"raw"` when you also want the raw command/detail appended for debugging. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
-  - `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
-  - `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`
+- `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels and `"raw"` for unabridged non-shell detail. Standalone shell summaries require `/verbose full` for command text; progress drafts require the channel's explicit `streaming.*.commandText: "raw"` opt-in. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
+  - `/verbose on`: `🛠️ Exec`
+  - `/verbose full` + `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
+  - `/verbose full` + `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`
 
 ## Plugin trace directives (/trace)
 

@@ -11,7 +11,6 @@ import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
-  acquireSessionWriteLockMock,
   acquireAgentRunPreparedModelRuntimeMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
@@ -72,7 +71,6 @@ let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmb
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
-let withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -308,7 +306,6 @@ beforeAll(async () => {
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
-  withOwnedSessionTranscriptWrites = loaded.withOwnedSessionTranscriptWrites;
 });
 
 beforeEach(() => {
@@ -330,41 +327,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
-  });
-
-  it("acquires the normal session lock without process-wide reentry", async () => {
-    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
-
-    expect(result).toMatchObject({ ok: true, compacted: true });
-    const lockOptions = mockCallArg(acquireSessionWriteLockMock);
-    expect(lockOptions).toMatchObject({
-      sessionFile: expect.any(String),
-      targetKind: "session-key",
-    });
-    expect(lockOptions.sessionFile).not.toBe(TEST_SESSION_KEY);
-    expect(lockOptions).not.toHaveProperty("allowReentrant");
-  });
-
-  it("reuses the matching logical writer lock during direct compaction", async () => {
-    const withSessionWriteLockCall = vi.fn();
-    const withSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> => {
-      withSessionWriteLockCall();
-      return await run();
-    };
-
-    const result = await withOwnedSessionTranscriptWrites(
-      {
-        sessionKey: TEST_SESSION_KEY,
-        sessionTarget: wrappedCompactionArgs().sessionTarget,
-        assertOwned: () => undefined,
-        withSessionWriteLock,
-      },
-      async () => await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs()),
-    );
-
-    expect(result).toMatchObject({ ok: true, compacted: true });
-    expect(withSessionWriteLockCall).toHaveBeenCalledOnce();
-    expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {

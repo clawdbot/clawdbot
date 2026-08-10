@@ -348,9 +348,6 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
     },
   ),
 }));
-const sessionWriteLockMocks = vi.hoisted(() => ({
-  acquireSessionWriteLock: vi.fn(),
-}));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -406,17 +403,6 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
-
-vi.mock("../session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-write-lock.js")>(
-    "../session-write-lock.js",
-  );
-  sessionWriteLockMocks.acquireSessionWriteLock.mockImplementation(actual.acquireSessionWriteLock);
-  return {
-    ...actual,
-    acquireSessionWriteLock: sessionWriteLockMocks.acquireSessionWriteLock,
-  };
-});
 
 function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
@@ -665,7 +651,6 @@ describe("CLI attempt execution", () => {
     hasClaudeLiveSessionForOwnerMock.mockReturnValue(false);
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
-    sessionWriteLockMocks.acquireSessionWriteLock.mockClear();
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
@@ -2208,36 +2193,6 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("holds the session-key lease for the embedded assistant gap-fill", async () => {
-    const sessionKey = "agent:main:direct:gap-fill-lease";
-    const sessionEntry = makeSessionEntry("session-gap-fill-lease");
-    await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
-    const release = vi.fn();
-    sessionWriteLockMocks.acquireSessionWriteLock.mockResolvedValueOnce({ release });
-
-    await persistCliTurnTranscript({
-      body: "ignored prompt",
-      result: makeCliResult("runtime answer"),
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-
-    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledOnce();
-    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: expect.any(String),
-        targetKind: "session-key",
-      }),
-    );
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it("persists a media-only ACP user turn when the reply is empty", async () => {
     const sessionKey = "agent:main:direct:acp-media-only";
     const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");
@@ -2945,7 +2900,7 @@ describe("CLI attempt execution", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("stamps CLI prompts with current timestamp context", async () => {
+  it("stamps CLI prompts and forwards the transcript target", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
     const sessionKey = "agent:main:direct:claude-timestamp";
@@ -2964,6 +2919,12 @@ describe("CLI attempt execution", () => {
         storePath,
       }),
     });
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    };
     await runStoredAttempt({
       providerOverride: "claude-cli",
       modelOverride: "opus",
@@ -2975,6 +2936,7 @@ describe("CLI attempt execution", () => {
       runId: "run-cli-timestamp",
       messageChannel: "discord",
       sessionStore,
+      sessionTarget,
       userTurnTranscriptRecorder,
     });
 
@@ -2983,6 +2945,7 @@ describe("CLI attempt execution", () => {
       transcriptPrompt: "canonical timestamp question",
       imagePrompt: "what time is it?",
       userTurnTranscriptRecorder,
+      sessionTarget,
       suppressNextUserMessagePersistence: false,
     });
   });

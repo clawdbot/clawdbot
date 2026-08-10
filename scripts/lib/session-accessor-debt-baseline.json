@@ -9,7 +9,7 @@
     "src/config/sessions/session-accessor.entry.ts": 2
   },
   "sessionAccessorWrite": {
-    "src/agents/subagent-spawn.test-helpers.ts": 1,
+    "src/agents/subagents/spawn/subagent-spawn.test-helpers.ts": 1,
     "src/plugins/registry-runtime.ts": 1
   },
   "sessionCompactManualTrim": {},

@@ -50,6 +50,7 @@ import {
 } from "./embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
+import { isFailoverError } from "./failover-error.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -367,14 +368,11 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway not connected/i,
   /gateway closed \(1006/i,
   /gateway timeout/i,
-  /\ball models failed\b/i,
-  /\ball profiles unavailable\b/i,
-  /\boverloaded\b/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
-const SESSION_FILE_CHANGED_ANNOUNCE_RE =
-  /session file changed while embedded prompt lock was released/i;
+const WRITER_CLAIM_REBOUND_ANNOUNCE_RE =
+  /session writer claim changed before transcript persistence/i;
 
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
@@ -386,20 +384,19 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  SESSION_FILE_CHANGED_ANNOUNCE_RE,
+  WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
-function isSessionFileChangedAnnounceError(message: string): boolean {
-  return SESSION_FILE_CHANGED_ANNOUNCE_RE.test(message);
+function isWriterClaimReboundAnnounceError(error: unknown): boolean {
+  return Boolean(
+    (error &&
+      typeof error === "object" &&
+      (error as { name?: unknown }).name === "SessionTranscriptWriterClaimReboundError") ||
+    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error)),
+  );
 }
 
-const ANNOUNCE_ERROR_CHAIN_KEYS = [
-  "cause",
-  "cleanupError",
-  "error",
-  "promptError",
-  "reason",
-] as const;
+const ANNOUNCE_ERROR_CHAIN_KEYS = ["cause", "error", "reason"] as const;
 type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
 type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
   sentBeforeError?: unknown;
@@ -429,9 +426,13 @@ function hasAnnounceErrorMatch(
   return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
 }
 
-function hasSessionFileChangedAnnounceError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, (candidate) =>
-    isSessionFileChangedAnnounceError(summarizeDeliveryError(candidate)),
+function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
+}
+
+function isTransientFailoverAnnounceError(error: unknown): boolean {
+  return (
+    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0)
   );
 }
 
@@ -440,12 +441,12 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const topLevelPermanent = Boolean(
     message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
   );
-  if (topLevelPermanent && !isSessionFileChangedAnnounceError(message)) {
+  if (topLevelPermanent && !isWriterClaimReboundAnnounceError(error)) {
     return false;
   }
 
-  const sessionFileChanged = hasSessionFileChangedAnnounceError(error);
-  if (sessionFileChanged) {
+  const writerClaimRebound = hasWriterClaimReboundAnnounceError(error);
+  if (writerClaimRebound) {
     return !hasAnnounceSendEvidence(error);
   }
 
@@ -467,14 +468,17 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   if (topLevelPermanent) {
     return false;
   }
-  return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+  return (
+    hasAnnounceErrorMatch(error, isTransientFailoverAnnounceError) ||
+    TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))
+  );
 }
 
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   return (
     (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
-    hasSessionFileChangedAnnounceError(error)
+    hasWriterClaimReboundAnnounceError(error)
   );
 }
 
@@ -1568,8 +1572,8 @@ const testing = {
       : defaultSubagentAnnounceDeliveryDeps;
   },
   hasAnnounceSendEvidence,
-  hasSessionFileChangedAnnounceError,
-  isSessionFileChangedAnnounceError,
+  hasWriterClaimReboundAnnounceError,
+  isWriterClaimReboundAnnounceError,
 };
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[

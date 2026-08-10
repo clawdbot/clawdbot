@@ -251,7 +251,7 @@ openclaw-chat-pane {
   background: var(--panel);
   color: var(--muted);
   font-size: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-pane__gateway-chip:hover,
@@ -366,7 +366,7 @@ openclaw-chat-pane {
   background: var(--panel);
   color: var(--muted);
   font-size: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-pane__workspace-chip:hover,

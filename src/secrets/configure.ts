@@ -12,11 +12,12 @@ import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  ManualExecSecretProviderConfig,
-  SecretProviderConfig,
-  SecretRef,
-  SecretRefSource,
+import {
+  isValidEnvSecretRefId,
+  type ManualExecSecretProviderConfig,
+  type SecretProviderConfig,
+  type SecretRef,
+  type SecretRefSource,
 } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -54,7 +55,6 @@ type SecretsConfigureResult = {
   preflight: SecretsApplyResult;
 };
 
-const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -131,11 +131,15 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
     if (defaults?.exec === providerAlias) {
       delete defaults.exec;
     }
+    if (defaults?.store === providerAlias) {
+      delete defaults.store;
+    }
     if (
       defaults &&
       defaults.env === undefined &&
       defaults.file === undefined &&
-      defaults.exec === undefined
+      defaults.exec === undefined &&
+      defaults.store === undefined
     ) {
       delete config.secrets?.defaults;
     }
@@ -149,6 +153,9 @@ function providerHint(provider: SecretProviderConfig): string {
   }
   if (provider.source === "file") {
     return `file (${provider.mode ?? "json"})`;
+  }
+  if (provider.source === "store") {
+    return "store";
   }
   if ("pluginIntegration" in provider) {
     const { pluginId, integrationId } = provider.pluginIntegration;
@@ -188,6 +195,7 @@ function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource
       value: "env",
       label: "env",
     },
+    { value: "store", label: "store" },
   ];
   if (hasSource("file")) {
     choices.push({ value: "file", label: "file" });
@@ -210,7 +218,7 @@ const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 function validateEnvNameCsv(value: string): string | undefined {
   const entries = parseCsv(value);
   for (const entry of entries) {
-    if (!ENV_NAME_PATTERN.test(entry)) {
+    if (!isValidEnvSecretRefId(entry)) {
       return `Invalid env name: ${entry}`;
     }
   }
@@ -422,6 +430,7 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
         { value: "env", label: "env" },
         { value: "file", label: "file" },
         { value: "exec", label: "exec" },
+        { value: "store", label: "store" },
       ],
       initialValue: initial,
     }),
@@ -629,6 +638,9 @@ async function promptProviderConfig(
   if (source === "file") {
     return await promptFileProvider(current?.source === "file" ? current : undefined);
   }
+  if (source === "store") {
+    return { source: "store" };
+  }
   return await promptExecProvider(
     current?.source === "exec" && "command" in current ? current : undefined,
   );
@@ -653,7 +665,7 @@ async function configureProvidersInteractive(
       {
         value: "add",
         label: "Add provider",
-        hint: "Define a new env/file/exec provider",
+        hint: "Define a new env/file/exec/store provider",
       },
     ];
     if (presetEntries.length > 0) {
@@ -686,7 +698,7 @@ async function configureProvidersInteractive(
         message:
           providerEntries.length > 0
             ? "Configure secret providers"
-            : "Configure secret providers (only env refs are available until file/exec providers are added)",
+            : "Configure secret providers (env/store refs are built in; add file/exec providers as needed)",
         options: actionOptions,
       }),
       "Secrets configure cancelled.",
@@ -960,7 +972,7 @@ export async function runSecretsConfigureInteractive(
       const suggestedIdFromExistingRef =
         existingRef?.source === source ? existingRef.id : undefined;
       let suggestedId = suggestedIdFromExistingRef;
-      if (!suggestedId && source === "env") {
+      if (!suggestedId && (source === "env" || source === "store")) {
         suggestedId = resolveSuggestedEnvSecretId(candidate);
       }
       if (!suggestedId && source === "file") {
@@ -977,6 +989,9 @@ export async function runSecretsConfigureInteractive(
             const trimmed = normalizeStringifiedOptionalString(value) ?? "";
             if (!trimmed) {
               return "Required";
+            }
+            if ((source === "env" || source === "store") && !isValidEnvSecretRefId(trimmed)) {
+              return `${source} ids must match /^[A-Z][A-Z0-9_]{0,127}$/`;
             }
             if (source === "exec" && !isValidExecSecretRefId(trimmed)) {
               return formatExecSecretRefIdValidationMessage();

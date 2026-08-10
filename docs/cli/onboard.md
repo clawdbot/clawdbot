@@ -264,7 +264,7 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
-With `--secret-input-mode ref`, onboarding stores new credentials as env-backed refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, or `exec` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+With `--secret-input-mode ref`, onboarding stores new credentials as env-backed refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ### Gateway auth (non-interactive)
 

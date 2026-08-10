@@ -117,7 +117,13 @@ export function parseRuntimeResult(stdout: string): WorkerRuntimeResult {
   if (
     result.status === "failed" &&
     result.reason === "turn-failed" &&
-    Object.keys(result).every((key) => ["status", "reason"].includes(key))
+    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
+    typeof result.transcriptNextSeq === "number" &&
+    Number.isSafeInteger(result.transcriptNextSeq) &&
+    result.transcriptNextSeq >= 1 &&
+    Object.keys(result).every((key) =>
+      ["status", "reason", "transcriptLeafId", "transcriptNextSeq"].includes(key),
+    )
   ) {
     return result as WorkerRuntimeResult;
   }

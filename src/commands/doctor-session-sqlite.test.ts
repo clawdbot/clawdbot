@@ -9,10 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadExactSqliteSessionEntry,
+  upsertSqliteSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
   loadSqliteTranscriptEventsSync,
   readSqliteTranscriptStatsSync,
-  upsertSqliteSessionEntry,
-} from "../config/sessions/session-accessor.sqlite.js";
+} from "../config/sessions/session-accessor.sqlite-read.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";

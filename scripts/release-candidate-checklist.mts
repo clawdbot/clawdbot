@@ -145,7 +145,8 @@ Options:
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
-  --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
+  --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
+  --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
   --parallels-registry-package-artifact <dir>
                                       Add a verified plugin npm preflight artifact directory. Repeatable.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
@@ -189,7 +190,10 @@ export function parseArgs(argv: string[]) {
     >(),
     skipDispatch: false,
     skipLocalGeneratedCheck: false,
+    runParallels: false,
     skipParallels: false,
+    parallelsMode: "auto" as "auto" | "run" | "skip",
+    parallelsSkipReason: "",
     skipTelegram: false,
     telegramProviderMode: DEFAULT_TELEGRAM_PROVIDER_MODE,
     tag: "",
@@ -234,6 +238,7 @@ export function parseArgs(argv: string[]) {
       ),
       booleanFlag("--skip-dispatch", "skipDispatch"),
       booleanFlag("--skip-local-generated-check", "skipLocalGeneratedCheck"),
+      booleanFlag("--run-parallels", "runParallels"),
       booleanFlag("--skip-parallels", "skipParallels"),
       booleanFlag("--skip-telegram", "skipTelegram"),
     ],
@@ -270,6 +275,18 @@ export function parseArgs(argv: string[]) {
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
     throw new Error("--release-profile must be beta, stable, or full");
   }
+  if (options.runParallels && options.skipParallels) {
+    throw new Error("--run-parallels and --skip-parallels cannot be combined");
+  }
+  options.parallelsMode = options.runParallels ? "run" : options.skipParallels ? "skip" : "auto";
+  options.skipParallels =
+    options.parallelsMode === "skip" ||
+    (options.parallelsMode === "auto" && options.releaseProfile === "beta");
+  options.parallelsSkipReason = options.skipParallels
+    ? options.parallelsMode === "auto"
+      ? "deferred to postpublish release:beta-smoke"
+      : "operator skipped --skip-parallels"
+    : "";
   if (options.skipDispatch && (!options.fullReleaseRunId || !options.npmPreflightRunId)) {
     throw new Error("--skip-dispatch requires --full-release-run and --npm-preflight-run");
   }
@@ -1597,7 +1614,7 @@ async function runParallelsIfNeeded(
   registryPackageTarballPaths: string[],
 ): Promise<LocalCheckResult> {
   if (options.skipParallels) {
-    return { status: "skipped", reason: "operator skipped --skip-parallels" };
+    return { status: "skipped", reason: options.parallelsSkipReason };
   }
   // This function runs inside trusted tooling, not the frozen target checkout.
   // Prepare its isolated dependencies here before importing the Parallels harness.

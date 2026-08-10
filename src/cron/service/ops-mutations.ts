@@ -18,18 +18,16 @@ import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
-import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
-  applyJobPatch,
-  applyDeclarativeJobSpec,
   computeJobNextRunAtMs,
-  createJob,
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
-} from "./jobs.js";
+} from "./jobs-scheduling.js";
+import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
+import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
 import {
   getPendingCronSessionCleanup,
   locked,

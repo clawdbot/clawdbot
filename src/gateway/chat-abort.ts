@@ -25,6 +25,10 @@ import {
   type ChatRunPlanSnapshot,
   type ChatRunState,
 } from "./server-chat-state.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "./session-subscription-keys.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -477,20 +481,19 @@ function resolveChatAbortDeliverySessionKeys(
   sessionKey: string,
   agentId: string | undefined,
 ): string[] {
-  if (sessionKey !== "global") {
-    return [sessionKey];
-  }
   const scopedAgentId = normalizeActiveAgentId(agentId);
   if (!scopedAgentId) {
     return [sessionKey];
   }
-  const keys = [`agent:${scopedAgentId}:global`];
-  const cfg = ops.getRuntimeConfig?.();
-  const defaultAgentId = cfg ? resolveDefaultAgentId(cfg) : undefined;
-  if (defaultAgentId && scopedAgentId === defaultAgentId) {
-    keys.push(sessionKey);
+  const canonicalKey = resolveSessionSubscriptionKey(sessionKey, scopedAgentId);
+  if (canonicalKey === sessionKey) {
+    return [canonicalKey];
   }
-  return keys;
+  return resolveSessionSubscriptionKeys(
+    sessionKey,
+    scopedAgentId,
+    resolveDefaultGlobalAgentId(ops),
+  );
 }
 
 function broadcastChatAborted(

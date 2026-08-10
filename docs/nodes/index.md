@@ -525,12 +525,12 @@ Per-agent exec node override:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         tools: { exec: { node: "build-node" } },
       },
-    ],
+    },
   },
 }
 ```

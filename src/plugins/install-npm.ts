@@ -49,6 +49,7 @@ export async function installPluginFromNpmSpec(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -83,7 +84,7 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs });
+  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal });
   if (!metadataResult.ok) {
     return {
       ok: false,
@@ -111,6 +112,7 @@ export async function installPluginFromNpmSpec(
           spec: parsedSpec,
           resolvedPrereleaseVersion: npmResolution.version,
           timeoutMs,
+          signal: params.signal,
           logger,
         })
       : null;
@@ -143,6 +145,7 @@ export async function installPluginFromNpmSpec(
       expectedPluginId,
       currentResolution: npmResolution,
       timeoutMs,
+      signal: params.signal,
       logger,
     });
     if (compatibleResolution) {
@@ -265,6 +268,7 @@ export async function installPluginFromNpmSpec(
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,
     timeoutMs,
+    signal: params.signal,
     logger,
     mode,
     dryRun,

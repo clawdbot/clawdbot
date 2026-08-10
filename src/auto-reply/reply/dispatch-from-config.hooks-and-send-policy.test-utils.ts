@@ -6,6 +6,7 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./agent-runner-failure-copy.js";
 import {
   NO_VISIBLE_REPLY_FALLBACK_TEXT,
   QUEUE_CAP_REJECTION_TEXT,
@@ -35,7 +36,6 @@ import {
   describe2BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -2703,6 +2703,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           sourceReplyDeliveryMode: "message_tool_only",
           forceToolResultProgress: true,
           suppressDefaultToolProgressMessages: true,
+          suppressToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onToolResult,
         },

@@ -79,34 +79,6 @@ describe("memoryRuntime", () => {
     });
   });
 
-  it("keeps SQLite lease coordination scoped to each runtime instance", async () => {
-    const cfg = {} as OpenClawConfig;
-    const firstLease = vi.fn();
-    const secondLease = vi.fn();
-
-    await Promise.all([
-      createMemoryRuntime({ withLease: firstLease }).getMemorySearchManager({
-        cfg,
-        agentId: "first",
-      }),
-      createMemoryRuntime({ withLease: secondLease }).getMemorySearchManager({
-        cfg,
-        agentId: "second",
-      }),
-    ]);
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "first",
-      withLease: firstLease,
-    });
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "second",
-      withLease: secondLease,
-    });
-  });
-
   it("binds the scoped state opener inside each lazy runtime instance", async () => {
     const cfg = {} as OpenClawConfig;
     const openKeyedStore = vi.fn();

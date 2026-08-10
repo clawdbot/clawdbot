@@ -14,6 +14,7 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
@@ -26,6 +27,7 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
+import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -815,6 +817,16 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const liveEditDiff = updateLiveEditDiffProgress(ctx.state.liveEditDiffStateById, assistantRecord);
+  if (liveEditDiff) {
+    const data = { phase: "input_delta", ...liveEditDiff };
+    emitAgentEvent({ runId: ctx.params.runId, stream: "tool", data });
+    runBestEffortCallback({
+      label: "live edit diff agent event",
+      log: ctx.log,
+      callback: () => ctx.params.onAgentEvent?.({ stream: "tool", data }),
+    });
+  }
   const eventAssistantMessage =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)

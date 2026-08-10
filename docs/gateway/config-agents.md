@@ -153,24 +153,14 @@ injection behavior from the shared defaults. Omitted fields inherit from
 }
 ```
 
-### `agents.defaults.bootstrapPromptTruncationWarning`
+### Bootstrap truncation notice
 
-Controls the agent-visible system-prompt notice when bootstrap context is truncated.
-Default: `"always"`.
-
-- `"off"`: never inject truncation notice text into the system prompt.
-- `"once"`: inject a concise notice once per unique truncation signature.
-- `"always"`: inject a concise notice on every run when truncation exists (recommended).
-
-Detailed raw/injected counts and config tuning fields stay in diagnostics such
-as context/status reports and logs; routine WebChat user/runtime context only
-gets the concise recovery notice.
-
-```json5
-{
-  agents: { defaults: { bootstrapPromptTruncationWarning: "always" } }, // off | once | always
-}
-```
+When bootstrap context is truncated, OpenClaw always injects a concise
+agent-visible notice into the system prompt saying some bootstrap files were
+truncated and to read the affected files directly. This notice is built in
+and not configurable, and it deliberately omits per-file diagnostics: file
+names, raw vs injected counts, and limit causes stay in diagnostics such as
+context/status reports and logs.
 
 ### Context budget ownership map
 
@@ -505,16 +495,16 @@ as shown above. See [CLI backends](/gateway/cli-backends) for operations and
 [building CLI backend plugins](/plugins/cli-backend-plugins) for command,
 session, image, and parser registration.
 
-### `agents.defaults.promptOverlays`
+### OpenAI GPT-5 personality
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
+The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 contribution, and OpenClaw disables Codex's built-in personality for native threads.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      promptOverlays: {
-        gpt5: {
+  plugins: {
+    entries: {
+      openai: {
+        config: {
           personality: "friendly", // friendly | on | off
         },
       },
@@ -525,7 +515,8 @@ Provider-independent prompt overlays applied by model family on OpenClaw-assembl
 
 - `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
 - `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
-- Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
+
+See [OpenAI GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution) for provider and native Codex behavior.
 
 ### `agents.defaults.heartbeat`
 
@@ -1290,7 +1281,6 @@ Membership and visibility changes are written into the session transcript as sys
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
-      debounceMs: 500,
       cap: 20,
       drop: "summarize", // old | new | summarize (default)
       byChannel: {
@@ -1346,11 +1336,13 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
   - `followup`: run the new prompt after the active run finishes.
   - `collect`: batch compatible messages and run them together later.
   - `interrupt`: abort the active run before starting the newest prompt.
-- `debounceMs`: delay before dispatching a queued/steered message. Default: `500`.
+- The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
-- `debounceMsByChannel`: per-channel `debounceMs` overrides keyed by provider id.
+- `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
+
+Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 ### Inbound debounce
 

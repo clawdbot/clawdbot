@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
+import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
