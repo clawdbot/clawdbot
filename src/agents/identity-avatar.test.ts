@@ -339,6 +339,19 @@ describe("resolveAgentAvatar", () => {
         { includeUiOverride: true },
       ),
     ).toEqual({ kind: "none", reason: "missing" });
+
+    const rawLegacyCfg: OpenClawConfig = {
+      ui: { assistant: { avatar: "https://example.com/raw-ui-avatar.png" } },
+      agents: { list: [{ id: "research" }, { id: "ops", default: true }] },
+    };
+    expect(resolveAgentAvatar(rawLegacyCfg, "ops", { includeUiOverride: true })).toMatchObject({
+      kind: "remote",
+      url: "https://example.com/raw-ui-avatar.png",
+    });
+    expect(resolveAgentAvatar(rawLegacyCfg, "research", { includeUiOverride: true })).toEqual({
+      kind: "none",
+      reason: "missing",
+    });
   });
 
   it("ui.assistant.avatar takes priority over IDENTITY.md avatar with includeUiOverride", async () => {

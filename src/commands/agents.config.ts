@@ -184,8 +184,19 @@ export function pruneAgentConfig(
   config: OpenClawConfig;
   removedBindings: number;
   removedAllow: number;
+  clearedOwnerRefs: string[];
 } {
   const id = normalizeAgentId(agentId);
+  const clearedOwnerRefs: string[] = [];
+  const clearOwnerRef = <T extends { agentId?: string }>(value: T | undefined, path: string) => {
+    const owner = normalizeOptionalString(value?.agentId);
+    if (!value || !owner || normalizeAgentId(owner) !== id) {
+      return value;
+    }
+    clearedOwnerRefs.push(path);
+    const { agentId: _agentId, ...rest } = value;
+    return Object.keys(rest).length > 0 ? (rest as T) : undefined;
+  };
   const agents = listAgentEntries(cfg);
   const pruneAllowAgents = (allowAgents: string[] | undefined) =>
     allowAgents?.filter((entry) => {
@@ -217,7 +228,7 @@ export function pruneAgentConfig(
   const allow = cfg.tools?.agentToAgent?.allow ?? [];
   const filteredAllow = allow.filter((entry) => entry !== id);
 
-  const nextDefaults = cfg.agents?.defaults?.subagents?.allowAgents
+  const prunedDefaults = cfg.agents?.defaults?.subagents?.allowAgents
     ? {
         ...cfg.agents.defaults,
         subagents: {
@@ -226,6 +237,17 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
+  const nextDefaults = prunedDefaults
+    ? {
+        ...prunedDefaults,
+        heartbeat: clearOwnerRef(prunedDefaults.heartbeat, "agents.defaults.heartbeat.agentId"),
+        systemAgent: clearOwnerRef(
+          prunedDefaults.systemAgent,
+          "agents.defaults.systemAgent.agentId",
+        ),
+      }
+    : undefined;
+  const nextTalk = clearOwnerRef(cfg.talk, "talk.agentId");
   const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
     ? {
@@ -254,6 +276,7 @@ export function pruneAgentConfig(
     ...cfg,
     agents: nextAgentsConfig,
     bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+    talk: nextTalk,
     tools: nextTools,
   };
   const workspacePinnedConfig = pinSurvivorWorkspaceForRosterCollapse(
@@ -269,5 +292,6 @@ export function pruneAgentConfig(
     config: transitionPinnedConfig,
     removedBindings: bindings.length - filteredBindings.length,
     removedAllow: allow.length - filteredAllow.length,
+    clearedOwnerRefs,
   };
 }

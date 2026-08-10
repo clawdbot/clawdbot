@@ -422,7 +422,11 @@ describe("agents helpers", () => {
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { subagents: { allowAgents: ["work", "home"] } },
+        defaults: {
+          heartbeat: { agentId: "work", every: "5m" },
+          systemAgent: { agentId: "WORK" },
+          subagents: { allowAgents: ["work", "home"] },
+        },
         entries: {
           work: { workspace: "/work-ws" },
           home: {
@@ -438,6 +442,7 @@ describe("agents helpers", () => {
       tools: {
         agentToAgent: { enabled: true, allow: ["work", "home"] },
       },
+      talk: { agentId: "work", provider: "test-provider" },
     };
 
     const result = pruneAgentConfig(cfg, "work");
@@ -448,9 +453,17 @@ describe("agents helpers", () => {
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "5m" });
+    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
+    expect(result.clearedOwnerRefs).toEqual([
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.systemAgent.agentId",
+      "talk.agentId",
+    ]);
   });
 
   it("pruneAgentConfig pins a survivor's workspace before the roster becomes sole", () => {

@@ -50,6 +50,12 @@ type AgentsDeleteGatewayResult = {
   failed?: Array<{ path: string; reason: string }>;
 };
 
+function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
+  if (clearedOwnerRefs.length > 0) {
+    runtime.log(`Cleared owner references: ${clearedOwnerRefs.join(", ")}`);
+  }
+}
+
 async function maybeDeleteAgentThroughGateway(params: {
   agentId: string;
   deleteFiles: boolean;
@@ -166,12 +172,14 @@ export async function agentsDeleteCommand(
         sessionsDir,
         removedBindings: gatewayResult.removedBindings,
         removedAllow: result.removedAllow,
+        clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
         removed: gatewayResult.removed,
         failed: gatewayResult.failed,
         transport: "gateway",
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
+      logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
       for (const failure of gatewayResult.failed ?? []) {
         runtime.error(
           `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
@@ -238,8 +246,10 @@ export async function agentsDeleteCommand(
       sessionsDir,
       removedBindings: result.removedBindings,
       removedAllow: result.removedAllow,
+      clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
     });
   } else {
     runtime.log(`Deleted agent: ${agentId}`);
+    logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
   }
 }
