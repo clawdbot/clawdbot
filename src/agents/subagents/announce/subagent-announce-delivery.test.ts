@@ -763,6 +763,52 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     },
   );
 
+  it("uses the requester agent when bare session keys collide", async () => {
+    const cfg = {
+      session: { scope: "global" },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(
+      (_requesterSessionKey: string, requesterAgentId?: string) => ({
+        sessionId: requesterAgentId === "research" ? "research-session" : "ops-session",
+        isActive: true,
+      }),
+    );
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadRequesterSessionEntry: (sessionKey: string) => ({
+        cfg,
+        entry: undefined,
+        canonicalKey: sessionKey,
+      }),
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      requesterAgentId: "research",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-bare-key-agent-owner",
+    });
+
+    expectDeliveryPath(result, "steered");
+    expect(getRequesterSessionActivity).toHaveBeenCalledWith("global", "research");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "research-session",
+      "child done",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
   it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
     const queueEmbeddedAgentMessageWithOutcome = vi
       .fn<QueueEmbeddedAgentMessageWithOutcome>()

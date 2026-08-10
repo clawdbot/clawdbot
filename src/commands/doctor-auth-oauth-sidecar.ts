@@ -7,6 +7,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -84,6 +85,7 @@ function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
+  addCandidate(candidates, resolveLegacyInheritedAuthDir(cfg, env));
   const envAgentDir = readNonEmptyString(env.OPENCLAW_AGENT_DIR);
   if (envAgentDir) {
     addCandidate(candidates, envAgentDir);

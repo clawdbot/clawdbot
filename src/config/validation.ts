@@ -154,6 +154,9 @@ function validateConfigObjectWithPluginsBase(
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
+  // Zod returns a fresh object. Preserve the migration-only owner before
+  // workspace-scoped plugin discovery, or legacy-root plugins disappear here.
+  const parsedConfig = inheritLegacyDefaultAgentId(raw as OpenClawConfig, base.config);
 
   const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
     opts.onManifestRegistryResolved?.(registry);
@@ -163,16 +166,16 @@ function validateConfigObjectWithPluginsBase(
     ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
   if (opts.applyDefaults && !registryInfo) {
-    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
+    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
       registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
     }
   }
   const config = opts.applyDefaults
-    ? materializeRuntimeConfig(base.config, "snapshot", {
+    ? materializeRuntimeConfig(parsedConfig, "snapshot", {
         manifestRegistry: registryInfo?.registry,
       })
-    : base.config;
+    : parsedConfig;
   if (opts.pluginValidation === "skip") {
     return { ok: true, config, warnings: [] };
   }
@@ -340,11 +343,11 @@ function validateConfigObjectWithPluginsBase(
   // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
   // so account inheritance matches the per-channel Zod refinements.
   warnings.push(
-    ...(hasChannelDmPolicyDependencyWarningCandidates(base.config)
-      ? collectChannelDmPolicyDependencyWarnings(base.config, {
+    ...(hasChannelDmPolicyDependencyWarningCandidates(parsedConfig)
+      ? collectChannelDmPolicyDependencyWarnings(parsedConfig, {
           dmAllowFromModes: ensureChannelDmAllowFromModes(),
         })
-      : collectChannelDmPolicyDependencyWarnings(base.config)),
+      : collectChannelDmPolicyDependencyWarnings(parsedConfig)),
   );
 
   let mutatedConfig = config;

@@ -174,6 +174,10 @@ function collectSessionIdMatchesForRequest(opts: {
   const candidates: SessionIdMatchCandidate[] = [];
   const configuredAgentIds = listAgentIds(opts.cfg).map(normalizeAgentId);
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(opts.cfg);
+  const persistedSessionStoreAgentId = opts.cfg.agents?.defaults?.sessionStore?.agentId?.trim();
+  const fixedStoreCompatibilityAgentId = persistedSessionStoreAgentId
+    ? normalizeAgentId(persistedSessionStoreAgentId)
+    : compatibilityAgentId;
   const configuredStoreOwners = new Map<string, Set<string>>();
   for (const agentId of configuredAgentIds) {
     const configuredStorePath = path.resolve(
@@ -204,16 +208,23 @@ function collectSessionIdMatchesForRequest(opts: {
       const pathOwners = configuredStoreOwners.get(path.resolve(candidateStorePath));
       const pathOwnedAgentId =
         pathOwners?.size === 1 ? pathOwners.values().next().value : undefined;
+      const sharedPathCompatibilityAgentId =
+        opts.searchOtherAgentStores && pathOwners && pathOwners.size > 1
+          ? fixedStoreCompatibilityAgentId
+          : undefined;
       const parsedAgentId = parseAgentSessionKey(candidateKey)?.agentId;
       const normalizedParsedAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
       if (normalizedParsedAgentId && !configuredAgentIds.includes(normalizedParsedAgentId)) {
         continue;
       }
-      // Unique physical paths prove ownership directly. Fixed/shared stores rely on the
-      // validated scan scope; compatibility is only the final unscoped fallback.
+      // Unique physical paths prove ownership directly. During cross-agent scans, unscoped rows
+      // in a shared fixed store belong to its persisted/retained owner, not the scan candidate.
       const legacyUnscopedOwner =
         classifySessionKeyShape(candidateKey) === "legacy_or_alias"
-          ? (pathOwnedAgentId ?? scopedCandidateAgentId ?? compatibilityAgentId)
+          ? (pathOwnedAgentId ??
+            sharedPathCompatibilityAgentId ??
+            scopedCandidateAgentId ??
+            compatibilityAgentId)
           : undefined;
       const matchedAgentId =
         normalizedParsedAgentId ??

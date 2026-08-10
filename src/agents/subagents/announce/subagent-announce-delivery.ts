@@ -97,7 +97,10 @@ const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
+  getRequesterSessionActivity: (
+    requesterSessionKey: string,
+    requesterAgentId?: string,
+  ) => {
     sessionId?: string;
     isActive: boolean;
   };
@@ -115,10 +118,16 @@ type SubagentAnnounceDeliveryDeps = {
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
-    const sessionId =
-      resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
-      loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
+  getRequesterSessionActivity: (requesterSessionKey: string, requesterAgentId?: string) => {
+    const storedSessionId = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry
+      ?.sessionId;
+    // Unscoped active-run keys are ambiguous across agents. An explicit owner
+    // must use its logical store entry instead of accepting another agent's run.
+    const activeSessionId =
+      !requesterAgentId || parseAgentSessionKey(requesterSessionKey)
+        ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
+        : undefined;
+    const sessionId = activeSessionId ?? storedSessionId;
     return {
       sessionId,
       isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
@@ -175,12 +184,15 @@ function formatQueueWakeFailureError(
   return summary ? `${fallback}: ${summary}` : fallback;
 }
 
-function resolveRequesterSessionActivity(requesterSessionKey: string) {
-  const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(requesterSessionKey);
+function resolveRequesterSessionActivity(requesterSessionKey: string, requesterAgentId?: string) {
+  const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(
+    requesterSessionKey,
+    requesterAgentId,
+  );
   if (activity.sessionId || activity.isActive) {
     return activity;
   }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey);
+  const { entry } = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId);
   const sessionId = entry?.sessionId;
   return {
     sessionId,
@@ -625,7 +637,10 @@ async function maybeSteerSubagentAnnounce(params: {
     params.requesterAgentId,
   );
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  const { sessionId, isActive } = resolveRequesterSessionActivity(
+    canonicalKey,
+    params.requesterAgentId,
+  );
   if (subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(canonicalKey, sessionId)) {
     return { status: "none" };
   }
@@ -671,7 +686,7 @@ async function maybeSteerSubagentAnnounce(params: {
   if (queueOutcome.reason === "stale_run") {
     return { status: "none" };
   }
-  const currentActivity = resolveRequesterSessionActivity(canonicalKey);
+  const currentActivity = resolveRequesterSessionActivity(canonicalKey, params.requesterAgentId);
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
@@ -991,7 +1006,10 @@ async function sendSubagentAnnounceDirectly(params: {
     const requiresMessageToolDelivery =
       completionRouteRequiresMessageToolDelivery ||
       subagentDirectMessageCompletionRequiresMessageTool;
-    const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    const requesterActivity = resolveRequesterSessionActivity(
+      canonicalRequesterSessionKey,
+      params.requesterAgentId,
+    );
     if (
       params.expectsCompletionMessage &&
       subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
@@ -1088,7 +1106,8 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive &&
+      !resolveRequesterSessionActivity(canonicalRequesterSessionKey, params.requesterAgentId)
+        .isActive &&
       !agentMediatedCompletion
     ) {
       return {

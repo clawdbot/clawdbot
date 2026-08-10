@@ -5,7 +5,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
   listSessionEntriesMock: vi.fn<
-    (scope?: { storePath?: string; clone?: boolean }) => Array<{
+    (scope?: { agentId?: string; storePath?: string; clone?: boolean }) => Array<{
       entry: SessionEntry;
       sessionKey: string;
     }>
@@ -14,13 +14,15 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesCore: (scope?: { storePath?: string; clone?: boolean }) =>
+  listSessionEntriesCore: (scope?: { agentId?: string; storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionStorePathCore: (_store?: string, params?: { agentId?: string }) =>
-    `/stores/${params?.agentId ?? "main"}.json`,
+  resolveSessionStorePathCore: (store?: string, params?: { agentId?: string }) =>
+    store
+      ? store.replace("{agentId}", params?.agentId ?? "main")
+      : `/stores/${params?.agentId ?? "main"}.json`,
 }));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
@@ -135,6 +137,35 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore).toEqual(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("assigns unscoped shared-store rows to the persisted owner regardless of scan order", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
+    const sharedStore = {
+      main: { sessionId: "ops-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: { store: "/stores/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { research: {}, ops: {} },
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "ops-session",
+    });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.sessionKey).toBe("main");
+    expect(result.sessionStore).toEqual(sharedStore);
+    expect(result.storePath).toBe("/stores/shared.sqlite");
+    expect(hoisted.listSessionEntriesMock.mock.calls.map(([scope]) => scope?.agentId)).toEqual([
+      "research",
+      "ops",
+    ]);
   });
 
   it("borrows session stores when requested", () => {
