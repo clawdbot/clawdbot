@@ -2,8 +2,9 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord, parseDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
@@ -411,7 +412,7 @@ async function readPiSessionSummary(
     const threadId = header?.type === "session" ? readBoundedString(header.id, 256) : undefined;
     if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
       const cwd = readBoundedString(header.cwd, 4_096);
-      const createdAt = parseDateTimestampMs(header.timestamp);
+      const createdAt = parsePiSessionTimestampMs(header.timestamp);
       summary = {
         file: candidate.file,
         version,

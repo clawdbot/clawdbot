@@ -6,8 +6,9 @@ import {
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord, parseDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readPiSessionFileBaseline } from "./pi-session-store.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
@@ -157,8 +158,8 @@ async function checkPiSessionUpstreamActivity(
       humanTurns += 1;
       occurredAt = Math.max(
         occurredAt ?? 0,
-        parseDateTimestampMs(entry.message.timestamp) ??
-          parseDateTimestampMs(entry.timestamp) ??
+        parsePiSessionTimestampMs(entry.message.timestamp) ??
+          parsePiSessionTimestampMs(entry.timestamp) ??
           stat.mtimeMs,
       );
     }

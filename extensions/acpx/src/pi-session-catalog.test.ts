@@ -200,6 +200,38 @@ describe("Pi session catalog", () => {
     ]);
   });
 
+  it("preserves Pi date parsing for numeric-looking timestamp strings", async () => {
+    const directory = await createPiStore();
+    const entries = [
+      {
+        type: "session",
+        version: 3,
+        id: "pi-session",
+        timestamp: "2026",
+        cwd: "/workspace",
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026",
+        message: { role: "user", content: "hello", timestamp: "0" },
+      },
+    ];
+    await fs.writeFile(
+      path.join(directory, "session.jsonl"),
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+
+    const listed = await listLocalPiSessionPage({ limit: 20 });
+    expect(listed.sessions[0]?.createdAt).toBe(Date.parse("2026"));
+    expect(listed.sessions[0]?.createdAt).not.toBe(2_026);
+
+    const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
+    expect(transcript.items[0]?.timestamp).toBe(new Date(Date.parse("0")).toISOString());
+    expect(transcript.items[0]?.timestamp).not.toBe(new Date(0).toISOString());
+  });
+
   it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
     const sessionDirectory = await createPiStore();
     const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-real-"));

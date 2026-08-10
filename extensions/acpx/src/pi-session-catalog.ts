@@ -4,9 +4,10 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord, parseDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const LOCAL_HOST_ID = "gateway";
 const DEFAULT_PAGE_LIMIT = 20;
@@ -225,7 +226,8 @@ function isoTimestamp(
   message: Record<string, unknown>,
   entry: Record<string, unknown>,
 ): string | undefined {
-  const value = parseDateTimestampMs(message.timestamp) ?? parseDateTimestampMs(entry.timestamp);
+  const value =
+    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
   if (value === undefined) {
     return undefined;
   }
