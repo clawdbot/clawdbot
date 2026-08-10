@@ -1,5 +1,6 @@
 // Cron tool tests cover schedule guidance, scoped job operations, delivery
 // context inheritance, session routing, and agent id ownership.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
@@ -1100,6 +1101,22 @@ describe("cron tool", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "hello" },
+    });
+  });
+
+  it("canonicalizes the inclusive Date maximum without losing service compatibility", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-date-max", {
+      action: "add",
+      job: {
+        name: "far-future",
+        schedule: { atMs: MAX_DATE_TIMESTAMP_MS },
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      schedule: { kind: "at", at: new Date(MAX_DATE_TIMESTAMP_MS).toISOString() },
     });
   });
 

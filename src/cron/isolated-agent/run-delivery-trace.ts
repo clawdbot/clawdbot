@@ -46,14 +46,6 @@ async function loadCodexNativeWebSearch() {
   return await codexNativeWebSearchLoader.load();
 }
 
-async function loadWebToolRuntimeContext() {
-  return await webToolRuntimeContextLoader.load();
-}
-
-async function loadWebSearchRuntime() {
-  return await webSearchRuntimeLoader.load();
-}
-
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
 export type ResolvedCronDeliveryTarget = Awaited<
   ReturnType<CronDeliveryRuntime["resolveDeliveryTarget"]>
@@ -213,14 +205,14 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
     ) {
       return undefined;
     }
-    const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
+    const { resolveWebSearchToolRuntimeContext } = await webToolRuntimeContextLoader.load();
     const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
       {
         config: params.cfg,
         lateBindRuntimeConfig: true,
       },
     );
-    const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
+    const { hasUsableWebSearchProvider } = await webSearchRuntimeLoader.load();
     const hasWebSearchProvider = hasUsableWebSearchProvider({
       config,
       agentDir: params.agentDir,

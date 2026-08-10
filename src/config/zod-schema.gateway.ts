@@ -1,4 +1,14 @@
 import { z } from "zod";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
+  READ_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+} from "../gateway/operator-scopes.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
@@ -6,6 +16,17 @@ import {
   TailscaleServiceNameSchema,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+const OperatorScopeSchema = z.enum([
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  QUESTIONS_SCOPE,
+  PAIRING_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+]);
 
 export const GatewayConfigSchema = z
   .strictObject({
@@ -63,6 +84,7 @@ export const GatewayConfigSchema = z
         token: SecretInputSchema.optional().register(sensitive),
         password: SecretInputSchema.optional().register(sensitive),
         allowTailscale: z.boolean().optional(),
+        identityScopes: z.record(z.string().min(1), z.array(OperatorScopeSchema)).optional(),
         rateLimit: z
           .strictObject({
             maxAttempts: z.number().optional(),
