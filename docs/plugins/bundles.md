@@ -201,13 +201,34 @@ them:
 - Only supported stdio-backed LSP servers are runnable today; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
 
-### Detected but not executed
+### Agent templates: inspected, not executed
 
-These are recognized and shown in diagnostics, but OpenClaw does not run them:
+OpenClaw parses agent Markdown from Claude and Cursor bundles into normalized,
+metadata-only capability records. It recognizes default Claude `agents/`,
+default Cursor `.cursor/agents/`, and either format's manifest-declared agent roots. Run
+`openclaw plugins inspect <id>` for a template summary. Add `--json` to inspect
+the full record: source format, name, description, prompt file reference and
+digest, source path, model and effort hints, maximum-turn hint, requested tools
+and skills, supported execution hints, and unsupported field names with their
+reasons. Malformed definitions produce diagnostics instead of stopping bundle
+loading.
 
-- Claude `agents`, `hooks/hooks.json` automation, `outputStyles`
-- Cursor `.cursor/agents`, `.cursor/hooks.json`, `.cursor/rules`
+These records are **not executable**. Discovery does not instantiate an
+OpenClaw subagent, add template prompts to an active agent prompt, or grant
+tools, skills, models, memory, background execution, or isolation.
+
+Other detected-but-not-executed surfaces remain:
+
+- Claude `hooks/hooks.json` automation and `outputStyles`
+- Cursor `.cursor/hooks.json` and `.cursor/rules`
 - Codex `.app.json` metadata beyond capability reporting
+
+<Info>
+  **Future execution path:** a later feature could convert these records into
+  native subagent templates only after explicit operator opt-in, mapping model
+  and tool requests through the selected OpenClaw agent's local policy and
+  requiring approval review before activation.
+</Info>
 
 ## Bundle formats
 
@@ -269,6 +290,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
     - `settings.json` is imported into embedded OpenClaw settings (shell override keys are sanitized)
     - `.mcp.json` exposes supported stdio tools to embedded OpenClaw
     - `.lsp.json` plus manifest-declared `lspServers` paths load into embedded OpenClaw LSP defaults
+    - `agents/` definitions are parsed for inspection but are not executed
     - `hooks/hooks.json` is detected but not executed
     - Custom component paths in the manifest are additive; they extend defaults, not replace them
 
@@ -277,10 +299,11 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
   <Accordion title="Cursor bundles">
     Markers: `.cursor-plugin/plugin.json`
 
-    Optional content: `skills/`, `.cursor/commands/`, `.cursor/agents/`, `.cursor/rules/`, `.cursor/hooks.json`, `.mcp.json`
+    Optional content: `skills/`, `.cursor/commands/`, `.cursor/agents/`, manifest-declared agent roots, `.cursor/rules/`, `.cursor/hooks.json`, `.mcp.json`
 
     - `.cursor/commands/` is treated as skill content
-    - `.cursor/rules/`, `.cursor/agents/`, and `.cursor/hooks.json` are detect-only
+    - `.cursor/agents/` and manifest-declared agent roots (commonly `agents/`) are parsed for inspection but are not executed
+    - `.cursor/rules/` and `.cursor/hooks.json` are detect-only
 
   </Accordion>
 </AccordionGroup>

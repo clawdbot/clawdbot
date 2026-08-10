@@ -209,4 +209,94 @@ describe("bundle plugins", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    {
+      pluginId: "claude-agent-pack",
+      bundleFormat: "claude" as const,
+      manifestDir: ".claude-plugin",
+      agentPath: "agents/reviewer.md",
+      name: "reviewer",
+      description: "Reviews changes for correctness",
+    },
+    {
+      pluginId: "cursor-agent-pack",
+      bundleFormat: "cursor" as const,
+      manifestDir: ".cursor-plugin",
+      agentPath: ".cursor/agents/explorer.md",
+      name: "explorer",
+      description: "Maps an unfamiliar repository",
+    },
+  ])("preserves $bundleFormat bundle agents as metadata", (fixture) => {
+    const registry = loadBundleFixture({
+      pluginId: fixture.pluginId,
+      build: (bundleRoot) => {
+        mkdirSafe(path.join(bundleRoot, fixture.manifestDir));
+        fs.writeFileSync(
+          path.join(bundleRoot, fixture.manifestDir, "plugin.json"),
+          JSON.stringify({ name: fixture.pluginId }),
+          "utf8",
+        );
+        mkdirSafe(path.dirname(path.join(bundleRoot, fixture.agentPath)));
+        fs.writeFileSync(
+          path.join(bundleRoot, fixture.agentPath),
+          [
+            "---",
+            `name: ${fixture.name}`,
+            `description: ${fixture.description}`,
+            "model: inherit",
+            "---",
+            "Template prompt body.",
+          ].join("\n"),
+          "utf8",
+        );
+      },
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === fixture.pluginId);
+    expect(plugin).toMatchObject({
+      bundleFormat: fixture.bundleFormat,
+      bundleAgentTemplates: [
+        {
+          id: `${fixture.pluginId}:${fixture.name}`,
+          pluginId: fixture.pluginId,
+          sourceFormat: fixture.bundleFormat,
+          name: fixture.name,
+          description: fixture.description,
+          prompt: {
+            kind: "file",
+            path: fixture.agentPath,
+            contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          },
+          sourceFilePath: fixture.agentPath,
+          model: "inherit",
+        },
+      ],
+    });
+  });
+
+  it("keeps loading a bundle when an agent definition is malformed", () => {
+    const registry = loadBundleFixture({
+      pluginId: "malformed-agent-pack",
+      build: (bundleRoot) => {
+        mkdirSafe(path.join(bundleRoot, "agents"));
+        fs.writeFileSync(
+          path.join(bundleRoot, "agents", "broken.md"),
+          ["---", "name: broken", "description: [unterminated", "Prompt body."].join("\n"),
+          "utf8",
+        );
+      },
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "malformed-agent-pack");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin).toMatchObject({ bundleAgentTemplates: [] });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "malformed-agent-pack",
+        level: "warn",
+        message: expect.stringContaining("invalid frontmatter"),
+      }),
+    );
+  });
 });

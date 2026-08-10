@@ -21,6 +21,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { BundledChannelConfigCollector } from "./manifest-registry.js";
+import { isTransientPluginDiagnostic } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -566,7 +567,14 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
             .filter((plugin) => enabledPluginIds.has(plugin.id))
             .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.id))
             .map(normalizePreparedManifestRecord),
-          diagnostics: [...diagnostics],
+          diagnostics: [
+            ...diagnostics,
+            ...(params.manifestRegistry.diagnostics ?? []).filter(
+              (diagnostic) =>
+                isTransientPluginDiagnostic(diagnostic) &&
+                (!pluginIdSet || !diagnostic.pluginId || pluginIdSet.has(diagnostic.pluginId)),
+            ),
+          ],
         };
       }
       const candidates = params.index.plugins

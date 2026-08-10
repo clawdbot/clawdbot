@@ -22,6 +22,7 @@ import {
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import { isTransientPluginDiagnostic } from "./manifest-types.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -74,7 +75,11 @@ function buildInstalledPluginIndex(
     diagnostics: discovery.diagnostics,
     installRecords,
   });
-  const diagnostics = [...(registry.diagnostics ?? [])];
+  // Agent Markdown is rescanned when the manifest registry is materialized from
+  // the index. Persisting these diagnostics would make repaired files look stale.
+  const diagnostics = (registry.diagnostics ?? []).filter(
+    (diagnostic) => !isTransientPluginDiagnostic(diagnostic),
+  );
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const plugins = buildInstalledPluginIndexRecords({
     candidates: discovery.candidates,

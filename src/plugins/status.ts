@@ -22,7 +22,7 @@ import {
 } from "./inspect-shape.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { BundleAgentTemplate, PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   loadPluginMetadataSnapshot,
@@ -70,7 +70,7 @@ export type PluginCompatibilitySummary = {
 
 export type PluginInspectReport = {
   workspaceDir?: string;
-  plugin: PluginRegistry["plugins"][number];
+  plugin: Omit<PluginRegistry["plugins"][number], "bundleAgentTemplates">;
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
@@ -103,6 +103,8 @@ export type PluginInspectReport = {
   }>;
   httpRouteCount: number;
   bundleCapabilities: string[];
+  /** Metadata-only compatible-bundle templates. Prompt bodies are never included. */
+  bundleAgentTemplates: BundleAgentTemplate[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -469,9 +471,10 @@ export function buildPluginInspectReport(params: {
     diagnostics,
     hasRuntimeMemoryEmbeddingProviderRegistration,
   });
+  const { bundleAgentTemplates, ...inspectPlugin } = plugin;
   return {
     workspaceDir: report.workspaceDir,
-    plugin,
+    plugin: inspectPlugin,
     shape,
     capabilityMode: shapeSummary.capabilityMode,
     capabilityCount: shapeSummary.capabilityCount,
@@ -488,6 +491,7 @@ export function buildPluginInspectReport(params: {
     lspServers,
     httpRouteCount: plugin.httpRoutes,
     bundleCapabilities: plugin.bundleCapabilities ?? [],
+    bundleAgentTemplates: structuredClone(bundleAgentTemplates ?? []),
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,

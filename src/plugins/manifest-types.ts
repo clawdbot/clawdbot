@@ -23,11 +23,47 @@ export type PluginFormat = "openclaw" | "bundle";
 /** Supported external bundle manifest formats. */
 export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 
+/** Prompt source metadata for a compatible-bundle agent. Prompt bytes are not persisted. */
+type BundlePromptReference = {
+  kind: "file";
+  path: string;
+  contentDigest: string;
+};
+
+/** Declared metadata that OpenClaw preserves but does not currently map to runtime policy. */
+export type BundleAgentUnsupportedField = {
+  field: string;
+  reason: string;
+};
+
+/** Normalized, metadata-only agent definition discovered in a compatible bundle. */
+export type BundleAgentTemplate = {
+  id: string;
+  pluginId: string;
+  sourceFormat: "claude" | "cursor";
+  name: string;
+  description: string;
+  prompt: BundlePromptReference;
+  sourceFilePath: string;
+  model?: string;
+  effort?: string;
+  maxTurns?: number;
+  tools?: string[];
+  disallowedTools?: string[];
+  skills?: string[];
+  memory?: string;
+  background?: boolean;
+  isolation?: string;
+  readOnly?: boolean;
+  unsupportedFields?: BundleAgentUnsupportedField[];
+};
+
 /**
  * Closed classification codes for plugin diagnostics. Health surfaces branch
  * on these instead of matching freeform diagnostic message text.
  */
 export type PluginDiagnosticCode =
+  | "bundle-agent-metadata"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification";
@@ -40,6 +76,11 @@ export type PluginDiagnostic = {
   source?: string;
   code?: PluginDiagnosticCode;
 };
+
+/** Diagnostics derived from mutable plugin payloads rather than the installed index itself. */
+export function isTransientPluginDiagnostic(diagnostic: PluginDiagnostic): boolean {
+  return diagnostic.code === "bundle-agent-metadata";
+}
 
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;

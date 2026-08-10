@@ -7,7 +7,7 @@ import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
@@ -785,5 +785,71 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.bundleFormat).toBe("claude");
     expect(registry.plugins[0]?.rootDir).toBe(rootDir);
     expect(registry.plugins[0]?.skills).toEqual(["commands"]);
+  });
+
+  it("rescans agent diagnostics instead of persisting stale file state", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "agents"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "agent-pack" }),
+      "utf8",
+    );
+    const agentPath = path.join(rootDir, "agents", "reviewer.md");
+    fs.writeFileSync(
+      agentPath,
+      ["---", "name: reviewer", "description: [unterminated", "Prompt."].join("\n"),
+      "utf8",
+    );
+    const env = { OPENCLAW_VERSION: "2026.4.25", VITEST: "true" };
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        {
+          idHint: "agent-pack",
+          source: rootDir,
+          rootDir,
+          origin: "global",
+          format: "bundle",
+          bundleFormat: "claude",
+        },
+      ],
+      env,
+    });
+
+    expect(index.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "bundle-agent-metadata",
+    );
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    if (!persisted) {
+      throw new Error("expected persisted installed plugin index");
+    }
+    const malformed = loadPluginManifestRegistryForInstalledIndex({
+      index: persisted,
+      env,
+      includeDisabled: true,
+    });
+    expect(
+      malformed.diagnostics.filter((diagnostic) => diagnostic.code === "bundle-agent-metadata"),
+    ).toHaveLength(1);
+
+    fs.writeFileSync(
+      agentPath,
+      ["---", "name: reviewer", "description: Reviews changes", "---", "Review."].join("\n"),
+      "utf8",
+    );
+    clearPluginMetadataLifecycleCaches();
+    const repaired = loadPluginManifestRegistryForInstalledIndex({
+      index: persisted,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(repaired.diagnostics).toStrictEqual([]);
+    expect(repaired.plugins[0]?.bundleAgentTemplates).toMatchObject([
+      { id: "agent-pack:reviewer", name: "reviewer" },
+    ]);
   });
 });

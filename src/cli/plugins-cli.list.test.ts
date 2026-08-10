@@ -826,7 +826,22 @@ describe("plugins cli list", () => {
       lspServers: [],
       httpRouteCount: 0,
       bundleCapabilities: [],
-      diagnostics: [],
+      bundleAgentTemplates: [
+        {
+          id: "reviewer",
+          pluginId: "openclaw-mem0",
+          sourceFormat: "claude",
+          name: "reviewer\u001b[2J\nforged",
+          description: "Review safely\u009b31m",
+          prompt: {
+            kind: "file",
+            path: "agents/reviewer.md",
+            contentDigest: "a".repeat(64),
+          },
+          sourceFilePath: "agents/reviewer.md\rforged",
+        },
+      ],
+      diagnostics: [{ level: "warn", message: "warning\u001b[2J\nforged" }],
       policy: {
         allowConversationAccess: true,
         allowedModels: [],
@@ -840,6 +855,9 @@ describe("plugins cli list", () => {
 
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("Policy");
+    expect(runtimeLogs.join("\n")).toContain("reviewer\\nforged");
+    expect(runtimeLogs.join("\n")).toContain("warning\\nforged");
+    expect(runtimeLogs.join("\n")).not.toContain("\u001b[2J");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
     expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
@@ -877,6 +895,7 @@ describe("plugins cli list", () => {
       lspServers: [],
       httpRouteCount: 0,
       bundleCapabilities: [],
+      bundleAgentTemplates: [],
       diagnostics: [],
       policy: {
         allowedModels: [],

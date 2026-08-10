@@ -6,6 +6,7 @@ type ParsedFrontmatter = Record<string, string>;
 export type ParsedFrontmatterBlockResult = {
   frontmatter: ParsedFrontmatter;
   issues: FrontmatterParseIssue[];
+  structuredFields: string[];
 };
 
 export type FrontmatterParseIssue = {
@@ -113,6 +114,7 @@ function parseYamlFrontmatterOnce(
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
       return {
         frontmatter: fallback,
+        structuredFields: [],
         issues:
           doc.errors.length > 0
             ? doc.errors.map((error) => ({
@@ -127,6 +129,7 @@ function parseYamlFrontmatterOnce(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         frontmatter: fallback,
+        structuredFields: [],
         issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
       };
     }
@@ -149,6 +152,7 @@ function parseYamlFrontmatterOnce(
     }
 
     const result: ParsedFrontmatter = {};
+    const structuredFields: string[] = [];
     for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
@@ -156,10 +160,12 @@ function parseYamlFrontmatterOnce(
         continue;
       }
       const fallbackValue = Object.hasOwn(fallback, key) ? fallback[key] : undefined;
-      result[key] =
-        coerced.kind === "structured" && inlineColonKeys.has(key) && fallbackValue !== undefined
-          ? fallbackValue
-          : coerced.value;
+      const useFallback =
+        coerced.kind === "structured" && inlineColonKeys.has(key) && fallbackValue !== undefined;
+      result[key] = useFallback ? fallbackValue : coerced.value;
+      if (coerced.kind === "structured" && !useFallback) {
+        structuredFields.push(key);
+      }
     }
 
     for (const [key, value] of Object.entries(fallback)) {
@@ -167,11 +173,12 @@ function parseYamlFrontmatterOnce(
         result[key] = value;
       }
     }
-    return { frontmatter: result, issues: [] };
+    return { frontmatter: result, issues: [], structuredFields };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
       frontmatter: fallback,
+      structuredFields: [],
       issues: [{ code: "YAML_EXCEPTION", message }],
     };
   }
@@ -243,11 +250,14 @@ export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterB
   const normalized = normalizeFrontmatterContent(content);
   const block = extractFrontmatterBlockFromNormalized(normalized)?.block;
   if (block !== undefined) {
-    return block ? parseYamlFrontmatter(block) : { frontmatter: {}, issues: [] };
+    return block
+      ? parseYamlFrontmatter(block)
+      : { frontmatter: {}, issues: [], structuredFields: [] };
   }
   return FRONTMATTER_OPENING_DELIMITER.test(normalized)
     ? {
         frontmatter: {},
+        structuredFields: [],
         issues: [
           {
             code: "UNTERMINATED_FRONTMATTER",
@@ -255,5 +265,5 @@ export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterB
           },
         ],
       }
-    : { frontmatter: {}, issues: [] };
+    : { frontmatter: {}, issues: [], structuredFields: [] };
 }

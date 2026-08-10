@@ -272,6 +272,57 @@ describe("handlePluginsCommand", () => {
     expect(inspectAllResult?.reply?.text).toContain('"superpowers"');
   });
 
+  it("bounds compatible agent metadata in chat inspection replies", async () => {
+    const templates = Array.from({ length: 4 }, (_, index) => ({
+      id: `superpowers:reviewer-${index}-${"x".repeat(120)}`,
+      pluginId: "superpowers",
+      sourceFormat: "claude",
+      name: `reviewer-${index}-${"y".repeat(120)}`,
+      description: "not included in chat summaries",
+      prompt: {
+        kind: "file",
+        path: `agents/reviewer-${index}.md`,
+        contentDigest: "a".repeat(64),
+      },
+      sourceFilePath: `agents/${"z".repeat(120)}-${index}.md`,
+    }));
+    buildPluginInspectReportMock.mockReturnValue({
+      plugin: { id: "superpowers" },
+      compatibility: [],
+      bundleAgentTemplates: templates,
+    });
+    buildAllPluginInspectReportsMock.mockReturnValue([
+      {
+        plugin: { id: "superpowers" },
+        compatibility: [],
+        bundleAgentTemplates: templates,
+      },
+    ]);
+
+    const result = await handlePluginsCommand(
+      buildPluginsParams("/plugins inspect superpowers", buildCfg()),
+      true,
+    );
+    const text = result?.reply?.text ?? "";
+
+    expect(text).toContain('"bundleAgentTemplateCount": 4');
+    expect(text).toContain('"bundleAgentTemplatesOmitted": 2');
+    expect(text).toContain("reviewer-0");
+    expect(text).toContain("reviewer-1");
+    expect(text).not.toContain("reviewer-2");
+    expect(text).not.toContain("not included in chat summaries");
+    expect(text).not.toContain("x".repeat(100));
+
+    const allResult = await handlePluginsCommand(
+      buildPluginsParams("/plugins inspect all", buildCfg()),
+      true,
+    );
+    const allText = allResult?.reply?.text ?? "";
+    expect(allText).toContain('"bundleAgentTemplatesOmitted": 2');
+    expect(allText).not.toContain("not included in chat summaries");
+    expect(allText).not.toContain("x".repeat(100));
+  });
+
   it("rejects internal writes without operator.admin", async () => {
     const params = buildPluginsParams("/plugins enable superpowers", buildCfg());
     params.command.channel = "webchat";

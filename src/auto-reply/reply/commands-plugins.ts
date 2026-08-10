@@ -38,12 +38,43 @@ function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
+const CHAT_AGENT_TEMPLATE_LIMIT = 2;
+const CHAT_AGENT_TEMPLATE_TEXT_LIMIT = 80;
+
+function truncateChatMetadata(value: string): string {
+  const prefix: string[] = [];
+  for (const character of value) {
+    if (prefix.length === CHAT_AGENT_TEMPLATE_TEXT_LIMIT) {
+      return `${prefix.slice(0, -1).join("")}…`;
+    }
+    prefix.push(character);
+  }
+  return value;
+}
+
+function buildChatSafePluginInspect(
+  inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
+) {
+  const templates = inspect.bundleAgentTemplates ?? [];
+  return {
+    ...inspect,
+    bundleAgentTemplates: templates.slice(0, CHAT_AGENT_TEMPLATE_LIMIT).map((template) => ({
+      id: truncateChatMetadata(template.id),
+      sourceFormat: template.sourceFormat,
+      name: truncateChatMetadata(template.name),
+      sourceFilePath: truncateChatMetadata(template.sourceFilePath),
+    })),
+    bundleAgentTemplateCount: templates.length,
+    bundleAgentTemplatesOmitted: Math.max(0, templates.length - CHAT_AGENT_TEMPLATE_LIMIT),
+  };
+}
+
 function buildPluginInspectJson(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
   installRecords: Record<string, PluginInstallRecord>,
 ) {
   return {
-    inspect,
+    inspect: buildChatSafePluginInspect(inspect),
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
       code: warning.code,
       severity: warning.severity,
@@ -275,7 +306,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         const payload = buildPluginInspectJson(inspect, installRecords);
         return commandReply(
           renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-            ...inspect,
+            ...payload.inspect,
             compatibilityWarnings: payload.compatibilityWarnings,
             install: payload.install,
           }),

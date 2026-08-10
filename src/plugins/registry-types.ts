@@ -27,6 +27,7 @@ import type {
 } from "./host-hooks.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
+  BundleAgentTemplate,
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
@@ -456,6 +457,7 @@ export type PluginRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
+  bundleAgentTemplates?: BundleAgentTemplate[];
   kind?: PluginKind | PluginKind[];
   source: string;
   rootDir?: string;

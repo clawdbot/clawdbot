@@ -11,7 +11,15 @@ import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { readRootStructuredFileSync } from "../infra/json-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../utils.js";
-import type { PluginBundleFormat } from "./manifest-types.js";
+import {
+  filterConflictingBundleAgentTemplates,
+  loadBundleAgentTemplates,
+} from "./bundle-agent-manifest.js";
+import type {
+  BundleAgentTemplate,
+  PluginBundleFormat,
+  PluginDiagnostic,
+} from "./manifest-types.js";
 import type { PluginManifestActivation } from "./manifest.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -31,7 +39,7 @@ const MAX_AGENT_BUNDLE_MANIFEST_BYTES = 256 * 1024;
 const log = createSubsystemLogger("plugins/bundle-manifest");
 
 /** Normalized bundle manifest shape consumed by plugin discovery. */
-type BundlePluginManifest = {
+export type BundlePluginManifest = {
   id: string;
   name?: string;
   description?: string;
@@ -43,10 +51,16 @@ type BundlePluginManifest = {
   bundleFormat: PluginBundleFormat;
   activation?: PluginManifestActivation;
   capabilities: string[];
+  agentTemplates?: BundleAgentTemplate[];
 };
 
 type BundleManifestLoadResult =
-  | { ok: true; manifest: BundlePluginManifest; manifestPath: string }
+  | {
+      ok: true;
+      manifest: BundlePluginManifest;
+      manifestPath: string;
+      diagnostics: PluginDiagnostic[];
+    }
   | { ok: false; error: string; manifestPath: string };
 
 type BundleManifestFileLoadResult =
@@ -386,11 +400,95 @@ function resolveAgentActivation(
   return normalizeManifestActivation(openclawExtension.activation);
 }
 
+function loadCompatibleAgentTemplates(params: {
+  rootDir: string;
+  rootRealPath?: string;
+  preferredFormat: PluginBundleFormat;
+  preferredRaw: Record<string, unknown>;
+  pluginId: string;
+  rejectHardlinks: boolean;
+}): { agentTemplates: BundleAgentTemplate[]; diagnostics: PluginDiagnostic[] } {
+  const diagnostics: PluginDiagnostic[] = [];
+  const contributions: Array<{
+    format: "claude" | "cursor";
+    raw: Record<string, unknown>;
+  }> = [];
+  for (const format of ["cursor", "claude"] as const) {
+    const manifestRelativePath =
+      format === "cursor"
+        ? CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH
+        : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
+    const defaultAgentRoot = format === "cursor" ? ".cursor/agents" : "agents";
+    const hasManifest = pluginScanExistsSync(path.join(params.rootDir, manifestRelativePath));
+    const canInferDefaultRoot = !(params.preferredFormat === "cursor" && format === "claude");
+    const hasContribution =
+      params.preferredFormat === format ||
+      hasManifest ||
+      (canInferDefaultRoot && pluginScanExistsSync(path.join(params.rootDir, defaultAgentRoot)));
+    if (!hasContribution) {
+      continue;
+    }
+    if (params.preferredFormat === format) {
+      contributions.push({ format, raw: params.preferredRaw });
+      continue;
+    }
+    const loaded = loadBundleManifestFile({
+      rootDir: params.rootDir,
+      ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
+      manifestRelativePath,
+      rejectHardlinks: params.rejectHardlinks,
+      allowMissing: true,
+    });
+    if (!loaded.ok) {
+      diagnostics.push({
+        level: "warn",
+        pluginId: params.pluginId,
+        source: loaded.manifestPath,
+        message: loaded.error,
+      });
+      // A malformed optional manifest must not hide a valid default agents directory.
+      contributions.push({ format, raw: {} });
+      continue;
+    }
+    contributions.push({ format, raw: loaded.raw });
+  }
+
+  const agentTemplates = contributions.flatMap(({ format, raw }) => {
+    const loaded = loadBundleAgentTemplates({
+      rootDir: params.rootDir,
+      agentRoots:
+        format === "cursor"
+          ? resolveCursorAgentDirs(raw, params.rootDir)
+          : resolveClaudeAgentDirs(raw, params.rootDir),
+      sourceFormat: format,
+      pluginId: params.pluginId,
+      rejectHardlinks: params.rejectHardlinks,
+    });
+    diagnostics.push(...loaded.diagnostics);
+    return loaded.agentTemplates;
+  });
+  const conflicts = filterConflictingBundleAgentTemplates(agentTemplates);
+  for (const id of conflicts.conflictingIds) {
+    diagnostics.push({
+      level: "warn",
+      pluginId: params.pluginId,
+      source: params.rootDir,
+      message: `agent-template "${id}" has conflicting compatible definitions; entries ignored`,
+    });
+  }
+  return {
+    agentTemplates: conflicts.agentTemplates,
+    diagnostics,
+  };
+}
+
 export function loadBundleManifest(params: {
   rootDir: string;
   rootRealPath?: string;
   bundleFormat: PluginBundleFormat;
   rejectHardlinks?: boolean;
+  /** Discovery only needs the bundle id; registry loading owns the metadata scan. */
+  loadAgentTemplates?: boolean;
 }): BundleManifestLoadResult {
   const rejectHardlinks = params.rejectHardlinks ?? true;
   const manifestRelativePath =
@@ -422,6 +520,18 @@ export function loadBundleManifest(params: {
     normalizeOptionalString(raw.shortDescription) ??
     normalizeOptionalString(interfaceRecord?.shortDescription);
   const version = normalizeOptionalString(raw.version);
+  const id = slugifyPluginId(name, params.rootDir);
+  const agents =
+    params.bundleFormat === "agent" || params.loadAgentTemplates !== true
+      ? { agentTemplates: [], diagnostics: [] }
+      : loadCompatibleAgentTemplates({
+          rootDir: params.rootDir,
+          ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
+          preferredFormat: params.bundleFormat,
+          preferredRaw: raw,
+          pluginId: id,
+          rejectHardlinks,
+        });
 
   if (params.bundleFormat === "agent") {
     if (raw.$schema !== AGENT_BUNDLE_MANIFEST_SCHEMA) {
@@ -453,6 +563,7 @@ export function loadBundleManifest(params: {
         capabilities: buildAgentCapabilities(params.rootDir),
       },
       manifestPath: loaded.manifestPath,
+      diagnostics: [],
     };
   }
 
@@ -462,7 +573,7 @@ export function loadBundleManifest(params: {
     return {
       ok: true,
       manifest: {
-        id: slugifyPluginId(name, params.rootDir),
+        id,
         name,
         description,
         version,
@@ -472,8 +583,10 @@ export function loadBundleManifest(params: {
         bundleFormat: "codex",
         activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCodexCapabilities(raw, params.rootDir),
+        ...(agents.agentTemplates.length > 0 ? { agentTemplates: agents.agentTemplates } : {}),
       },
       manifestPath: loaded.manifestPath,
+      diagnostics: agents.diagnostics,
     };
   }
 
@@ -481,7 +594,7 @@ export function loadBundleManifest(params: {
     return {
       ok: true,
       manifest: {
-        id: slugifyPluginId(name, params.rootDir),
+        id,
         name,
         description,
         version,
@@ -491,15 +604,17 @@ export function loadBundleManifest(params: {
         bundleFormat: "cursor",
         activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCursorCapabilities(raw, params.rootDir),
+        ...(agents.agentTemplates.length > 0 ? { agentTemplates: agents.agentTemplates } : {}),
       },
       manifestPath: loaded.manifestPath,
+      diagnostics: agents.diagnostics,
     };
   }
 
   return {
     ok: true,
     manifest: {
-      id: slugifyPluginId(name, params.rootDir),
+      id,
       name,
       description,
       version,
@@ -509,8 +624,10 @@ export function loadBundleManifest(params: {
       bundleFormat: "claude",
       activation: normalizeManifestActivation(raw.activation),
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
+      ...(agents.agentTemplates.length > 0 ? { agentTemplates: agents.agentTemplates } : {}),
     },
     manifestPath: loaded.manifestPath,
+    diagnostics: agents.diagnostics,
   };
 }
 

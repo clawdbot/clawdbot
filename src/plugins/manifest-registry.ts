@@ -12,7 +12,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
-import { loadBundleManifest } from "./bundle-manifest.js";
+import { loadBundleManifest, type BundlePluginManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
@@ -25,6 +25,7 @@ import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
+  BundleAgentTemplate,
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
@@ -229,6 +230,7 @@ export type PluginManifestRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
+  bundleAgentTemplates?: BundleAgentTemplate[];
   kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
@@ -660,17 +662,7 @@ function buildRecord(params: {
 }
 
 function buildBundleRecord(params: {
-  manifest: {
-    id: string;
-    name?: string;
-    description?: string;
-    version?: string;
-    skills: string[];
-    settingsFiles?: string[];
-    hooks: string[];
-    capabilities: string[];
-    activation?: PluginManifestRecord["activation"];
-  };
+  manifest: BundlePluginManifest;
   candidate: PluginCandidate;
   manifestPath: string;
 }): PluginManifestRecord {
@@ -690,6 +682,7 @@ function buildBundleRecord(params: {
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
+    bundleAgentTemplates: params.manifest.agentTemplates ?? [],
     activation: params.manifest.activation,
     channels: [],
     providers: [],
@@ -1074,6 +1067,7 @@ export function loadPluginManifestRegistry(
               rootDir: candidate.rootDir,
               bundleFormat: candidate.bundleFormat,
               rejectHardlinks,
+              loadAgentTemplates: true,
             })
           : isManifestlessConfiguredFile
             ? {
@@ -1096,6 +1090,9 @@ export function loadPluginManifestRegistry(
     }
     const manifest = manifestRes.manifest;
     const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
+    if ("diagnostics" in manifestRes) {
+      diagnostics.push(...manifestRes.diagnostics);
+    }
     if (candidate.origin !== "bundled") {
       const packageManifestSource = path.join(
         candidate.packageDir ?? candidate.rootDir,
