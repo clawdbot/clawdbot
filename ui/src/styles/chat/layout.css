@@ -993,6 +993,7 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card--audio,
+.chat-assistant-attachment-card--document,
 .chat-assistant-attachment-card--video {
   display: flex;
   flex-direction: column;
@@ -1000,7 +1001,8 @@ openclaw-chat-video-player {
   width: min(100%, 390px);
 }
 
-.chat-assistant-attachment-card--audio {
+.chat-assistant-attachment-card--audio,
+.chat-assistant-attachment-card--document {
   gap: 8px;
 }
 
@@ -1069,6 +1071,32 @@ openclaw-chat-video-player {
 .chat-assistant-attachment-card__download svg {
   width: 15px;
   height: 15px;
+}
+
+.chat-assistant-attachment-card--document .chat-assistant-attachment-card__link {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-assistant-attachment-card__preview-text {
+  width: 100%;
+  max-height: 174px;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: auto;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-audio-player {

@@ -42,6 +42,120 @@ import {
 
 export { getAssistantAttachmentAvailabilityRenderVersion };
 
+const DOCUMENT_PREVIEW_MAX_BYTES = 256 * 1024;
+const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
+const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
+const TEXTY_DOCUMENT_MIME_TYPES = new Set([
+  "application/json",
+  "application/toml",
+  "application/x-ndjson",
+  "application/x-yaml",
+  "application/xml",
+  "application/yaml",
+]);
+const TEXTY_DOCUMENT_EXTENSIONS = new Set([
+  ".csv",
+  ".diff",
+  ".json",
+  ".jsonl",
+  ".log",
+  ".markdown",
+  ".md",
+  ".patch",
+  ".toml",
+  ".tsv",
+  ".txt",
+  ".xml",
+  ".yaml",
+  ".yml",
+]);
+
+export function isTextyDocumentAttachment(
+  attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
+): boolean {
+  const mimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (mimeType.startsWith("text/") || TEXTY_DOCUMENT_MIME_TYPES.has(mimeType)) {
+    return true;
+  }
+  if (mimeType && mimeType !== "application/octet-stream") {
+    return false;
+  }
+  const label = attachment.label.trim().toLowerCase();
+  return [...TEXTY_DOCUMENT_EXTENSIONS].some((extension) => label.endsWith(extension));
+}
+
+function resolveDocumentPreviewText(
+  attachmentUrl: string,
+  sourceIdentity: string,
+  sizeBytes: number | undefined,
+  onRequestUpdate: (() => void) | undefined,
+): string | null | undefined {
+  if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
+    return null;
+  }
+  const resource = observeChatMediaResource<string | null>(
+    "document-preview",
+    attachmentUrl,
+    onRequestUpdate,
+    sourceIdentity,
+  );
+  if (resource.value !== undefined) {
+    return resource.value;
+  }
+  if (resource.pending) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  resource.abortController = controller;
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("document preview fetch timed out", "TimeoutError")),
+    DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS,
+  );
+  const pending = fetch(attachmentUrl, {
+    credentials: "same-origin",
+    method: "GET",
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!isChatMediaResourceCurrent(resource)) {
+        return null;
+      }
+      if (!response.ok) {
+        resource.value = null;
+        return null;
+      }
+      const text = await response.text();
+      if (!isChatMediaResourceCurrent(resource)) {
+        return null;
+      }
+      const preview =
+        text.length > DOCUMENT_PREVIEW_MAX_CHARS
+          ? `${text.slice(0, DOCUMENT_PREVIEW_MAX_CHARS)}…`
+          : text;
+      resource.value = preview;
+      return preview;
+    })
+    .catch(() => {
+      if (isChatMediaResourceCurrent(resource)) {
+        resource.value = null;
+      }
+      return null;
+    })
+    .finally(() => {
+      clearTimeout(timeout);
+      if (resource.abortController === controller) {
+        resource.abortController = undefined;
+      }
+      if (resource.pending === pending) {
+        resource.pending = undefined;
+      }
+      notifyChatMediaResourceSubscribers(resource);
+    });
+  resource.pending = pending;
+  return undefined;
+}
+
 export function resolveAssistantAttachmentAvailability(
   source: string,
   localMediaPreviewRoots: readonly string[],
@@ -680,20 +794,45 @@ export function renderAssistantAttachments(
           });
         }
         const downloadHref = safeAttachmentHref(attachmentUrl);
+        const texty = isTextyDocumentAttachment(attachment);
+        const previewText = texty
+          ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
+          : null;
         return html`
-          <div class="chat-assistant-attachment-card">
-            <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
-            ${downloadHref
-              ? html`<a
-                  class="chat-assistant-attachment-card__link"
-                  href=${downloadHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  >${attachment.label}</a
-                >`
-              : html`<span class="chat-assistant-attachment-card__title"
-                  >${attachment.label}</span
-                >`}
+          <div class="chat-assistant-attachment-card chat-assistant-attachment-card--document">
+            <div class="chat-assistant-attachment-card__header">
+              <span class="chat-assistant-attachment-card__icon"
+                >${texty ? icons.fileText : icons.paperclip}</span
+              >
+              ${downloadHref
+                ? html`<a
+                    class="chat-assistant-attachment-card__link"
+                    href=${downloadHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    >${attachment.label}</a
+                  >`
+                : html`<span class="chat-assistant-attachment-card__title"
+                    >${attachment.label}</span
+                  >`}
+              <span class="chat-assistant-attachment-card__actions">
+                ${downloadHref
+                  ? html`<a
+                      class="chat-assistant-attachment-card__download"
+                      href=${downloadHref}
+                      download=${attachment.label}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label=${t("chat.mediaPlayer.download", { filename: attachment.label })}
+                      title=${t("chat.mediaPlayer.download", { filename: attachment.label })}
+                      >${icons.download}</a
+                    >`
+                  : null}
+              </span>
+            </div>
+            ${previewText !== null && previewText !== undefined
+              ? html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`
+              : null}
           </div>
         `;
       })}
