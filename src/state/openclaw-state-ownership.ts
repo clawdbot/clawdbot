@@ -132,7 +132,12 @@ export function inspectOpenClawStateOwnershipAtPath(
       database.exec(
         `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
       );
-      return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+      const ownership = inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+      if (location !== resolvedPath && existsSync(`${resolvedPath}-wal`)) {
+        location = resolvedPath;
+        continue;
+      }
+      return ownership;
     } catch (error) {
       // External claims checkpoint before returning, so the main file is authoritative.
       // If a WAL appeared during immutable inspection, retry once with its live reader.
