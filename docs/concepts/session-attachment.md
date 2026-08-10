@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "How Gateway-owned sessions continue across the Control UI, terminal, CLI, mobile clients, and coding harnesses"
 read_when:
   - You want to continue a Control UI session in the terminal
