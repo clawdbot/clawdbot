@@ -66,6 +66,7 @@ async function writeListToolsMcpServer(params: {
   filePath: string;
   logPath: string;
   delayMs?: number;
+  listToolsReleasePath?: string;
   initializeDelayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
@@ -105,6 +106,7 @@ import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
 const delayMs = ${params.delayMs ?? 0};
+const listToolsReleasePath = ${JSON.stringify(params.listToolsReleasePath)};
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
@@ -233,7 +235,7 @@ function handle(message) {
     const currentListCount = listCount;
     const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
-    pendingTimer = setTimeout(() => {
+    const sendListResponse = () => {
       send({
         jsonrpc: "2.0",
         id: message.id,
@@ -250,7 +252,20 @@ function handle(message) {
         log("notify tools/list_changed");
         send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
       }
-    }, delayMs);
+    };
+    void (async () => {
+      while (listToolsReleasePath) {
+        const released = await fs
+          .access(listToolsReleasePath)
+          .then(() => true)
+          .catch(() => false);
+        if (released) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      pendingTimer = setTimeout(sendListResponse, delayMs);
+    })();
   }
   if (message.method === "tools/call") {
     if (hangToolCallsUntilRestart) {
@@ -5308,20 +5323,24 @@ process.stdin.on("end", () => {
   );
 
   it(
-    "parallelizes MCP server catalog loading across multiple slow servers",
+    "starts MCP server catalog loading concurrently",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = makeTempDir(tempDirs, "bundle-mcp-parallel-");
-      const delays = [200, 400, 600];
-      const serverPaths = delays.map((delay, i) => {
+      const releasePath = path.join(tempDir, "release-list-tools");
+      const serverPaths = Array.from({ length: 3 }, (_, i) => {
         const serverPath = path.join(tempDir, `slow-server-${i}.mjs`);
         const logPath = path.join(tempDir, `server-${i}.log`);
-        return { serverPath, logPath, delay, serverName: `slowServer${i}` };
+        return { serverPath, logPath, serverName: `slowServer${i}` };
       });
 
       await Promise.all(
-        serverPaths.map(({ serverPath, logPath, delay }) =>
-          writeListToolsMcpServer({ filePath: serverPath, logPath, delayMs: delay }),
+        serverPaths.map(({ serverPath, logPath }) =>
+          writeListToolsMcpServer({
+            filePath: serverPath,
+            logPath,
+            listToolsReleasePath: releasePath,
+          }),
         ),
       );
 
@@ -5347,30 +5366,25 @@ process.stdin.on("end", () => {
         },
       });
 
+      const catalogPromise = runtime.getCatalog();
       try {
-        const sumDelays = delays.reduce((a, b) => a + b, 0);
-        const maxDelay = Math.max(...delays);
-        const parallelBudgetMs = maxDelay + 500;
+        await Promise.all(
+          serverPaths.map(({ logPath }) =>
+            waitForFileText(logPath, "tools/list cursor", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS),
+          ),
+        );
+        await fs.writeFile(releasePath, "released", "utf8");
+        const catalog = await catalogPromise;
 
-        const t0 = performance.now();
-        const catalog = await runtime.getCatalog();
-        const wallTime = performance.now() - t0;
-
-        // Must have successfully connected to all servers
-        expect(Object.keys(catalog.servers)).toHaveLength(delays.length);
+        expect(Object.keys(catalog.servers)).toHaveLength(serverPaths.length);
         expect(catalog.tools.map((t) => t.toolName)).toEqual([
           "slow_tool",
           "slow_tool",
           "slow_tool",
         ]);
-
-        // Sequential listing would have to wait roughly sumDelays before overhead;
-        // parallel listing should stay near the slowest server plus launch overhead.
-        expect(wallTime).toBeLessThan(parallelBudgetMs);
-        expect(parallelBudgetMs).toBeLessThan(sumDelays);
-
-        expect(wallTime).toBeGreaterThanOrEqual(maxDelay * 0.7);
       } finally {
+        await fs.writeFile(releasePath, "released", "utf8").catch(() => {});
+        await catalogPromise.catch(() => {});
         await runtime.dispose();
       }
     },

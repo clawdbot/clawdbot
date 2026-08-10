@@ -118,7 +118,7 @@ function createMetadataReplacement(): MetadataReplacement {
   return { promise, reject, resolve };
 }
 
-class ChatMetadataSnapshotUnavailableError extends Error {
+export class ChatMetadataSnapshotUnavailableError extends Error {
   constructor(message = "prepared chat metadata snapshot is unavailable") {
     super(message);
     this.name = "ChatMetadataSnapshotUnavailableError";

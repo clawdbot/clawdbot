@@ -7,6 +7,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
@@ -1178,6 +1182,37 @@ describe("sessions_send gating", () => {
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
     expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
+  it("detaches fire-and-forget A2A work from parent transcript ownership", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    let inheritedFence: ReturnType<typeof getOwnedSessionTranscriptWriterFence>;
+    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async () => {
+      inheritedFence = getOwnedSessionTranscriptWriterFence();
+    });
+    let parentTranscriptWriteCalls = 0;
+    const parentTranscriptWrite = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      parentTranscriptWriteCalls += 1;
+      return await run();
+    };
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        sessionTarget: {
+          expectedWriterRunId: "disposed-parent-run",
+          sessionKey: MAIN_AGENT_SESSION_KEY,
+        },
+        withTranscriptWrite: parentTranscriptWrite,
+      },
+      async () => {
+        await executeFireAndForgetA2AFrom(MAIN_AGENT_SESSION_KEY);
+      },
+    );
+    await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
+
+    expect(inheritedFence).toBeUndefined();
+    expect(parentTranscriptWriteCalls).toBe(0);
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {
