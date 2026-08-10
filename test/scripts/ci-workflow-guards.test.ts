@@ -1363,6 +1363,18 @@ NODE
     expect(activityRun).toMatch(
       /push: \(if \$event_name == "push" then \{\s+before: \.before,\s+after: \.after,\s+ref: \.ref,\s+compare: \.compare,\s+head_commit: \.head_commit\.id\s+\} else null end\)/u,
     );
+
+    const exactReviewStep = expectDefined(
+      steps.find((step) => step.name === "Dispatch exact ClawSweeper review"),
+      "ClawSweeper exact-review dispatch",
+    );
+    expect(exactReviewStep.env?.TARGET_BRANCH).toBe(
+      "${{ github.event.repository.default_branch }}",
+    );
+    expect(exactReviewStep.run).toContain('--arg target_branch "$TARGET_BRANCH"');
+    expect(exactReviewStep.run).toContain("target_branch:$target_branch");
+    expect(exactReviewStep.run).toContain('ingress_route:"target_dispatcher"');
+    expect(exactReviewStep.run).toContain("ingress_fingerprint:$ingress_fingerprint");
   });
 
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
