@@ -200,7 +200,14 @@ function restoreEvent(event: AssistantMessageEvent, state: TransformState): Assi
   if ("partial" in restored && restored.partial) {
     restored.partial = restoreMessage(restored.partial, state);
   }
-  if (restored.type === "toolcall_end") {
+  if (restored.type === "toolcall_delta") {
+    const call = restored.partial.content[restored.contentIndex];
+    if (call?.type === "toolCall" && (state.fields.get(call.name)?.length ?? 0) > 0) {
+      // Dynamic-record wire JSON is not prefix-compatible with restored object JSON.
+      // Defer argument bytes so consumers emit one canonical payload at toolcall_end.
+      restored.delta = "";
+    }
+  } else if (restored.type === "toolcall_end") {
     restored.toolCall = { ...restored.toolCall };
     transformCall(restored.toolCall as unknown as Record<string, unknown>, state, false);
   } else if (restored.type === "done") {

@@ -1,5 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
@@ -196,6 +200,7 @@ describe("OpenCode stream adapter", () => {
   it("round-trips dynamic record tool arguments through OpenCode-compatible schemas", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
+    let producerDelta: Extract<AssistantMessageEvent, { type: "toolcall_delta" }> | undefined;
     const baseStreamFn: StreamFn = async (model, _context, options) => {
       const initialPayload = { model: model.id };
       const replacement = await options?.onPayload?.(initialPayload, model);
@@ -206,6 +211,16 @@ describe("OpenCode stream adapter", () => {
           command: "node app.js",
           env: [{ key: "NODE_ENV", value: "test" }],
         });
+        producerDelta = {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: JSON.stringify({
+            command: "node app.js",
+            env: [{ key: "NODE_ENV", value: "test" }],
+          }),
+          partial: execMessage,
+        };
+        stream.push(producerDelta);
         stream.push({
           type: "toolcall_end",
           contentIndex: 0,
@@ -351,10 +366,30 @@ describe("OpenCode stream adapter", () => {
       ],
     });
     expect(events[0]).toMatchObject({
+      type: "toolcall_delta",
+      delta: "",
+      partial: {
+        content: [{ arguments: { command: "node app.js", env: { NODE_ENV: "test" } } }],
+      },
+    });
+    expect(producerDelta).toMatchObject({
+      delta: '{"command":"node app.js","env":[{"key":"NODE_ENV","value":"test"}]}',
+      partial: {
+        content: [
+          {
+            arguments: {
+              command: "node app.js",
+              env: [{ key: "NODE_ENV", value: "test" }],
+            },
+          },
+        ],
+      },
+    });
+    expect(events[1]).toMatchObject({
       type: "toolcall_end",
       toolCall: { arguments: { command: "node app.js", env: { NODE_ENV: "test" } } },
     });
-    expect(events[1]).toMatchObject({
+    expect(events[2]).toMatchObject({
       type: "toolcall_end",
       toolCall: {
         arguments: {
@@ -365,13 +400,13 @@ describe("OpenCode stream adapter", () => {
         },
       },
     });
-    expect(events[2]).toMatchObject({
+    expect(events[3]).toMatchObject({
       type: "toolcall_end",
       toolCall: {
         arguments: { providerOptions: [{ key: "broken", value: "not-json" }] },
       },
     });
-    expect(events[3]).toMatchObject({
+    expect(events[4]).toMatchObject({
       type: "done",
       message: {
         content: [
