@@ -57,6 +57,13 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "extensions/memory-core/src/memory/search-manager.ts",
   ),
   entry(
+    "memory-index-manager-sync-repro-manager-acquisition",
+    "control",
+    "operator-memory-host",
+    "legacy-only",
+    "scripts/memory-index-manager.sync-repro.ts",
+  ),
+  entry(
     "selected-runtime-backend-resolution",
     "control",
     "core-access-host",
