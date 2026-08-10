@@ -91,7 +91,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
-} from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
+} from "../embedded-agent-runner/run/attempt-tool-prepare.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
 import {
   prependSystemPromptAddition,

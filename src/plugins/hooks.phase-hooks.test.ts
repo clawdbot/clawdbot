@@ -1,6 +1,6 @@
 /** Tests phase-scoped plugin hooks and hook registration ordering. */
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-fixtures.js";

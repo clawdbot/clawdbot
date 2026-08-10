@@ -240,11 +240,11 @@ export {
 export { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
-export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
+export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt-tool-catalog.js";
 export {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
-} from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+} from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
 export {
   attachModelProviderRequestTransport,

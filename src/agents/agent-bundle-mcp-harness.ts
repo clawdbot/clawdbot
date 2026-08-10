@@ -21,7 +21,7 @@ import {
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
-import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-prepare.js";
 import { requiresMcpCodexToolApproval } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
