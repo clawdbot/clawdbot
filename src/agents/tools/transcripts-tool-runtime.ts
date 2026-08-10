@@ -137,8 +137,15 @@ function bindSourceToTurnAccount(params: {
   if (providerChannels.length === 0) {
     return { source: params.source };
   }
-  if (!channel || !providerChannels.includes(channel)) {
+  if (!channel) {
     return { source: params.source };
+  }
+  if (!providerChannels.includes(channel)) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} can only start from ${providerChannels.join(
+        ", ",
+      )} or a channel-less local tool`,
+    );
   }
   if (!accountId) {
     throw new Error(
