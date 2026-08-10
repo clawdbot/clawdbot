@@ -785,12 +785,14 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
-    // Codex defers native collab tools behind tool_search on search-capable
-    // models; the instructions must teach the retrieval path or models fall
-    // back to the always-direct sessions_spawn.
+    // Codex defers native collab tools behind tool_search or code mode; the
+    // instructions must teach both retrieval paths or models fall back to the
+    // always-direct sessions_spawn.
+    expect(instructions).toContain("Use `tool_search` when directly callable");
     expect(instructions).toContain(
-      "when `spawn_agent` is not directly listed, load it with `tool_search` before spawning",
+      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
     );
+    expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).toContain(
       "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
@@ -952,7 +954,11 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain(
       "Deferred searchable OpenClaw dynamic tools available: image_generate, music_generate.",
     );
-    expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
+    expect(instructions).toContain("Use `tool_search` when directly callable");
+    expect(instructions).toContain(
+      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
+    );
+    expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).not.toContain("message,");
   });
 

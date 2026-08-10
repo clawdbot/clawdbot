@@ -12,6 +12,7 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
+import type { ApprovalRequestChannelRouteClass } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -76,8 +77,6 @@ function hasApprovalForwardTarget(params: {
     (target) => normalizeOptionalChannel(target.channel) === channel,
   );
 }
-
-export type ApprovalRequestChannelRouteClass = "bound-or-explicit" | "unbound";
 
 /** Classifies whether native delivery has named channel-account owners. */
 export function classifyApprovalRequestChannelRoute(params: {

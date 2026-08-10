@@ -24,6 +24,14 @@ import {
   assertResultCollectionBytes,
 } from "./collection-byte-limits.js";
 import {
+  MAX_RECONCILED_SKILL_BYTES,
+  MAX_RECONCILED_SKILLS,
+  type SkillCollectionPlanEntry,
+  type SkillCollectionReconcileResult,
+  type SkillCollectionRestoreResult,
+  type WritableSkillCollectionEntry,
+} from "./collection-contracts.js";
+import {
   canonicalSkillCollectionWorkspace,
   pruneOlderSkillCollectionBackups,
   resolveSkillCollectionBackupRoot,
@@ -45,45 +53,6 @@ import { withSkillCollectionLock } from "./target-lock.js";
 import { assertWritableSkillTarget } from "./workspace-skill-read.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
-export const MAX_RECONCILED_SKILLS = 200;
-export const MAX_RECONCILED_SKILL_BYTES = 240_000;
-
-export type SkillCollectionPlanEntry =
-  | { action: "keep"; name: string }
-  | { action: "drop"; name: string; reason: string }
-  | { action: "write"; name: string; description: string; content: string };
-
-export type SkillCollectionReconcileResult = {
-  backupId: string;
-  kept: string[];
-  written: string[];
-  dropped: Array<{ name: string; reason: string }>;
-};
-
-export type SkillCollectionRestoreResult = {
-  backupId: string;
-  restored: string[];
-  removed: string[];
-};
-
-export type SkillCollectionReconcileContext = {
-  agentIds?: string[];
-  approvedSkillNames?: Set<string>;
-  approvedSkillNamesByAgent?: Array<Set<string>>;
-  readSkillHashes?: Map<string, string>;
-  readSkillTreeHashes?: Map<string, string>;
-  readSkillBytes?: Map<string, number>;
-  readByteCount?: number;
-  reconciling?: boolean;
-  result?: SkillCollectionReconcileResult;
-};
-
-export type WritableSkillCollectionEntry = {
-  name: string;
-  description?: string;
-  baseDir: string;
-  filePath: string;
-};
 
 type CollectionBackupManifest = {
   schema: typeof BACKUP_SCHEMA;

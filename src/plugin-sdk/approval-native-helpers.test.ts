@@ -154,7 +154,7 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
 });
 
 describe("createNativeApprovalChannelRouteGates", () => {
-  it("reports each locally eligible account for coordinator arbitration", () => {
+  it("reports each eligible account as a raw candidate for unbound session routes", () => {
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
     } satisfies OpenClawConfig;
@@ -274,7 +274,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
     ).toBe(false);
   });
 
-  it("uses the default account for unscoped targets", () => {
+  it("maps unscoped targets only to the default account", () => {
     const cfg = {
       approvals: {
         exec: {

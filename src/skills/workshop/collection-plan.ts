@@ -2,7 +2,7 @@ import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import type {
   SkillCollectionPlanEntry,
   WritableSkillCollectionEntry,
-} from "./collection-reconcile.js";
+} from "./collection-contracts.js";
 
 export function validateSkillCollectionPlan(
   input: readonly SkillCollectionPlanEntry[],

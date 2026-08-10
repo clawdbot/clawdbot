@@ -153,7 +153,7 @@ async function discardRestoreSnapshot(backupDir: string, rollbackDir: string): P
   });
 }
 
-export async function removeSkillCollectionDirectory(
+async function removeSkillCollectionDirectory(
   workspaceDir: string,
   skillDir: string,
 ): Promise<void> {
