@@ -70,10 +70,30 @@
     "wrapper": "src/channels/streaming.ts"
   },
   {
+    "name": "discoverAllSessions",
+    "wrapped": "src/infra/session-cost-usage-reporting.ts",
+    "wrapper": "src/infra/session-cost-usage.ts"
+  },
+  {
     "name": "drainPendingDeliveries",
     "wrapped": "src/infra/outbound/delivery-queue-recovery.ts",
     "wrapper": "src/plugin-sdk/delivery-queue-runtime.ts",
     "via": "src/infra/outbound/delivery-queue.ts"
+  },
+  {
+    "name": "enqueueSystemEventEntry",
+    "wrapped": "src/infra/system-events.ts",
+    "wrapper": "src/plugin-sdk/infra-runtime.ts"
+  },
+  {
+    "name": "enqueueSystemEvent",
+    "wrapped": "src/infra/system-events.ts",
+    "wrapper": "src/plugin-sdk/infra-runtime.ts"
+  },
+  {
+    "name": "enqueueSystemEvent",
+    "wrapped": "src/infra/system-events.ts",
+    "wrapper": "src/plugin-sdk/system-event-runtime.ts"
   },
   {
     "name": "formatSkillsForPrompt",
@@ -285,6 +305,16 @@
     "wrapper": "src/agents/auth-profiles/store.ts"
   },
   {
+    "name": "requestHeartbeat",
+    "wrapped": "src/infra/heartbeat-wake.ts",
+    "wrapper": "src/plugin-sdk/heartbeat-runtime.ts"
+  },
+  {
+    "name": "requeueAwaitingNextCompactionDelegates",
+    "wrapped": "src/auto-reply/continuation/delegate-store-post-compaction.ts",
+    "wrapper": "src/auto-reply/continuation/delegate-dispatch-recovery.ts"
+  },
+  {
     "name": "resolveAllowedModelRef",
     "wrapped": "src/agents/model-selection-resolve.ts",
     "wrapper": "src/agents/model-selection.ts"
@@ -351,11 +381,6 @@
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
   },
   {
-    "name": "resolveSessionTranscriptActiveLeafEntryId",
-    "wrapped": "src/config/sessions/session-accessor.sqlite-message-cut.ts",
-    "wrapper": "src/config/sessions/session-accessor.message-cut.ts"
-  },
-  {
     "name": "resolveStorePath",
     "wrapped": "src/config/sessions/paths.ts",
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
@@ -364,6 +389,11 @@
     "name": "resolveThinkingDefaultForModel",
     "wrapped": "src/auto-reply/thinking.shared.ts",
     "wrapper": "src/auto-reply/thinking.ts"
+  },
+  {
+    "name": "runHeartbeatOnce",
+    "wrapped": "src/infra/heartbeat-runner-run.ts",
+    "wrapper": "src/infra/heartbeat-runner.ts"
   },
   {
     "name": "runProviderModelSelectedHook",
@@ -384,6 +414,11 @@
     "name": "shouldSuppressBuiltInModel",
     "wrapped": "src/agents/model-suppression.ts",
     "wrapper": "src/agents/model-suppression.runtime.ts"
+  },
+  {
+    "name": "startHeartbeatRunner",
+    "wrapped": "src/infra/heartbeat-runner-scheduler.ts",
+    "wrapper": "src/infra/heartbeat-runner.ts"
   },
   {
     "name": "textToSpeech",
