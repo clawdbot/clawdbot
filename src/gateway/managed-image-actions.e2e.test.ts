@@ -47,6 +47,8 @@ describe("managed image actions Gateway E2E", () => {
     if (!block || typeof block.artifactId !== "string" || typeof block.url !== "string") {
       throw new Error("managed image fixture did not produce an artifact");
     }
+    const artifactId = block.artifactId;
+    const imageUrl = block.url;
 
     const sessionId = "managed-image-actions-session";
     const transcriptPath = path.join(stateDir, `${sessionId}.jsonl`);
@@ -96,10 +98,10 @@ describe("managed image actions Gateway E2E", () => {
             expiresAt?: string;
           }>("artifacts.download", {
             sessionKey: SESSION_KEY,
-            artifactId: block.artifactId,
+            artifactId,
           });
           expect(download.artifact).toMatchObject({
-            id: block.artifactId,
+            id: artifactId,
             source: "session-transcript",
           });
           expect(download.expiresAt).toEqual(expect.any(String));
@@ -122,7 +124,7 @@ describe("managed image actions Gateway E2E", () => {
             height: 84,
           });
 
-          const authenticated = await fetch(new URL(String(block.url), fullUrl), {
+          const authenticated = await fetch(new URL(imageUrl, fullUrl), {
             headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },
           });
           expect(authenticated.status).toBe(200);

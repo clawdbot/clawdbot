@@ -1,6 +1,7 @@
 // Memory Host SDK module implements read file behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import {
   resolveMemoryHostAgentContextLimits,
   resolveMemoryHostAgentWorkspaceDir,
@@ -41,8 +42,10 @@ async function isAllowedAdditionalDirectoryPath(
   }
   try {
     await assertNoSymlinkParents({ rootDir: additionalPath, targetPath: absPath });
-  } catch {
-    return false;
+  } catch (err) {
+    if (!hasNodeErrorCode(err, "not-file")) {
+      return false;
+    }
   }
   if (!isPathInsideWithRealpath(additionalPath, absPath)) {
     try {
