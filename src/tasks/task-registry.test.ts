@@ -612,15 +612,23 @@ describe("task-registry", () => {
         stream: "assistant",
         data: { text: "Editing" },
       });
+      expect(upsert).not.toHaveBeenCalled();
       emitAgentEvent({
         runId: "run-ephemeral-activity",
         stream: "tool",
         data: {
-          phase: "result",
+          phase: "start",
           name: "write",
-          isError: false,
+          toolCallId: "write-1",
           args: { path: "src/example.ts", content: "one\ntwo" },
         },
+      });
+      expect(upsert).toHaveBeenCalledOnce();
+      upsert.mockClear();
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "tool",
+        data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
       });
 
       expect(upsert).not.toHaveBeenCalled();

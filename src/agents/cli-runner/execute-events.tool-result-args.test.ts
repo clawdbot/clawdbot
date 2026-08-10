@@ -1,5 +1,5 @@
-// CLI backends report a tool result without repeating the request, so the
-// terminal progress event has to carry the args the tool started with.
+// Correlated CLI tool results already carry their started args; display-only
+// results must not duplicate that potentially large payload.
 import { describe, expect, it, vi } from "vitest";
 import { type AgentEventRuntimePayload, onAgentEvent } from "../../infra/agent-events.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -66,7 +66,7 @@ function collectToolEvents(runId: string): {
 }
 
 describe("cli tool result events", () => {
-  it("carries the started args into terminal events across CLI tool paths", () => {
+  it("keeps correlated result args without adding them to display results", () => {
     const runId = "run-tool-result-args";
     const handlers = createCliEventHandlers({
       context: buildContext(runId),
@@ -100,15 +100,20 @@ describe("cli tool result events", () => {
         isError: false,
         result: "wrote note.txt",
       });
+      // The display result also releases correlation state for this call id.
+      handlers.emitCliToolResult({
+        toolCallId: "call-2",
+        name: "write",
+        isError: false,
+        result: "duplicate terminal",
+      });
 
       const results = events.filter((event) => event.data.phase === "result");
       expect(results[0]?.data.args).toEqual({ command: "nope-not-a-command" });
       expect(results[0]?.data.isError).toBe(true);
-      expect(results[1]?.data.args).toEqual({
-        path: "note.txt",
-        content: "hello",
-      });
+      expect(results[1]?.data.args).toBeUndefined();
       expect(results[1]?.data.isError).toBe(false);
+      expect(results[2]?.data.args).toBeUndefined();
     } finally {
       dispose();
     }

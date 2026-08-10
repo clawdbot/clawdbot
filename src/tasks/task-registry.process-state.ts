@@ -10,6 +10,7 @@ export type TaskActivityOverlayState = {
   files: Set<string>;
   added: number;
   removed: number;
+  pendingDiffByToolCallId: Map<string, { files: string[]; added: number; removed: number }>;
   dirty: boolean;
   lastFlushedAt?: number;
   flushTimer?: ReturnType<typeof setTimeout>;

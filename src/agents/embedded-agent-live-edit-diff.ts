@@ -1,11 +1,10 @@
 import { parseStreamingJson } from "@openclaw/ai/internal/runtime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveFileMutationToolName, type FileMutationToolName } from "./tool-mutation-names.js";
 
 const LIVE_EDIT_DIFF_MIN_INTERVAL_MS = 250;
 const LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS = 1024 * 1024;
 const LIVE_EDIT_DIFF_MAX_TRACKED_CALLS = 64;
-
-type LiveEditToolKind = "write" | "edit" | "patch";
 
 type LiveEditDiffProgressState = {
   added: number;
@@ -20,20 +19,6 @@ type LiveEditDiffProgress = {
   name: string;
   diff: { added: number; removed: number };
 };
-
-/** Classify the canonical file tools shared by live progress and patch summaries. */
-export function resolveLiveEditToolKind(toolName: string): LiveEditToolKind | undefined {
-  switch (normalizeLowercaseStringOrEmpty(toolName)) {
-    case "write":
-      return "write";
-    case "edit":
-      return "edit";
-    case "apply_patch":
-      return "patch";
-    default:
-      return undefined;
-  }
-}
 
 function countNewlines(value: unknown): number {
   if (typeof value !== "string") {
@@ -80,7 +65,7 @@ function countPatchLines(patch: unknown): { added: number; removed: number } {
 }
 
 function countLiveEditDiff(
-  kind: LiveEditToolKind,
+  kind: FileMutationToolName,
   args: Record<string, unknown>,
 ): { added: number; removed: number } {
   if (kind === "write") {
@@ -146,7 +131,7 @@ export function updateLiveEditDiffProgress(
   const block = readToolCallBlock(event);
   const toolCallId = typeof block?.id === "string" ? block.id : "";
   const name = typeof block?.name === "string" ? block.name : "";
-  const kind = resolveLiveEditToolKind(name);
+  const kind = resolveFileMutationToolName(name);
   const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
   if (!toolCallId || !kind || !partialJson) {
     return undefined;

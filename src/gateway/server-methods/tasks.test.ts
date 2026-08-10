@@ -541,10 +541,9 @@ describe("tasks gateway handlers", () => {
       runId: primary.runId!,
       stream: "tool",
       data: {
-        phase: "result",
+        phase: "start",
         name: "edit",
         toolCallId: "edit-1",
-        isError: false,
         args: {
           path: "src/a.ts",
           edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
@@ -554,22 +553,30 @@ describe("tasks gateway handlers", () => {
     emitAgentEvent({
       runId: primary.runId!,
       stream: "tool",
+      data: { phase: "result", name: "edit", toolCallId: "edit-1", isError: false },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
       data: {
-        phase: "result",
+        phase: "start",
         name: "write",
         toolCallId: "write-1",
-        isError: false,
         args: { file_path: "src/b.ts", content: "alpha\nbeta" },
       },
     });
     emitAgentEvent({
       runId: primary.runId!,
       stream: "tool",
+      data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
       data: {
-        phase: "result",
+        phase: "start",
         name: "apply_patch",
         toolCallId: "patch-1",
-        isError: false,
         args: {
           input: [
             "*** Begin Patch",
@@ -583,6 +590,26 @@ describe("tasks gateway handlers", () => {
           ].join("\n"),
         },
       },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: { phase: "result", name: "apply_patch", toolCallId: "patch-1", isError: false },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "write",
+        toolCallId: "write-failed",
+        args: { path: "src/ignored.ts", content: "not\ncounted" },
+      },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: { phase: "result", name: "write", toolCallId: "write-failed", isError: true },
     });
 
     const primaryGet = await getTaskPayload(primary.taskId);

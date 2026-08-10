@@ -1639,10 +1639,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     const resultEvent = onAgentEvent.mock.calls.find(
       ([event]) => event.stream === "tool" && event.data.phase === "result",
     )?.[0];
-    expect(resultEvent?.data.args).toEqual({
-      action: "add",
-      job: { name: "rewritten mutation" },
-    });
+    expect(resultEvent?.data).not.toHaveProperty("args");
   });
 
   it("uses hook-adjusted message arguments for delivery telemetry", async () => {

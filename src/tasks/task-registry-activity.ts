@@ -21,6 +21,7 @@ import type { TaskRecord } from "./task-registry.types.js";
 const MAX_ACTIVITY_CHARS = 200;
 const STREAM_TEXT_BUFFER_CHARS = 4_000;
 const ACTIVITY_FLUSH_MS = 1_000;
+const MAX_PENDING_DIFFS = 64;
 
 type TaskActivitySnapshot = {
   lastActivity?: string;
@@ -47,6 +48,7 @@ function activityFor(task: TaskRecord): TaskActivityOverlayState {
     files: new Set(),
     added: 0,
     removed: 0,
+    pendingDiffByToolCallId: new Map(),
     dirty: false,
   };
   taskActivityByTaskId.set(task.taskId, created);
@@ -143,12 +145,8 @@ function readPatchDelta(args: Record<string, unknown>): DiffDelta | undefined {
 
 function readDiffDelta(
   kind: FileMutationToolName,
-  data: Record<string, unknown>,
+  args: Record<string, unknown>,
 ): DiffDelta | undefined {
-  const args = asOptionalObjectRecord(data.args);
-  if (!args) {
-    return undefined;
-  }
   if (kind === "apply_patch") {
     return readPatchDelta(args);
   }
@@ -215,21 +213,42 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     return true;
   }
 
-  const toolName = typeof event.data.name === "string" ? event.data.name : "";
-  const kind = resolveFileMutationToolName(toolName);
-  if (
-    event.stream !== "tool" ||
-    event.data.phase !== "result" ||
-    event.data.isError === true ||
-    !kind
-  ) {
+  if (event.stream !== "tool") {
     return false;
   }
-  const delta = readDiffDelta(kind, event.data);
-  if (!delta) {
-    return true;
+  const toolName = typeof event.data.name === "string" ? event.data.name : "";
+  const kind = resolveFileMutationToolName(toolName);
+  if (!kind) {
+    return false;
   }
-  const activity = activityFor(task);
+  const toolCallId = normalizeOptionalString(event.data.toolCallId);
+  if (event.data.phase === "start") {
+    const args = asOptionalObjectRecord(event.data.args);
+    const delta = args ? readDiffDelta(kind, args) : undefined;
+    if (!toolCallId || !delta) {
+      return false;
+    }
+    const activity = activityFor(task);
+    if (
+      !activity.pendingDiffByToolCallId.has(toolCallId) &&
+      activity.pendingDiffByToolCallId.size >= MAX_PENDING_DIFFS
+    ) {
+      return false;
+    }
+    activity.pendingDiffByToolCallId.set(toolCallId, delta);
+    return false;
+  }
+  if (event.data.phase !== "result") {
+    return false;
+  }
+  const activity = taskActivityByTaskId.get(task.taskId);
+  const delta = toolCallId ? activity?.pendingDiffByToolCallId.get(toolCallId) : undefined;
+  if (toolCallId) {
+    activity?.pendingDiffByToolCallId.delete(toolCallId);
+  }
+  if (event.data.isError === true || !delta || !activity) {
+    return event.data.isError !== true;
+  }
   let changed = delta.added > 0 || delta.removed > 0;
   for (const file of delta.files) {
     const size = activity.files.size;
