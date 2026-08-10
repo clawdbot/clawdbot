@@ -273,9 +273,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: normalized Gateway public origin resolver for plugin-generated links.
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
-      // +56: versioned serializable memory-authorization contract and reusable backend-conformance
+      // +57: versioned serializable memory-authorization contract and reusable backend-conformance
       //      types, capability declarations, and helpers.
-      4362,
+      4363,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
