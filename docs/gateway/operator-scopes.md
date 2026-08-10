@@ -43,6 +43,43 @@ require the `node` role.
 Unknown future `operator.*` scopes require an exact match unless the caller
 already holds `operator.admin`.
 
+## Identity scope grants
+
+`gateway.auth.identityScopes` grants operator scopes to verified user
+identities from trusted-proxy auth or Tailscale WhoIs:
+
+```json5
+{
+  gateway: {
+    auth: {
+      identityScopes: {
+        "admin@example.com": ["operator.admin"],
+        "operator@example.com": ["operator.read", "operator.write"],
+      },
+    },
+  },
+}
+```
+
+The key is the verified proxy identity or Tailscale WhoIs login. Email keys
+match case-insensitively; non-email identities match exactly. Config validation
+rejects scope names outside the closed set above.
+
+Connection authority is resolved in this order:
+
+1. For trusted-proxy Control UI connections, `x-openclaw-scopes` first caps
+   device enrollment or upgrade requests. Device authorization then establishes
+   the persistent scopes; a device-less session contributes no self-declared
+   scopes.
+2. OpenClaw unions a matching server-side identity grant with those scopes.
+3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
+   An absent header means no cap; a present-but-empty header yields no scopes.
+
+The result is used for both `hello.auth.scopes` and Gateway method
+authorization. Identity grants are session-only: they do not create or modify
+pairing records or request a device scope upgrade. Token, password, and no-auth
+connections carry no verified identity and receive no grant.
+
 ## Method scope is only the first gate
 
 Each Gateway RPC has a least-privilege method scope that decides whether a
