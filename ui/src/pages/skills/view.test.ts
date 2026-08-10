@@ -839,7 +839,6 @@ describe("renderSkills", () => {
           clawhubResults: ["gzlicanyi", "wangchenyu8"].map((ownerHandle) => ({
             score: 1,
             slug: "imap-smtp-email",
-            ownerHandle,
             installRef: `@${ownerHandle}/imap-smtp-email`,
             displayName: "imap-smtp-email",
           })),

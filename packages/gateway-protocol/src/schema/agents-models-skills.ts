@@ -428,7 +428,6 @@ export const SkillsSearchResultSchema = closedObject({
             "Publisher-qualified reference for this result. Send it as `slug` to skills.detail and skills.install; several publishers can share one slug.",
         }),
       ),
-      ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
       icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
