@@ -85,6 +85,22 @@ describe("signal REST real-server deadline", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
+  it("rejects invalid UTF-8 in a successful JSON response", async () => {
+    const server = await startServer((_req, res) => {
+      const corrupted = Buffer.concat([
+        Buffer.from('{"version":"1.'),
+        Buffer.from([0xff]),
+        Buffer.from('0"}'),
+      ]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(corrupted);
+    });
+
+    await expect(
+      containerRpcRequest("version", undefined, { baseUrl: server.baseUrl, timeoutMs: 1_000 }),
+    ).rejects.toThrow(/not valid for encoding utf-8/i);
+  });
+
   it("returns the parsed body when it completes within the deadline", async () => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
