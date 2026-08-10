@@ -15,6 +15,7 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-o
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
+  extractAssistantTextForSilentCheck,
   extractProjectedText,
   hasAssistantNonTextContent,
   hasTranscriptMediaFacts,
@@ -311,7 +312,9 @@ function openclawAssistantModel(message: Record<string, unknown>): string | unde
 }
 
 export function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
-  const text = extractProjectedText(message.content ?? message.text).trim();
+  // Reasoning content never renders as its own bubble, so it must not count
+  // toward whether two assistant rows show the same visible text.
+  const text = extractAssistantTextForSilentCheck(message)?.trim();
   return text ? text : undefined;
 }
 
@@ -357,11 +360,29 @@ function isDuplicateChannelFinalDeliveryMirror(
     return false;
   }
   const previousMeta = readRecord(previousVisible["__openclaw"]);
-  if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
-    return false;
-  }
-  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
-    return false;
+  const previousMessageId =
+    typeof previousMeta?.id === "string" && previousMeta.id.trim() ? previousMeta.id : undefined;
+  const sourceAssistantMessageId =
+    typeof deliveryMirror?.sourceAssistantMessageId === "string" &&
+    deliveryMirror.sourceAssistantMessageId.trim()
+      ? deliveryMirror.sourceAssistantMessageId
+      : undefined;
+  // An identified match (the mirror was tagged at append time with the entry
+  // id of the reply it duplicates) is authoritative: it does not depend on
+  // the reply being thinking-free, unlike the mirrorIdentity fallback below.
+  const isIdentifiedMatch =
+    Boolean(sourceAssistantMessageId) && sourceAssistantMessageId === previousMessageId;
+  if (isIdentifiedMatch) {
+    if (hasAssistantNonTextContent(current)) {
+      return false;
+    }
+  } else {
+    if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
+      return false;
+    }
+    if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
+      return false;
+    }
   }
   const previousText = displayTextForDuplicateCheck(previousVisible);
   const currentText = displayTextForDuplicateCheck(current);

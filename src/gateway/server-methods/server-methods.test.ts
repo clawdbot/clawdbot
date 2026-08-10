@@ -1923,6 +1923,69 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toHaveLength(2);
   });
 
+  it("dedupes a channel-final mirror identified by its source assistant message id, even with thinking content", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "considering the greeting" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+        provider: "openai-completions",
+        model: "deepseek-v4-flash-free",
+        __openclaw: { id: "asst-turn-1" },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Hey! What's up?" }],
+        idempotencyKey: "channel-final:telegram-final:1:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "telegram-final:1",
+          sourceAssistantMessageId: "asst-turn-1",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        content: [
+          { type: "thinking", text: "considering the greeting" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+      }),
+    );
+  });
+
+  it("keeps a channel-final mirror visible when its source assistant message id does not match the preceding reply", () => {
+    const result = projectRecentChatDisplayMessages([
+      assistantHistoryMessage("Repeated reply", {
+        __openclaw: { id: "asst-turn-2" },
+        timestamp: 1,
+      }),
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:telegram-final:2:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "telegram-final:2",
+          sourceAssistantMessageId: "asst-turn-unrelated",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
   it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
     const result = projectRecentChatDisplayMessages([
       sessionsSendHistoryMessage("Forwarded status", 1),

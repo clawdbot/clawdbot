@@ -84,6 +84,11 @@ export type SessionTranscriptDeliveryMirror =
   | {
       kind: "channel-final";
       sourceMessageId?: string;
+      // The transcript entry id of the real assistant reply this mirror
+      // duplicates, when it was identified at append time. Lets Gateway
+      // display projection hide the redundant mirror bubble without relying
+      // on adjacency or text matching alone.
+      sourceAssistantMessageId?: string;
     }
   | {
       kind: "channel-final-suppressed";

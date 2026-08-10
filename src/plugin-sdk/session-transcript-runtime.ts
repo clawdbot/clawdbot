@@ -315,24 +315,27 @@ export async function appendAssistantMirrorMessageByIdentity(
       sessionId: currentEntry.sessionId,
     };
     const target = await resolveSessionTranscriptRuntimeTarget(scope);
-    const latestEquivalentAssistantId =
-      !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
-        ? findLatestEquivalentAssistantMessageId(
-            selectVisibleTranscriptEvents(await locked.readEvents()),
-            message,
-            params.config,
-          )
-        : undefined;
-    if (latestEquivalentAssistantId) {
+    const latestEquivalentAssistantId = isDeliveryMirrorAssistantMessage(message)
+      ? findLatestEquivalentAssistantMessageId(
+          selectVisibleTranscriptEvents(await locked.readEvents()),
+          message,
+          params.config,
+        )
+      : undefined;
+    if (!params.idempotencyKey && latestEquivalentAssistantId) {
       return {
         ok: true,
         messageId: latestEquivalentAssistantId,
       };
     }
+    const messageToAppend = attachDeliveryMirrorSourceAssistantMessageId(
+      message,
+      latestEquivalentAssistantId,
+    );
     const appendResult = await locked.appendMessage({
       ...(params.config !== undefined ? { config: params.config } : {}),
       ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
-      message,
+      message: messageToAppend,
     });
     if (!appendResult) {
       return { ok: false, reason: "message skipped", code: "blocked" };
@@ -478,6 +481,32 @@ function createAssistantMirrorMessage(params: {
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
   };
+}
+
+/**
+ * Records the transcript entry id of the real assistant reply a "channel-final"
+ * mirror duplicates. Identified mirrors (idempotency-keyed appends) always add
+ * a new transcript row for audit purposes, so this only tags that row with the
+ * id of the reply it mirrors; it never rewrites the earlier, already-persisted
+ * message.
+ */
+function attachDeliveryMirrorSourceAssistantMessageId(
+  message: SessionTranscriptAssistantMessage,
+  sourceAssistantMessageId: string | undefined,
+): SessionTranscriptAssistantMessage {
+  if (!sourceAssistantMessageId) {
+    return message;
+  }
+  const deliveryMirror = (message as { openclawDeliveryMirror?: SessionTranscriptDeliveryMirror })
+    .openclawDeliveryMirror;
+  if (deliveryMirror?.kind !== "channel-final") {
+    return message;
+  }
+  const updated: Record<string, unknown> = {
+    ...message,
+    openclawDeliveryMirror: { ...deliveryMirror, sourceAssistantMessageId },
+  };
+  return updated as unknown as SessionTranscriptAssistantMessage;
 }
 
 function findLatestEquivalentAssistantMessageId(
