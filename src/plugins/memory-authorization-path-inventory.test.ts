@@ -48,6 +48,10 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "memory-doctor-inspection-and-repair",
   "gateway-memory-search",
   "memory-import",
+  "session-backfill-transcript-read",
+  "session-backfill-derived-memory-write",
+  "dreaming-session-transcript-ingestion",
+  "session-transcript-index-ingestion",
   "memory-migration-import",
   "memory-export",
   "memory-public-artifact-provider-list",
@@ -127,6 +131,13 @@ const MEMORY_MIGRATION_IMPORT_ROOTS = [
   "extensions/migrate-claude",
   "extensions/migrate-hermes",
   "extensions/codex/src/migration",
+] as const;
+
+const SESSION_TRANSCRIPT_INGESTION_CALL_NAMES = [
+  "listSessionTranscriptCorpusEntriesForAgent",
+  "scanSessionIngestionSource",
+  "appendSessionCorpusLines",
+  "writeSessionIngestionState",
 ] as const;
 
 function isProductionTypeScript(file: string): boolean {
@@ -297,6 +308,29 @@ function listMemoryMigrationIngressMarkers(file: string, sourceText: string): st
   return markers;
 }
 
+function listSessionTranscriptIngestionCalls(file: string, sourceText: string): string[] {
+  const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+  const callBindings = new Map(
+    SESSION_TRANSCRIPT_INGESTION_CALL_NAMES.map((name) => [
+      name,
+      listImportedCallBindings(source, name),
+    ]),
+  );
+  const calls: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      for (const [name, bindings] of callBindings) {
+        if (isNamedCall(node.expression, bindings)) {
+          calls.push(name);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return calls;
+}
+
 describe("memory authorization path inventory", () => {
   const inventory: readonly MemoryAuthorizationPathInventoryEntry[] =
     MEMORY_AUTHORIZATION_PATH_INVENTORY;
@@ -359,6 +393,88 @@ describe("memory authorization path inventory", () => {
       owner: "operator-memory-host",
       disposition: "blocked-in-enforced-mode",
       surfaces: expect.arrayContaining([...MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES]),
+    });
+  });
+
+  it("records session backfill and dreaming transcript ingestion as separate scoped derivations", () => {
+    const entriesById = new Map(inventory.map((item) => [item.id, item]));
+
+    expect(entriesById.get("memory-import")).toMatchObject({
+      direction: "ingress",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/index.ts",
+        "extensions/memory-core/cli-metadata.ts",
+        "extensions/memory-core/cli.ts",
+        "extensions/memory-core/src/cli.ts",
+        "extensions/memory-core/src/cli.runtime.ts",
+        "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/rem-evidence.ts",
+        "extensions/memory-core/src/dreaming-narrative.ts",
+        "extensions/memory-core/src/short-term-promotion.ts",
+        "extensions/memory-core/src/short-term-promotion-record.ts",
+        "extensions/memory-core/src/short-term-promotion-artifacts.ts",
+      ]),
+    });
+    expect(entriesById.get("session-backfill-transcript-read")).toMatchObject({
+      direction: "egress",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/index.ts",
+        "extensions/memory-core/cli-metadata.ts",
+        "extensions/memory-core/cli.ts",
+        "extensions/memory-core/src/cli.ts",
+        "extensions/memory-core/src/cli.runtime.ts",
+        "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/session-backfill-gateway.ts",
+        "extensions/memory-core/src/session-backfill-gateway.runtime.ts",
+        "extensions/memory-core/src/session-backfill.ts",
+      ]),
+    });
+    expect(entriesById.get("session-backfill-derived-memory-write")).toMatchObject({
+      direction: "derive",
+      owner: "selected-memory-plugin",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/index.ts",
+        "extensions/memory-core/cli-metadata.ts",
+        "extensions/memory-core/cli.ts",
+        "extensions/memory-core/src/cli.ts",
+        "extensions/memory-core/src/cli.runtime.ts",
+        "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/session-backfill-gateway.ts",
+        "extensions/memory-core/src/session-backfill-gateway.runtime.ts",
+        "extensions/memory-core/src/session-backfill.ts",
+        "extensions/memory-core/src/session-backfill-lifecycle.ts",
+        "extensions/memory-core/src/session-ingestion.ts",
+        "extensions/memory-core/src/short-term-promotion-record.ts",
+        "extensions/memory-core/src/short-term-promotion-artifacts.ts",
+      ]),
+    });
+    expect(entriesById.get("dreaming-session-transcript-ingestion")).toMatchObject({
+      direction: "derive",
+      owner: "selected-memory-plugin",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/index.ts",
+        "extensions/memory-core/src/dreaming.ts",
+        "extensions/memory-core/src/dreaming-phases.ts",
+        "extensions/memory-core/src/session-ingestion.ts",
+        "extensions/memory-core/src/short-term-promotion-record.ts",
+      ]),
+    });
+    expect(entriesById.get("session-transcript-index-ingestion")).toMatchObject({
+      direction: "ingress",
+      owner: "selected-memory-plugin",
+      disposition: "legacy-only",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/src/memory/manager.ts",
+        "extensions/memory-core/src/memory/manager-session-sync-ops.ts",
+        "extensions/memory-core/src/memory/manager-sync-ops.ts",
+        "extensions/memory-core/src/memory/manager-source-sync-ops.ts",
+      ]),
     });
   });
 
@@ -487,6 +603,28 @@ describe("memory authorization path inventory", () => {
             file,
             fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
           ).length > 0,
+      )
+      .filter((file) => !inventoried.has(file));
+
+    expect(missing).toEqual([]);
+  });
+
+  it("does not allow an unrecorded production session transcript ingestion route", () => {
+    const tracked = listGitTrackedFiles({
+      repoRoot: REPO_ROOT,
+      pathspecs: ["extensions/memory-core/src"],
+    });
+    if (!tracked) {
+      throw new Error("could not list tracked files for the session transcript ingestion inventory");
+    }
+    const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
+    const missing = tracked
+      .filter(isProductionTypeScript)
+      .filter((file) =>
+        listSessionTranscriptIngestionCalls(
+          file,
+          fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
+        ).length > 0,
       )
       .filter((file) => !inventoried.has(file));
 
