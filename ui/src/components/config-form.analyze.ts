@@ -1,7 +1,6 @@
+import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 // Control UI view renders config form.analyze screen content.
 import {
-  arrayItemSchema,
-  arrayItemSchemaIndexes,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,

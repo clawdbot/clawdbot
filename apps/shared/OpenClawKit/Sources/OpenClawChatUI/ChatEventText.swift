@@ -50,8 +50,7 @@ public enum OpenClawChatEventText {
         guard let object = self.dictionary(from: value) else { return nil }
         guard ChatMessageVisibleText.isVisibleContentType(
             self.stringValue(object["type"]),
-            role: "assistant"
-        )
+            role: "assistant")
         else { return nil }
         return self.trimmed(self.stringValue(object["text"]) ?? "")
     }

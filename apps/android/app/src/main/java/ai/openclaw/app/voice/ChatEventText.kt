@@ -40,7 +40,12 @@ internal object ChatEventText {
       ?.takeIf { it.isNotEmpty() }
       ?.let { return it }
     val obj = part.asObjectOrNull() ?: return null
-    val type = obj["type"].asStringOrNull()?.trim()?.lowercase().orEmpty()
+    val type =
+      obj["type"]
+        .asStringOrNull()
+        ?.trim()
+        ?.lowercase()
+        .orEmpty()
     if (type !in visibleAssistantTextTypes) return null
     return obj["text"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
   }
