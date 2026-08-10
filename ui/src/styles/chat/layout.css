@@ -1580,6 +1580,13 @@ openclaw-chat-video-player {
   font-style: italic;
 }
 
+.agent-chat__typing-avatars {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .agent-chat__typing-indicator .chat-author-avatar {
   flex-basis: 18px;
   width: 18px;

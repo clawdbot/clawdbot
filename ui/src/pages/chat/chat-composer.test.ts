@@ -857,6 +857,10 @@ describe("renderChatComposer status", () => {
       expect(indicator?.closest(".agent-chat__composer-footer")).not.toBeNull();
       expect(indicator?.closest(".agent-chat__input")?.firstElementChild).not.toBe(indicator);
       expect(indicator?.querySelectorAll(".chat-author-avatar")).toHaveLength(expectedAvatars);
+      // The status text already names every typer; avatars must stay out of the
+      // accessibility tree or screen readers announce each name twice.
+      const avatars = indicator?.querySelector(".agent-chat__typing-avatars");
+      expect(avatars?.getAttribute("aria-hidden")).toBe("true");
       expect(indicator?.textContent).toContain(expectedText);
     },
   );
