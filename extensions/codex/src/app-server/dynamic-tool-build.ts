@@ -352,6 +352,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
         cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
       }),
+      { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
     );
   const allTools = input.resolveCronCreatorToolAuthority
     ? runWithCronCreatorAuthorityResolver({

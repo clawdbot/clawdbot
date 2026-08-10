@@ -77,7 +77,9 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
       ? {
           execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
             assertActive();
-            return await execute(...args);
+            const result = await execute(...args);
+            assertActive();
+            return result;
           },
         }
       : {}),
@@ -87,14 +89,22 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
     attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
       assertActive();
       const prepared = await sourcePreparer(preparationParams);
+      try {
+        assertActive();
+      } catch (error) {
+        prepared.dispose();
+        throw error;
+      }
       if (prepared.kind === "immediate") {
         return prepared;
       }
       return {
         ...prepared,
-        execute: (onImplementationStart) => {
+        execute: async (onImplementationStart) => {
           assertActive();
-          return prepared.execute(onImplementationStart);
+          const result = await prepared.execute(onImplementationStart);
+          assertActive();
+          return result;
         },
       };
     });
@@ -126,6 +136,9 @@ export function createAgentHarnessHostCapabilities(params: {
     throw new Error("agent harness host capability requires active admitted run authority");
   }
   let active = true;
+  // Lexical closure must also fence work already past its entry guard. The
+  // result guards below cover exact authority loss that does not use close().
+  const capabilityAbortController = new AbortController();
   const assertActive = () => {
     if (
       !active ||
@@ -201,6 +214,9 @@ export function createAgentHarnessHostCapabilities(params: {
     assertActive,
     bindToolSurface: (tools, options) => {
       assertActive();
+      const boundAbortSignal = attempt.abortSignal
+        ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+        : capabilityAbortController.signal;
       const bindingCwd =
         options?.cwd !== undefined
           ? normalizeNativeOperationCwd(options.cwd, hookContext.cwd)
@@ -219,7 +235,7 @@ export function createAgentHarnessHostCapabilities(params: {
           )
           // Rewrapping intentionally restores the original source tool. Restore
           // the run abort race around the rebound surface for plugin harnesses.
-          .map((tool) => wrapToolWithAbortSignal(tool, attempt.abortSignal))
+          .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
           .map((tool) => gateBoundTool(tool, assertActive))
       );
     },
@@ -305,6 +321,7 @@ export function createAgentHarnessHostCapabilities(params: {
         return;
       }
       active = false;
+      capabilityAbortController.abort();
     },
   };
 }

@@ -187,8 +187,10 @@ describe("Codex app-server dynamic tool build", () => {
       tools: ["read"],
       provenance: { version: 1 as const, source: "final-executable-surface" as const },
     }));
+    const effectiveCwd = path.join(workspaceDir, "native-cwd");
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      effectiveCwd,
       resolveCronCreatorToolAuthority,
     });
 
@@ -196,6 +198,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(bindToolSurface).toHaveBeenCalledOnce();
     expect(bindToolSurface).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ name: "read" })]),
+      { cwd: effectiveCwd },
     );
     expect(tools).toEqual([]);
   });

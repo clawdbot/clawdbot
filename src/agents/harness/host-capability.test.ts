@@ -140,9 +140,7 @@ describe("agent harness host capability", () => {
     };
     // Plain-JavaScript plugins can still supply removed policy fields at runtime.
     await host.capabilities.runBeforeToolCall(
-      forgedRequest as unknown as Parameters<
-        typeof host.capabilities.runBeforeToolCall
-      >[0],
+      forgedRequest as unknown as Parameters<typeof host.capabilities.runBeforeToolCall>[0],
     );
     expect(mockRunBefore).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -389,6 +387,107 @@ describe("agent harness host capability", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("aborts an in-flight bound tool when its host capability closes", async () => {
+    const { attempt } = await admittedAttempt("run-bound-close-race");
+    const sourceStarted = createDeferred<void>();
+    const sourceResult = createDeferred<{ content: []; details: {} }>();
+    const { tool } = testTool(
+      vi.fn(async () => {
+        sourceStarted.resolve();
+        return await sourceResult.promise;
+      }),
+    );
+    const { host, bound } = bindTool(attempt, tool);
+
+    const pending = bound.execute("call-close-race", {});
+    await sourceStarted.promise;
+    host.close();
+
+    await expect(pending).rejects.toThrow("Aborted");
+    sourceResult.resolve({ content: [], details: {} });
+  });
+
+  it("rejects a bound tool result after exact authority closes during execution", async () => {
+    const { attempt } = await admittedAttempt("run-bound-release-race");
+    const sourceStarted = createDeferred<void>();
+    const sourceResult = createDeferred<{ content: []; details: {} }>();
+    const { tool } = testTool(
+      vi.fn(async () => {
+        sourceStarted.resolve();
+        return await sourceResult.promise;
+      }),
+    );
+    const { bound } = bindTool(attempt, tool);
+
+    const pending = bound.execute("call-release-race", {});
+    await sourceStarted.promise;
+    expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+    sourceResult.resolve({ content: [], details: {} });
+
+    await expect(pending).rejects.toThrow("no longer active");
+  });
+
+  it("disposes a prepared handle that resolves after host capability closure", async () => {
+    const { attempt } = await admittedAttempt("run-preparation-close-race");
+    const preparationStarted = createDeferred<void>();
+    const preparationResult = createDeferred<Awaited<ReturnType<InternalToolExecutionPreparer>>>();
+    const dispose = vi.fn();
+    const { tool } = testTool();
+    attachInternalToolExecutionPreparer(tool, async () => {
+      preparationStarted.resolve();
+      return await preparationResult.promise;
+    });
+    const { host, bound } = bindTool(attempt, tool);
+    const boundPreparer = getInternalToolExecutionPreparer(bound);
+    if (!boundPreparer) {
+      throw new Error("expected retained bound execution preparer");
+    }
+
+    const pending = boundPreparer({ toolCallId: "call-prepare-close-race", args: {} });
+    await preparationStarted.promise;
+    host.close();
+
+    await expect(pending).rejects.toThrow("Aborted");
+    preparationResult.resolve({
+      kind: "immediate",
+      outcome: { kind: "error", error: new Error("late preparation") },
+      dispose,
+    });
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+  });
+
+  it("aborts prepared execution when its host capability closes", async () => {
+    const { attempt } = await admittedAttempt("run-prepared-close-race");
+    const executionStarted = createDeferred<void>();
+    const executionResult = createDeferred<{ content: []; details: {} }>();
+    const { tool } = testTool();
+    attachInternalToolExecutionPreparer(tool, async () => ({
+      kind: "ready",
+      args: {},
+      execute: async () => {
+        executionStarted.resolve();
+        return await executionResult.promise;
+      },
+      dispose() {},
+    }));
+    const { host, bound } = bindTool(attempt, tool);
+    const boundPreparer = getInternalToolExecutionPreparer(bound);
+    if (!boundPreparer) {
+      throw new Error("expected retained bound execution preparer");
+    }
+    const prepared = await boundPreparer({ toolCallId: "call-ready-close-race", args: {} });
+    if (prepared.kind !== "ready") {
+      throw new Error("expected ready execution preparation");
+    }
+
+    const pending = prepared.execute();
+    await executionStarted.promise;
+    host.close();
+
+    await expect(pending).rejects.toThrow("Aborted");
+    executionResult.resolve({ content: [], details: {} });
+  });
+
   it("restores the attempt abort race around a rebound tool", async () => {
     const abortController = new AbortController();
     const { attempt } = await admittedAttempt("run-bound-abort", {
@@ -490,7 +589,7 @@ describe("agent harness host capability", () => {
     if (prepared.kind !== "ready") {
       throw new Error("expected ready execution preparation");
     }
-    expect(() => prepared.execute()).toThrow("no longer active");
+    await expect(prepared.execute()).rejects.toThrow("no longer active");
     expect(executePrepared).not.toHaveBeenCalled();
   });
 });

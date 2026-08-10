@@ -148,7 +148,7 @@ describe("createCopilotToolBridge", () => {
   it("binds every tool surface and retained source/SDK tools fail after capability closure", async () => {
     let active = true;
     const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const bindToolSurface = vi.fn((tools: AnyAgentTool[]) =>
+    const bindToolSurface = vi.fn((tools: AnyAgentTool[], _options?: Readonly<{ cwd?: string }>) =>
       tools.map((tool) => ({
         ...tool,
         execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
@@ -161,6 +161,7 @@ describe("createCopilotToolBridge", () => {
     );
     const bridge = await createCopilotToolBridge({
       agentId: "agent-1",
+      cwd: "/tmp/copilot-native-cwd",
       attemptParams: {
         hostCapabilities: { ...testHostCapabilities, bindToolSurface },
       },
@@ -181,6 +182,9 @@ describe("createCopilotToolBridge", () => {
       textResultForLlm: expect.stringContaining("no longer active"),
     });
     expect(bindToolSurface).toHaveBeenCalledTimes(1);
+    expect(bindToolSurface).toHaveBeenCalledWith(expect.any(Array), {
+      cwd: "/tmp/copilot-native-cwd",
+    });
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -431,7 +435,7 @@ describe("createCopilotToolBridge", () => {
   it("binds retained code-mode source and SDK controls exactly once", async () => {
     let active = true;
     const hiddenExecute = vi.fn(async () => ({ content: [], details: {} }));
-    const bindToolSurface = vi.fn((tools: AnyAgentTool[]) =>
+    const bindToolSurface = vi.fn((tools: AnyAgentTool[], _options?: Readonly<{ cwd?: string }>) =>
       tools.map((tool) => {
         const execute = tool.execute;
         const bound = {
@@ -448,6 +452,7 @@ describe("createCopilotToolBridge", () => {
     );
     const bridge = await createCopilotToolBridge({
       agentId: "agent-1",
+      cwd: "/tmp/copilot-code-mode-cwd",
       attemptParams: {
         config: { tools: { codeMode: true } },
         hostCapabilities: { ...testHostCapabilities, bindToolSurface },
@@ -484,6 +489,10 @@ describe("createCopilotToolBridge", () => {
     expect(bindToolSurface.mock.calls.map(([tools]) => tools.map((tool) => tool.name))).toEqual([
       ["read"],
       ["exec", "wait"],
+    ]);
+    expect(bindToolSurface.mock.calls.map(([, options]) => options)).toEqual([
+      { cwd: "/tmp/copilot-code-mode-cwd" },
+      { cwd: "/tmp/copilot-code-mode-cwd" },
     ]);
     expect(hiddenExecute).not.toHaveBeenCalled();
   });

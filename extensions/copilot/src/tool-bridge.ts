@@ -240,12 +240,14 @@ export async function createCopilotToolBridge(
   if (!hostCapabilities) {
     throw new Error("Copilot attempt tools require host-bound capabilities.");
   }
+  const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
+  const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
   try {
     const constructedTools = await createOpenClawCodingTools(toolOptions);
     if (!Array.isArray(constructedTools)) {
       throw new Error("createOpenClawCodingTools must return an array of tools");
     }
-    const boundTools = hostCapabilities.bindToolSurface(constructedTools);
+    const boundTools = hostCapabilities.bindToolSurface(constructedTools, bindingOptions);
     sourceTools = boundTools;
     for (const tool of boundTools) {
       boundSourceTools.add(tool);
@@ -279,7 +281,7 @@ export async function createCopilotToolBridge(
   const newlyConstructedTools = filteredTools.filter((tool) => !boundSourceTools.has(tool));
   const boundNewlyConstructedTools =
     newlyConstructedTools.length > 0
-      ? hostCapabilities.bindToolSurface(newlyConstructedTools)
+      ? hostCapabilities.bindToolSurface(newlyConstructedTools, bindingOptions)
       : newlyConstructedTools;
   if (boundNewlyConstructedTools.length !== newlyConstructedTools.length) {
     throw new Error("Copilot host capability changed the tool surface length.");
