@@ -10,6 +10,7 @@ import {
   runAgentHarnessBeforeCompactionHook,
   type AgentHarness,
   type AgentHarnessAttemptParamsV2,
+  type AgentHarnessSettledTurnFinalizationAttemptParams,
   type AgentHarnessV2,
   type AgentHarnessAttemptResult,
   type AgentHarnessCompactParams,
@@ -36,6 +37,9 @@ import type {
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
+type CopilotHarnessAttemptParams =
+  | AgentHarnessAttemptParamsV2
+  | AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>;
 
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
@@ -668,7 +672,7 @@ export function createCopilotAgentHarness(
   }
 
   async function runHarnessAttempt(
-    params: AgentHarnessAttemptParamsV2,
+    params: CopilotHarnessAttemptParams,
     operation: "attempt" | "settled-tool-finalization",
   ): Promise<AgentHarnessAttemptResult> {
     const attemptPromise = (async () => {
@@ -728,7 +732,7 @@ export function createCopilotAgentHarness(
           "[copilot] cannot safely finalize a settled tool turn without its compatible SDK session",
         );
       }
-      const effectiveParams: AgentHarnessAttemptParamsV2 = resumableSessionId
+      const effectiveParams: CopilotHarnessAttemptParams = resumableSessionId
         ? ({
             ...params,
             ...(operation === "settled-tool-finalization"
@@ -761,7 +765,7 @@ export function createCopilotAgentHarness(
                     ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
                     sdkSessionId: resumableSessionId,
                   },
-          } as AgentHarnessAttemptParamsV2)
+          } as CopilotHarnessAttemptParams)
         : params;
 
       const result = await runCopilotAttempt(effectiveParams, {

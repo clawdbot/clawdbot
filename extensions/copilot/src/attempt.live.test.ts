@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
-import type { AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
+  AgentHarnessSettledTurnFinalizationAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
@@ -201,6 +204,17 @@ function createAttemptParams(params: {
   } as unknown as AgentHarnessAttemptParams;
 }
 
+function createFinalizationAttempt(
+  attempt: AgentHarnessAttemptParams,
+  overrides: Partial<AgentHarnessAttemptParams>,
+): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParams> {
+  const { hostCapabilities: _hostCapabilities, ...finalizationAttempt } = {
+    ...attempt,
+    ...overrides,
+  };
+  return finalizationAttempt;
+}
+
 describeLive("copilot agent runtime live smoke", () => {
   it("uses one custom tool, then resumes with an isolated finalization turn", async () => {
     liveToolState.calls.length = 0;
@@ -251,8 +265,7 @@ describeLive("copilot agent runtime live smoke", () => {
 
       const finalPrompt = "Reply with exactly COPILOT-SETTLED-FINALIZER-OK and nothing else.";
       const finalResult = await harness.finalizeSettledTurn?.({
-        attempt: {
-          ...attempt,
+        attempt: createFinalizationAttempt(attempt, {
           onAgentEvent: (event: unknown) => {
             const type = (event as { type?: unknown } | undefined)?.type;
             if (typeof type === "string") {
@@ -261,7 +274,7 @@ describeLive("copilot agent runtime live smoke", () => {
           },
           prompt: finalPrompt,
           runId: `${attempt.runId}-finalize`,
-        },
+        }),
         settledAttempt: settledResult,
       });
       if (!finalResult) {

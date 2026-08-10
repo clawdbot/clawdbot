@@ -1,11 +1,11 @@
 import {
   normalizeUsage,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessSettledTurnFinalizationAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -27,9 +27,8 @@ vi.mock("./transcript-mirror.js", () => ({
 
 const { runCodexSettledTurnFinalization } = await import("./settled-turn-finalizer.js");
 
-function createAttempt(): EmbeddedRunAttemptParams {
+function createAttempt(): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> {
   return {
-    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "Produce the final user-visible answer now.",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -48,7 +47,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
-  } as EmbeddedRunAttemptParams;
+  } as AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>;
 }
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {

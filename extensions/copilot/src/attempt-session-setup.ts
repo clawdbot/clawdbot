@@ -10,6 +10,7 @@ import {
   isRawCopilotModelRun,
   type resolvePoolAcquire,
 } from "./attempt-config.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AttemptParamsLike,
   CopilotAgentEndHookParams,
@@ -112,10 +113,12 @@ export async function createCopilotSessionSetup(params: {
   };
   const hasNativePromptHook =
     !settledToolFinalization && Boolean(attemptInput.hooksConfig?.onUserPromptSubmitted);
-  const userInputBridge = createCopilotUserInputBridge({
-    paramsForRun: attemptInput,
-    signal,
-  });
+  const userInputBridge = settledToolFinalization
+    ? undefined
+    : (() => {
+        assertCopilotAttemptHostCapabilities(attemptInput);
+        return createCopilotUserInputBridge({ paramsForRun: attemptInput, signal });
+      })();
   const sessionConfig = createSessionConfig(
     attemptInput,
     modelRef.id,
@@ -125,7 +128,7 @@ export async function createCopilotSessionSetup(params: {
     promptBuild.developerInstructions || undefined,
     effectiveWorkspaceDir,
     effectiveCwd,
-    settledToolFinalization ? undefined : userInputBridge.onUserInputRequest,
+    userInputBridge?.onUserInputRequest,
     {
       hooksBridgeOptions: hasNativePromptHook
         ? {
@@ -147,7 +150,7 @@ export async function createCopilotSessionSetup(params: {
         promptBuild.developerInstructions || undefined,
         effectiveWorkspaceDir,
         effectiveCwd,
-        settledToolFinalization ? undefined : userInputBridge.onUserInputRequest,
+        userInputBridge?.onUserInputRequest,
         {
           hooksBridgeOptions: hasNativePromptHook
             ? {

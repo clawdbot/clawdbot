@@ -6,6 +6,7 @@ import type {
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
+  AgentHarnessSettledTurnFinalizationAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -65,6 +66,13 @@ function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptPar
     hostCapabilities: createCopilotTestHostCapabilities(),
     ...value,
   } as unknown as AgentHarnessAttemptParams;
+}
+
+function asFinalizationAttempt(
+  params: AgentHarnessAttemptParams,
+): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParams> {
+  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+  return attempt;
 }
 
 function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {
@@ -464,7 +472,10 @@ describe("createCopilotAgentHarness", () => {
 
     await expect(harness.runAttempt(params)).resolves.toBe(settledResult);
     await expect(
-      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: settledResult }),
+      harness.finalizeSettledTurn?.({
+        attempt: asFinalizationAttempt(params),
+        settledAttempt: settledResult,
+      }),
     ).resolves.toEqual({ assistant: finalAssistant });
 
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
@@ -496,7 +507,10 @@ describe("createCopilotAgentHarness", () => {
     });
 
     await expect(
-      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: ATTEMPT_RESULT }),
+      harness.finalizeSettledTurn?.({
+        attempt: asFinalizationAttempt(params),
+        settledAttempt: ATTEMPT_RESULT,
+      }),
     ).rejects.toThrow(
       "cannot safely finalize a settled tool turn without its compatible SDK session",
     );

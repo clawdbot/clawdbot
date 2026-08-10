@@ -1,8 +1,5 @@
 import fsp from "node:fs/promises";
-import type {
-  AgentHarnessAttemptParamsV2,
-  SandboxContext,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
   isHostScopedAgentToolActive,
@@ -10,10 +7,14 @@ import {
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readResolvedAttemptPath, readString, resolveModelRef } from "./attempt-config.js";
-import type { AttemptParamsLike, CopilotAttemptDeps } from "./attempt-types.js";
+import type {
+  AttemptParamsLike,
+  CopilotAttemptDeps,
+  CopilotAttemptParams,
+} from "./attempt-types.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 export function prepareCopilotAttemptContext(
-  params: AgentHarnessAttemptParamsV2,
+  params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ) {
   const settledToolFinalization = deps.operation === "settled-tool-finalization";
