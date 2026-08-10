@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
@@ -47,6 +48,20 @@ function readWindowsProbe() {
     throw new Error("Windows probe must declare both headless CI and native proof jobs");
   }
   return { workflow, probe, native };
+}
+
+function writeTimeoutHook(tempDir: string): string {
+  const hookPath = path.join(tempDir, "shorten-command-timeout.mjs");
+  writeFileSync(
+    hookPath,
+    [
+      "const nativeSetTimeout = globalThis.setTimeout;",
+      "globalThis.setTimeout = (callback, delay, ...args) =>",
+      "  nativeSetTimeout(callback, delay === 300_000 ? 500 : delay === 900_000 ? 2_000 : delay, ...args);",
+      "",
+    ].join("\n"),
+  );
+  return hookPath;
 }
 
 afterEach(() => {
@@ -119,6 +134,236 @@ describe("check-workflows", () => {
     expect(preCommitArgs).toContain("run --config .pre-commit-config.yaml zizmor --files");
     expect(preCommitArgs).toContain(".github/workflows/ci.yml");
     expect(preCommitArgs).toContain(".github/workflows/windows-testbox-probe.yml");
+  });
+
+  it("lets a slow healthy Go bootstrap exceed the linter budget", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "go"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "version" ]; then exit 0; fi',
+        'if [ "$1" = "run" ]; then sleep 1.2; exit 0; fi',
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    for (const command of ["pre-commit", "python3", "node"]) {
+      writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+  });
+
+  it("applies the bootstrap budget to a non-cooperative Go fallback", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "go"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "version") process.exit(0);',
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "[check-workflows] timed out after 900000ms: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+    );
+  });
+
+  it("preserves the venv bootstrap timeout diagnostic", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "python3"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "--version") process.exit(0);',
+        'if (process.argv[2] === "-m" && process.argv[3] === "pre_commit") process.exit(1);',
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[check-workflows] timed out after 900000ms: python3 -m venv");
+    expect(result.stderr).not.toContain("missing pre-commit runtime");
+  });
+
+  it("fails with an actionable timeout when a workflow command ignores SIGTERM", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "actionlint"),
+      [
+        `#!${process.execPath}`,
+        'if (process.argv[2] === "--version") process.exit(0);',
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 5_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("[check-workflows] timed out after 300000ms: actionlint");
+    expect(result.stderr).toContain(".github/workflows/ci.yml");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "cleans up a surviving descendant when the POSIX leader exits first",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "check-workflows-");
+      const binDir = path.join(tempDir, "bin");
+      const timeoutHookPath = writeTimeoutHook(tempDir);
+      const survivorMarker = path.join(tempDir, "survivor.pid");
+      mkdirSync(binDir);
+      writeFileSync(
+        path.join(binDir, "actionlint"),
+        [
+          `#!${process.execPath}`,
+          `import { spawn } from "node:child_process";`,
+          `if (process.argv[2] === "--version") process.exit(0);`,
+          `spawn(process.execPath, ["-e", "require('node:fs').writeFileSync(process.env.CHECK_WORKFLOWS_SURVIVOR_MARKER, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 10_000);"], {`,
+          `  env: { ...process.env, CHECK_WORKFLOWS_SURVIVOR_MARKER: process.env.CHECK_WORKFLOWS_SURVIVOR_MARKER },`,
+          `  stdio: "ignore",`,
+          `});`,
+          `process.on("SIGTERM", () => process.exit(0));`,
+          `setInterval(() => {}, 10_000);`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+
+      const result = spawnSync(process.execPath, [scriptPath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+          CHECK_WORKFLOWS_SURVIVOR_MARKER: survivorMarker,
+          PATH: binDir,
+        },
+        timeout: 10_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[check-workflows] timed out after 300000ms: actionlint");
+      expect(existsSync(survivorMarker)).toBe(true);
+      const survivorPid = Number(readFileSync(survivorMarker, "utf8"));
+      expect(Number.isInteger(survivorPid) && survivorPid > 0).toBe(true);
+
+      // The checker must not settle on the leader's exit while its survivor is
+      // still running: escalation (SIGKILL after the grace period) must finish
+      // the group before the timed-out run resolves.
+      const deadline = Date.now() + 5_000;
+      let survivorGone = false;
+      while (Date.now() < deadline && !survivorGone) {
+        try {
+          process.kill(survivorPid, 0);
+        } catch {
+          survivorGone = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(survivorGone).toBe(true);
+    },
+  );
+
+  it("surfaces a timed-out discovery probe instead of silently falling back", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "actionlint"),
+      [
+        `#!${process.execPath}`,
+        'process.on("SIGTERM", () => {});',
+        "setInterval(() => {}, 10_000);",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
+        PATH: binDir,
+      },
+      timeout: 10_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "[check-workflows] timed out after 300000ms: actionlint --version",
+    );
+    expect(result.stderr).not.toContain("missing workflow linter");
   });
 
   it("bootstraps pinned pre-commit in a temporary Python venv when needed", () => {
