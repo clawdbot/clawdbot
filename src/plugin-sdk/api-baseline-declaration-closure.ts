@@ -24,6 +24,7 @@ type DeclarationIndex = {
   globals: ts.ModuleDeclaration[];
   imports: Map<string, Dependency>;
   reexports: Map<string, Reexport>;
+  sideEffects: Dependency[];
 };
 type Sections = Map<string, DeclarationSection>;
 type Walk = { sections: Sections; tainted: boolean };
@@ -34,6 +35,9 @@ function compareText(left: string, right: string): number {
 }
 
 function addSection(sections: Sections, section: DeclarationSection): void {
+  // Sections intentionally dedupe by {name, text}: same-name byte-identical nominal declarations
+  // collapse across files because path-bearing identity would restore move churn. Silent
+  // repointing between such twins is the accepted narrow escape window.
   sections.set(`${section.name}\0${section.text}`, section);
 }
 
@@ -183,6 +187,8 @@ export function createDeclarationClosureRenderer(params: {
   const renderedClosures = new Map<string, DeclarationClosure>();
   const reachability = new Map<string, WalkResult>();
   const active = new Set<string>();
+  const ambientReachability = new Map<string, Walk>();
+  const activeAmbient = new Set<string>();
 
   const baseDiagnostics = [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics()];
   if (baseDiagnostics.length > 0) {
@@ -336,6 +342,7 @@ export function createDeclarationClosureRenderer(params: {
     const reexports = new Map<string, Reexport>();
     const exportStars: Dependency[] = [];
     const globals: ts.ModuleDeclaration[] = [];
+    const sideEffects: Dependency[] = [];
     const addDeclaration = (name: string, statement: ts.Statement) => {
       declarations.set(name, [...(declarations.get(name) ?? []), statement]);
     };
@@ -358,12 +365,12 @@ export function createDeclarationClosureRenderer(params: {
           addDeclaration("default", statement);
         }
       }
-      if (
-        ts.isImportDeclaration(statement) &&
-        statement.importClause &&
-        ts.isStringLiteralLike(statement.moduleSpecifier)
-      ) {
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteralLike(statement.moduleSpecifier)) {
         const reference = referenceFor(declaration.declarationFile, statement.moduleSpecifier);
+        if (!statement.importClause) {
+          sideEffects.push(resolveDependency(sourceFile, reference, "*"));
+          continue;
+        }
         if (statement.importClause.name) {
           imports.set(
             statement.importClause.name.text,
@@ -443,6 +450,7 @@ export function createDeclarationClosureRenderer(params: {
       globals,
       imports,
       reexports,
+      sideEffects,
     };
     indexes.set(key, index);
     return index;
@@ -493,6 +501,36 @@ export function createDeclarationClosureRenderer(params: {
     sections: fallbackFile(sourceFile),
     tainted: false,
   });
+
+  const ambientContribution = (sourceFile: ts.SourceFile): Walk => {
+    const key = canonical(sourceFile.fileName);
+    const cached = ambientReachability.get(key);
+    if (cached) {
+      return cached;
+    }
+    if (activeAmbient.has(key)) {
+      return { sections: new Map(), tainted: true };
+    }
+    activeAmbient.add(key);
+    const index = getIndex(sourceFile);
+    const sections = globalSections(index);
+    let tainted = false;
+    for (const dependency of index.sideEffects) {
+      if (dependency.kind === "failure") {
+        tainted = appendWalk(sections, recallFallback(sourceFile)) || tainted;
+      } else if (dependency.kind === "repo") {
+        // Side-effect imports expose only ambient globals; named declarations are unreachable by
+        // name through that edge and intentionally stay out of the closure.
+        tainted = appendWalk(sections, ambientContribution(dependency.sourceFile)) || tainted;
+      }
+    }
+    activeAmbient.delete(key);
+    const result = { sections, tainted };
+    if (!tainted) {
+      ambientReachability.set(key, result);
+    }
+    return result;
+  };
 
   const resolveWalkDependency = (dependency: Dependency, owner: ts.SourceFile): Walk => {
     if (dependency.kind === "external") {
@@ -548,8 +586,9 @@ export function createDeclarationClosureRenderer(params: {
     const statements = index.declarations.get(name);
     let result: WalkResult;
     if (statements) {
-      const sections = globalSections(index);
-      let tainted = false;
+      const ambient = ambientContribution(sourceFile);
+      const sections = new Map(ambient.sections);
+      let tainted = ambient.tainted;
       for (const statement of statements) {
         addSection(sections, { name, text: statementText(statement) });
         tainted = appendWalk(sections, walkStatementImports(sourceFile, statement)) || tainted;

@@ -59,9 +59,14 @@ export function normalizePluginSdkApiDeclarationText(repoRoot: string, value: st
         : `import("${normalizedSpecifier}"${suffix})`;
     },
   );
-  return normalized.replaceAll(
+  const withoutRepoQualifiers = normalized.replaceAll(
     /import\("([^"]+)"((?:\s*,[^)]*)?)\)((?:\.[A-Za-z_$][\w$]*)+)/g,
     (match, specifier: string, _suffix: string, qualifier: string) =>
       repoOwnedSpecifiers.has(specifier) ? qualifier.slice(1) : match,
+  );
+  return withoutRepoQualifiers.replaceAll(
+    /import\("([^"]+)"((?:\s*,[^)]*)?)\)/g,
+    (match, specifier: string, suffix: string) =>
+      repoOwnedSpecifiers.has(specifier) ? `import("<repo>"${suffix})` : match,
   );
 }

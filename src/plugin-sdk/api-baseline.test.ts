@@ -163,16 +163,14 @@ describe("Plugin SDK API baseline", () => {
     const normalized = normalizePluginSdkApiDeclarationText(repoRoot, declaration);
 
     expect(normalized).not.toContain(repoRoot);
-    expect(normalized).toContain(
-      'import("src/agents/agent-model-discovery", { with: { "resolution-mode": "import" } })',
-    );
+    expect(normalized).toContain('import("<repo>", { with: { "resolution-mode": "import" } })');
     expect(
       normalizePluginSdkApiDeclarationText(
         repoRoot,
-        'type Owned = import("src/x").Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("src/x");',
+        'type Owned = import("src/x").Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("src/x"); type ExternalNamespace = typeof import("node_modules/pkg/x");',
       ),
     ).toBe(
-      'type Owned = Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("src/x");',
+      'type Owned = Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("<repo>"); type ExternalNamespace = typeof import("node_modules/pkg/x");',
     );
   });
 
@@ -397,6 +395,41 @@ describe("Plugin SDK API baseline", () => {
         "export declare function createFixture(value: Leaf): Leaf;",
       ].join("\n"),
       "moved/leaf.ts": "export type Leaf = { value: string };\n",
+    });
+
+    expect(moved.jsonl).toBe(baseline.jsonl);
+  });
+
+  it("includes globals from side-effect imports in closure hashes", async () => {
+    const render = (optionalValue: boolean) =>
+      renderSourceFixture({
+        "fixture.ts": [
+          'import "./ambient.js";',
+          "export declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;",
+        ].join("\n"),
+        "ambient.ts": [
+          "declare global {",
+          `  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }`,
+          "}",
+          "export {};",
+        ].join("\n"),
+      });
+    const baseline = await render(false);
+    const changed = await render(true);
+
+    expect(changed.baseline.modules[0]?.exports[0]?.closureHash).not.toBe(
+      baseline.baseline.modules[0]?.exports[0]?.closureHash,
+    );
+  });
+
+  it("keeps hashes stable when unqualified repo import types move", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": 'export declare const fixture: typeof import("./dep/mod.js");\n',
+      "dep/mod.ts": "export const value = 1;\n",
+    });
+    const moved = await renderSourceFixture({
+      "fixture.ts": 'export declare const fixture: typeof import("./moved/mod.js");\n',
+      "moved/mod.ts": "export const value = 1;\n",
     });
 
     expect(moved.jsonl).toBe(baseline.jsonl);
