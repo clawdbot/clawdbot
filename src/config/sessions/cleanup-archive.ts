@@ -83,7 +83,7 @@ export class SessionArchiveCleanupPreviewCoordinator {
   readonly #appliedDirectories = new Set<string>();
   readonly #cleanableDirectories = new Set<string>();
   readonly #archiveDirectories = new Set<string>();
-  readonly #isSameArchiveDirectory = createOpenClawAgentDatabasePathMatcher();
+  readonly #isSameArchiveDirectory = createOpenClawAgentDatabasePathMatcher({ readOnly: true });
 
   #resolveDirectoryKey(target: SessionStoreTarget): string {
     const directory = resolveArchiveDirectory(target);

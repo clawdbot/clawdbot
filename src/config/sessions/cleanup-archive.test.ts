@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";
 
@@ -113,5 +115,22 @@ describe("SessionArchiveCleanupPreviewCoordinator", () => {
     expect(mainApplied).toEqual({ scannedFiles: 1, removedFiles: 1 });
     expect(workApplied).toEqual({ scannedFiles: 0, removedFiles: 0 });
     expect(mocks.cleanupSessionArchivedTranscriptFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not probe missing archive-directory aliases during preview", async () => {
+    await withTempDir({ prefix: "openclaw-archive-preview-readonly-" }, async (dir) => {
+      const main = target("main", path.join(dir, "Future", "sessions.json"));
+      const work = target("work", path.join(dir, "future", "sessions.json"));
+      fs.utimesSync(dir, new Date(0), new Date(0));
+      const before = fs.statSync(dir, { bigint: true }).mtimeNs;
+
+      const coordinator = new SessionArchiveCleanupPreviewCoordinator({
+        selectedTargets: [main, work],
+        knownTargets: [main, work],
+      });
+      await coordinator.preview({ target: main, maintenance });
+
+      expect(fs.statSync(dir, { bigint: true }).mtimeNs).toBe(before);
+    });
   });
 });
