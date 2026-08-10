@@ -1,10 +1,7 @@
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
-/**
- * Classifies embedded-agent run results for model fallback decisions.
- */
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
+/** Classifies embedded-agent run results for model fallback decisions. */
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
@@ -112,35 +109,6 @@ function hasNonTextVisiblePayloadContent(
   return hasDeliverableAssistantPayload({ payloads: [payloadWithoutText] });
 }
 
-function classifyGenericExternalRunFailurePayload(params: {
-  provider: string;
-  model: string;
-  result: EmbeddedAgentRunResult;
-}): ModelFallbackResultClassification {
-  const payloads = params.result.payloads;
-  if (!Array.isArray(payloads) || payloads.length !== 1) {
-    return null;
-  }
-  const [payload] = payloads;
-  const text = payload?.text;
-  if (
-    payload?.isError === true ||
-    payload?.isReasoning === true ||
-    typeof text !== "string" ||
-    text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
-    !payload ||
-    hasNonTextVisiblePayloadContent(payload)
-  ) {
-    return null;
-  }
-  return {
-    message: `${params.provider}/${params.model} ended with a generic external runner failure: ${text}`,
-    reason: "format",
-    code: "generic_external_run_failure",
-    rawError: text,
-  };
-}
-
 function classifyHarnessResult(params: {
   provider: string;
   model: string;
@@ -226,14 +194,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   const payloads = params.result.payloads ?? [];
-  const genericExternalFailureClassification = classifyGenericExternalRunFailurePayload({
-    provider: params.provider,
-    model: params.model,
-    result: params.result,
-  });
-  if (genericExternalFailureClassification) {
-    return genericExternalFailureClassification;
-  }
   if (hasDeliverableAssistantPayload(params.result)) {
     return null;
   }

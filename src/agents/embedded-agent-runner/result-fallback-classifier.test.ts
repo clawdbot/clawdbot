@@ -1,6 +1,5 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -127,28 +126,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("classifies generic external runner failure text as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message:
-        "claude-cli/claude-sonnet-4-6 ended with a generic external runner failure: " +
-        GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      reason: "format",
-      code: "generic_external_run_failure",
-      rawError: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-    });
-  });
-
   it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
     const errorText =
       "You've reached your Codex subscription usage limit. " +
@@ -188,82 +165,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         payloads: [{ text: "Here is the requested answer." }],
         meta: {
           durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not retry generic external runner failure text mixed with non-text visible content", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [
-          {
-            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            mediaUrl: "https://example.com/failure-screenshot.png",
-            channelData: { delivered: true },
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not retry generic external runner failure text mixed with interactive content", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [
-          {
-            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            interactive: { type: "button", label: "Retry" },
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not retry generic external runner failure text after committed delivery", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        messagingToolSentTexts: ["already delivered"],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("preserves hook block results with generic external runner failure text", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-          error: {
-            kind: "hook_block",
-            message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-          },
         },
       },
     });
