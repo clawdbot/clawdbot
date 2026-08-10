@@ -2,8 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
