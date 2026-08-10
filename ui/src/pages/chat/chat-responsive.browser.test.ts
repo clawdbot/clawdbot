@@ -855,7 +855,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-split-view__cell" style="width: 320px;">
             <div class="chat-pane__header">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
-              <span class="chat-pane__session-title">A deliberately long split-pane session title</span>
+              <span class="chat-pane__session-title"
+                ><span class="chat-pane__session-title-text"
+                  >A deliberately long split-pane session title</span
+                ></span
+              >
               <openclaw-session-owner-chip>
                 <span class="session-owner-chip session-owner-chip--header">O</span>
               </openclaw-session-owner-chip>
