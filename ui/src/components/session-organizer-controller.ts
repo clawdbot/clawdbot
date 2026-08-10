@@ -82,26 +82,13 @@ export class SessionOrganizerController implements ReactiveController {
 
   hostConnected(): void {}
 
-  hostDisconnected(): void {
-    // Dialogs mount on document.body, so the sidebar going away would otherwise
-    // leave one over the destination, still submitting against a dead host.
-    this.dialogLifecycle?.abort();
-  }
-
-  /** Only one dialog is open at a time; disconnect closes whichever it is. */
-  private dialogLifecycle: AbortController | null = null;
-
-  private async withDialogLifecycle<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    const lifecycle = new AbortController();
-    this.dialogLifecycle = lifecycle;
-    try {
-      return await run(lifecycle.signal);
-    } finally {
-      if (this.dialogLifecycle === lifecycle) {
-        this.dialogLifecycle = null;
-      }
-    }
-  }
+  // No dialog teardown here on purpose. The sidebar detaches for reasons that
+  // are not the operator leaving — a narrow viewport drops it entirely — and
+  // cancelling on those would throw away a name mid-edit. The dialog is a
+  // body-level modal, so it outlives the sidebar's DOM position by design; the
+  // Sessions page binds its own dialogs because a page unmount really is a
+  // navigation.
+  hostDisconnected(): void {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
@@ -428,18 +415,12 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    // The lifecycle is armed before the chunk load, so a sidebar that disconnects
-    // mid-import cannot have a dialog open behind it once the chunk resolves.
-    const nextLabel = await this.withDialogLifecycle(async (signal) => {
-      const showInputDialog = await this.loadInputDialog();
-      return (
-        (await showInputDialog?.({
-          signal,
-          title: t("sessionsView.renameSessionPrompt"),
-          defaultValue: session.label,
-        })) ?? null
-      );
-    });
+    const showInputDialog = await this.loadInputDialog();
+    const nextLabel =
+      (await showInputDialog?.({
+        title: t("sessionsView.renameSessionPrompt"),
+        defaultValue: session.label,
+      })) ?? null;
     if (nextLabel === null) {
       return;
     }
@@ -452,16 +433,13 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    await this.withDialogLifecycle(async (signal) => {
-      const showInputDialog = await this.loadInputDialog();
-      await showInputDialog?.({
-        signal,
-        title: t("sessionsView.newGroupTitle"),
-        label: t("sessionsView.newGroupPrompt"),
-        submitLabel: t("sessionsView.newGroupCreate"),
-        requireValue: true,
-        submit: (name) => this.writeSessionGroup(name, sessions),
-      });
+    const showInputDialog = await this.loadInputDialog();
+    await showInputDialog?.({
+      title: t("sessionsView.newGroupTitle"),
+      label: t("sessionsView.newGroupPrompt"),
+      submitLabel: t("sessionsView.newGroupCreate"),
+      requireValue: true,
+      submit: (name) => this.writeSessionGroup(name, sessions),
     });
   }
 

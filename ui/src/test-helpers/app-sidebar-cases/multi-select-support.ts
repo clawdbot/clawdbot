@@ -10,7 +10,7 @@ import {
 } from "../app-sidebar.ts";
 
 /** Shared by the multi-select and new-group-dialog sidebar cases. */
-export const MULTI_SELECT_KEYS = [
+const MULTI_SELECT_KEYS = [
   "agent:main:main",
   "agent:main:a",
   "agent:main:b",
