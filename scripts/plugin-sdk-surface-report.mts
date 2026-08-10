@@ -332,10 +332,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
       // +1: shipped channel setup state-migration declaration during its migration window.
-      // +7: candidate continuation/#666 deprecated-compat exports retained through this back-merge.
+      // +4: candidate continuation/#666 deprecated-compat exports retained through this back-merge.
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
-      1715,
+      // Measured by scripts/plugin-sdk-surface-report.mts after the back-merge, not derived:
+      // both sides independently claimed +7 here and the auto-merged 1715 was wrong.
+      1712,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
