@@ -656,12 +656,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           }}
         >
           <label class="chat-session-rail__prompt">
-            <span class="sr-only">${t("chat.rail.askLabel")}</span>
             <input
               class="chat-session-rail__input"
               type="text"
               maxlength="400"
               autocomplete="off"
+              aria-label=${t("chat.rail.askLabel")}
               .value=${this.companion.draft}
               placeholder=${this.companion.pendingQuestion
                 ? t("chat.rail.askPending")
