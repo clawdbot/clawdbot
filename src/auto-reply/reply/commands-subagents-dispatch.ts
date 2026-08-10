@@ -6,7 +6,6 @@ export {
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
-  stopWithText,
 } from "./commands-subagents/shared.js";
 
 export type SubagentsCommandContext = {
