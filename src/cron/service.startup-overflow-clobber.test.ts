@@ -6,6 +6,7 @@ import { status } from "./service/ops-read.js";
 import { createCronServiceState } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
+import * as cronStoreModule from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -172,33 +173,80 @@ describe("CronService startup catch-up repair scoping", () => {
         createDateBoundaryEveryJob("date-limit-2", now - 40_000),
       ],
     });
+    const order: string[] = [];
+    const deferredAutoDisableReasons = new Set([
+      "cron:date-limit-1:auto-disabled",
+      "cron:date-limit-2:auto-disabled",
+    ]);
+    const enqueueSystemEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
+      if (context?.contextKey && deferredAutoDisableReasons.has(context.contextKey)) {
+        order.push("notify");
+      }
+    });
+    const requestHeartbeat = vi.fn((request: { reason?: string }) => {
+      if (request.reason && deferredAutoDisableReasons.has(request.reason)) {
+        order.push("heartbeat");
+      }
+    });
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });
+    const save = cronStoreModule.saveCronJobsStore;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (...args) => {
+        if (
+          args[1].jobs.some(
+            (job) => job.id !== "date-limit-0" && job.state.autoDisabled !== undefined,
+          )
+        ) {
+          expect(order).toEqual([]);
+          const result = await save(...args);
+          expect(order).toEqual([]);
+          order.push("persist");
+          return result;
+        }
+        return await save(...args);
+      });
 
-    await runMissedJobs(state);
+    try {
+      await runMissedJobs(state);
 
-    const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
-    expect(deferred).toHaveLength(2);
-    for (const job of deferred) {
-      expect(job.enabled).toBe(false);
-      expect(job.state.nextRunAtMs).toBeUndefined();
-      expect(job.state.startupCatchupAtMs).toBeUndefined();
+      const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
+      expect(deferred).toHaveLength(2);
+      for (const job of deferred) {
+        expect(job.enabled).toBe(false);
+        expect(job.state.nextRunAtMs).toBeUndefined();
+        expect(job.state.startupCatchupAtMs).toBeUndefined();
+        expect(job.state.autoDisabled).toEqual({
+          reason: "schedule-errors",
+          atMs: now,
+          consecutiveErrors: 1,
+        });
+      }
+      expect(order).toEqual(["persist", "notify", "heartbeat", "notify", "heartbeat"]);
+      expect((await loadCronStore(store.storePath)).jobs).toEqual(
+        expect.arrayContaining(
+          deferred.map((job) =>
+            expect.objectContaining({
+              id: job.id,
+              enabled: false,
+              state: expect.objectContaining({ autoDisabled: job.state.autoDisabled }),
+            }),
+          ),
+        ),
+      );
+    } finally {
+      saveSpy.mockRestore();
+      await store.cleanup();
     }
-    expect((await loadCronStore(store.storePath)).jobs).toEqual(
-      expect.arrayContaining(
-        deferred.map((job) => expect.objectContaining({ id: job.id, enabled: false })),
-      ),
-    );
-
-    await store.cleanup();
   });
 });
