@@ -3485,6 +3485,7 @@ describe("messaging tool media URL tracking", () => {
 
   it("commits internal-ui source replies from successful message sends", async () => {
     const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
 
     const startEvt: ToolExecutionStartEvent = {
       toolName: "message",
@@ -3519,6 +3520,7 @@ describe("messaging tool media URL tracking", () => {
         mediaUrls: ["file:///tmp/reply.png"],
         channelData: { source: "tui" },
         idempotencyKey: "stable-source-reply",
+        sourceReplyFinal: true,
       },
     ]);
   });

@@ -30,7 +30,6 @@ import {
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
-import { addCodexMessageToolOnlyFinalControl } from "./message-tool-final-control.js";
 import {
   resolveCodexNodeExecToolOverrides,
   resolveCodexNativeExecutionPolicy,
@@ -359,13 +358,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         run: buildOpenClawCodingTools,
       })
     : buildOpenClawCodingTools();
-  const codexScopedTools = addCodexMessageToolOnlyFinalControl(
-    allTools,
-    params.sourceReplyDeliveryMode,
-  );
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
-  const readableAllToolProjection = filterProviderNormalizableTools(codexScopedTools);
+  const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,

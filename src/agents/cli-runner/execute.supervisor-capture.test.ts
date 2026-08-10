@@ -2440,10 +2440,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
       {
         text: "implicit reply",
         mediaUrl: "https://example.com/implicit.png",
+        sourceReplyFinal: true,
       },
       {
         text: "implicit reply",
         mediaUrl: "https://example.com/implicit.png",
+        sourceReplyFinal: true,
       },
     ]);
   });
