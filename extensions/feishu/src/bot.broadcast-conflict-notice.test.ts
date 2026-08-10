@@ -465,4 +465,68 @@ describe("broadcast dispatch", () => {
     expect(broadcastClaim.commit).not.toHaveBeenCalled();
     expect(broadcastClaim.release).toHaveBeenCalledTimes(1);
   });
+
+  it("abandons a mixed broadcast aggregate instead of sending the conflict notice (#108320)", async () => {
+    const broadcastClaim = createReplayClaim("broadcast-conflict-mixed");
+    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) =>
+      options?.namespace === "broadcast"
+        ? { kind: "claimed", handle: broadcastClaim }
+        : { kind: "invalid" },
+    );
+    // One lane exhausts its reply-session init conflict while the other fails
+    // for an unrelated reason; the aggregate must not classify as a conflict.
+    mockDispatchReply
+      .mockReset()
+      .mockImplementation(async (params: { ctx: { SessionKey?: string } }) => {
+        if (params.ctx.SessionKey?.startsWith("agent:susan:")) {
+          throw new Error("model provider overloaded");
+        }
+        throw new Error(
+          "reply session initialization conflicted for agent:main:feishu:group:oc-broadcast-group",
+        );
+      });
+    const mockNoticeReply = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om-n" } });
+    const mockNoticeCreate = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om-n" } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      im: {
+        chat: {
+          get: mockGetChatInfo.mockResolvedValue({
+            code: 0,
+            data: { name: "Broadcast Team" },
+          }),
+        },
+        message: { reply: mockNoticeReply, create: mockNoticeCreate },
+      },
+    });
+    const transport = createIngressLifecycle();
+
+    await expect(
+      handleFeishuMessage({
+        cfg: createBroadcastConfig(),
+        event: createBroadcastEvent({
+          messageId: "msg-broadcast-conflict-mixed",
+          text: "hello @bot",
+          botMentioned: true,
+        }),
+        botOpenId: "bot-open-id",
+        runtime: createRuntimeEnv(),
+        turnAdoptionLifecycle: transport.lifecycle,
+      }),
+    ).rejects.toThrow("Feishu broadcast dispatch failed");
+
+    // The session-busy notice must not go out: it would adopt the durable
+    // event and hide the unrelated lane failure from redelivery. Instead the
+    // settlement abandons + releases so a redelivery can retry both lanes.
+    expect(mockNoticeReply).not.toHaveBeenCalled();
+    expect(mockNoticeCreate).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+    expect(transport.calls.abandoned).toHaveBeenCalledTimes(1);
+    expect(broadcastClaim.commit).not.toHaveBeenCalled();
+    expect(broadcastClaim.release).toHaveBeenCalledTimes(1);
+  });
 });

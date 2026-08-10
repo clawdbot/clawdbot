@@ -114,10 +114,15 @@ function isFeishuReplySessionInitConflictError(error: unknown): boolean {
   ) {
     return true;
   }
-  // Broadcast fan-out aggregates per-lane failures, so an exhausted conflict
-  // can sit inside the AggregateError while its top-level message differs.
+  // Broadcast fan-out aggregates per-lane failures. Treat the aggregate as a
+  // conflict only when every failed lane is the reply-session conflict: the
+  // catch path answers a match with a terminal notice and adopts the durable
+  // event, so a mixed aggregate would hide the unrelated lane failure from
+  // redelivery.
   return (
-    error instanceof AggregateError && error.errors.some(isFeishuReplySessionInitConflictError)
+    error instanceof AggregateError &&
+    error.errors.length > 0 &&
+    error.errors.every(isFeishuReplySessionInitConflictError)
   );
 }
 
