@@ -72,7 +72,7 @@ import { isMissingRestoredFolderError } from "./folder-validation.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { isAbsolutePath, isWorkspaceContainedPath } from "./path.ts";
+import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import {
   loadNewSessionPreference,
@@ -117,6 +117,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
   @state() private restoredFolderValidation: "none" | "checking" | "failed" = "none";
+  @state() private gatewayApprovedWorkspaceRoots: string[] = [];
 
   private openedFor: string | null = null;
   private openedAgentId = "";
@@ -126,6 +127,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   // Discovery retry provenance separates user choices from Gateway-derived defaults.
   private agentSelectedByUser = false;
   private folderSelectedByUser = false;
+  private folderGatewayApproved = false;
   private preferredWorktreeRestore = false;
   private worktreeSelectedByUser = false;
   private submitRequestToken = 0;
@@ -343,6 +345,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.attachmentDraft.abortReads();
     this.closeBrowser();
     this.cancelRestoredFolderValidation();
+    this.gatewayApprovedWorkspaceRoots = [];
+    this.folderGatewayApproved = false;
     this.invalidateSubmission(submissionOutcome);
     if (!resetHostSelection) {
       return;
@@ -604,9 +608,47 @@ class NewSessionPage extends OpenClawLightDomElement {
     return normalizeOptionalString(this.selectedAgent()?.workspace) ?? "";
   }
 
+  private knownWorkspaceRoots(): string[] {
+    const configuredWorkspace = this.workspacePath();
+    return configuredWorkspace
+      ? [configuredWorkspace, ...this.gatewayApprovedWorkspaceRoots]
+      : this.gatewayApprovedWorkspaceRoots;
+  }
+
+  private recordGatewayApprovedListing(listing: FsListDirResult) {
+    if (this.isAdmin()) {
+      return;
+    }
+    const roots = new Set(this.gatewayApprovedWorkspaceRoots);
+    roots.add(listing.path);
+    if (listing.parent) {
+      roots.add(listing.parent);
+    }
+    if (roots.size !== this.gatewayApprovedWorkspaceRoots.length) {
+      this.gatewayApprovedWorkspaceRoots = [...roots];
+    }
+  }
+
   private usesCustomFolder(): boolean {
     const folder = this.folder.trim();
     return Boolean(folder) && folder !== this.workspacePath();
+  }
+
+  private folderSubmissionMode(): "blocked" | "approved" | "server" {
+    if (this.restoredFolderValidation !== "none") {
+      return "blocked";
+    }
+    if (
+      !this.usesCustomFolder() ||
+      this.isAdmin() ||
+      this.folderGatewayApproved ||
+      isKnownWorkspacePath(this.knownWorkspaceRoots(), this.folder)
+    ) {
+      return "approved";
+    }
+    // Free-typed paths still reach sessions.create so the Gateway can return
+    // the authoritative missing-scope error instead of the UI dead-ending.
+    return "server";
   }
 
   private buildCreateParamsForAccess(
@@ -706,6 +748,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private restoreWorkspaceFolder() {
     this.restoredFolderValidation = "none";
+    this.folderGatewayApproved = false;
     if (this.error === t("newSession.browserLoadFailed")) {
       this.error = null;
     }
@@ -719,8 +762,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private validateRestoredFolder(folder: string) {
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
-    const workspaceContained = isWorkspaceContainedPath(this.workspacePath(), folder);
-    if (snapshot?.phase !== "connected" || !client || (!this.isAdmin() && !workspaceContained)) {
+    if (snapshot?.phase !== "connected" || !client) {
       this.restoreWorkspaceFolder();
       return;
     }
@@ -728,7 +770,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.restoredFolderValidation = "checking";
     void client
       .request<FsListDirResult>("fs.listDir", { path: folder })
-      .then(() => {
+      .then((result) => {
         if (
           requestId !== this.restoredFolderValidationToken ||
           this.folderSelectedByUser ||
@@ -736,6 +778,8 @@ class NewSessionPage extends OpenClawLightDomElement {
         ) {
           return;
         }
+        this.recordGatewayApprovedListing(result);
+        this.folderGatewayApproved = !this.isAdmin();
         this.restoredFolderValidation = "none";
         if (this.error === t("newSession.browserLoadFailed")) {
           this.error = null;
@@ -750,7 +794,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         ) {
           return;
         }
-        if (isMissingRestoredFolderError(error)) {
+        if (!this.isAdmin() || isMissingRestoredFolderError(error)) {
           this.restoreWorkspaceFolder();
           return;
         }
@@ -786,11 +830,9 @@ class NewSessionPage extends OpenClawLightDomElement {
         Boolean(storedFolder) &&
         storedFolder === preference?.workspace &&
         preference.workspace !== workspace;
-      const storedFolderUsable =
-        Boolean(storedFolder) &&
-        !storedWorkspaceMoved &&
-        (this.isAdmin() || isWorkspaceContainedPath(workspace, storedFolder));
+      const storedFolderUsable = Boolean(storedFolder) && !storedWorkspaceMoved;
       this.folder = storedFolderUsable ? storedFolder : workspace;
+      this.folderGatewayApproved = false;
       this.folderSelectedByUser = false;
       this.preferredWorktreeRestore = preference?.worktree === true;
       this.worktreeSelectedByUser = false;
@@ -830,6 +872,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
+    this.folderGatewayApproved = false;
+    this.gatewayApprovedWorkspaceRoots = [];
     this.cancelRestoredFolderValidation();
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = false;
@@ -922,6 +966,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.visibility = recovery.createParams?.incognito === true ? "incognito" : "normal";
     // Show the staged repo (not the agent workspace) while the draft is locked.
     this.folder = recovery.createParams?.cwd ?? "";
+    this.folderGatewayApproved = false;
     this.setMessage(recovery.message);
     this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
   }
@@ -950,6 +995,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.execNode = "";
         this.folder = this.workspacePath();
         this.folderSelectedByUser = false;
+        this.folderGatewayApproved = false;
         this.worktree = false;
         this.worktreeName = "";
         this.closeBrowser();
@@ -1127,7 +1173,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!access.allowed) {
       return false;
     }
-    if (this.restoredFolderValidation !== "none") {
+    if (this.folderSubmissionMode() === "blocked") {
       return false;
     }
     // Stored model and worktree choices are provisional until their current
@@ -1171,13 +1217,6 @@ class NewSessionPage extends OpenClawLightDomElement {
         !this.worktree ||
         !this.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
         Boolean(this.cloudRuntimeUnsupportedReason()))
-    ) {
-      return false;
-    }
-    if (
-      this.usesCustomFolder() &&
-      !this.isAdmin() &&
-      !isWorkspaceContainedPath(this.workspacePath(), this.folder)
     ) {
       return false;
     }
@@ -1565,6 +1604,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     this.agentSelectedByUser = true;
     this.folderSelectedByUser = false;
+    this.folderGatewayApproved = false;
+    this.gatewayApprovedWorkspaceRoots = [];
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = false;
     this.cloudProfileId = "";
@@ -1592,7 +1633,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.repository.repoRoot === repoRoot;
   }
 
-  private applyFolder(folder: string, execNode = this.execNode) {
+  private applyFolder(folder: string, execNode = this.execNode, gatewayApproved = false) {
     if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
@@ -1604,6 +1645,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.error = null;
     this.folder = folder.trim();
+    this.folderGatewayApproved = gatewayApproved && !execNode && !this.isAdmin();
     this.folderSelectedByUser = true;
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = true;
@@ -1639,6 +1681,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       // Folder paths belong to one host; never carry a Gateway or node path to another host.
       this.folder = execNode ? "" : this.workspacePath();
       this.folderSelectedByUser = false;
+      this.folderGatewayApproved = false;
     }
     this.worktree = keepWorktree;
     this.closeBrowser();
@@ -1732,10 +1775,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (draft.length === 0) {
       return "";
     }
-    if (!isAbsolutePath(draft)) {
-      return null;
-    }
-    return this.isAdmin() || isWorkspaceContainedPath(this.workspacePath(), draft) ? draft : null;
+    return isAbsolutePath(draft) ? draft : null;
   }
 
   private selectBrowserTarget(target: BrowserTarget) {
@@ -1782,6 +1822,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.browserListing = result ?? null;
+        if (result) {
+          this.recordGatewayApprovedListing(result);
+        }
         // Sync the head input to the listed directory unless the user typed
         // while this request was in flight; their edit wins.
         if (result?.path && this.browserPathDraft === draftAtRequest) {
@@ -1825,6 +1868,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       isAdmin: this.isAdmin(),
       folder: this.folder,
       workspace: this.workspacePath(),
+      workspaceRoots: this.knownWorkspaceRoots(),
       sessions: this.context?.sessions.state.result?.sessions ?? [],
       execNodes: this.isAdmin() ? execNodes : [],
       gatewayName: this.gatewayName,
@@ -1880,7 +1924,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       },
       onSelectExecNode: (nodeId) => this.selectExecNode(nodeId),
       onSelectCloudProfile: (profileId) => this.selectCloudProfile(profileId),
-      onApplyFolder: (folder, execNode) => this.applyFolder(folder, execNode),
+      onApplyFolder: (folder, execNode) =>
+        this.applyFolder(folder, execNode, !execNode && this.browserListing?.path === folder),
       onBrowse: (target) => this.selectBrowserTarget(target),
       onBrowserPathDraftChange: (value) => {
         this.browserPathDraft = value;

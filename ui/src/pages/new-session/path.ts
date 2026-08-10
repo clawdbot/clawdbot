@@ -33,11 +33,19 @@ function comparableAbsolutePath(value: string): string | null {
 }
 
 /** Client-side affordance check; the Gateway remains the realpath authority. */
-export function isWorkspaceContainedPath(workspace: string, candidate: string): boolean {
+function isWorkspaceContainedPath(workspace: string, candidate: string): boolean {
   const root = comparableAbsolutePath(workspace);
   const target = comparableAbsolutePath(candidate);
   if (!root || !target) {
     return false;
   }
   return target === root || target.startsWith(root === "/" ? root : `${root}/`);
+}
+
+/** Checks a path against every configured or Gateway-approved workspace spelling. */
+export function isKnownWorkspacePath(
+  workspaceRoots: readonly string[],
+  candidate: string,
+): boolean {
+  return workspaceRoots.some((root) => isWorkspaceContainedPath(root, candidate));
 }

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { isWorkspaceContainedPath } from "./path.ts";
+import { isKnownWorkspacePath } from "./path.ts";
 import { recentPlaces } from "./recent-places.ts";
 
 describe("recentPlaces", () => {
@@ -45,7 +45,7 @@ describe("recentPlaces", () => {
         {
           workspace: "/workspace",
           execNodes: [],
-          allowGatewayFolder: (folder) => isWorkspaceContainedPath("/workspace", folder),
+          allowGatewayFolder: (folder) => isKnownWorkspacePath(["/workspace"], folder),
         },
       ),
     ).toEqual([{ folder: "/workspace/packages/app", execNode: "" }]);

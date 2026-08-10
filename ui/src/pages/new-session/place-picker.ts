@@ -4,7 +4,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
 import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
-import { folderDisplayName, isWorkspaceContainedPath } from "./path.ts";
+import { folderDisplayName, isKnownWorkspacePath } from "./path.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
@@ -134,6 +134,7 @@ export function renderPlaceSelect(params: {
   isAdmin: boolean;
   folder: string;
   workspace: string;
+  workspaceRoots: readonly string[];
   sessions: readonly RecentPlaceSource[];
   execNodes: DraftNode[];
   gatewayName: string;
@@ -201,7 +202,7 @@ export function renderPlaceSelect(params: {
     workspace: params.workspace,
     execNodes: params.execNodes,
     allowGatewayFolder: (recentFolder) =>
-      params.isAdmin || isWorkspaceContainedPath(params.workspace, recentFolder),
+      params.isAdmin || isKnownWorkspacePath(params.workspaceRoots, recentFolder),
   });
   const recentItems = recents.map((recent) => {
     const node = params.execNodes.find((candidate) => candidate.nodeId === recent.execNode);
