@@ -324,13 +324,19 @@ validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
 
-Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
-`channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
-runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
-User policy entries must use stable Slack user IDs; names, slugs, display names,
-and email addresses fail startup. IDs must use Slack's canonical uppercase
-prefix and body (for example, `C0123456789` or `U0123456789`); lowercase and
-short lookalikes fail startup. Enterprise accounts cannot enable
+Channel policy keys accept raw stable Slack channel IDs, `channel:<id>`, or the
+`"*"` wildcard. `dm.groupChannels` accepts raw stable channel IDs or
+`channel:<id>`, but not `"*"`. OpenClaw normalizes the ID forms to the raw
+channel ID for runtime matching; the channel prefixes `slack:`, `group:`, and
+`mpim:` fail startup.
+
+User policy entries in `allowFrom`, `reactionAllowlist`, and per-channel `users`
+accept raw stable Slack user IDs, `slack:<user-id>`, `user:<user-id>`, or `"*"`.
+Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
+`channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
+addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
+(for example, `C0123456789` or `U0123456789`); lowercase and short lookalikes
+fail startup. Enterprise accounts cannot enable
 `dangerouslyAllowNameMatching`. Enterprise accounts may set the global
 `mentionPatterns.mode`. Enterprise `mentionPatterns.allowIn` and
 `mentionPatterns.denyIn` entries use
