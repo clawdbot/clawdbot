@@ -37,6 +37,7 @@ type AttemptWorkspaceParams = Pick<
   | "sandboxSessionKey"
   | "sessionId"
   | "sessionKey"
+  | "skillsSnapshot"
   | "workspaceDir"
 >;
 
@@ -50,6 +51,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     config: params.config,
     execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir: resolvedWorkspace,
   });
   const effectiveWorkspace =
