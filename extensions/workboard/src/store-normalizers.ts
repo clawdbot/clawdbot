@@ -60,6 +60,7 @@ import {
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
+import { capText } from "./store-card-helpers.js";
 import type {
   WorkboardAttachmentInput,
   WorkboardBoardInput,
@@ -950,7 +951,7 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
     : undefined;
   const createdAt = normalizeTimestamp(record.createdAt, Date.now());
   const sequence = normalizeTimestamp(record.sequence, 0) || undefined;
-  const message = normalizeBoundedString(record.message, undefined, 240, "notification message");
+  const message = capText(normalizeOptionalString(record.message), 240);
   if (!kind || !message) {
     return null;
   }
