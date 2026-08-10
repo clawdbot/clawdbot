@@ -131,10 +131,15 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
     const stateDir = path.join(root, "custom-state");
     const configPath = path.join(root, "custom-config", "openclaw.json");
     const relayPort = await getFreePort();
+    const linuxConfigHome = path.join(homeDir, ".config");
+    const chromeRootEnv =
+      process.platform === "linux"
+        ? { CHROME_CONFIG_HOME: linuxConfigHome, XDG_CONFIG_HOME: linuxConfigHome }
+        : {};
     const userDataDir =
       process.platform === "darwin"
         ? path.join(homeDir, "Library", "Application Support", "Google", "Chrome for Testing")
-        : path.join(homeDir, ".config", "google-chrome-for-testing");
+        : path.join(linuxConfigHome, "chromium");
     await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
     const token = relayTestKey(3);
@@ -152,20 +157,32 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
       { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
       async () => {
         const extensionSource = path.dirname(fileURLToPath(import.meta.url));
+        const nativeHostPath = await fs.realpath(
+          path.resolve("extensions/browser/native-host-entry.ts"),
+        );
+        const tsxPath = await fs.realpath(path.resolve("node_modules/.bin/tsx"));
+        const tsxTsconfigPath = path.resolve("tsconfig.json");
         const deps = {
           platform: process.platform,
           homeDir,
           stateDir,
           env: {
             HOME: homeDir,
+            ...chromeRootEnv,
             OPENCLAW_STATE_DIR: stateDir,
             OPENCLAW_CONFIG_PATH: configPath,
           },
-          nodePath: process.execPath,
+          nodePath: tsxPath,
+          nativeHostPath,
         };
         const relay = await startExtensionRelayServer({ port: relayPort, token });
         cleanups.push(relay.close);
-        const browserEnv: NodeJS.ProcessEnv = { ...process.env, HOME: homeDir };
+        const browserEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          HOME: homeDir,
+          ...chromeRootEnv,
+          TSX_TSCONFIG_PATH: tsxTsconfigPath,
+        };
         delete browserEnv.OPENCLAW_STATE_DIR;
         delete browserEnv.OPENCLAW_CONFIG_PATH;
         delete browserEnv.VITEST;
