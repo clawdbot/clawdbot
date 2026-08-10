@@ -1,6 +1,6 @@
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
-export type SourceReplyDeliveryModeOrigin = "stable_policy" | "runtime_default";
+type SourceReplyDeliveryModeOrigin = "stable_policy" | "runtime_default";
 
 export type SourceReplyDeliveryRuntimeOptions = {
   sourceReplyDeliveryModeOrigin?: SourceReplyDeliveryModeOrigin;

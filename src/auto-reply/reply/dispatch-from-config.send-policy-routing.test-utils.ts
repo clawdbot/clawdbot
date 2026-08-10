@@ -6,7 +6,6 @@ import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { NO_VISIBLE_REPLY_FALLBACK_TEXT } from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -864,7 +863,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({ text: "Short fallback final" });
   });
 
-  it("records a rejected short-final attempt after a runtime-derived fallback", async () => {
+  it("records a rejected source delivery after a runtime-derived fallback", async () => {
     setNoAbort();
     registerAgentHarness({
       id: "codex",
@@ -874,8 +873,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       runAttempt: vi.fn(async () => ({}) as never),
     });
     sessionStoreMocks.currentEntry = { ...codexEntry };
-    const dispatcher = createDispatcher();
-    vi.mocked(dispatcher.sendFinalReply).mockReturnValue(false);
+    const deliveryError = new Error("source transport rejected final");
+    const deliver = vi.fn(async () => {
+      throw deliveryError;
+    });
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onError });
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       const internalOpts = opts as
         | (GetReplyOptions & {
@@ -893,10 +896,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(result).toMatchObject({ queuedFinal: false });
-    expect(
-      vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
-    ).toEqual(["Rejected fallback final", NO_VISIBLE_REPLY_FALLBACK_TEXT]);
+    expect(result).toMatchObject({ queuedFinal: true });
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Rejected fallback final" }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    expect(onError).toHaveBeenCalledWith(deliveryError, expect.objectContaining({ kind: "final" }));
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
   });
 
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {
