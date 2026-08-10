@@ -109,7 +109,7 @@ export function registerWebhooksCli(program: Command) {
     });
 }
 
-export function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
+function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
   const account = normalizeOptionalString(accountRaw) ?? "";
   if (!account) {
@@ -127,7 +127,7 @@ export function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetup
   };
 }
 
-export function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
+function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
   const common = parseGmailCommonOptions(raw);
   return {
     account: normalizeOptionalString(raw.account),
@@ -136,15 +136,6 @@ export function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOpti
 }
 
 function parseGmailCommonOptions(raw: Record<string, unknown>) {
-  const tailscaleRaw = normalizeOptionalString(raw.tailscale);
-  if (
-    tailscaleRaw !== undefined &&
-    tailscaleRaw !== "funnel" &&
-    tailscaleRaw !== "serve" &&
-    tailscaleRaw !== "off"
-  ) {
-    throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
-  }
   return {
     topic: normalizeOptionalString(raw.topic),
     subscription: normalizeOptionalString(raw.subscription),
@@ -158,7 +149,7 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     includeBody: booleanOption(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
     renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
-    tailscaleRaw,
+    tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
   };
@@ -180,10 +171,21 @@ function gmailOptionsFromCommon(
     includeBody: common.includeBody,
     maxBytes: common.maxBytes,
     renewEveryMinutes: common.renewEveryMinutes,
-    tailscale: common.tailscaleRaw as GmailRunOptions["tailscale"],
+    tailscale: common.tailscale,
     tailscalePath: common.tailscalePath,
     tailscaleTarget: common.tailscaleTarget,
   };
+}
+
+function tailscaleModeOption(value: unknown) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const mode = normalizeOptionalString(value);
+  if (mode === "funnel" || mode === "serve" || mode === "off") {
+    return mode;
+  }
+  throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
 }
 
 function numberOption(value: unknown, label: string): number | undefined {

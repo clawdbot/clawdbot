@@ -62,12 +62,19 @@ describe("webhooks cli", () => {
     expect(mocks.runGmailService).not.toHaveBeenCalled();
   });
 
-  it.each([["setup"], ["run"]])("rejects invalid gmail %s --tailscale mode", async (command) => {
+  it.each([
+    ["setup", "offf"],
+    ["setup", ""],
+    ["setup", " "],
+    ["run", "offf"],
+    ["run", ""],
+    ["run", " "],
+  ])("rejects invalid gmail %s --tailscale mode %j", async (command, mode) => {
     const program = createProgram();
     const args =
       command === "setup"
-        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", "offf"]
-        : ["webhooks", "gmail", command, "--tailscale", "offf"];
+        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", mode]
+        : ["webhooks", "gmail", command, "--tailscale", mode];
 
     await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
 
@@ -96,5 +103,15 @@ describe("webhooks cli", () => {
 
     const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
     expect(runner).toHaveBeenCalledWith(expect.objectContaining({ tailscale: mode }));
+  });
+
+  it("preserves an omitted gmail run --tailscale mode", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["webhooks", "gmail", "run"], { from: "user" });
+
+    expect(mocks.runGmailService).toHaveBeenCalledWith(
+      expect.objectContaining({ tailscale: undefined }),
+    );
   });
 });
