@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CodeModePrivateAuthority } from "./code-mode-private-authority.js";
+import {
+  CodeModePrivateAuthority,
+  markTrustedCodeModePreflightSettlement,
+} from "./code-mode-private-authority.js";
+import type { SettledBridgeRequest } from "./code-mode-runtime.js";
 
 const build = {
   conversationRef: "conv_0123456789abcdef0123456789abcdef",
@@ -15,6 +19,10 @@ const deploy = {
   kind: "direct",
   target: "deploy-bot",
 } as const;
+
+function failedSettlement(id: string): SettledBridgeRequest {
+  return { id, ok: false, error: "trusted preparation failed" };
+}
 
 function deliverList(
   authority: CodeModePrivateAuthority,
@@ -37,6 +45,53 @@ function deliverList(
 }
 
 describe("CodeModePrivateAuthority", () => {
+  it("accepts only the exact marked failed settlement and consumes it once", () => {
+    const authority = new CodeModePrivateAuthority();
+    const settlement = failedSettlement("bridge:callValue:1");
+    markTrustedCodeModePreflightSettlement(settlement);
+    authority.beginBridgeRequest(settlement.id);
+
+    authority.issueTrustedPreflight(settlement);
+
+    expect(authority.consumeTrustedPreflight(settlement.id)).toBe(true);
+    expect(authority.consumeTrustedPreflight(settlement.id)).toBe(false);
+  });
+
+  it("rejects structural clones, reconstructed failures, and cancellation substitutions", () => {
+    const authority = new CodeModePrivateAuthority();
+    const exact = failedSettlement("bridge:callValue:1");
+    markTrustedCodeModePreflightSettlement(exact);
+    authority.beginBridgeRequest(exact.id);
+
+    authority.issueTrustedPreflight({ ...exact });
+    authority.issueTrustedPreflight(structuredClone(exact));
+    authority.issueTrustedPreflight({
+      id: exact.id,
+      ok: false,
+      error: "code mode bridge call cancelled",
+    });
+
+    expect(authority.consumeTrustedPreflight(exact.id)).toBe(false);
+  });
+
+  it("invalidates repair authority when any bridge request precedes or follows preflight", () => {
+    const earlier = new CodeModePrivateAuthority();
+    earlier.beginBridgeRequest("bridge:callValue:1");
+    const laterPreflight = failedSettlement("bridge:callValue:2");
+    markTrustedCodeModePreflightSettlement(laterPreflight);
+    earlier.beginBridgeRequest(laterPreflight.id);
+    earlier.issueTrustedPreflight(laterPreflight);
+    expect(earlier.consumeTrustedPreflight(laterPreflight.id)).toBe(false);
+
+    const later = new CodeModePrivateAuthority();
+    const preflight = failedSettlement("bridge:callValue:1");
+    markTrustedCodeModePreflightSettlement(preflight);
+    later.beginBridgeRequest(preflight.id);
+    later.issueTrustedPreflight(preflight);
+    later.beginBridgeRequest("bridge:yield:1");
+    expect(later.consumeTrustedPreflight(preflight.id)).toBe(false);
+  });
+
   it("preserves direct-tool parity before list selection starts", () => {
     const authority = new CodeModePrivateAuthority();
     expect(authority.consumeConversation(build.conversationRef)).toBe(true);
@@ -132,11 +187,17 @@ describe("CodeModePrivateAuthority", () => {
     expect(parallel.consumeConversation(build.conversationRef)).toBe(false);
   });
 
-  it("keeps private state out of serialization and rejects after revocation", () => {
+  it("keeps both private ledgers out of serialization and rejects after revocation", () => {
     const authority = new CodeModePrivateAuthority();
+    const settlement = failedSettlement("bridge:callValue:1");
+    markTrustedCodeModePreflightSettlement(settlement);
+    authority.beginBridgeRequest(settlement.id);
+    authority.issueTrustedPreflight(settlement);
     deliverList(authority, [build]);
     expect(JSON.stringify(authority)).toBe("{}");
+    expect(Object.keys(authority)).toEqual([]);
     authority.revoke();
+    expect(authority.consumeTrustedPreflight(settlement.id)).toBe(false);
     expect(authority.consumeConversation(build.conversationRef)).toBe(false);
   });
 });

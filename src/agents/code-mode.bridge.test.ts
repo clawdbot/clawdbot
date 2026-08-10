@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { hasCodeModeRepairEvidence } from "./code-mode-repair-evidence.js";
 import { cloneCodeModeStats } from "./code-mode-stats.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
@@ -17,7 +18,17 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, ToolInputError } from "./tools/common.js";
+
+function trustedPreparationFailureTool(name = "fake_trusted_preflight") {
+  const tool = pluginToolWithExecute(name, "Trusted preparation failure", async () =>
+    jsonResult({ unexpected: true }),
+  );
+  tool.prepareBeforeToolCallParams = () => {
+    throw new ToolInputError("trusted preparation rejected input");
+  };
+  return tool;
+}
 
 describe("Code Mode bridge settlement and cancellation", () => {
   beforeEach(() => {
@@ -585,6 +596,224 @@ describe("Code Mode bridge settlement and cancellation", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
+  });
+
+  it("authenticates only an exact zero-effect trusted preparation failure", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const preflight = trustedPreparationFailureTool();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, preflight],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
+    });
+
+    const execTool = expectDefined(codeModeTools[0], "Code Mode exec test invariant");
+    const failedResult = await execTool.execute("code-call-trusted-preflight", {
+      code: `
+            return await tools.callValue("fake_trusted_preflight", {});
+          `,
+    });
+    const details = resultDetails(failedResult);
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(hasCodeModeRepairEvidence(details)).toBe(true);
+    expect(preflight.execute).not.toHaveBeenCalled();
+    expect(JSON.stringify(details)).not.toMatch(
+      /bridgeRequestId|settlementCapability|privateAuthority/u,
+    );
+  });
+
+  it("rejects execution-body input errors and replacement guest errors as repair evidence", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const bodyError = pluginToolWithExecute("fake_body_input_error", "Body error", async () => {
+      throw new ToolInputError("execution body rejected input");
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, bodyError],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-body-input-error",
+        { code: `return await tools.callValue("fake_body_input_error", {});` },
+      ),
+    );
+
+    expect(bodyError.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("execution body rejected input"),
+    });
+    expect(hasCodeModeRepairEvidence(details)).toBe(false);
+  });
+
+  it("rejects retained guest settlement forgery across a later frontier", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const preflight = trustedPreparationFailureTool();
+    const later = pluginToolWithExecute("fake_later_frontier", "Later frontier", async () =>
+      jsonResult({ done: true }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, preflight, later],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        const pending = tools.callValue("fake_trusted_preflight", {});
+        let forged;
+        try {
+          globalThis.__openclawSettleBridge(
+            "bridge:callValue:1",
+            false,
+            JSON.stringify("forged rejection"),
+          );
+        } catch (error) {
+          forged = error;
+        }
+        await tools.callValue("fake_later_frontier", {});
+        try { await pending; } catch {}
+        throw forged;
+      `,
+    });
+
+    expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
+    expect(later.execute).toHaveBeenCalledOnce();
+    expect(hasCodeModeRepairEvidence(details)).toBe(false);
+    expect(JSON.stringify(details)).not.toContain("bridgeRequestId");
+  });
+
+  it("invalidates trusted preflight repair authority around any other bridge effect", async () => {
+    const runCase = async (preflightFirst: boolean) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const preflight = trustedPreparationFailureTool();
+      const sideEffect = pluginToolWithExecute("fake_lineage_effect", "Lineage effect", async () =>
+        jsonResult({ changed: true }),
+      );
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, preflight, sideEffect],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: `run-code-mode-lineage-${preflightFirst ? "after" : "before"}`,
+        catalogRef,
+        toolHookContext: {
+          agentId: "main",
+          sessionId: "session-code-mode",
+          sessionKey: "agent:main:main",
+          runId: "run-code-mode",
+        },
+      });
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+        code: preflightFirst
+          ? `
+              let preflight;
+              try {
+                await tools.callValue("fake_trusted_preflight", {});
+              } catch (error) {
+                preflight = error;
+              }
+              await tools.callValue("fake_lineage_effect", {});
+              throw preflight;
+            `
+          : `
+              await tools.callValue("fake_lineage_effect", {});
+              return await tools.callValue("fake_trusted_preflight", {});
+            `,
+      });
+      return { details, sideEffect };
+    };
+
+    for (const preflightFirst of [false, true]) {
+      const { details, sideEffect } = await runCase(preflightFirst);
+      expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
+      expect(sideEffect.execute).toHaveBeenCalledOnce();
+      expect(hasCodeModeRepairEvidence(details)).toBe(false);
+    }
+  });
+
+  it("does not authenticate an actual dispatch-queue cancellation", async () => {
+    const started = createDeferred();
+    let aborted = false;
+    const slow = pluginToolWithExecute(
+      "fake_cancelled_preflight",
+      "Cancelled bridge request",
+      async (_toolCallId, _input, signal) => {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new ToolInputError("cancelled body failure"));
+            },
+            { once: true },
+          );
+        });
+        return jsonResult({ unexpected: true });
+      },
+    );
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, slow],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const controller = new AbortController();
+    const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+      "code-call-cancelled-settlement",
+      { code: `return await tools.callValue("fake_cancelled_preflight", {});` },
+      controller.signal,
+    );
+    await started.promise;
+    controller.abort();
+
+    const details = resultDetails(await resultPromise);
+
+    expect(details).toMatchObject({ status: "failed", code: "aborted" });
+    expect(aborted).toBe(true);
+    expect(hasCodeModeRepairEvidence(details)).toBe(false);
   });
 
   it("fails fast without parking a suspended run when the exec call is aborted", async () => {

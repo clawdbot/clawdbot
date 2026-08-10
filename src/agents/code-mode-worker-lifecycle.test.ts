@@ -8,15 +8,21 @@ import {
   type CodeModeActivityOwner,
 } from "./code-mode-activity.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import { CodeModePrivateAuthority } from "./code-mode-private-authority.js";
+import {
+  CodeModePrivateAuthority,
+  consumeActiveCodeModeConversationAuthority,
+  runWithCodeModeConversationAuthority,
+} from "./code-mode-private-authority.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
   disposeAllCodeModeRuns,
   disposeCodeModeRun,
   disposeCodeModeRunsByActivityOwner,
+  removeExpiredRuns,
   reserveActiveRunSlot,
   resumingRunIds,
+  CodeModeBridgeDispatchQueue,
   storeSnapshotState,
   type PendingBridgeState,
 } from "./code-mode-state.js";
@@ -29,6 +35,35 @@ import {
 
 const EXPIRING_RUN_ID = "cm_worker_lifecycle_expiry";
 const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
+const CONVERSATION_REF = "conv_0123456789abcdef0123456789abcdef";
+
+function promoteConversationAuthority(authority: CodeModePrivateAuthority): void {
+  const id = "bridge:callValue:conversation-list";
+  authority.beginBridgeFrontier([
+    {
+      id,
+      conversationListIntent: true,
+      conversationListEligible: true,
+    },
+  ]);
+  authority.deliverBridgeSettlements([
+    {
+      id,
+      conversationListResult: {
+        conversations: [
+          {
+            conversationRef: CONVERSATION_REF,
+            channel: "reef",
+            accountId: "default",
+            kind: "direct",
+            target: "reef:peer",
+          },
+        ],
+        complete: true,
+      },
+    },
+  ]);
+}
 
 function parkExpiringRun(
   method: "callValue" | "agentWait",
@@ -71,6 +106,11 @@ function parkExpiringRun(
     config,
     runtime,
     namespaceRuntime: createCodeModeNamespaceRuntime(),
+    bridgeDispatchQueue: new CodeModeBridgeDispatchQueue(
+      config.maxPendingToolCalls,
+      undefined,
+      activityOwner,
+    ),
     privateAuthority: new CodeModePrivateAuthority(),
     output: [],
   });
@@ -88,7 +128,7 @@ afterEach(() => {
 });
 
 describe("Code Mode worker lifecycle", () => {
-  it("cancels every suspended run, releases capacity, and clears its expiry timer", () => {
+  it("cancels every suspended run, releases capacity, and clears its expiry timer", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const firstRunId = `${CAPACITY_RUN_PREFIX}shutdown_first`;
     const secondRunId = `${CAPACITY_RUN_PREFIX}shutdown_second`;
@@ -98,6 +138,7 @@ describe("Code Mode worker lifecycle", () => {
     if (!firstRun) {
       throw new Error("expected a parked Code Mode shutdown run");
     }
+    promoteConversationAuthority(firstRun.privateAuthority);
     resumingRunIds.add(firstRunId);
     resumingRunIds.add(secondRunId);
     for (let index = 0; index < 62; index += 1) {
@@ -120,6 +161,11 @@ describe("Code Mode worker lifecycle", () => {
     expect(resumingRunIds.has(firstRunId)).toBe(false);
     expect(resumingRunIds.has(secondRunId)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+    await expect(
+      runWithCodeModeConversationAuthority(firstRun.privateAuthority, async () =>
+        consumeActiveCodeModeConversationAuthority(CONVERSATION_REF),
+      ),
+    ).resolves.toBe(false);
     clearExpiryTimer.mockRestore();
 
     const releaseFreedSlot = reserveActiveRunSlot();
@@ -157,6 +203,26 @@ describe("Code Mode worker lifecycle", () => {
     releaseFreedSlot();
   });
 
+  it("revokes private authority when a parked run expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    parkExpiringRun("callValue");
+    const state = activeRuns.get(EXPIRING_RUN_ID);
+    expect(state).toBeDefined();
+    if (!state) {
+      throw new Error("expected a parked Code Mode run");
+    }
+    promoteConversationAuthority(state.privateAuthority);
+
+    removeExpiredRuns(state.expiresAt + 1);
+
+    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+    await expect(
+      runWithCodeModeConversationAuthority(state.privateAuthority, async () =>
+        consumeActiveCodeModeConversationAuthority(CONVERSATION_REF),
+      ),
+    ).resolves.toBe(false);
+  });
+
   it("keeps resumed ownership non-quiescent while a parked snapshot transfers", () => {
     const activityOwner = createCodeModeActivityOwner();
     registerCodeModeRunActivity(activityOwner);
@@ -177,7 +243,7 @@ describe("Code Mode worker lifecycle", () => {
     discardCodeModeRunActivity(activityOwner);
   });
 
-  it("disposes only parked runs owned by the terminating command", () => {
+  it("disposes only parked runs owned by the terminating command", async () => {
     const targetOwner = createCodeModeActivityOwner();
     const foreignOwner = createCodeModeActivityOwner();
     registerCodeModeRunActivity(targetOwner);
@@ -190,6 +256,15 @@ describe("Code Mode worker lifecycle", () => {
     const cancelTargetSecond = parkExpiringRun("agentWait", targetSecondId, targetOwner);
     const cancelForeign = parkExpiringRun("callValue", foreignId, foreignOwner);
     const cancelUnrelated = parkExpiringRun("callValue", unrelatedId);
+    const targetAuthority = activeRuns.get(targetFirstId)?.privateAuthority;
+    const foreignAuthority = activeRuns.get(foreignId)?.privateAuthority;
+    expect(targetAuthority).toBeDefined();
+    expect(foreignAuthority).toBeDefined();
+    for (const authority of [targetAuthority, foreignAuthority]) {
+      if (authority) {
+        promoteConversationAuthority(authority);
+      }
+    }
     resumingRunIds.add(targetFirstId);
     resumingRunIds.add(foreignId);
 
@@ -211,6 +286,22 @@ describe("Code Mode worker lifecycle", () => {
     expect(resumingRunIds.has(foreignId)).toBe(true);
     expect(sampleCodeModeRunFinalQuiescence(targetOwner)).toBe("quiescent");
     expect(sampleCodeModeRunFinalQuiescence(foreignOwner)).toBe("non_quiescent");
+    await expect(
+      runWithCodeModeConversationAuthority(targetAuthority!, async () =>
+        consumeActiveCodeModeConversationAuthority(CONVERSATION_REF),
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      runWithCodeModeConversationAuthority(foreignAuthority!, async () =>
+        consumeActiveCodeModeConversationAuthority(CONVERSATION_REF),
+      ),
+    ).resolves.toMatchObject({
+      conversationRef: CONVERSATION_REF,
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      target: "reef:peer",
+    });
 
     discardCodeModeRunActivity(targetOwner);
     discardCodeModeRunActivity(foreignOwner);

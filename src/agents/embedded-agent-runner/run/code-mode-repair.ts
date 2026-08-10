@@ -3,6 +3,7 @@ import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
 } from "../../code-mode-control-tools.js";
+import { hasCodeModeRepairEvidence } from "../../code-mode-repair-evidence.js";
 import type {
   AfterToolCallResult,
   AfterToolOutcomeContext,
@@ -18,6 +19,7 @@ type CodeModeFailure = {
   failurePhase: CodeModeFailurePhase;
   bridgeDispatchStarted: boolean;
   bridgeDispatchKnown: boolean;
+  repairEvidence?: true;
   details: Record<string, unknown>;
 };
 
@@ -58,6 +60,7 @@ function codeModeFailureFromOutcome(context: AfterToolOutcomeContext): CodeModeF
       ),
       bridgeDispatchStarted,
       bridgeDispatchKnown: typeof details.bridgeDispatchStarted === "boolean",
+      ...(hasCodeModeRepairEvidence(details) ? { repairEvidence: true as const } : {}),
       details,
     };
   }
@@ -107,6 +110,7 @@ function preserveOriginalDispatchEvidence(
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
       bridgeDispatchKnown: true,
+      ...(original.repairEvidence ? { repairEvidence: true as const } : {}),
     };
   }
   if (!original.bridgeDispatchKnown || preserved.bridgeDispatchKnown) {
@@ -269,7 +273,10 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
       });
     }
 
-    if (failure.bridgeDispatchStarted || effective.toolCall.name === CODE_MODE_WAIT_TOOL_NAME) {
+    if (
+      (failure.bridgeDispatchStarted && failure.repairEvidence !== true) ||
+      effective.toolCall.name === CODE_MODE_WAIT_TOOL_NAME
+    ) {
       repairState = "consumed";
       return renderFailure({
         failure,
@@ -282,9 +289,10 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
     }
 
     const repairable =
-      failure.bridgeDispatchKnown &&
-      (failure.failurePhase === "input" || failure.failurePhase === "guest") &&
-      (failure.code === "invalid_input" || failure.code === "internal_error");
+      failure.repairEvidence === true ||
+      (failure.bridgeDispatchKnown &&
+        (failure.failurePhase === "input" || failure.failurePhase === "guest") &&
+        (failure.code === "invalid_input" || failure.code === "internal_error"));
     if (repairState === "offered" && effective.assistantMessage === repairOfferedBy && repairable) {
       return renderFailure({
         failure,

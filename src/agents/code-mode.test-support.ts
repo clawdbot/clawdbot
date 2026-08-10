@@ -1,6 +1,7 @@
 import { expect, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import type { CodeModeActivityOwner } from "./code-mode-activity.js";
+import type { CodeModePrivateAuthority } from "./code-mode-private-authority.js";
 import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import { createCodeModeTools } from "./code-mode.js";
@@ -32,6 +33,7 @@ type CodeModeTestApi = {
     {
       runId: string;
       config: CodeModeConfig;
+      privateAuthority: CodeModePrivateAuthority;
       expiresAt: number;
       replayId?: string;
       agentWaitRetainUntil?: number;
@@ -53,6 +55,7 @@ type CodeModeTestApi = {
     assistantTurnId?: string,
   ): string;
   removeExpiredRuns(now?: number): void;
+  disposeAllCodeModeRuns(): void;
   runBridgeRequest(
     params: Record<string, unknown>,
   ): Promise<{ id: string; ok: true; value: unknown } | { id: string; ok: false; error: string }>;
@@ -105,7 +108,7 @@ function getTestApi(): CodeModeTestApi {
 export const testing = getTestApi();
 
 export function resetCodeModeTestState(): void {
-  testing.activeRuns.clear();
+  testing.disposeAllCodeModeRuns();
   testing.resumingRunIds.clear();
   testing.setTypescriptRuntimeForTest(null);
 }

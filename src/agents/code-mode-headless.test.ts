@@ -61,7 +61,7 @@ describe("headless Code Mode", () => {
     vi.useRealTimers();
     testing.setTypescriptRuntimeForTest(null);
     expect(testing.activeRuns.size).toBe(0);
-    testing.activeRuns.clear();
+    testing.disposeAllCodeModeRuns();
     testing.resumingRunIds.clear();
   });
 

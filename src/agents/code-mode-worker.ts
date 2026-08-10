@@ -214,7 +214,10 @@ function isWorkerThreadResult(
     typeof value.code === "string" &&
     WORKER_FAILURE_CODES.has(value.code) &&
     (value.failurePhase === "input" || value.failurePhase === "guest") &&
-    value.bridgeDispatchStarted === false
+    value.bridgeDispatchStarted === false &&
+    (value.bridgeRequestId === undefined ||
+      (typeof value.bridgeRequestId === "string" &&
+        /^bridge:[A-Za-z]+:[1-9]\d*$/u.test(value.bridgeRequestId)))
   );
 }
 

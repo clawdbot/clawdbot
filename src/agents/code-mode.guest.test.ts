@@ -241,8 +241,6 @@ describe("Code Mode guest execution", () => {
   it("uses exact conversation addresses for same-cell delivery and ambiguous evidence", async () => {
     const buildRef = "conv_0123456789abcdef0123456789abcdef";
     const duplicateBuildRef = "conv_abcdef0123456789abcdef0123456789";
-    const deployRef = "conv_11111111111111111111111111111111";
-    const threadedBuildRef = "conv_22222222222222222222222222222222";
     const displayLabel = "Build bot";
     const requestedAddress = {
       channel: "discord",
@@ -254,32 +252,11 @@ describe("Code Mode guest execution", () => {
     const runCase = async (includeDuplicate: boolean) => {
       const conversations = [
         {
-          conversationRef: deployRef,
-          channel: "discord",
-          accountId: "default",
-          kind: "direct" as const,
-          target: "deploy-bot",
-          label: displayLabel,
-          firstSeenAt: 1,
-          lastSeenAt: 2,
-        },
-        {
           conversationRef: buildRef,
           channel: "discord",
           accountId: "default",
           kind: "direct" as const,
           target: "build-bot",
-          firstSeenAt: 1,
-          lastSeenAt: 2,
-        },
-        {
-          conversationRef: threadedBuildRef,
-          channel: "discord",
-          accountId: "default",
-          kind: "direct" as const,
-          target: "build-bot",
-          threadId: "thread-1",
-          label: displayLabel,
           firstSeenAt: 1,
           lastSeenAt: 2,
         },
@@ -382,6 +359,7 @@ describe("Code Mode guest execution", () => {
 
     const exact = await runCase(false);
     expect(exact.listIndexLine).toContain("-> { conversations:");
+    expect(exact.listIndexLine).toContain("complete?: boolean");
     expect(exact.listIndexLine).not.toContain("-> ?");
     expect(exact.sendIndexLine).toContain("-> { channel: string; conversationRef: string; status:");
     expect(exact.sendIndexLine).not.toContain("-> ?");

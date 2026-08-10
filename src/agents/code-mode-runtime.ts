@@ -104,6 +104,8 @@ export type CodeModeWorkerResult = (
       code: CodeModeFailureCode;
       failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: boolean;
+      /** Host-internal provenance only; stripped before tool/model output. */
+      bridgeRequestId?: string;
       output: unknown[];
     }
 ) & { snapshotAttempt?: CodeModeSnapshotAttempt };

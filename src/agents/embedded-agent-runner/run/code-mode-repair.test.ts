@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { markCodeModeRepairEvidence } from "../../code-mode-repair-evidence.js";
 import type { AfterToolOutcomeContext, Agent, AgentToolResult } from "../../runtime/index.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 
@@ -38,6 +39,7 @@ function failedResult(params?: {
   failurePhase?: "input" | "guest" | "bridge" | "host";
   bridgeDispatchStarted?: boolean;
   output?: unknown[];
+  repairEvidence?: boolean;
 }): AgentToolResult<unknown> {
   const details = {
     status: "failed",
@@ -47,6 +49,9 @@ function failedResult(params?: {
     bridgeDispatchStarted: params?.bridgeDispatchStarted ?? false,
     ...(params?.output ? { output: params.output } : {}),
   };
+  if (params?.repairEvidence) {
+    markCodeModeRepairEvidence(details);
+  }
   return {
     content: [{ type: "text", text: JSON.stringify(details) }],
     details,
@@ -193,6 +198,101 @@ describe("installCodeModeRepairHook", () => {
       },
     });
     expect(payload.output).toEqual([{ type: "text", text: "before dispatch failure" }]);
+  });
+
+  it("offers one repair only for exact host-authenticated preflight evidence", async () => {
+    const agent = createAgent();
+    const authenticated = failedResult({
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      repairEvidence: true,
+    });
+
+    const offered = await agent.afterToolOutcome?.(outcome({ result: authenticated }));
+    const exhausted = await agent.afterToolOutcome?.(
+      outcome({
+        result: failedResult({
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          repairEvidence: true,
+        }),
+      }),
+    );
+
+    expect(offered).toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
+    });
+    expect(exhausted).toMatchObject({
+      terminate: true,
+      details: { repair: { allowed: false, remainingAttempts: 0 } },
+    });
+  });
+
+  it("does not transfer repair evidence through a structural clone", async () => {
+    const agent = createAgent();
+    const authenticated = failedResult({
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      repairEvidence: true,
+    });
+    const cloned = {
+      ...authenticated,
+      details: { ...(authenticated.details as Record<string, unknown>) },
+    };
+
+    const result = await agent.afterToolOutcome?.(outcome({ result: cloned }));
+
+    expect(result).toMatchObject({
+      terminate: true,
+      details: { repair: { allowed: false, remainingAttempts: 0 } },
+    });
+  });
+
+  it("preserves exact original repair evidence across an earlier outcome rewrite", async () => {
+    const previous = vi.fn(async () => ({
+      details: {
+        status: "failed",
+        code: "internal_error",
+        error: "rewritten failure",
+      },
+    }));
+    const agent = createAgent(previous);
+
+    const result = await agent.afterToolOutcome?.(
+      outcome({
+        result: failedResult({
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          repairEvidence: true,
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
+    });
+  });
+
+  it("keeps authenticated wait failures terminal", async () => {
+    const agent = createAgent();
+
+    const result = await agent.afterToolOutcome?.(
+      outcome({
+        toolName: "wait",
+        result: failedResult({
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          repairEvidence: true,
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      terminate: true,
+      details: { repair: { allowed: false, remainingAttempts: 0 } },
+    });
   });
 
   it("preserves dispatch evidence replaced by an earlier outcome hook", async () => {

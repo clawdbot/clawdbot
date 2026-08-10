@@ -34,7 +34,12 @@ import {
   resolveCodeModeConfig,
   resolveCodeModeHeadlessConfig,
 } from "./code-mode-runtime.js";
-import { activeRuns, removeExpiredRuns, resumingRunIds } from "./code-mode-state.js";
+import {
+  activeRuns,
+  disposeAllCodeModeRuns,
+  removeExpiredRuns,
+  resumingRunIds,
+} from "./code-mode-state.js";
 import {
   ensureCodeModeStats,
   recordCodeModeControlCall,
@@ -386,6 +391,7 @@ const testing = {
   resumingRunIds,
   codeModeReplayIdForToolCall,
   removeExpiredRuns,
+  disposeAllCodeModeRuns,
   runBridgeRequest,
   createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,

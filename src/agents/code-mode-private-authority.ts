@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SettledBridgeRequest } from "./code-mode-runtime.js";
 
 const MAX_CONVERSATION_LIST_ITEMS = 100;
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
+const trustedPreflightSettlements = new WeakSet<object>();
 const activeConversationAuthority = new AsyncLocalStorage<CodeModePrivateAuthority>();
 
 type CodeModeConversationAddress = {
@@ -59,11 +61,25 @@ function conversationTuple(address: CodeModeConversationAddress): string {
  * authority. The same object is retained while a run is parked.
  */
 export class CodeModePrivateAuthority {
+  readonly #trustedPreflightClaims = new Set<string>();
+  readonly #bridgeRequestIds = new Set<string>();
   readonly #undeliveredBridgeRequestIds = new Set<string>();
   #conversationList?: CodeModeConversationAddress[];
   #pendingConversationListRequestId?: string;
   #conversationSelectionStarted = false;
+  #repairRevoked = false;
   #revoked = false;
+
+  beginBridgeRequest(bridgeRequestId: string): void {
+    if (this.#revoked || this.#bridgeRequestIds.has(bridgeRequestId)) {
+      return;
+    }
+    this.#bridgeRequestIds.add(bridgeRequestId);
+    if (this.#bridgeRequestIds.size > 1) {
+      this.#trustedPreflightClaims.clear();
+      this.#repairRevoked = true;
+    }
+  }
 
   beginBridgeFrontier(
     requests: readonly {
@@ -78,6 +94,7 @@ export class CodeModePrivateAuthority {
     const hadUndeliveredRequests = this.#undeliveredBridgeRequestIds.size > 0;
     const conversationListRequests = requests.filter((request) => request.conversationListIntent);
     for (const request of requests) {
+      this.beginBridgeRequest(request.id);
       this.#undeliveredBridgeRequestIds.add(request.id);
     }
     if (conversationListRequests.length === 0) {
@@ -165,12 +182,48 @@ export class CodeModePrivateAuthority {
       : false;
   }
 
+  issueTrustedPreflight(settlement: SettledBridgeRequest): void {
+    if (
+      this.#revoked ||
+      this.#repairRevoked ||
+      settlement.ok ||
+      this.#bridgeRequestIds.size !== 1 ||
+      !this.#bridgeRequestIds.has(settlement.id) ||
+      !trustedPreflightSettlements.has(settlement) ||
+      this.#trustedPreflightClaims.has(settlement.id)
+    ) {
+      return;
+    }
+    this.#trustedPreflightClaims.add(settlement.id);
+  }
+
+  consumeTrustedPreflight(bridgeRequestId: string | undefined): boolean {
+    if (this.#revoked || this.#repairRevoked || !bridgeRequestId) {
+      return false;
+    }
+    if (!this.#trustedPreflightClaims.has(bridgeRequestId)) {
+      return false;
+    }
+    this.#trustedPreflightClaims.delete(bridgeRequestId);
+    return true;
+  }
+
   revoke(): void {
     this.#revoked = true;
+    this.#repairRevoked = true;
+    this.#trustedPreflightClaims.clear();
+    this.#bridgeRequestIds.clear();
     this.#undeliveredBridgeRequestIds.clear();
     this.#conversationSelectionStarted = true;
     this.#conversationList = undefined;
     this.#pendingConversationListRequestId = undefined;
+  }
+}
+
+/** Mark the exact failed settlement produced by a trusted host preparation boundary. */
+export function markTrustedCodeModePreflightSettlement(settlement: SettledBridgeRequest): void {
+  if (!settlement.ok) {
+    trustedPreflightSettlements.add(settlement);
   }
 }
 

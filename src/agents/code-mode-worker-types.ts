@@ -112,5 +112,6 @@ export type CodeModeWorkerThreadResult =
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
       bridgeDispatchStarted: false;
+      bridgeRequestId?: string;
       output: unknown[];
     };

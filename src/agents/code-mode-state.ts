@@ -332,7 +332,13 @@ export function settledBridgeRequestsInCompletionOrder(
         : {}),
     })),
   );
-  return delivered.flatMap((entry) => (entry.settled ? [entry.settled] : []));
+  return delivered.flatMap((entry) => {
+    if (!entry.settled) {
+      return [];
+    }
+    privateAuthority?.issueTrustedPreflight(entry.settled);
+    return [entry.settled];
+  });
 }
 
 /** Keep every dispatched bridge call required until its guest has received the result. */

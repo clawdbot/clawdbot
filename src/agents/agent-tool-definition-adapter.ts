@@ -32,6 +32,7 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { revokeTrustedToolPreparationError } from "./tool-result-error.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
@@ -351,6 +352,7 @@ export function toToolDefinitions(
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         recordStructuredReplayTrustForToolCall(toolCallId, tool, correlation.runId);
         let executeParams = params;
+        let unwrappedBodyStarted = false;
         try {
           if (!beforeHookWrapped) {
             const preparedParams = await prepareBeforeToolCallExecutionParams({
@@ -411,6 +413,7 @@ export function toToolDefinitions(
             }
             recordAdjustedParamsForToolCall(toolCallId, executeParams, correlation.runId);
           }
+          unwrappedBodyStarted = !beforeHookWrapped;
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
@@ -418,6 +421,9 @@ export function toToolDefinitions(
           });
           return result;
         } catch (err) {
+          if (unwrappedBodyStarted) {
+            revokeTrustedToolPreparationError(err);
+          }
           if (signal?.aborted) {
             throw err;
           }

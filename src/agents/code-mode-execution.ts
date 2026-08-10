@@ -11,6 +11,7 @@ import {
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
 import { CodeModePrivateAuthority } from "./code-mode-private-authority.js";
+import { sealCodeModeRepairEvidence } from "./code-mode-repair-evidence.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -568,13 +569,12 @@ async function settleCodeModeResult(params: {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
-  params.privateAuthority.revoke();
   enforceResultLimit({
     output,
     value: result.status === "completed" ? result.value : undefined,
     config: params.config,
   });
-  return {
+  const finalResult = {
     ...result,
     ...(result.status === "failed"
       ? {
@@ -586,6 +586,7 @@ async function settleCodeModeResult(params: {
     replaySafe: params.replaySafety.safe,
     telemetry: telemetry(params.runtime),
   };
+  return sealCodeModeRepairEvidence(params.privateAuthority, finalResult);
 }
 
 export async function runWait(params: {
@@ -727,7 +728,9 @@ export async function runWait(params: {
   } catch (error) {
     // After ownership leaves activeRuns, worker/limit failures must cancel
     // every transferred loser; there is no parked snapshot left to own it.
-    if (!activeRuns.has(state.runId)) {
+    if (activeRuns.has(state.runId)) {
+      disposeCodeModeRun(state.runId);
+    } else {
       state.privateAuthority.revoke();
       cancelPendingBridgeStates(state.pending);
     }

@@ -3,51 +3,67 @@ import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-
 
 export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
+  const HostError = Error;
+  const HostArrayIsArray = Array.isArray;
+  const HostJsonParse = JSON.parse;
+  const HostJsonStringify = JSON.stringify;
+  const HostPromise = Promise;
+  const HostString = String;
   const output = [];
   const pending = new Map();
+  const pendingDelete = pending.delete.bind(pending);
+  const pendingGet = pending.get.bind(pending);
+  const pendingSet = pending.set.bind(pending);
+  const bridgeFailureIds = new WeakMap();
+  const bridgeFailureGet = bridgeFailureIds.get.bind(bridgeFailureIds);
+  const bridgeFailureSet = bridgeFailureIds.set.bind(bridgeFailureIds);
   const catalog = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
+  const hostTakeSettlements = globalThis.__openclawHostTakeSettlements;
   delete globalThis.__openclawHostRequest;
+  delete globalThis.__openclawHostTakeSettlements;
   const bridgeSequences = new Map();
+  const bridgeSequenceGet = bridgeSequences.get.bind(bridgeSequences);
+  const bridgeSequenceSet = bridgeSequences.set.bind(bridgeSequences);
 
   function safe(value) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value));
+      return HostJsonParse(HostJsonStringify(value));
     } catch {
-      if (value instanceof Error) {
+      if (value instanceof HostError) {
         return { name: value.name, message: value.message };
       }
       if (value === null) return null;
       const type = typeof value;
       if (type === "string" || type === "number" || type === "boolean") return value;
-      return String(value);
+      return HostString(value);
     }
   }
 
   function asText(value) {
     if (typeof value === "string") return value;
-    const encoded = JSON.stringify(safe(value));
-    return typeof encoded === "string" ? encoded : String(value);
+    const encoded = HostJsonStringify(safe(value));
+    return typeof encoded === "string" ? encoded : HostString(value);
   }
 
   function request(method, args) {
-    const methodName = String(method);
-    const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
-    bridgeSequences.set(methodName, sequence);
-    const bridgeId = "bridge:" + methodName + ":" + String(sequence);
-    const id = String(hostRequest(methodName, JSON.stringify(safe(args ?? [])), bridgeId));
-    return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+    const methodName = HostString(method);
+    const sequence = (bridgeSequenceGet(methodName) ?? 0) + 1;
+    bridgeSequenceSet(methodName, sequence);
+    const bridgeId = "bridge:" + methodName + ":" + HostString(sequence);
+    const id = HostString(hostRequest(methodName, HostJsonStringify(safe(args ?? [])), bridgeId));
+    return new HostPromise((resolve, reject) => {
+      pendingSet(id, { resolve, reject });
     });
   }
 
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
 
   function namespaceFunction(namespaceId, path) {
-    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));
+    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => HostString(entry)));
     return (...args) => request("namespace", [namespaceId, callablePath, args]);
   }
 
@@ -75,23 +91,41 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   }
 
   function settle(id, ok, payload) {
-    const entry = pending.get(String(id));
+    const requestId = HostString(id);
+    const entry = pendingGet(requestId);
     if (!entry) return false;
-    pending.delete(String(id));
+    pendingDelete(requestId);
     let parsed = null;
     try {
-      parsed = JSON.parse(String(payload));
+      parsed = HostJsonParse(HostString(payload));
     } catch {
-      parsed = String(payload);
+      parsed = HostString(payload);
     }
     if (ok) {
       entry.resolve(parsed);
     } else {
-      const error = new Error(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
+      const error = new HostError(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
+      bridgeFailureSet(error, requestId);
       entry.reject(error);
     }
     return true;
   }
+
+  function resumeBridge() {
+    const settlements = hostTakeSettlements();
+    if (!HostArrayIsArray(settlements)) return 0;
+    let settled = 0;
+    for (const request of settlements) {
+      if (!request || typeof request !== "object" || typeof request.id !== "string") continue;
+      const payload = HostJsonStringify(request.ok === true ? request.value : request.error);
+      if (settle(request.id, request.ok === true, payload)) settled += 1;
+    }
+    return settled;
+  }
+
+  Object.defineProperty(globalThis, "__openclawBridgeFailureId", {
+    value: (error) => bridgeFailureGet(error) ?? null,
+  });
 
   function nodeHandle(descriptor) {
     const handle = Object.create(null);
@@ -231,7 +265,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
-    __openclawSettleBridge: { value: settle },
+    __openclawResumeBridge: { value: resumeBridge },
     __openclawTakeOutput: { value: () => output.splice(0) },
   });
 })();

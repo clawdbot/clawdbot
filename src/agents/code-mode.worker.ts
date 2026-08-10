@@ -48,7 +48,10 @@ class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
 }
 
 class CodeModeGuestError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly bridgeRequestId?: string,
+  ) {
     super(message);
     this.name = "CodeModeGuestError";
   }
@@ -244,6 +247,10 @@ async function createVm(params: {
       config: params.config,
     }),
   ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
+  vm.newFunction("__openclawHostTakeSettlements", () => vm.hostToHandle([])).consume(
+    (hostTakeSettlements) =>
+      vm.global.setProp("__openclawHostTakeSettlements", hostTakeSettlements),
+  );
   vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return {
     vm,
@@ -257,6 +264,7 @@ async function restoreVm(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
+  settledRequests: SettledBridgeRequest[];
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
@@ -280,6 +288,14 @@ async function restoreVm(params: {
       config: params.config,
     }),
   );
+  let settlementsTaken = false;
+  vm.registerHostCallback("__openclawHostTakeSettlements", () => {
+    if (settlementsTaken) {
+      return vm.hostToHandle([]);
+    }
+    settlementsTaken = true;
+    return vm.hostToHandle(params.settledRequests);
+  });
   return {
     vm,
     didTimeout: () => timedOut || deadlineReached(),
@@ -379,6 +395,12 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
       const dumped = vm.dump(error);
+      const bridgeRequestId = vm.global.getProp("__openclawBridgeFailureId").consume((readId) =>
+        vm.callFunction(readId, vm.undefined, error).consume((value) => {
+          const id = vm.dump(value);
+          return typeof id === "string" ? id : undefined;
+        }),
+      );
       // Node module globals are deliberately absent from the WASI guest. Keep
       // aliases fail-closed at that runtime boundary rather than guessing source
       // provenance or installing a host-backed loader.
@@ -393,7 +415,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
           : errorMessage(dumped);
-      throw new CodeModeGuestError(text);
+      throw new CodeModeGuestError(text, bridgeRequestId);
     });
   }
   return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
@@ -534,6 +556,7 @@ async function runResume(input: Extract<CodeModeWorkerPayload, { kind: "resume" 
     snapshotBytes: input.snapshotBytes,
     config: input.config,
     pendingRequests,
+    settledRequests: input.settledRequests,
   });
   return runVmExecution({
     vm,
@@ -542,24 +565,14 @@ async function runResume(input: Extract<CodeModeWorkerPayload, { kind: "resume" 
     config: input.config,
     takeBridgeFailure,
     prepare: () => {
-      vm.global.getProp("__openclawSettleBridge").consume((settle) => {
-        for (const request of input.settledRequests) {
-          const id = vm.newString(request.id);
-          const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
-          try {
-            vm.callFunction(
-              settle,
-              vm.undefined,
-              id,
-              request.ok ? vm.true : vm.false,
-              payload,
-            ).dispose();
-          } finally {
-            id.dispose();
-            payload.dispose();
-          }
-        }
-      });
+      const settledCount = vm.global
+        .getProp("__openclawResumeBridge")
+        .consume((resumeBridge) =>
+          vm.callFunction(resumeBridge, vm.undefined).consume((value) => vm.dump(value)),
+        );
+      if (settledCount !== input.settledRequests.length) {
+        throw new Error("code mode host settlement frontier was not consumed exactly once");
+      }
     },
   });
 }
@@ -619,6 +632,12 @@ async function main(): Promise<CodeModeWorkerResult> {
     };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
+    const guestError =
+      error instanceof CodeModeGuestError
+        ? error
+        : error instanceof Error && error.cause instanceof CodeModeGuestError
+          ? error.cause
+          : undefined;
     const code = timedOut
       ? "timeout"
       : error instanceof CodeModeWorkerFailure
@@ -630,6 +649,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       code,
       failurePhase: code === "invalid_input" ? "input" : "guest",
       bridgeDispatchStarted: false,
+      ...(guestError?.bridgeRequestId ? { bridgeRequestId: guestError.bridgeRequestId } : {}),
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }

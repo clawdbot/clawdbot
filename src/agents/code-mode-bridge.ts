@@ -10,6 +10,7 @@ import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   type CodeModePrivateAuthority,
+  markTrustedCodeModePreflightSettlement,
   runWithCodeModeConversationAuthority,
 } from "./code-mode-private-authority.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
@@ -22,6 +23,7 @@ import {
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./swarm-code-mode.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
+import { isTrustedToolPreparationError } from "./tool-result-error.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import {
   waitForCollectorCompletion,
@@ -549,7 +551,15 @@ export async function runBridgeRequest(params: {
     }
     return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
   } catch (error) {
-    return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
+    const settlement = {
+      id: params.request.id,
+      ok: false as const,
+      error: formatErrorMessage(error),
+    };
+    if (isTrustedToolPreparationError(error)) {
+      markTrustedCodeModePreflightSettlement(settlement);
+    }
+    return settlement;
   }
 }
 
