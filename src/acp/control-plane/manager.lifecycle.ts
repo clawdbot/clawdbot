@@ -16,6 +16,8 @@ export async function disposeAcpSessionManagerInstance(
   reason: string,
 ): Promise<void> {
   const dispose = ACP_SESSION_MANAGER_DISPOSERS.get(manager);
-  if (!dispose) throw new Error("ACP session manager disposer unavailable");
+  if (!dispose) {
+    throw new Error("ACP session manager disposer unavailable");
+  }
   await dispose(reason);
 }
