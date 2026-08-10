@@ -81,6 +81,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 type BeforeToolCallWrapperOptions = {
   approvalMode?: "request" | "report" | "deny";
   emitDiagnostics: boolean;
+  beforeSourceExecution?: () => void;
 };
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -277,7 +278,11 @@ export function buildBlockedToolResult(params: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
+  options: {
+    approvalMode?: "request" | "report" | "deny";
+    emitDiagnostics?: boolean;
+    beforeSourceExecution?: () => void;
+  } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -491,6 +496,9 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
+      // Host capabilities can close while hooks, approval, validation, or
+      // steering awaits. Recheck at the final synchronous source boundary.
+      options.beforeSourceExecution?.();
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -679,7 +687,11 @@ export function wrapToolWithBeforeToolCallHook(
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
+  options: {
+    approvalMode?: "request" | "report" | "deny";
+    emitDiagnostics?: boolean;
+    beforeSourceExecution?: () => void;
+  } = {},
 ): AnyAgentTool {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];

@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
@@ -292,6 +295,8 @@ export function resolveMcpLoopbackClientGrant(params: {
   if (
     !grant ||
     grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
+    !grant.admittedRunContext ||
+    !getAdmittedRunDelegatedAuthority(grant.admittedRunContext) ||
     !grant.activeCaptureKey ||
     grant.activeCaptureKey !== params.captureKey
   ) {

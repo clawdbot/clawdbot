@@ -20,7 +20,7 @@ import {
   type CronCreatorAuthorityGrant,
 } from "../cron-creator-authority-grant.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
@@ -202,6 +202,9 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
     },
     cronStorePath: "cron-validation-test.json",
     getRuntimeConfig: () => getRuntimeConfig(),
+    validateAgentRuntimeApprovalAuthority: undefined as
+      | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
+      | undefined,
   };
 }
 
@@ -1203,6 +1206,33 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
+    let authorityActive = true;
+    let releasePreparation: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    const context = createCronContext();
+    context.cron.prepareWake.mockImplementationOnce(async () => await held);
+    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+
+    const invocation = invokeCron(
+      "wake",
+      { mode: "now", text: "ping", agentId: "ops" },
+      { context, client: callerClient("ops") },
+    );
+    await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
+    authorityActive = false;
+    releasePreparation?.();
+    const { respond } = await invocation;
+
+    expect(context.cron.wake).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "agent runtime authority is no longer active",
+    });
+  });
+
   it("stamps declaration ownership from the trusted caller and scopes key lookup", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
@@ -1315,6 +1345,22 @@ describe("cron method validation", () => {
     expectResponseError(result.respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "Configured MCP cron authority is no longer active",
+    });
+    expect(context.committedAdds).toHaveLength(0);
+  });
+
+  it("keeps cron.add mutation at zero when delegated runtime authority closes before commit", async () => {
+    const context = createCronContext();
+    context.validateAgentRuntimeApprovalAuthority = () => false;
+
+    const result = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClient("ops"),
+    });
+
+    expectResponseError(result.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "agent runtime authority is no longer active",
     });
     expect(context.committedAdds).toHaveLength(0);
   });

@@ -52,8 +52,11 @@ function createClient(): GatewayWsClient {
 
 function createDispatcher(
   handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>,
+  context: Record<string, unknown> = {},
 ) {
   const send = vi.fn();
+  const close = vi.fn();
+  const setCloseCause = vi.fn();
   const logGateway = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -64,16 +67,16 @@ function createDispatcher(
     handler: {
       connId: "conn-trace-test",
       extraHandlers: { "test.trace": handler },
-      buildRequestContext: () => ({}) as never,
+      buildRequestContext: () => context as never,
       send,
-      close: vi.fn(),
+      close,
       isClosed: () => false,
-      setCloseCause: vi.fn(),
+      setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,
     isWebchatConnect: () => false,
   });
-  return { dispatcher, logGateway, send };
+  return { close, dispatcher, logGateway, send, setCloseCause };
 }
 
 async function dispatchInFreshMessageScope(
@@ -170,6 +173,85 @@ describe("authenticated WebSocket request trace dispatch", () => {
       traceFlags: "01",
     });
     expect(observed?.spanId).not.toBe("1111111111111111");
+  });
+
+  it("rejects a cached agent runtime identity after its delegated authority closes", async () => {
+    const handler = vi.fn();
+    const validateAgentRuntimeApprovalAuthority = vi.fn(() => false);
+    const { close, dispatcher, send, setCloseCause } = createDispatcher(handler, {
+      validateAgentRuntimeApprovalAuthority,
+    });
+    const client = createClient();
+    client.internal = {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:test",
+      },
+    } as never;
+
+    await dispatchInFreshMessageScope(dispatcher, client, "closed-authority");
+
+    expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(
+      client.internal.agentRuntimeIdentity,
+    );
+    expect(handler).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "closed-authority",
+        ok: false,
+        error: expect.objectContaining({ message: "agent runtime authority is no longer active" }),
+      }),
+    );
+    expect(setCloseCause).toHaveBeenCalledWith("agent-runtime-authority-closed", {
+      method: "test.trace",
+    });
+    expect(close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
+  });
+
+  it("revalidates delegated authority before returning a post-await result", async () => {
+    let authorityActive = true;
+    let releaseHandler: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const handler = vi.fn(async ({ respond }) => {
+      await held;
+      respond(true, { exposed: true }, undefined);
+    });
+    const validateAgentRuntimeApprovalAuthority = vi.fn(() => authorityActive);
+    const { close, dispatcher, send } = createDispatcher(handler, {
+      validateAgentRuntimeApprovalAuthority,
+    });
+    const client = createClient();
+    client.internal = {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:test",
+      },
+    } as never;
+
+    await dispatchInFreshMessageScope(dispatcher, client, "closed-before-result");
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    authorityActive = false;
+    releaseHandler?.();
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "closed-before-result",
+          ok: false,
+          error: expect.objectContaining({
+            message: "agent runtime authority is no longer active",
+          }),
+        }),
+      );
+    });
+    expect(send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "closed-before-result", ok: true }),
+    );
+    expect(close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
   });
 
   it("keeps handler failure logging and responses inside the request trace", async () => {

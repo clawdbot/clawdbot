@@ -129,6 +129,7 @@ describe("agent harness host capability", () => {
         sessionKey: "agent:main:session-1",
         channelId: "chat-1",
       }),
+      expect.objectContaining({ beforeSourceExecution: expect.any(Function) }),
     );
 
     const forgedRequest = {
@@ -330,6 +331,54 @@ describe("agent harness host capability", () => {
 
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the source boundary after awaited bound-tool policy", async () => {
+    const { attempt, admission } = await admittedAttempt("run-bound-policy-race");
+    const policyStarted = createDeferred<void>();
+    const policyResult = createDeferred<void>();
+    mockRewrap.mockImplementationOnce((tool, _ctx, options) => ({
+      ...tool,
+      execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
+        policyStarted.resolve();
+        await policyResult.promise;
+        options.beforeSourceExecution?.();
+        return await tool.execute?.(...args);
+      },
+    }));
+    const { tool, execute } = testTool();
+    const { bound } = bindTool(attempt, tool);
+
+    const pending = bound.execute("call-policy-race", {});
+    await policyStarted.promise;
+    admission.close();
+    policyResult.resolve();
+
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("restores the attempt abort race around a rebound tool", async () => {
+    const abortController = new AbortController();
+    const { attempt } = await admittedAttempt("run-bound-abort", {
+      abortSignal: abortController.signal,
+    });
+    const sourceStarted = createDeferred<void>();
+    const sourceResult = createDeferred<{ content: []; details: {} }>();
+    const { tool } = testTool(
+      vi.fn(async () => {
+        sourceStarted.resolve();
+        return await sourceResult.promise;
+      }),
+    );
+    const { bound } = bindTool(attempt, tool);
+
+    const pending = bound.execute("call-abort", {});
+    await sourceStarted.promise;
+    abortController.abort();
+
+    await expect(pending).rejects.toThrow("Aborted");
+    sourceResult.resolve({ content: [], details: {} });
   });
 
   it("revokes a retained bound tool after lifecycle rotation", async () => {

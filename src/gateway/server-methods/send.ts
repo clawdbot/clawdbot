@@ -80,6 +80,7 @@ import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   resolveGatewayInflightRequest as resolveIdempotentGatewayRequest,
   runGatewayInflightWork,
@@ -528,6 +529,7 @@ async function withMessageOperationRoute<
   bindingAccountIds: readonly unknown[];
   routeAccountIds: (binding: MessageOperationRouteBinding | undefined) => readonly unknown[];
   conflictMessage: string;
+  authorize?: () => boolean;
   resolveChannel: (requestChannel: unknown) => Promise<T | undefined>;
   work: (
     route: T & {
@@ -609,6 +611,16 @@ async function withMessageOperationRoute<
     if (inflight.kind === "handled") {
       releaseLock();
       await inflight.done;
+      return;
+    }
+    // Routing and attachment preparation may yield while the admitted run
+    // closes. Revalidate before any provider-visible message side effect.
+    if (params.authorize && !params.authorize()) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      );
       return;
     }
     retainMessageOperationRouteBinding({
@@ -921,6 +933,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -1144,6 +1157,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveInternalDeliveryChannel(requestChannel, context);
         if (resolved.kind !== "ready") {
@@ -1371,6 +1385,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
       conflictMessage: "poll account selections do not match",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,

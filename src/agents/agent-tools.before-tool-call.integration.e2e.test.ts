@@ -649,6 +649,39 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(order).toEqual(["commit", "body", "gap"]);
   });
 
+  it("rechecks a private source guard after asynchronous before-tool policy", async () => {
+    let releaseHook: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        await held;
+      },
+    });
+    let authorityActive = true;
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const source = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "read", execute }),
+      undefined,
+      {
+        beforeSourceExecution: () => {
+          if (!authorityActive) {
+            throw new Error("delegated authority closed");
+          }
+        },
+      },
+    );
+
+    const pending = expectDefined(source.execute, "guarded source execute")("call-guard", {});
+    await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());
+    authorityActive = false;
+    releaseHook?.();
+
+    await expect(pending).rejects.toThrow("delegated authority closed");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("does not consume a voice grant when private execution is disposed", async () => {
     const runId = "run-voice-private-dispose";
     const toolParams = { action: "send", to: "target-a", message: "approved body" };

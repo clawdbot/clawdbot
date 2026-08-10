@@ -3,6 +3,7 @@ import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-co
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
@@ -198,12 +199,21 @@ export function createAgentHarnessHostCapabilities(params: {
     version: 1 as const,
     bindToolSurface: (tools) => {
       assertActive();
-      return tools
-        .map((tool) => rewrapToolWithBeforeToolCallHook(tool, hookContext))
-        .map((tool) =>
-          callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
-        )
-        .map((tool) => gateBoundTool(tool, assertActive));
+      return (
+        tools
+          .map((tool) =>
+            rewrapToolWithBeforeToolCallHook(tool, hookContext, {
+              beforeSourceExecution: assertActive,
+            }),
+          )
+          .map((tool) =>
+            callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
+          )
+          // Rewrapping intentionally restores the original source tool. Restore
+          // the run abort race around the rebound surface for plugin harnesses.
+          .map((tool) => wrapToolWithAbortSignal(tool, attempt.abortSignal))
+          .map((tool) => gateBoundTool(tool, assertActive))
+      );
     },
     runBeforeToolCall: async ({ nativeOperation, ...request }) => {
       assertActive();
