@@ -1,5 +1,5 @@
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
@@ -59,16 +59,22 @@ export async function start(state: CronServiceState) {
             ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
             deferredNotifications: postPersistNotifications,
           });
-          // Skip only the old invocation; a distinct overdue replacement
-          // must remain eligible for normal one-shot startup catch-up.
-          if (repaired.replacementAtMs === undefined) {
-            interruptedJobIds.add(job.id);
+          if (repaired) {
+            // Skip only the old invocation; a distinct overdue replacement
+            // must remain eligible for normal one-shot startup catch-up.
+            if (repaired.replacementAtMs === undefined) {
+              interruptedJobIds.add(job.id);
+            }
+            if (repaired.shouldDelete) {
+              completedJobIdsToDelete.add(job.id);
+            }
+            repairedAnyStartupRun = true;
+            continue;
           }
-          if (repaired.shouldDelete) {
-            completedJobIdsToDelete.add(job.id);
-          }
-          repairedAnyStartupRun = true;
-          continue;
+          state.deps.log.warn(
+            { jobId: job.id },
+            "cron: treating invalid finalized startup run as interrupted",
+          );
         }
         const nowMs = state.deps.nowMs();
         const interrupted = markInterruptedStartupRun({

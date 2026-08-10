@@ -22,7 +22,7 @@ const RULES: Rule[] = [
   {
     label: "caller-owned reply dispatcher lifecycle",
     pattern:
-      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|dispatchReplyFromConfigWithSettledDispatcher|settleReplyDispatcher)\s*\(/u,
+      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|settleReplyDispatcher)\s*\(/u,
   },
   {
     label: "deprecated channel ingress resolver aliases",

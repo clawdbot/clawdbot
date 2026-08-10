@@ -17,6 +17,7 @@ import {
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
+import type { WorkerPlacementDispatchRequest } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
@@ -43,6 +44,12 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
     resolveGatewaySessionStoreTargetWithStore:
       sessionUtils.resolveGatewaySessionStoreTargetWithStore,
   };
+});
+
+const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
+  const { preflightWorkerWorkspace } =
+    await import("./worker-environments/workspace-sync-preflight.js");
+  return preflightWorkerWorkspace;
 });
 
 class WorkerDispatchTargetChangedError extends Error {
@@ -124,8 +131,36 @@ export function coordinateWorkerPlacementDispatch(
       }
     }
   };
+  const dispatchInFlight = new Map<
+    string,
+    {
+      request: WorkerPlacementDispatchRequest;
+      operation: ReturnType<WorkerPlacementDispatchService["dispatch"]>;
+    }
+  >();
   return {
-    dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
+    dispatch: async (request, onTransition) => {
+      const inFlight = dispatchInFlight.get(request.sessionId);
+      if (inFlight) {
+        if (
+          inFlight.request.sessionKey !== request.sessionKey ||
+          inFlight.request.agentId !== request.agentId ||
+          inFlight.request.profileId !== request.profileId
+        ) {
+          throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
+        }
+        return await inFlight.operation;
+      }
+      const operation = runPlacementOperation(() => service.dispatch(request, onTransition));
+      dispatchInFlight.set(request.sessionId, { request, operation });
+      try {
+        return await operation;
+      } finally {
+        if (dispatchInFlight.get(request.sessionId)?.operation === operation) {
+          dispatchInFlight.delete(request.sessionId);
+        }
+      }
+    },
     forceDestroyEnvironment: (environmentId, onCleanupError) =>
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
@@ -264,6 +299,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
               );
             }
+            const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
+            await preflightWorkerWorkspace({ localPath: worktree.path });
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({

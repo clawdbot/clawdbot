@@ -8,7 +8,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -379,8 +379,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
-    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
-    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */

@@ -13,7 +13,6 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -22,7 +21,6 @@ import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { formatErrorMessage } from "./errors.js";
-import { HEARTBEAT_RUN_SCOPE } from "./heartbeat-run-scope.js";
 import { heartbeatLog, resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-runner-config.js";
 import type {
   HeartbeatRunOptions,
@@ -43,8 +41,8 @@ export async function invokeHeartbeatAgentRun(
   wake: ReadyHeartbeatWake,
   prepared: PreparedHeartbeatRun,
 ) {
-  const { cfg, agentId, heartbeat, runScope, startedAt, preflight } = wake;
-  const { delivery, hasDueCommitments, hasExecCompletion, hasCronEvents, prompt } = prepared;
+  const { cfg, agentId, heartbeat, startedAt, preflight } = wake;
+  const { delivery, hasExecCompletion, hasCronEvents, prompt } = prepared;
   const { replyPrefix, runSessionKey, sender, suppressOriginatingContext } = prepared;
   const { usesHeartbeatResponseTool } = prepared;
   const replyOperationRunState: ReplyOperationRunState = {};
@@ -54,13 +52,11 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
   const replyOpts = {
     isHeartbeat: true,
-    [HEARTBEAT_RUN_SCOPE]: runScope,
     [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
     ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
     suppressToolErrorWarnings: false,
     ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
     ...(usesHeartbeatResponseTool ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
-    ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
     ...(heartbeatWakeAbortSignal ? { abortSignal: heartbeatWakeAbortSignal } : {}),
     // Heartbeat timeout is a per-run override so user turns keep the global default.
     timeoutOverrideSeconds: resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
@@ -88,12 +84,7 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
-  // Commitment turns are explicit user notifications, not assistant source
-  // replies; keep their owner-marked delivery visible under tool-only policy.
-  const replyPayload =
-    hasDueCommitments && selectedReplyPayload
-      ? markReplyPayloadForSourceSuppressionDelivery(selectedReplyPayload)
-      : selectedReplyPayload;
+  const replyPayload = selectedReplyPayload;
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&

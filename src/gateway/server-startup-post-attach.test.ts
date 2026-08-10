@@ -173,6 +173,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   })),
 }));
 
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
+  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
+}));
+
 vi.mock("../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
 }));

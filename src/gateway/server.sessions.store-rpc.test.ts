@@ -58,6 +58,29 @@ async function loadTranscriptRows(params: {
   });
 }
 
+test("sessions.patch accepts and discards the retired beta icon field", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  const patched = await directSessionHandlerReq<{
+    entry: Record<string, unknown>;
+  }>("sessions.patch", {
+    key: "agent:main:main",
+    icon: "🧪",
+  });
+
+  expect(patched.ok).toBe(true);
+  expect(patched.payload?.entry).not.toHaveProperty("icon");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
+});
+
 test("lists and patches session store via sessions.* RPC", async () => {
   const { storePath } = await createSessionStoreDir();
   const now = Date.now();
@@ -337,22 +360,12 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(pinned.ok).toBe(true);
   expect(pinned.payload?.entry.pinnedAt).toEqual(expect.any(Number));
 
-  const iconPatched = await directSessionReq<{
-    entry: { icon?: string };
-  }>("sessions.patch", {
-    key: "agent:main:subagent:one",
-    icon: "name:spark",
-  });
-  expect(iconPatched.ok).toBe(true);
-  expect(iconPatched.payload?.entry.icon).toBe("name:spark");
-
   const pinnedList = await directSessionReq<{
-    sessions: Array<{ key: string; pinned?: boolean; icon?: string }>;
+    sessions: Array<{ key: string; pinned?: boolean }>;
   }>("sessions.list", {});
   expect(pinnedList.payload?.sessions[0]).toMatchObject({
     key: "agent:main:subagent:one",
     pinned: true,
-    icon: "name:spark",
   });
 
   const archived = await directSessionReq<{

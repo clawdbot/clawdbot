@@ -130,7 +130,10 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       !resolved ||
       !ref ||
       typeof ref !== "object" ||
-      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
+      (ref.source !== "env" &&
+        ref.source !== "file" &&
+        ref.source !== "exec" &&
+        ref.source !== "store") ||
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||

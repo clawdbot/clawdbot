@@ -266,7 +266,7 @@ export function registerSlackMessageEvents(params: {
         noteConversationMessage(assistantChangedInbound, eventScope);
         await handleSlackMessage(assistantChangedInbound, {
           source: "message",
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
           ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
           ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
@@ -295,7 +295,7 @@ export function registerSlackMessageEvents(params: {
           channelId,
           channelType: subtypeHandler.resolveChannelType(message),
           eventKind: subtypeHandler.eventKind,
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
         });
         if (!ingressContext) {
           return;
@@ -310,7 +310,7 @@ export function registerSlackMessageEvents(params: {
       noteConversationMessage(message, eventScope);
       await handleSlackMessage(message, {
         source: "message",
-        ...(eventScope ? { eventScope } : {}),
+        eventScope,
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
       });
@@ -360,7 +360,7 @@ export function registerSlackMessageEvents(params: {
         const channelType = await resolveSlackAppMentionChannelType({
           ctx,
           mention,
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
         });
         if (!channelType) {
           // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
@@ -393,7 +393,7 @@ export function registerSlackMessageEvents(params: {
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
           wasMentioned: true,
-          ...(eventScope ? { eventScope } : {}),
+          eventScope,
           ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
           ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });

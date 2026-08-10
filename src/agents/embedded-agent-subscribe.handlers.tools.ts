@@ -52,10 +52,12 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { resolveLiveEditToolKind } from "./embedded-agent-live-edit-diff.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   readMessageToolSourceReplyText,
+  resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -92,6 +94,7 @@ import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { isCommandBearingToolCall } from "./tool-display.js";
 import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
@@ -428,6 +431,7 @@ function buildToolCallSummary(
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
+    commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
     replaySafe:
@@ -448,10 +452,6 @@ function buildToolItemTitle(toolName: string, meta?: string): string {
 
 function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
-}
-
-function isPatchToolName(toolName: string): boolean {
-  return toolName === "apply_patch";
 }
 
 function buildCommandItemId(toolCallId: string): string {
@@ -1131,6 +1131,7 @@ export function handleToolExecutionStart(
     return;
   }
   const startToolName = normalizeToolName(evt.toolName);
+  ctx.state.liveEditDiffStateById?.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
       ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
@@ -1257,10 +1258,8 @@ export function handleToolExecutionStart(
       evt.replaySafe === true ||
       ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
       ctx.params.replaySafeToolNames?.has(toolName) === true;
-    ctx.state.toolMetaById.set(
-      toolCallId,
-      buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false),
-    );
+    const callSummary = buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false);
+    ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1285,9 +1284,13 @@ export function handleToolExecutionStart(
       status: "running",
       name: toolName,
       meta,
+      commandBearing: callSummary.commandBearing,
       toolCallId,
       startedAt,
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      ...(callSummary.commandBearing && !isExecToolName(toolName)
+        ? { suppressChannelProgress: true }
+        : {}),
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
@@ -1314,7 +1317,7 @@ export function handleToolExecutionStart(
         toolCallId,
         startedAt,
       });
-    } else if (isPatchToolName(toolName)) {
+    } else if (resolveLiveEditToolKind(toolName) === "patch") {
       emitTrackedItemEvent(ctx, {
         itemId: buildPatchItemId(toolCallId),
         phase: "start",
@@ -1334,7 +1337,7 @@ export function handleToolExecutionStart(
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {
       ctx.state.toolSummaryById.add(toolCallId);
-      ctx.emitToolSummary(toolName, meta);
+      ctx.emitToolSummary(toolName, meta, callSummary.commandBearing);
     }
 
     // Track messaging tool sends (pending until confirmed in tool_execution_end).
@@ -1476,7 +1479,11 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    commandBearing: ctx.state.toolMetaById.get(toolCallId)?.commandBearing,
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    ...(ctx.state.toolMetaById.get(toolCallId)?.commandBearing && !isExecTool
+      ? { suppressChannelProgress: true }
+      : {}),
     ...(toolProgress
       ? { progressText: toolProgress.text }
       : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
@@ -1546,6 +1553,7 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
+  ctx.state.liveEditDiffStateById?.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
@@ -1707,6 +1715,18 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
+  const deliveredCurrentSourceReply =
+    didDeliverMessagingResult &&
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
+  const sourceReplyFinal = deliveredCurrentSourceReply
+    ? resolveMessageToolSourceReplyFinal(startArgs)
+    : undefined;
   ctx.state.pendingMessagingTexts.delete(toolCallId);
   ctx.state.pendingMessagingTargets.delete(toolCallId);
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
@@ -1724,18 +1744,10 @@ export async function handleToolExecutionEnd(
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
+      ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     });
     ctx.trimMessagingToolSent();
   }
-  const deliveredCurrentSourceReply =
-    didDeliverMessagingResult &&
-    isDeliveredMessageToolOnlySourceReplyResult({
-      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
-      toolName,
-      args: startArgs,
-      result,
-      isError: isToolError,
-    });
   if (deliveredCurrentSourceReply) {
     ctx.state.messageToolOnlySourceReplyDelivered = true;
     const sourceReplyText = readMessageToolSourceReplyText(startArgs);
@@ -1755,7 +1767,10 @@ export async function handleToolExecutionEnd(
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
-      ctx.state.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+      ctx.state.messagingToolSourceReplyPayloads.push({
+        ...sourceReplyPayload,
+        ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+      });
       ctx.trimMessagingToolSent();
     }
   }
@@ -1809,6 +1824,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      commandBearing: callSummary.commandBearing,
       result: eventResult,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
@@ -1824,10 +1840,14 @@ export async function handleToolExecutionEnd(
     status: isToolError ? "failed" : "completed",
     name: toolName,
     meta,
+    commandBearing: callSummary.commandBearing,
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    ...(callSummary.commandBearing && !isExecToolName(toolName)
+      ? { suppressChannelProgress: true }
+      : {}),
     ...(isToolError && extractToolErrorMessage(sanitizedResult)
       ? { error: extractToolErrorMessage(sanitizedResult) }
       : {}),
@@ -1841,6 +1861,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      commandBearing: callSummary.commandBearing,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
@@ -1983,7 +2004,7 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  if (isPatchToolName(toolName)) {
+  if (resolveLiveEditToolKind(toolName) === "patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;

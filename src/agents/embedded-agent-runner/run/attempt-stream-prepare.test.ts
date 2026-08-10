@@ -42,7 +42,7 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
 import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-} from "./attempt-abort.js";
+} from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 

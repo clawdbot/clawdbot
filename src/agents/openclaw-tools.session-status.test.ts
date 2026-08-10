@@ -22,6 +22,7 @@ import { compactToolOutputHint } from "./tool-schema-hints.js";
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
+const agentToolGatewayCallMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
@@ -193,6 +194,12 @@ function createGatewayCallModuleMock() {
   };
 }
 
+function createInProcessGatewayModuleMock() {
+  return {
+    callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
+  };
+}
+
 function createConfigModuleMock() {
   return {
     getRuntimeConfig: () => mockConfig,
@@ -316,6 +323,7 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("./tools/in-process-gateway.js", createInProcessGatewayModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -414,6 +422,8 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
+  agentToolGatewayCallMock.mockReset();
+  agentToolGatewayCallMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   listTasksForRelatedSessionKeyForOwnerMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();

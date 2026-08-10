@@ -1,4 +1,5 @@
 /** In-process Gateway calls for built-in agent tools. */
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import type { TrustedSessionCreation } from "../../gateway/server-methods/session-creation-provenance.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -15,6 +16,24 @@ export type InProcessGatewayCaller = <T = Record<string, unknown>>(
   params: Record<string, unknown>,
 ) => Promise<T>;
 
+type AgentToolGatewayRequest = Pick<
+  CallGatewayOptions,
+  | "config"
+  | "expectFinal"
+  | "method"
+  | "onAccepted"
+  | "onSignalAbort"
+  | "params"
+  | "signal"
+  | "timeoutMs"
+>;
+
+export type AgentToolGatewayRequestCaller = <T = Record<string, unknown>>(
+  request: AgentToolGatewayRequest,
+) => Promise<T>;
+
+const DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS = 10_000;
+
 export function hasInProcessGatewayToolContext(): boolean {
   return hasInProcessGatewayContext();
 }
@@ -22,6 +41,45 @@ export function hasInProcessGatewayToolContext(): boolean {
 export function getInProcessGatewayToolContext(): GatewayRequestContext | undefined {
   return getInProcessGatewayRequestContext();
 }
+
+/**
+ * Dispatches a request-shaped built-in tool call through the local Gateway
+ * router without opening a loopback transport. Outside a Gateway process, the
+ * same request falls back to the ordinary Gateway client.
+ */
+export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
+  request: AgentToolGatewayRequest,
+): Promise<T> => {
+  if (!hasInProcessGatewayContext()) {
+    const { callGateway } = await import("../../gateway/call.js");
+    return await callGateway<T>(request);
+  }
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
+  const timeoutMs =
+    request.timeoutMs === null
+      ? undefined
+      : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
+  return await dispatchGatewayMethodInProcess<T>(
+    request.method,
+    (request.params ?? {}) as Record<string, unknown>,
+    {
+      forceSyntheticClient: true,
+      syntheticScopes: scopes,
+      ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
+      ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),
+      ...(request.onSignalAbort
+        ? {
+            onSignalAbort: () =>
+              request.onSignalAbort?.((method, params, options) =>
+                callAgentToolGatewayRequest({ method, params, ...options }),
+              ),
+          }
+        : {}),
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    },
+  );
+};
 
 export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
   method: string,

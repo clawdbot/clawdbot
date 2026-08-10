@@ -166,7 +166,7 @@ describe("listGatewayMethods", () => {
       "doctor.memory.dreamDiary",
       "doctor.memory.backfillDreamDiary",
     ]);
-    expect(methods.slice(32, 37)).toEqual([
+    expect(methods.slice(31, 36)).toEqual([
       "exec.approvals.get",
       "exec.approvals.set",
       "exec.approvals.node.get",
@@ -239,11 +239,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.client.toolCall");
     expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
-    expect(methods).toContain("talk.session.join");
     expect(methods).toContain("talk.session.appendAudio");
-    expect(methods).toContain("talk.session.startTurn");
-    expect(methods).toContain("talk.session.endTurn");
-    expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
     expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");

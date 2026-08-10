@@ -1,6 +1,7 @@
 import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
+  SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
@@ -150,6 +151,12 @@ type GatewaySystemAgentSession = {
       question?: SystemAgentChatQuestion;
     }>;
     answerWizard: (answer: WizardAnswer) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      question?: SystemAgentChatQuestion;
+    }>;
+    cancelWizard: (cancel: SystemAgentWizardCancel) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;

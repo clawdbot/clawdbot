@@ -6,7 +6,6 @@ import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
-import { markCommitmentsStatus } from "../commitments/store.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
@@ -178,10 +177,8 @@ export async function finalizeHeartbeatOutcome(params: {
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
-  const { delivery, dueCommitmentIds, entry, previousUpdatedAt } = params.prepared;
+  const { delivery, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
-  const markDueCommitments = (status: "dismissed" | "sent") =>
-    markCommitmentsStatus({ ids: dueCommitmentIds, status, nowMs: startedAt });
   const outcome = params.outcome;
   if (outcome.kind === "terminal-failure") {
     const failureChannel = delivery.channel;
@@ -296,7 +293,6 @@ export async function finalizeHeartbeatOutcome(params: {
         ? resolveIndicatorType(outcome.eventStatus)
         : undefined,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
@@ -335,7 +331,6 @@ export async function finalizeHeartbeatOutcome(params: {
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
       accountId: delivery.accountId,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
@@ -417,10 +412,7 @@ export async function finalizeHeartbeatOutcome(params: {
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
-  // Suppressed durable sends committed no visible channel message. Keep due
-  // commitments and heartbeat dedupe state active so a later heartbeat can retry.
   if (visibleSendSucceeded) {
-    await markDueCommitments("sent");
     const hasHeartbeatText = Boolean(normalized.text.trim());
     await patchSessionEntry(
       { storePath, sessionKey },

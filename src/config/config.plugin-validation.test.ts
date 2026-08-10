@@ -2133,7 +2133,7 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts voice-call OpenAI TTS speed, instructions, and baseUrl config fields", () => {
+  it("accepts voice-call OpenAI TTS speakerVoice, speed, instructions, and baseUrl fields", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
@@ -2146,7 +2146,7 @@ describe("config plugin validation", () => {
                 providers: {
                   openai: {
                     baseUrl: "http://localhost:8880/v1",
-                    voice: "alloy",
+                    speakerVoice: "alloy",
                     speed: 1.5,
                     instructions: "Speak in a cheerful tone",
                   },

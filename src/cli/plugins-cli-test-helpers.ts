@@ -12,9 +12,10 @@ import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type LoadConfigFn = (typeof import("../config/config.js"))["loadConfig"];
-type ParseClawHubPluginSpecFn = (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"];
+type ParseClawHubPluginSpecFn =
+  (typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"];
 type ReportClawHubPluginInstallTelemetryFn =
-  (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"];
+  (typeof import("../infra/clawhub-packages.js"))["reportClawHubPluginInstallTelemetry"];
 type InstallPluginFromMarketplaceFn =
   (typeof import("../plugins/marketplace.js"))["installPluginFromMarketplace"];
 type InstallPluginFromGitSpecFn =
@@ -767,29 +768,36 @@ vi.mock("../plugins/clawhub.js", () => ({
     )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-spec.js", () => ({
   parseClawHubPluginSpec: ((
-    ...args: Parameters<(typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"]>
+    ...args: Parameters<(typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"]>
   ) =>
     invokeMock<
-      Parameters<(typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"]>,
-      ReturnType<(typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"]>
+      Parameters<(typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"]>,
+      ReturnType<(typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"]>
     >(
       parseClawHubPluginSpec,
       ...args,
-    )) as (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"],
+    )) as (typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"],
+}));
+
+vi.mock("../infra/clawhub-packages.js", () => ({
   reportClawHubPluginInstallTelemetry: ((
     ...args: Parameters<
-      (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]
+      (typeof import("../infra/clawhub-packages.js"))["reportClawHubPluginInstallTelemetry"]
     >
   ) =>
     invokeMock<
-      Parameters<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>,
-      ReturnType<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>
+      Parameters<
+        (typeof import("../infra/clawhub-packages.js"))["reportClawHubPluginInstallTelemetry"]
+      >,
+      ReturnType<
+        (typeof import("../infra/clawhub-packages.js"))["reportClawHubPluginInstallTelemetry"]
+      >
     >(
       reportClawHubPluginInstallTelemetry,
       ...args,
-    )) as (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"],
+    )) as (typeof import("../infra/clawhub-packages.js"))["reportClawHubPluginInstallTelemetry"],
 }));
 
 const { registerPluginsCli } = await import("./plugins-cli.js");

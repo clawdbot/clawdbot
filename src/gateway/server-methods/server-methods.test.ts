@@ -2039,13 +2039,19 @@ describe("projectRecentChatDisplayMessages", () => {
   it.each([
     {
       name: "facts-only",
-      message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
-      expectedPath: "/tmp/openclaw/fact.png",
+      message: {
+        __openclaw: { media: [{ path: "/tmp/openclaw/fact.png", contentType: "image/png" }] },
+      },
+      expectedPath: undefined,
     },
     {
       name: "sparse",
-      message: { __openclaw: { media: [{}, { path: "/tmp/openclaw/sparse.png" }] } },
-      expectedPath: "/tmp/openclaw/sparse.png",
+      message: {
+        __openclaw: {
+          media: [{}, { path: "/tmp/openclaw/sparse.png", contentType: "image/png" }],
+        },
+      },
+      expectedPath: undefined,
       expectedIndex: 1,
     },
     {
@@ -2055,8 +2061,12 @@ describe("projectRecentChatDisplayMessages", () => {
     },
     {
       name: "media-only",
-      message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
-      expectedPath: "/tmp/openclaw/media-only.png",
+      message: {
+        __openclaw: {
+          media: [{ path: "/tmp/openclaw/media-only.png", contentType: "image/png" }],
+        },
+      },
+      expectedPath: undefined,
     },
   ])("keeps $name media-only users through canonical display projection", (testCase) => {
     const result = projectRecentChatDisplayMessages([

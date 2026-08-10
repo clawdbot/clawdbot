@@ -254,8 +254,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
       // +17: candidate continuation/#666 exports retained through this back-merge.
-      // +1: upstream's native command spec merger through the native-command-registry facade.
-      // -2: upstream removed the unused WhatsApp-specific ack policy exports.
+      // +1: native command spec merger through the native-command-registry facade.
+      // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
+      // -7: retire unused and duplicate inbound-dispatch compatibility exports.
+      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       4864,
       env,
     ),
@@ -312,9 +314,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: focused agent scope functions for doctor migration enumeration.
       // +3: channel streaming config reader functions and session-agent scope resolver.
       // +5: candidate continuation callable exports retained through this back-merge.
-      // +1: upstream's native command spec merger through the native-command-registry facade.
-      // -1: upstream removed the unused WhatsApp-specific ack policy helper.
-      2925,
+      // +1: native command spec merger through the native-command-registry facade.
+      // -1: remove the unused WhatsApp-specific ack policy helper.
+      // -10: collapse inbound-dispatch callable aliases and wrappers.
+      // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
+      2922,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -329,7 +333,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared ingress retention defaults projected through channel-message.
       // +1: shipped channel setup state-migration declaration during its migration window.
       // +7: candidate continuation/#666 deprecated-compat exports retained through this back-merge.
-      // +4: upstream's session-write lease no-op compatibility stubs through the 2026.10 train.
+      // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
+      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       1715,
       env,
     ),

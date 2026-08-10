@@ -15,7 +15,7 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "../../workboard/types.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import type { BoardWidget } from "../types.ts";
 
 type SharedWorkboardWidgetRuntime = {
   host: WorkboardHost;
@@ -125,7 +125,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   protected context?: ApplicationContext;
 
-  @property({ attribute: false }) widget?: BoardViewWidget;
+  @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) sessionKey = "";
   @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) canMutate = true;

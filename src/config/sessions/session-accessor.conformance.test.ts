@@ -46,25 +46,31 @@ import {
   type TranscriptUpdatePayload,
 } from "./session-accessor.js";
 import {
-  appendSqliteTranscriptEvent,
-  appendSqliteTranscriptMessage,
   branchSqliteCompactionCheckpointSession,
-  cleanupSqliteSessionLifecycleArtifacts,
-  forkSqliteSessionEntryFromParentTarget,
+  restoreSqliteCompactionCheckpointSession,
+} from "./session-accessor.sqlite-checkpoint.js";
+import {
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
-  loadSqliteTranscriptEvents,
-  loadSqliteTranscriptEventsSync,
   patchSqliteSessionEntry,
-  publishSqliteTranscriptUpdate,
   readSqliteSessionUpdatedAt,
   replaceSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
-  replaceSqliteTranscriptEvents,
-  restoreSqliteCompactionCheckpointSession,
   upsertSqliteSessionEntry,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-entry.js";
+import { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
+import { cleanupSqliteSessionLifecycleArtifacts } from "./session-accessor.sqlite-lifecycle.js";
+import { forkSqliteSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
+import {
+  loadSqliteTranscriptEvents,
+  loadSqliteTranscriptEventsSync,
+} from "./session-accessor.sqlite-read.js";
+import {
+  appendSqliteTranscriptEvent,
+  appendSqliteTranscriptMessage,
+  replaceSqliteTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 

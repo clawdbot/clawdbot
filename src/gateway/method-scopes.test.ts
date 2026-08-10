@@ -100,11 +100,7 @@ describe("method scope resolution", () => {
     ["talk.client.toolCall", ["operator.talk"]],
     ["talk.client.steer", ["operator.talk"]],
     ["talk.session.create", ["operator.talk"]],
-    ["talk.session.join", ["operator.talk"]],
     ["talk.session.appendAudio", ["operator.talk"]],
-    ["talk.session.startTurn", ["operator.talk"]],
-    ["talk.session.endTurn", ["operator.talk"]],
-    ["talk.session.cancelTurn", ["operator.talk"]],
     ["talk.session.cancelOutput", ["operator.talk"]],
     ["talk.session.acknowledgeMark", ["operator.talk"]],
     ["talk.session.submitToolResult", ["operator.talk"]],
@@ -326,7 +322,6 @@ describe("method scope resolution", () => {
         key: "agent:main:ios-1",
         label: "Trip planning",
         boardFace: "dashboard",
-        icon: "name:spark",
         pinned: true,
         archived: false,
       }),
@@ -342,28 +337,53 @@ describe("method scope resolution", () => {
     expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
   });
 
-  it("requires admin whenever sessions.create targets an explicit cwd", () => {
+  it("defers Gateway cwd containment to sessions.create while keeping node cwd admin-only", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { worktree: true }),
     ).toEqual(["operator.write"]);
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { cwd: "/other/repo" }),
-    ).toEqual(["operator.admin"]);
+    ).toEqual(["operator.write"]);
     expect(
       authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
         cwd: "/other/repo",
       }),
-    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    ).toEqual({ allowed: true });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
         worktree: true,
         cwd: "/other/repo",
       }),
-    ).toEqual(["operator.admin"]);
+    ).toEqual(["operator.write"]);
     expect(
       authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
         worktree: true,
         cwd: "/other/repo",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        execNode: "macbook",
+        cwd: "/other/repo",
+      }),
+    ).toEqual(["operator.admin"]);
+  });
+
+  it("keeps Gateway fs.listDir write-scoped and node browsing admin-only", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("fs.listDir", {})).toEqual([
+      "operator.write",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("fs.listDir", ["operator.write"], {
+        path: "/configured/workspace",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("fs.listDir", { nodeId: "macbook" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("fs.listDir", ["operator.write"], {
+        nodeId: "macbook",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
@@ -677,11 +697,7 @@ describe("operator scope authorization", () => {
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.session.create",
-      "talk.session.join",
       "talk.session.appendAudio",
-      "talk.session.startTurn",
-      "talk.session.endTurn",
-      "talk.session.cancelTurn",
       "talk.session.cancelOutput",
       "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",

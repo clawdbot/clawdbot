@@ -547,6 +547,10 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
 }
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
+  const onContinue =
+    props.firstRun && result.setupComplete && props.activation.phase !== "success"
+      ? props.onOpenChat
+      : undefined;
   const current = result.configuredModel
     ? renderConfiguredModel({
         result,
@@ -554,6 +558,7 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
         canVerify: props.canVerify,
         actionsDisabled: props.actionsDisabled,
         onVerify: props.onVerify,
+        onContinue,
       })
     : nothing;
   if (!props.canAdmin) {

@@ -68,6 +68,7 @@ export function handleAgentEnd(
   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
   options?: { deliveryGeneration?: number },
 ): void | Promise<void> {
+  ctx.state.liveEditDiffStateById?.clear();
   type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
   const isCurrentDeliveryGeneration = () =>
     options?.deliveryGeneration === undefined ||

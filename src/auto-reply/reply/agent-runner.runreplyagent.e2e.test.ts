@@ -14,7 +14,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -1003,21 +1002,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(runState.admission).toEqual({ status: "owned" });
   });
 
-  it("keeps heartbeat mechanics while isolating commitment bootstrap context", async () => {
-    const { run } = createMinimalRun({
-      opts: {
-        isHeartbeat: true,
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-
-    await run();
-
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).trigger).toBe("heartbeat");
-    expect((call as AgentRunParams).bootstrapContextRunKind).toBe("commitment-only");
-  });
-
   it.each(["work-wake", "delegate-return", "subagent-return"] as const)(
     "reports %s continuation provenance to the runner-owned hook path as heartbeat",
     async (continuationTrigger) => {
@@ -1032,7 +1016,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 
-  it("runs visible turns with the session identity returned by admission", async () => {
+  it("runs visible turns with the session id returned by admission", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "pre-compact-session",

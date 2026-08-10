@@ -233,7 +233,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeChannel,
     runtimeCapabilities,
     agentId: params.sessionAgentId,
-    trigger: attempt.bootstrapContextRunKind === "commitment-only" ? undefined : attempt.trigger,
+    trigger: attempt.trigger,
   };
   const promptContribution =
     attempt.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??

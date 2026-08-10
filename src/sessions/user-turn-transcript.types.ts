@@ -157,6 +157,7 @@ export type UserTurnTranscriptRecorder = {
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   replaceSessionDeliveryAckIds?: (deliveryIds: readonly string[]) => boolean;
+  setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (

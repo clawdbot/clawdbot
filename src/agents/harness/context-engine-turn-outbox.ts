@@ -256,10 +256,10 @@ export function discardContextEngineTurnIntent(params: {
 }
 
 export function recoverContextEngineTurnOutbox(params: {
-  currentAdmission: TranscriptTurnAdmission;
   database: OpenClawAgentDatabase;
   engineId: string;
   ownerPluginId?: string;
+  sessionId: string;
   warn: (message: string) => void;
 }): void {
   const db = outboxDb(params.database);
@@ -270,7 +270,7 @@ export function recoverContextEngineTurnOutbox(params: {
       .select(["advancement_key", "payload_json"])
       .where("engine_id", "=", params.engineId)
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
-      .where("session_id", "=", params.currentAdmission.sessionId)
+      .where("session_id", "=", params.sessionId)
       .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   for (const row of rows) {

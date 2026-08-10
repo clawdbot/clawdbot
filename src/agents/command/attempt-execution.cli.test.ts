@@ -2911,7 +2911,7 @@ describe("CLI attempt execution", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("stamps CLI prompts with current timestamp context", async () => {
+  it("stamps CLI prompts and forwards the transcript target", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
     const sessionKey = "agent:main:direct:claude-timestamp";
@@ -2930,6 +2930,12 @@ describe("CLI attempt execution", () => {
         storePath,
       }),
     });
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    };
     await runStoredAttempt({
       providerOverride: "claude-cli",
       modelOverride: "opus",
@@ -2941,6 +2947,7 @@ describe("CLI attempt execution", () => {
       runId: "run-cli-timestamp",
       messageChannel: "discord",
       sessionStore,
+      sessionTarget,
       userTurnTranscriptRecorder,
     });
 
@@ -2949,6 +2956,7 @@ describe("CLI attempt execution", () => {
       transcriptPrompt: "canonical timestamp question",
       imagePrompt: "what time is it?",
       userTurnTranscriptRecorder,
+      sessionTarget,
       suppressNextUserMessagePersistence: false,
     });
   });

@@ -40,8 +40,8 @@ const hoisted = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("../../subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-let consumeSubagentTraceparentHandoff: typeof import("./subagent-traceparent-handoff.js").consumeSubagentTraceparentHandoff;
-let resetSubagentTraceparentHandoffsForTests: typeof import("./subagent-traceparent-handoff.js").resetSubagentTraceparentHandoffsForTests;
+let consumeSubagentTraceparentHandoff: typeof import("../../subagent-traceparent-handoff.js").consumeSubagentTraceparentHandoff;
+let resetSubagentTraceparentHandoffsForTests: typeof import("../../subagent-traceparent-handoff.js").resetSubagentTraceparentHandoffsForTests;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {

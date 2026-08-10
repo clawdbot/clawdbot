@@ -127,11 +127,6 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
-    name: "commitments",
-    description: "List and manage inferred follow-up commitments",
-    hasSubcommands: true,
-  },
-  {
     name: "tasks",
     description: "Inspect durable background tasks and TaskFlow state",
     hasSubcommands: true,

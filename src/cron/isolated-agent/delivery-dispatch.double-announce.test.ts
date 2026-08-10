@@ -2309,7 +2309,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
-        "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
+        "Check automation history for delivery error details.",
         "One or more scheduled message payloads may already have been delivered.",
       ].join("\n"),
       {
@@ -2684,7 +2684,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456 thread 42",
-        "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+        "Check automation history for delivery error details.",
         "No scheduled message was delivered.",
       ].join("\n"),
       {
@@ -2731,7 +2731,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
-        "Delivery error: second payload failed",
+        "Check automation history for delivery error details.",
         "One or more scheduled message payloads may already have been delivered.",
       ].join("\n"),
       {

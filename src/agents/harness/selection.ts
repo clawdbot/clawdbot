@@ -528,6 +528,8 @@ async function runSelectedAgentHarnessAttempt(
       admission: internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       lease: internalParams.contextEngineLogicalTurnLease,
+      recorder: internalParams.userTurnTranscriptRecorder,
+      sessionTarget: internalParams.sessionTarget,
     });
     const effective = internalParams.contextEngineLogicalTurnLease.begin();
     internalParams = {
@@ -545,7 +547,7 @@ async function runSelectedAgentHarnessAttempt(
         ),
       ]
     : [];
-  const pluginParams = withoutInternalHarnessAuthority(internalParams);
+  const attemptParams = withoutHarnessSetupAuthority(internalParams);
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -558,18 +560,20 @@ async function runSelectedAgentHarnessAttempt(
       // trusted setup authority and must survive ordinary deny-all policy.
       const hostOpenClawAuthority =
         isHostScopedAgentToolActive("openclaw") &&
-        isSystemAgentOnlyAllowlist(pluginParams.toolsAllow);
+        isSystemAgentOnlyAllowlist(attemptParams.toolsAllow);
       const preparedParams =
-        harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
-      const attemptParams =
+        harness.id === "openclaw"
+          ? attemptParams
+          : preparePluginHarnessParams(withoutInternalHarnessAuthority(attemptParams));
+      const authorizedParams =
         hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
           ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
           : preparedParams;
       assertPluginHarnessConversationToolPolicySupport(
         harness,
-        attemptParams.pluginHarnessToolPolicyRestricted === true,
+        authorizedParams.pluginHarnessToolPolicyRestricted === true,
       );
-      return runAgentHarnessLifecycleAttempt(harness, attemptParams);
+      return runAgentHarnessLifecycleAttempt(harness, authorizedParams);
     }),
   );
   const admission = internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
@@ -666,15 +670,21 @@ function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): 
   return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "openclaw";
 }
 
-function withoutInternalHarnessAuthority(
+function withoutHarnessSetupAuthority(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
 ): EmbeddedRunAttemptParams {
   const {
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     systemAgentTool: _systemAgentTool,
-    ...pluginParams
+    ...attemptParams
   } = params;
+  return attemptParams;
+}
+
+function withoutInternalHarnessAuthority(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  const { onContextEngineTurnCandidate: _onContextEngineTurnCandidate, ...pluginParams } = params;
   return pluginParams;
 }
 

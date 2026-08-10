@@ -1,5 +1,4 @@
 // Dispatches reply turns through ACP runtimes and projects their events.
-import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
 import {
   isSessionIdentityPending,
@@ -12,7 +11,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
-import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
+import {
+  AcpRuntimeError,
+  formatAcpRuntimeErrorText,
+  toAcpRuntimeError,
+} from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -429,6 +432,7 @@ export async function tryDispatchAcpReply(params: {
   originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
+  shouldSendFullToolDetails: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
   recordProcessed: DispatchProcessedRecorder;
@@ -546,6 +550,7 @@ export async function tryDispatchAcpReply(params: {
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
+    shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,

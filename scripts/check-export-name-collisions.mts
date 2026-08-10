@@ -19,16 +19,35 @@ export type ExportNameCollision = {
   sdk?: true;
 };
 
-type SourceModule = {
+export type SourceModule = {
   content: string;
   includeDefinitions?: boolean;
   path: string;
 };
 
-type ModuleExports = {
+export type ImportedSymbolReference = {
+  importedName: string;
+  localName: string;
+  moduleSpecifier: string;
+};
+
+export type NamedReExport = {
+  exportedName: string;
+  importedName: string;
+  moduleSpecifier: string;
+};
+
+export type ExportedValueDefinition = {
+  importedReferences: ImportedSymbolReference[];
+  name: string;
+};
+
+export type ModuleExports = {
   definitions: Set<string>;
   exportedNames: Set<string>;
+  namedReExports: NamedReExport[];
   starExportSpecifiers: string[];
+  valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
 const exportNameCollisionSchema = z
@@ -73,6 +92,72 @@ function collectBindingNames(name: ts.BindingName, names: Set<string>) {
       collectBindingNames(element.name, names);
     }
   }
+}
+
+function resolveImportedReference(
+  expression: ts.Expression,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
+  namespaceImportsByLocalName: ReadonlyMap<string, string>,
+) {
+  const target = unwrapExpression(expression);
+  if (ts.isIdentifier(target)) {
+    return importedSymbolsByLocalName.get(target.text);
+  }
+  if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) {
+    return undefined;
+  }
+  const namespaceName = ts.isPropertyAccessExpression(target)
+    ? target.name.text
+    : ts.isElementAccessExpression(target) &&
+        target.argumentExpression &&
+        ts.isStringLiteral(target.argumentExpression)
+      ? target.argumentExpression.text
+      : null;
+  if (!namespaceName || !ts.isIdentifier(target.expression)) {
+    return undefined;
+  }
+  const moduleSpecifier = namespaceImportsByLocalName.get(target.expression.text);
+  return moduleSpecifier
+    ? {
+        importedName: namespaceName,
+        localName: `${target.expression.text}.${namespaceName}`,
+        moduleSpecifier,
+      }
+    : undefined;
+}
+
+function collectImportedReferences(
+  node: ts.Node,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
+  namespaceImportsByLocalName: ReadonlyMap<string, string>,
+) {
+  const references = new Map<string, ImportedSymbolReference>();
+  const addReference = (reference: ImportedSymbolReference | undefined) => {
+    if (reference) {
+      references.set(
+        `${reference.moduleSpecifier}\0${reference.importedName}\0${reference.localName}`,
+        reference,
+      );
+    }
+  };
+  const visit = (current: ts.Node): void => {
+    if (ts.isCallExpression(current)) {
+      addReference(
+        resolveImportedReference(
+          current.expression,
+          importedSymbolsByLocalName,
+          namespaceImportsByLocalName,
+        ),
+      );
+    }
+    ts.forEachChild(current, visit);
+  };
+  visit(node);
+  return [...references.values()].toSorted((left, right) =>
+    `${left.moduleSpecifier}\0${left.importedName}\0${left.localName}`.localeCompare(
+      `${right.moduleSpecifier}\0${right.importedName}\0${right.localName}`,
+    ),
+  );
 }
 
 function parametersAreForwarded(
@@ -238,11 +323,15 @@ function isForwardingOnlyConst(
 export function collectModuleExportNames(content: string, fileName = "source.ts"): ModuleExports {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const importedNamesByLocalName = new Map<string, string>();
+  const importedSymbolsByLocalName = new Map<string, ImportedSymbolReference>();
+  const namespaceImportsByLocalName = new Map<string, string>();
   const localConstDeclarations = new Map<string, ts.VariableDeclaration[]>();
   const localFunctions = new Map<string, ts.FunctionDeclaration[]>();
   const directlyExportedNames = new Set<string>();
   const locallyExportedNames = new Set<string>();
   const exportedNames = new Set<string>();
+  const namedReExports: NamedReExport[] = [];
+  const pendingLocalReExports: Array<{ exportedName: string; localName: string }> = [];
   const starExportSpecifiers: string[] = [];
 
   for (const statement of sourceFile.statements) {
@@ -251,13 +340,40 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
           if (!statement.importClause?.isTypeOnly && !specifier.isTypeOnly) {
-            importedNamesByLocalName.set(
-              specifier.name.text,
-              specifier.propertyName?.text ?? specifier.name.text,
-            );
+            const importedName = specifier.propertyName?.text ?? specifier.name.text;
+            const moduleSpecifier = ts.isStringLiteral(statement.moduleSpecifier)
+              ? statement.moduleSpecifier.text
+              : "";
+            importedNamesByLocalName.set(specifier.name.text, importedName);
+            importedSymbolsByLocalName.set(specifier.name.text, {
+              importedName,
+              localName: specifier.name.text,
+              moduleSpecifier,
+            });
           }
         }
+      } else if (
+        bindings &&
+        ts.isNamespaceImport(bindings) &&
+        !statement.importClause?.isTypeOnly &&
+        ts.isStringLiteral(statement.moduleSpecifier)
+      ) {
+        namespaceImportsByLocalName.set(bindings.name.text, statement.moduleSpecifier.text);
       }
+      continue;
+    }
+
+    if (
+      ts.isImportEqualsDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      ts.isExternalModuleReference(statement.moduleReference) &&
+      statement.moduleReference.expression &&
+      ts.isStringLiteral(statement.moduleReference.expression)
+    ) {
+      namespaceImportsByLocalName.set(
+        statement.name.text,
+        statement.moduleReference.expression.text,
+      );
       continue;
     }
 
@@ -325,6 +441,15 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
           continue;
         }
         const localName = specifier.propertyName?.text ?? specifier.name.text;
+        if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+          namedReExports.push({
+            exportedName: specifier.name.text,
+            importedName: localName,
+            moduleSpecifier: statement.moduleSpecifier.text,
+          });
+        } else if (!statement.moduleSpecifier) {
+          pendingLocalReExports.push({ exportedName: specifier.name.text, localName });
+        }
         // Renamed re-exports are deliberately outside this guard's first slice.
         if (specifier.name.text !== localName) {
           continue;
@@ -337,11 +462,51 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
     }
   }
 
+  for (const reExport of pendingLocalReExports) {
+    const imported = importedSymbolsByLocalName.get(reExport.localName);
+    if (imported) {
+      namedReExports.push({
+        exportedName: reExport.exportedName,
+        importedName: imported.importedName,
+        moduleSpecifier: imported.moduleSpecifier,
+      });
+    }
+  }
+
   const definitions = new Set<string>();
+  const valueDefinitions = new Map<string, ExportedValueDefinition>();
   for (const name of new Set([...directlyExportedNames, ...locallyExportedNames])) {
     const constDeclarations = localConstDeclarations.get(name);
     if (constDeclarations) {
       const [constDeclaration] = constDeclarations;
+      if (constDeclarations.length === 1 && constDeclaration) {
+        const importedReferences = collectImportedReferences(
+          constDeclaration,
+          importedSymbolsByLocalName,
+          namespaceImportsByLocalName,
+        );
+        const initializer = constDeclaration.initializer
+          ? unwrapExpression(constDeclaration.initializer)
+          : undefined;
+        if (initializer) {
+          const aliasSource = resolveImportedReference(
+            initializer,
+            importedSymbolsByLocalName,
+            namespaceImportsByLocalName,
+          );
+          if (aliasSource) {
+            importedReferences.push(aliasSource);
+          }
+        }
+        valueDefinitions.set(name, {
+          importedReferences: importedReferences.toSorted((left, right) =>
+            `${left.moduleSpecifier}\0${left.importedName}\0${left.localName}`.localeCompare(
+              `${right.moduleSpecifier}\0${right.importedName}\0${right.localName}`,
+            ),
+          ),
+          name,
+        });
+      }
       if (
         constDeclarations.length === 1 &&
         constDeclaration &&
@@ -357,6 +522,16 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       continue;
     }
     const implementation = functionDeclarations.find((declaration) => declaration.body);
+    if (implementation?.body) {
+      valueDefinitions.set(name, {
+        importedReferences: collectImportedReferences(
+          implementation.body,
+          importedSymbolsByLocalName,
+          namespaceImportsByLocalName,
+        ),
+        name,
+      });
+    }
     // Lazy runtime facades are mandated by AGENTS.md. Exempt only exact same-name
     // argument forwarding so those boundaries do not become duplicate behavior.
     if (
@@ -368,10 +543,20 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
     definitions.add(name);
   }
 
-  return { definitions, exportedNames, starExportSpecifiers };
+  return {
+    definitions,
+    exportedNames,
+    namedReExports: namedReExports.toSorted((left, right) =>
+      `${left.exportedName}\0${left.importedName}\0${left.moduleSpecifier}`.localeCompare(
+        `${right.exportedName}\0${right.importedName}\0${right.moduleSpecifier}`,
+      ),
+    ),
+    starExportSpecifiers,
+    valueDefinitions,
+  };
 }
 
-function resolveStarExportPath(
+export function resolveExportModulePath(
   sourcePath: string,
   specifier: string,
   modulesByPath: ReadonlyMap<string, ModuleExports>,
@@ -411,7 +596,7 @@ function collectTransitiveExportNames(
   const nextVisiting = new Set(visiting).add(modulePath);
   const names = new Set(moduleExports.exportedNames);
   for (const specifier of moduleExports.starExportSpecifiers) {
-    const targetPath = resolveStarExportPath(modulePath, specifier, modulesByPath);
+    const targetPath = resolveExportModulePath(modulePath, specifier, modulesByPath);
     if (!targetPath) {
       continue;
     }

@@ -110,7 +110,7 @@ Most setups only need the API key. To pin the provider explicitly:
 
 ```json5
 {
-  env: { BASETEN_API_KEY: "..." },
+  env: { vars: { BASETEN_API_KEY: "..." } },
   agents: {
     defaults: {
       model: { primary: "baseten/thinkingmachines/inkling" },

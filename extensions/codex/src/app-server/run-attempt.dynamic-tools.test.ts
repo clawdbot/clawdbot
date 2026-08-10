@@ -272,6 +272,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           tool: "lookup",
           arguments: {
             action: "search",
+            command: "cat /private/operator-file",
             token: "plain-secret-value-12345",
             text: "hello",
           },
@@ -294,6 +295,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
       data?: {
         args?: Record<string, unknown>;
+        commandBearing?: boolean;
         isError?: boolean;
         name?: string;
         phase?: string;
@@ -312,6 +314,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     expect(startEvent?.data?.name).toBe("lookup");
     expect(startEvent?.data?.toolCallId).toBe("call-1");
     expect(startEvent?.data?.args?.action).toBe("search");
+    expect(startEvent?.data?.commandBearing).toBe(true);
     expect(startEvent?.data?.args?.token).toBe("plain-…2345");
     expect(startEvent?.data?.args?.text).toBe("hello");
     const resultEvent = agentEvents.find(
@@ -321,6 +324,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         event.data.result !== undefined,
     );
     expect(resultEvent?.data?.name).toBe("lookup");
+    expect(resultEvent?.data?.commandBearing).toBe(true);
     expect(resultEvent?.data?.toolCallId).toBe("call-1");
     expect(resultEvent?.data?.isError).toBe(true);
     expect(resultEvent?.data?.result).not.toHaveProperty("success");

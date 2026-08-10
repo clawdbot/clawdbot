@@ -420,18 +420,12 @@ public actor GatewayChannelActor {
         }
     }
 
-    private static func loadDeviceIdentityForConnect(
+    static func loadDeviceIdentityForConnect(
         includeDeviceIdentity: Bool,
         profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
     {
         guard includeDeviceIdentity else { return nil }
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else {
-            throw NSError(
-                domain: "Gateway",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
-        }
-        return identity
+        return try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: profile)
     }
 
     private func sendConnect(

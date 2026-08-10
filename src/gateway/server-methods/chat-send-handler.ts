@@ -343,7 +343,7 @@ export async function handleChatSend(
       cfg,
       context,
       entry,
-      rawMessage,
+      request: normalizedRequest.value,
       sessionKey,
       sessionLoadOptions,
       storePath,
@@ -629,12 +629,9 @@ export async function handleChatSend(
               await persistGatewayUserTurnTranscriptBestEffort();
             }
             let broadcastedSourceReplyFinal = false;
-            // WebChat persistence has two owners. Agent runs persist model-visible turns
-            // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
-            // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-            // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
-            // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
-            // broadcasting the final UI event.
+            // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
+            // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
+            // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
             if (!agentRunStarted && !queuedFollowup.isEnqueued()) {
               await finalizeChatSendNonAgentReplies({
                 accountId,

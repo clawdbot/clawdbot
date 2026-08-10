@@ -73,9 +73,7 @@ export type SkillWorkshopProposalMutationBudget = {
   failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
-  /** Proposals composed mechanically by patching the live body with a reviewer edit. */
-  patchProposalIds?: Set<string>;
-  /** Content hash per live skill read this run; patches require a matching receipt. */
+  /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
   readSkillHashes?: Map<string, string>;
 };
 

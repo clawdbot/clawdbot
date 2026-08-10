@@ -24,11 +24,17 @@ vi.mock("../../skills/lifecycle/clawhub.js", () => ({
   searchSkillsFromClawHub: (...args: unknown[]) => searchSkillsFromClawHubMock(...args),
 }));
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub-skills.js", () => ({
   fetchClawHubSkillDetail: (...args: unknown[]) => fetchClawHubSkillDetailMock(...args),
-  resolveClawHubBaseUrl: vi.fn(() => "https://clawhub.ai"),
   searchClawHubSkills: vi.fn(),
+}));
+
+vi.mock("../../infra/clawhub-artifacts.js", () => ({
   downloadClawHubSkillArchive: vi.fn(),
+}));
+
+vi.mock("../../infra/clawhub-client.js", () => ({
+  resolveClawHubBaseUrl: vi.fn(() => "https://clawhub.ai"),
 }));
 
 vi.mock("../../skills/lifecycle/install.js", () => ({

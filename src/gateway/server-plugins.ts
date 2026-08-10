@@ -225,6 +225,7 @@ type DispatchGatewayMethodInProcessOptions = {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onSignalAbort?: () => Promise<void> | void;
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
@@ -313,6 +314,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       expectFinal: options?.expectFinal,
       isWebchatConnect,
       onAccepted: options?.onAccepted,
+      onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
       timeoutMs: options?.timeoutMs,
       ...(options?.signal ? { signal: options.signal } : {}),

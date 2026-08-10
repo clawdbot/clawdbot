@@ -1,7 +1,12 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type {
   SessionTranscriptReadScope,
   SessionTranscriptReadTarget,
@@ -53,12 +58,15 @@ export async function resolveSessionTranscriptRuntimeTarget(
   return { ...context, sessionId: scope.sessionId };
 }
 
-/** Read-only resolution shares the same identity without persisting metadata locators. */
-export async function resolveSessionTranscriptRuntimeReadTarget(
-  scope: SessionTranscriptRuntimeScope,
-): Promise<SessionTranscriptRuntimeTarget> {
-  return await resolveSessionTranscriptRuntimeTarget(scope);
+/** Resolves the physical agent database that owns one runtime transcript. */
+export function resolveSessionTranscriptDatabasePath(
+  target: SessionTranscriptRuntimeTarget,
+): string {
+  const resolved = resolveSqliteTranscriptScope(target);
+  return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 }
+
+export { resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget };
 
 export function resolveSessionTranscriptReadTarget(
   scope: SessionTranscriptReadScope,

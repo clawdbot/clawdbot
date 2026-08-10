@@ -119,12 +119,12 @@ function hasExplicitSendMediaSource(
   ) {
     return true;
   }
-  return collectStructuredAttachmentSources(args).some((source) =>
+  return collectAttachmentSources(args).some((source) =>
     Boolean(normalizeOptionalString(source.value)),
   );
 }
 
-function collectStructuredAttachmentSources(
+export function collectAttachmentSources(
   args: Record<string, unknown>,
 ): StructuredAttachmentSource[] {
   const attachments = args.attachments;
@@ -163,7 +163,7 @@ function resolveStructuredAttachmentSource(
   if (hasExplicitAttachmentPayload(args, extraParamKeys)) {
     return undefined;
   }
-  return collectStructuredAttachmentSources(args)[0];
+  return collectAttachmentSources(args)[0];
 }
 
 function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): string[] {
@@ -221,7 +221,7 @@ export function collectActionMediaSourceHints(
     }
   }
   if (options?.structuredAttachments === "all") {
-    sources.push(...collectStructuredAttachmentSources(args).map((source) => source.value));
+    sources.push(...collectAttachmentSources(args).map((source) => source.value));
   } else {
     const attachmentSource = resolveStructuredAttachmentSource(args, extraParamKeys);
     if (attachmentSource) {
@@ -567,7 +567,7 @@ export async function normalizeSandboxMediaParams(params: {
   }
   const attachmentSources =
     params.structuredAttachments === "all"
-      ? collectStructuredAttachmentSources(params.args)
+      ? collectAttachmentSources(params.args)
       : [resolveStructuredAttachmentSource(params.args, params.extraParamKeys)].filter(
           (source): source is StructuredAttachmentSource => Boolean(source),
         );

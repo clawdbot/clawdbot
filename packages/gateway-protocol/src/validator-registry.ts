@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
@@ -218,7 +219,18 @@ export const validateSessionsViewerPresenceSetParams = compile(
   S.SessionsViewerPresenceSetParamsSchema,
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
-export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+// Keep the current generated/client contract icon-free while accepting the
+// retired field from beta v4 clients at the raw Gateway validation boundary.
+const SessionsPatchV4CompatibilityParamsSchema = Type.Object(
+  {
+    ...S.SessionsPatchParamsSchema.properties,
+    icon: Type.Optional(Type.Union([S.NonEmptyString, Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+export const validateSessionsPatchParams = compile<S.SessionsPatchParams>(
+  SessionsPatchV4CompatibilityParamsSchema,
+);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
@@ -231,7 +243,6 @@ export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDelete
 export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
 export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);
 export const validateSessionsCompactionListParams = compile(S.SessionsCompactionListParamsSchema);
-export const validateSessionsCompactionGetParams = compile(S.SessionsCompactionGetParamsSchema);
 export const validateSessionsCompactionBranchParams = compile(
   S.SessionsCompactionBranchParamsSchema,
 );
@@ -290,13 +301,10 @@ export const validateTalkClientToolCallResult = compile(S.TalkClientToolCallResu
 export const validateTalkClientTranscriptParams = compile(S.TalkClientTranscriptParamsSchema);
 export const validateTalkClientSteerParams = compile(S.TalkClientSteerParamsSchema);
 export const validateTalkSessionCreateParams = compile(S.TalkSessionCreateParamsSchema);
-export const validateTalkSessionJoinParams = compile(S.TalkSessionJoinParamsSchema);
 export const validateTalkSessionAppendAudioParams = compile(S.TalkSessionAppendAudioParamsSchema);
 export const validateTalkSessionAcknowledgeMarkParams = compile(
   S.TalkSessionAcknowledgeMarkParamsSchema,
 );
-export const validateTalkSessionTurnParams = compile(S.TalkSessionTurnParamsSchema);
-export const validateTalkSessionCancelTurnParams = compile(S.TalkSessionCancelTurnParamsSchema);
 export const validateTalkSessionCancelOutputParams = compile(S.TalkSessionCancelOutputParamsSchema);
 export const validateTalkSessionSteerParams = compile(S.TalkSessionSteerParamsSchema);
 export const validateTalkSessionSubmitToolResultParams = compile(

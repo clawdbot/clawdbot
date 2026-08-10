@@ -29,7 +29,6 @@ type NormalizeReplyOptions = {
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
-  stripHeartbeat?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
@@ -100,8 +99,7 @@ export function normalizeReplyPayload(
     text = "";
   }
 
-  const shouldStripHeartbeat = opts.stripHeartbeat ?? true;
-  if (shouldStripHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
+  if (text?.includes(HEARTBEAT_TOKEN)) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();

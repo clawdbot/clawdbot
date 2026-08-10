@@ -6,7 +6,7 @@ import type { SessionManager } from "../../sessions/index.js";
  */
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";

@@ -141,7 +141,7 @@ function setNavigationContext(page: ChatPage) {
   const setAgent = vi.fn((agentId: string) => {
     agentSelectionState.selectedId = agentId;
   });
-  const browserAnnotationHandoff = {
+  const chatAttachmentHandoff = {
     prepare: vi.fn(),
     consume: vi.fn(() => null),
     clearPane: vi.fn(),
@@ -155,10 +155,10 @@ function setNavigationContext(page: ChatPage) {
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
-    browserAnnotationHandoff,
+    chatAttachmentHandoff,
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { browserAnnotationHandoff, context, navigate, replace, setAgent, patch };
+  return { chatAttachmentHandoff, context, navigate, replace, setAgent, patch };
 }
 
 function setViewerPresenceContext(page: ChatPage) {

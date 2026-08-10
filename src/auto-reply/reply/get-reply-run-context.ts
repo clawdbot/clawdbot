@@ -9,7 +9,6 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -50,6 +49,7 @@ import {
   resolveBareResetBootstrapFileAccess,
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
+import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -86,7 +86,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
   let { sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
-  const heartbeatRunScope = resolveHeartbeatRunScope(opts);
   const continuationTrigger = opts?.continuationTrigger;
   const isDelegateWake = continuationTrigger === "delegate-return";
   // `isContinuationWake` is the chain-budget reset gate's discriminator:
@@ -188,7 +187,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     : "";
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
-  const allowEmptyAssistantReplyAsSilent = isGroupChat && silentReplySettings.policy === "allow";
+  const isDirectedTurn =
+    isExplicitSourceReplyCommand(ctx, cfg) ||
+    (inboundEventKind !== "room_event" && (isDirectChat || ctx.WasMentioned === true));
+  const allowEmptyAssistantReplyAsSilent =
+    isGroupChat && !isDirectedTurn && silentReplySettings.policy === "allow";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
@@ -374,21 +377,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     inboundEventKind,
     sourceReplyDeliveryMode,
   });
-  // A commitment-only wake must not consume the one-shot aborted-run hint;
-  // that recovery context belongs to the next normal conversation turn.
-  const prefixedBodyBase =
-    heartbeatRunScope === "commitment-only"
-      ? promptEnvelopeBase.effectiveBaseBody
-      : await applySessionHints({
-          baseBody: promptEnvelopeBase.effectiveBaseBody,
-          abortedLastRun,
-          sessionEntry,
-          sessionEntryHandle,
-          sessionStore,
-          sessionKey,
-          storePath,
-          abortKey: command.abortKey,
-        });
+  const prefixedBodyBase = await applySessionHints({
+    baseBody: promptEnvelopeBase.effectiveBaseBody,
+    abortedLastRun,
+    sessionEntry,
+    sessionEntryHandle,
+    sessionStore,
+    sessionKey,
+    storePath,
+    abortKey: command.abortKey,
+  });
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -399,7 +397,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     runtimePolicySessionKey,
     isHeartbeat,
     isContinuationWake,
-    heartbeatRunScope,
     explicitThinkingLevelOverride,
     effectiveQueueMode,
     traceRunPhase,

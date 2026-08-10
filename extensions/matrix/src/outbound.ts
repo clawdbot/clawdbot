@@ -9,7 +9,7 @@ import {
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
-  resolvePayloadMediaUrls,
+  resolveSendableOutboundReplyParts,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -147,6 +147,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -158,14 +160,14 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       ...(replyToIdSource !== undefined ? { replyToIdSource } : {}),
       ...(replyToMode !== undefined ? { replyToMode } : {}),
     });
-    const urls = resolvePayloadMediaUrls(payload);
+    const urls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     const payloadText = resolveMatrixPayloadText(payload);
     if (urls.length > 0) {
       const sentResults: Awaited<ReturnType<typeof sendMessageMatrix>>[] = [];
       const lastResult = await sendPayloadMediaSequence({
         text: payloadText,
         mediaUrls: urls,
-        send: async ({ text, mediaUrl, isFirst }) =>
+        send: async ({ text, mediaUrl, index, isFirst }) =>
           await send(to, text, {
             cfg,
             mediaUrl,
@@ -176,6 +178,10 @@ export const matrixOutbound: ChannelOutboundAdapter = {
             threadId: resolvedThreadId,
             accountId: accountId ?? undefined,
             audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+            deliveryQueueId,
+            deliveryPartIndex: index,
+            deliveryPartCount: urls.length,
+            onPlatformSendDispatch,
             extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
             onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
           }),
@@ -204,6 +210,10 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+      deliveryQueueId,
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+      onPlatformSendDispatch,
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });

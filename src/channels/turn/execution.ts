@@ -360,10 +360,8 @@ async function runPreparedChannelTurnCoreInTrace<
   };
 }
 
-async function runPreparedChannelTurn<
+export async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
-
-export const runPreparedInboundReply = runPreparedChannelTurn;

@@ -34,14 +34,11 @@ import {
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
-import type { HeartbeatRunScope } from "./heartbeat-run-scope.js";
 import {
-  canHeartbeatDeliverCommitments,
   heartbeatLog,
   resolveHeartbeatAckMaxChars,
   resolveHeartbeatForWake,
@@ -76,7 +73,6 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
 } from "./heartbeat-wake.js";
-import { normalizeDeliverableOutboundChannel } from "./outbound/channel-resolution.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
@@ -122,7 +118,6 @@ export type HeartbeatRunOptions = {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
-  runScope?: HeartbeatRunScope;
   /** Persisted monitor cadence carried by a coalesced scheduled wake. */
   scheduledEveryMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
@@ -148,11 +143,9 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     source: wakeSource,
     mergeRequestedHeartbeat: wakeSource === "cron",
   });
-  const runScope = opts.runScope ?? "global";
-  const scheduledTasks =
-    runScope === "commitment-only"
-      ? []
-      : [...(opts.tasks ?? [])].toSorted((left, right) => left.jobId.localeCompare(right.jobId));
+  const scheduledTasks = [...(opts.tasks ?? [])].toSorted((left, right) =>
+    left.jobId.localeCompare(right.jobId),
+  );
   const allowsUnscheduledTarget =
     isTargetedImmediateUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
@@ -178,7 +171,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const shouldInspectExecWakeBeforeBusy = shouldPreflightExecEventWake(
     wakeSource,
     opts.scheduledEveryMs,
-    runScope,
     scheduledTasks.length,
   );
   const resolvePreflight = () =>
@@ -187,10 +179,8 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       cfg,
       agentId,
       heartbeat,
-      runScope,
       source: wakeSource,
       scheduledTasks,
-      nowMs: startedAt,
     });
   let preflight = shouldInspectExecWakeBeforeBusy ? await resolvePreflight() : undefined;
   if (preflight?.skipReason) {
@@ -363,7 +353,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     agentId,
     wakeSource,
     heartbeat,
-    runScope,
     scheduledTasks,
     startedAt,
     listActiveEmbeddedRuns,
@@ -377,7 +366,7 @@ export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatW
 
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const { cfg, agentId, heartbeat, preflight } = wake;
-  const { runScope, scheduledTasks, startedAt } = wake;
+  const { scheduledTasks, startedAt } = wake;
   const { listActiveEmbeddedRuns, isReplyRunActive } = wake;
   const { entry, sessionKey } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
@@ -388,37 +377,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
-  const firstDueCommitment =
-    canHeartbeatDeliverCommitments(heartbeat) && scheduledTasks.length === 0
-      ? preflight.dueCommitments[0]
-      : undefined;
-  const heartbeatDeliveryChannel =
-    heartbeat?.target === "last"
-      ? deliveryContextFromSession(entry)?.channel
-      : normalizeDeliverableOutboundChannel(heartbeat?.target);
-  // A configured heartbeat account belongs only to its normal route. Do not
-  // carry it into an accountless commitment that owns a different channel.
-  const commitmentAccountId =
-    firstDueCommitment?.accountId ??
-    (firstDueCommitment && heartbeatDeliveryChannel === firstDueCommitment.channel
-      ? heartbeat?.accountId
-      : undefined);
-  const commitmentDeliveryContext = firstDueCommitment
-    ? {
-        channel: firstDueCommitment.channel,
-        to: firstDueCommitment.to,
-        accountId: commitmentAccountId,
-        threadId: firstDueCommitment.threadId,
-      }
-    : undefined;
-  const heartbeatForDelivery = commitmentDeliveryContext
-    ? {
-        ...heartbeat,
-        target: "last",
-        to: undefined,
-        accountId: commitmentDeliveryContext.accountId,
-      }
-    : heartbeat;
+  const heartbeatForDelivery = heartbeat;
   const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
     agentId,
@@ -429,11 +388,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // `:heartbeat` session, not from the base session we peek during preflight.
     // Reusing base-session turnSource routing here can pin later isolated runs
     // to stale channels/threads because that base-session event context remains queued.
-    turnSource: commitmentDeliveryContext
-      ? commitmentDeliveryContext
-      : useIsolatedSession
-        ? undefined
-        : preflight.turnSourceDeliveryContext,
+    turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
@@ -483,7 +438,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     scheduledTasks,
     heartbeatScratchContent: preflight.heartbeatScratchContent,
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
-    runScope,
   });
 
   if (heartbeatRunPrompt.prompt === null) {
@@ -605,11 +559,10 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         scheduledTasks,
         heartbeatScratchContent: preflight.heartbeatScratchContent,
         useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
-        runScope,
       });
     }
   }
-  const { hasExecCompletion, hasCronEvents, hasDueCommitments } = heartbeatRunPrompt;
+  const { hasExecCompletion, hasCronEvents } = heartbeatRunPrompt;
   const prompt = heartbeatRunPrompt.prompt;
   if (prompt === null) {
     return { kind: "skipped", reason: "not-due" } as const;
@@ -626,9 +579,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     outboundPolicySessionKey,
     ...heartbeatRunPrompt,
     prompt,
-    dueCommitmentIds: hasDueCommitments
-      ? preflight.dueCommitments.map((commitment) => commitment.id)
-      : [],
     inspectedSystemEventsToConsume: selectSystemEventsConsumedByHeartbeat({
       preflight,
       hasExecCompletion,

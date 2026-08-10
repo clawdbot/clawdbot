@@ -24,7 +24,7 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { listSqliteSessionBranches } from "./session-accessor.sqlite.js";
+import { listSqliteSessionBranches } from "./session-accessor.sqlite-message-cut.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

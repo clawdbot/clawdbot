@@ -1,4 +1,4 @@
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
@@ -437,6 +437,38 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     refresh,
     refreshReplacement,
+    /** The row as currently published. The archived/all sidebars render their
+     * own snapshot, so a displayed row can be absent from the primary state.
+     * Lists refresh independently, so when both hold the row the primary one
+     * wins rather than guessing which snapshot the caller was looking at. */
+    publishedRow(key: string): GatewaySessionRow | undefined {
+      const primary = host.readState().result?.sessions.find((row) => row.key === key);
+      if (primary) {
+        return primary;
+      }
+      for (const entry of filteredLists.values()) {
+        const row = entry.snapshot.result?.sessions.find((candidate) => candidate.key === key);
+        if (row) {
+          return row;
+        }
+      }
+      return undefined;
+    },
+    /** Republishes every held list through `decorate` so a UI-owned overlay
+     * reaches the archived/all snapshots too, not just the primary state. */
+    redecorateLists() {
+      const state = host.readState();
+      const result = host.decorate(state.result);
+      if (result !== state.result) {
+        host.publish({ ...state, result });
+      }
+      for (const entry of filteredLists.values()) {
+        const decorated = host.decorate(entry.snapshot.result);
+        if (decorated !== entry.snapshot.result) {
+          publishFilteredList(entry, { ...entry.snapshot, result: decorated });
+        }
+      }
+    },
     setCreatorFilter(creatorId: string | null) {
       const options = { ...lastListOptions, creatorId: creatorId?.trim() || undefined };
       delete options.offset;

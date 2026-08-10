@@ -37,6 +37,7 @@ function projectSidebarSession(
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
     outboxCountForSessionKey: () => 0,
+    hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });
@@ -56,6 +57,13 @@ function projectDraftOwnership(
 }
 
 describe("sidebar session live-run projection", () => {
+  it("projects the durable last-message preview", () => {
+    expect(
+      projectSidebarSession({ lastMessagePreview: "The final reply is durable." })
+        .lastMessagePreview,
+    ).toBe("The final reply is durable.");
+  });
+
   it.each([
     ["legacy running status", { status: "running" }, true],
     ["confirmed active run", { status: "running", hasActiveRun: true }, true],
@@ -256,6 +264,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     runtimeSampledAtByRow: new WeakMap(),
     loadingChildSessionKeys: new Set(),
     outboxCountForSessionKey: () => 0,
+    hasSessionDraft: () => false,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });

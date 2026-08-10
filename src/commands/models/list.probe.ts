@@ -838,6 +838,7 @@ async function probeTarget(params: {
       reasoningLevel: "off",
       verboseLevel: "off",
       streamParams: { maxTokens },
+      agentHarnessRuntimeOverride: "openclaw",
       disableTools: true,
       modelRun: true,
       cleanupBundleMcpOnRunEnd: true,

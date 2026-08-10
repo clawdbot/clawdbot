@@ -421,9 +421,16 @@ timeout and cap `num_ctx`:
   },
   tools: {
     media: {
+      models: [
+        {
+          provider: "ollama",
+          model: "qwen2.5vl:7b",
+          timeoutSeconds: 300,
+          capabilities: ["image"],
+        },
+      ],
       image: {
         timeoutSeconds: 180,
-        models: [{ provider: "ollama", model: "qwen2.5vl:7b", timeoutSeconds: 300 }],
       },
     },
   },
@@ -1024,7 +1031,7 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
         defaults: {
           models: {
             "ollama/gemma4": {
-              thinking: "low",
+              params: { thinking: "low" },
             },
           },
         },

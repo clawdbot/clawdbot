@@ -90,7 +90,6 @@ const SlackAccountSchema = z
     }),
     postAs: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
-    enterpriseOrgInstall: z.boolean().optional(),
     relay: SlackRelaySchema.optional(),
     signingSecret: SecretInputSchema.optional(),
     webhookPath: z.string().optional(),

@@ -52,6 +52,7 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
+  sessionMenuAction: TemplateResult | typeof nothing;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -177,7 +178,6 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
         const selected = gateway.id === snapshot.currentId;
         return html`<wa-dropdown-item
           class="chat-pane__gateway-menu-item chat-pane__gateway-item"
-          type="checkbox"
           role="menuitemradio"
           aria-checked=${String(selected)}
           ${ref((element) => syncDropdownItemRadio(element, selected))}
@@ -495,6 +495,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
+        ${props.sessionMenuAction}
       </div>
     </div>
   `;

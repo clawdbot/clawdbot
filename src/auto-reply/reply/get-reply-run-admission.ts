@@ -71,7 +71,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     workspaceDir,
     isMainSession,
     inboundUserContextPromptJoiner,
-    heartbeatRunScope,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -137,7 +136,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const seenSystemEventBlockKeys = new Set<string>();
   const managedSystemEventDeliveries = new Map<string, PreparedManagedSystemEventDelivery>();
   const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+    if (!useFastReplyRuntime) {
       for (const deliveryId of managedSystemEventDeliveries.keys()) {
         const blockKey = `session-delivery:${deliveryId}`;
         seenSystemEventBlockKeys.delete(blockKey);

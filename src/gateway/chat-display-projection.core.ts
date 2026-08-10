@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
-import { isContextOverflowError } from "../agents/embedded-agent-helpers/context-overflow.js";
+import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { hasRawToolValidationOutput } from "../agents/tool-error-summary.js";
 import {

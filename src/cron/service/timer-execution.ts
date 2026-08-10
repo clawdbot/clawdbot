@@ -16,7 +16,7 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
-import { resolveJobPayloadTextForMain } from "./jobs.js";
+import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 import { resolveMainSessionCronRunSessionKey } from "./task-runs.js";
 import {

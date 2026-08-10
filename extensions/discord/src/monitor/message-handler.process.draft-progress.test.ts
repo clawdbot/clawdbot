@@ -750,6 +750,7 @@ describe("processDiscordMessage draft streaming progress", () => {
           mode: "progress",
           progress: {
             label: "Shelling",
+            commandText: "raw",
           },
         },
       },
@@ -793,6 +794,41 @@ describe("processDiscordMessage draft streaming progress", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
+  });
+
+  it("preserves command output text when raw Discord progress is configured", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "start",
+      });
+      await params?.replyOptions?.onCommandOutput?.({
+        toolCallId: "call-1",
+        phase: "end",
+        title: "pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 0,
+      });
+      await elapseProgressDraftStartDelay();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commandText: "raw" },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update.mock.calls.flat().join("\n")).toContain("pnpm test -- --watch=false");
   });
 
   it("keeps Discord progress lines below the configured label", async () => {

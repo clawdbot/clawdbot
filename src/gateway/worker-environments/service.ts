@@ -61,11 +61,7 @@ import {
 } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerDesktopObserveResult } from "./service-contract.js";
-import {
-  boundedWorkerError as boundedError,
-  requireWorkerLeaseStatus,
-  requireWorkerLease,
-} from "./service-validation.js";
+import { requireWorkerLeaseStatus, requireWorkerLease } from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
   type WorkerEnvironmentRecord,
@@ -75,6 +71,7 @@ import {
 } from "./store.js";
 import type { WorkerTunnelRequest } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
+import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 type WorkerEnvironmentServiceErrorCode =
   | "profile_not_found"
@@ -322,7 +319,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const isTerminalLiveEvent = (request: WorkerLiveEventParams): boolean =>
     request.event.kind === "lifecycle" &&
-    (request.event.payload.phase === "end" ||
+    (request.event.payload.phase === "finishing" ||
+      request.event.payload.phase === "end" ||
       (request.event.payload.phase === "error" &&
         (request.event.payload.aborted === true ||
           request.event.payload.fallbackExhaustedFailure === true)));
@@ -820,7 +818,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
       const requested =
         record.destroyRequestedAtMs === null
-          ? store.requestDestroy({ environmentId: record.environmentId, state: record.state })
+          ? store.requestDestroy({
+              environmentId: record.environmentId,
+              state: record.state,
+              ...(status === "destroyed" && !teardownExpected
+                ? {
+                    terminalState: "failed",
+                    lastError: "Worker environment disappeared before teardown was requested",
+                  }
+                : {}),
+            })
           : record;
       const draining = beginDrain(requested);
       await tunnels?.stop(record.environmentId);
