@@ -126,13 +126,13 @@ Plain output writes only the final assistant text to stdout; diagnostics go to s
 
 Run-stat fields are additive and may be absent:
 
-| Field | Meaning |
-| --- | --- |
-| `costUsd` | Estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data. |
+| Field             | Meaning                                                                                                                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `costUsd`         | Estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.                                                                                                                                                             |
 | `codeModeEngaged` | `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false`, since OpenClaw code mode never owns their tools. |
-| `assistantTurns` | Completed assistant/provider round trips in the run; omitted when none completed. |
-| `bridgeCalls` | Inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata. |
-| `toolSummary` | Outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run. |
+| `assistantTurns`  | Completed assistant/provider round trips in the run; omitted when none completed.                                                                                                                                                                                                           |
+| `bridgeCalls`     | Inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.                                                                                               |
+| `toolSummary`     | Outer model-visible tool-call count, tool names, failures, and total tool time from the embedded run.                                                                                                                                                                                       |
 
 The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --json` response; the outer tool summary remains at `meta.toolSummary`.
 
@@ -152,23 +152,23 @@ The output directory contains the canonical QA Lab `qa-evidence.json`. `summary.
 
 ### `agent exec` options
 
-| Flag | Description |
-| --- | --- |
-| `[message]` | Positional prompt text |
-| `--message-file <path>` | Read a UTF-8 prompt from a file; `-` reads stdin |
-| `--cwd <dir>` | Set both the agent workspace and tool working directory |
-| `--state-dir <dir>` | Use an existing state directory without deleting it |
-| `--config <path>` | Run against this config file instead of the ambient config (JSON5 and `$include` supported) |
-| `--isolated` | Ignore the ambient config and use only exec defaults |
-| `--model <provider/model>` | Explicit primary model |
-| `--code-mode <mode>` | Select `direct`, `auto`, or forced `code` tool mode |
-| `--local-model-lean` | Use the reduced local-model tool surface |
-| `--thinking <level>` | One-run thinking level |
-| `--fallback <provider/model>` | Ordered fallback model; repeatable and requires `--model` |
-| `--auth-env-only` | Use only environment provider keys; skips stored credentials, external CLI credentials, and config entirely |
-| `--no-auth-env-only` | Allow stored and external CLI credentials (default) |
-| `--timeout <seconds>` | Deadline in seconds (default `600`; `0` disables it) |
-| `--json` | Emit the stable JSON envelope |
+| Flag                          | Description                                                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `[message]`                   | Positional prompt text                                                                                      |
+| `--message-file <path>`       | Read a UTF-8 prompt from a file; `-` reads stdin                                                            |
+| `--cwd <dir>`                 | Set both the agent workspace and tool working directory                                                     |
+| `--state-dir <dir>`           | Use an existing state directory without deleting it                                                         |
+| `--config <path>`             | Run against this config file instead of the ambient config (JSON5 and `$include` supported)                 |
+| `--isolated`                  | Ignore the ambient config and use only exec defaults                                                        |
+| `--model <provider/model>`    | Explicit primary model                                                                                      |
+| `--code-mode <mode>`          | Select `direct`, `auto`, or forced `code` tool mode                                                         |
+| `--local-model-lean`          | Use the reduced local-model tool surface                                                                    |
+| `--thinking <level>`          | One-run thinking level                                                                                      |
+| `--fallback <provider/model>` | Ordered fallback model; repeatable and requires `--model`                                                   |
+| `--auth-env-only`             | Use only environment provider keys; skips stored credentials, external CLI credentials, and config entirely |
+| `--no-auth-env-only`          | Allow stored and external CLI credentials (default)                                                         |
+| `--timeout <seconds>`         | Deadline in seconds (default `600`; `0` disables it)                                                        |
+| `--json`                      | Emit the stable JSON envelope                                                                               |
 
 ---
 
@@ -176,25 +176,25 @@ The output directory contains the canonical QA Lab `qa-evidence.json`. `summary.
 
 These apply to the top-level, Gateway-backed `openclaw agent` command (not `agent exec`, documented above).
 
-| Flag | Description |
-| --- | --- |
-| `-m, --message <text>` | Message body |
-| `--message-file <path>` | Read the message body from a UTF-8 file |
-| `-t, --to <dest>` | Recipient used to derive the session key |
-| `--session-key <key>` | Explicit session key to use for routing |
-| `--session-id <id>` | Explicit session id |
-| `--agent <id>` | Agent id; overrides routing bindings |
-| `--model <id>` | Model override for this run (`provider/model` or model id) |
-| `--thinking <level>` | Agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`) |
-| `--verbose <on\|off>` | Persist verbose level for the session |
-| `--channel <channel>` | Delivery channel; omit to use the main session channel |
-| `--reply-to <target>` | Delivery target override |
-| `--reply-channel <channel>` | Delivery channel override |
-| `--reply-account <id>` | Delivery account override |
-| `--local` | Run the embedded agent directly (after plugin registry preload) |
-| `--deliver` | Send the reply back to the selected channel/target |
-| `--timeout <seconds>` | Override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours. |
-| `--json` | Output JSON |
+| Flag                        | Description                                                                                                                                                                                                                                    |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-m, --message <text>`      | Message body                                                                                                                                                                                                                                   |
+| `--message-file <path>`     | Read the message body from a UTF-8 file                                                                                                                                                                                                        |
+| `-t, --to <dest>`           | Recipient used to derive the session key                                                                                                                                                                                                       |
+| `--session-key <key>`       | Explicit session key to use for routing                                                                                                                                                                                                        |
+| `--session-id <id>`         | Explicit session id                                                                                                                                                                                                                            |
+| `--agent <id>`              | Agent id; overrides routing bindings                                                                                                                                                                                                           |
+| `--model <id>`              | Model override for this run (`provider/model` or model id)                                                                                                                                                                                     |
+| `--thinking <level>`        | Agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)                                                                                                  |
+| `--verbose <on\|off>`       | Persist verbose level for the session                                                                                                                                                                                                          |
+| `--channel <channel>`       | Delivery channel; omit to use the main session channel                                                                                                                                                                                         |
+| `--reply-to <target>`       | Delivery target override                                                                                                                                                                                                                       |
+| `--reply-channel <channel>` | Delivery channel override                                                                                                                                                                                                                      |
+| `--reply-account <id>`      | Delivery account override                                                                                                                                                                                                                      |
+| `--local`                   | Run the embedded agent directly (after plugin registry preload)                                                                                                                                                                                |
+| `--deliver`                 | Send the reply back to the selected channel/target                                                                                                                                                                                             |
+| `--timeout <seconds>`       | Override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours. |
+| `--json`                    | Output JSON                                                                                                                                                                                                                                    |
 
 ## Examples
 
@@ -247,26 +247,26 @@ Gateway-backed CLI responses also preserve the raw Gateway result shape at `resu
 
 `deliveryStatus.status` is one of:
 
-| Status | Meaning |
-| --- | --- |
-| `sent` | Delivery completed. |
-| `suppressed` | Delivery was intentionally not sent (for example a message-sending hook cancelled it, or there was no visible result). Terminal, no retry. |
-| `partial_failed` | At least one payload sent before a later payload failed. |
-| `failed` | No durable send completed, or delivery preflight failed. |
+| Status           | Meaning                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sent`           | Delivery completed.                                                                                                                        |
+| `suppressed`     | Delivery was intentionally not sent (for example a message-sending hook cancelled it, or there was no visible result). Terminal, no retry. |
+| `partial_failed` | At least one payload sent before a later payload failed.                                                                                   |
+| `failed`         | No durable send completed, or delivery preflight failed.                                                                                   |
 
 Common fields:
 
-| Field | Meaning |
-| --- | --- |
-| `requested` | Always `true` when the object is present. |
-| `attempted` | `true` once the durable send path ran; `false` for preflight failures or no visible payloads. |
-| `succeeded` | `true`, `false`, or `"partial"`; `"partial"` pairs with `status: "partial_failed"`. |
-| `reason` | Lowercase snake-case reason from durable delivery or preflight validation. Known values include `cancelled_by_message_sending_hook`, `no_visible_payload`, `no_visible_result`, `channel_resolved_to_internal`, `unknown_channel`, `invalid_delivery_target`, and `no_delivery_target`; failed durable sends may also report the failed stage. Treat unknown values as opaque since the set can expand. |
-| `resultCount` | Number of channel send results, when available. |
-| `sentBeforeError` | `true` when a partial failure sent at least one payload before erroring. |
-| `error` | `true` for failed or partial-failed sends. |
-| `errorMessage` | Present only when an underlying delivery error message was captured. Preflight failures carry `error`/`reason` but no `errorMessage`. |
-| `payloadOutcomes` | Optional per-payload results with `index`, `status`, `reason`, `resultCount`, `error`, `stage`, `sentBeforeError`, or hook metadata when available. |
+| Field             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requested`       | Always `true` when the object is present.                                                                                                                                                                                                                                                                                                                                                               |
+| `attempted`       | `true` once the durable send path ran; `false` for preflight failures or no visible payloads.                                                                                                                                                                                                                                                                                                           |
+| `succeeded`       | `true`, `false`, or `"partial"`; `"partial"` pairs with `status: "partial_failed"`.                                                                                                                                                                                                                                                                                                                     |
+| `reason`          | Lowercase snake-case reason from durable delivery or preflight validation. Known values include `cancelled_by_message_sending_hook`, `no_visible_payload`, `no_visible_result`, `channel_resolved_to_internal`, `unknown_channel`, `invalid_delivery_target`, and `no_delivery_target`; failed durable sends may also report the failed stage. Treat unknown values as opaque since the set can expand. |
+| `resultCount`     | Number of channel send results, when available.                                                                                                                                                                                                                                                                                                                                                         |
+| `sentBeforeError` | `true` when a partial failure sent at least one payload before erroring.                                                                                                                                                                                                                                                                                                                                |
+| `error`           | `true` for failed or partial-failed sends.                                                                                                                                                                                                                                                                                                                                                              |
+| `errorMessage`    | Present only when an underlying delivery error message was captured. Preflight failures carry `error`/`reason` but no `errorMessage`.                                                                                                                                                                                                                                                                   |
+| `payloadOutcomes` | Optional per-payload results with `index`, `status`, `reason`, `resultCount`, `error`, `stage`, `sentBeforeError`, or hook metadata when available.                                                                                                                                                                                                                                                     |
 
 ## Related
 
