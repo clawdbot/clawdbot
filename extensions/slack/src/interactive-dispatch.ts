@@ -103,24 +103,32 @@ type SlackInteractiveDispatchContext = Omit<
 export async function dispatchSlackPluginInteractiveHandler(params: {
   data: string;
   interactionId: string;
+  teamId?: string;
   channelType?: "im" | "mpim" | "channel" | "group";
   ctx: SlackInteractiveDispatchContext;
   respond: SlackInteractiveHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
 }) {
   const senderId = params.ctx.senderId?.trim();
-  const baseConversationId =
+  const rawBaseConversationId =
     params.channelType === "im"
       ? senderId
         ? `user:${senderId}`
         : ""
       : params.ctx.conversationId.trim();
   const threadId = params.ctx.threadId?.trim() || undefined;
+  const qualify = (value: string) =>
+    params.teamId ? `team:${encodeURIComponent(params.teamId)}:${value}` : value;
+  const baseConversationId = qualify(rawBaseConversationId);
+  const qualifiedThreadId = threadId ? qualify(threadId) : undefined;
+  const qualifiedParentConversationId = params.ctx.parentConversationId
+    ? qualify(params.ctx.parentConversationId)
+    : undefined;
 
   return await dispatchPluginInteractiveHandler<SlackInteractiveHandlerRegistration>({
     channel: "slack",
     data: params.data,
-    dedupeId: params.interactionId,
+    dedupeId: qualify(params.interactionId),
     onMatched: params.onMatched,
     invoke: ({ registration, namespace, payload }) =>
       registration.handler({
@@ -143,11 +151,11 @@ export async function dispatchSlackPluginInteractiveHandler(params: {
           conversation: {
             channel: "slack",
             accountId: params.ctx.accountId,
-            conversationId: threadId ?? baseConversationId,
-            parentConversationId: threadId
-              ? (params.ctx.parentConversationId ?? baseConversationId)
-              : params.ctx.parentConversationId,
-            threadId,
+            conversationId: qualifiedThreadId ?? baseConversationId,
+            parentConversationId: qualifiedThreadId
+              ? (qualifiedParentConversationId ?? baseConversationId)
+              : qualifiedParentConversationId,
+            threadId: qualifiedThreadId,
           },
         }),
       }),

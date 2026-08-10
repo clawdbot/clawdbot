@@ -1,5 +1,5 @@
 // Slack plugin module implements channels behavior.
-import type { SlackEventMiddlewareArgs } from "@slack/bolt";
+import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -9,11 +9,13 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 import type {
   SlackChannelCreatedEvent,
   SlackChannelIdChangedEvent,
   SlackChannelRenamedEvent,
 } from "../types.js";
+import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 export function registerSlackChannelEvents(params: {
   ctx: SlackMonitorContext;
@@ -25,6 +27,7 @@ export function registerSlackChannelEvents(params: {
     kind: "created" | "renamed";
     channelId: string | undefined;
     channelName: string | undefined;
+    eventScope?: SlackEventScope;
   }) => {
     if (
       !ctx.isChannelAllowed({
@@ -43,17 +46,23 @@ export function registerSlackChannelEvents(params: {
     const sessionKey = ctx.resolveSlackSystemEventSessionKey({
       channelId: paramsLocal.channelId,
       channelType: "channel",
+      eventScope: paramsLocal.eventScope,
     });
     enqueueSystemEvent(`Slack channel ${paramsLocal.kind}: ${label}.`, {
       sessionKey,
-      contextKey: `slack:channel:${paramsLocal.kind}:${paramsLocal.channelId ?? paramsLocal.channelName ?? "unknown"}`,
+      contextKey: `slack:channel:${paramsLocal.eventScope ? `${paramsLocal.eventScope.teamId}:` : ""}${paramsLocal.kind}:${paramsLocal.channelId ?? paramsLocal.channelName ?? "unknown"}`,
     });
   };
 
   ctx.app.event(
     "channel_created",
-    async ({ event, body }: SlackEventMiddlewareArgs<"channel_created">) => {
+    async (args: SlackEventMiddlewareArgs<"channel_created"> & AllMiddlewareArgs) => {
       try {
+        const { event, body, context, client } = args;
+        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        if (eventScope === null) {
+          return;
+        }
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
@@ -62,7 +71,7 @@ export function registerSlackChannelEvents(params: {
         const payload = event as SlackChannelCreatedEvent;
         const channelId = payload.channel?.id;
         const channelName = payload.channel?.name;
-        enqueueChannelSystemEvent({ kind: "created", channelId, channelName });
+        enqueueChannelSystemEvent({ kind: "created", channelId, channelName, eventScope });
       } catch (err) {
         ctx.runtime.error?.(
           danger(`slack channel created handler failed: ${formatErrorMessage(err)}`),
@@ -73,8 +82,13 @@ export function registerSlackChannelEvents(params: {
 
   ctx.app.event(
     "channel_rename",
-    async ({ event, body }: SlackEventMiddlewareArgs<"channel_rename">) => {
+    async (args: SlackEventMiddlewareArgs<"channel_rename"> & AllMiddlewareArgs) => {
       try {
+        const { event, body, context, client } = args;
+        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        if (eventScope === null) {
+          return;
+        }
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
@@ -83,7 +97,7 @@ export function registerSlackChannelEvents(params: {
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
         const channelName = payload.channel?.name_normalized ?? payload.channel?.name;
-        enqueueChannelSystemEvent({ kind: "renamed", channelId, channelName });
+        enqueueChannelSystemEvent({ kind: "renamed", channelId, channelName, eventScope });
       } catch (err) {
         ctx.runtime.error?.(
           danger(`slack channel rename handler failed: ${formatErrorMessage(err)}`),
@@ -91,6 +105,13 @@ export function registerSlackChannelEvents(params: {
       }
     },
   );
+}
+
+export function registerSlackChannelIdChangedEvent(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}) {
+  const { ctx, trackEvent } = params;
 
   ctx.app.event(
     "channel_id_changed",
