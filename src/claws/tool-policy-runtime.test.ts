@@ -6,7 +6,9 @@ import {
 
 function prepare(schemaVersion: "openclaw.clawInstallRecord.v1" | "openclaw.clawInstallRecord.v2") {
   const tools = { profile: schemaVersion.endsWith(".v2") ? "full" : "coding", allow: ["read"] };
-  const readSchemaVersions = vi.fn(() => new Map([["worker", schemaVersion]]));
+  const readSchemaVersions = vi.fn(
+    () => new Map([["worker", { kind: "ok" as const, schemaVersion }]]),
+  );
   prepareClawToolPolicyConsent(
     { agents: { list: [{ id: "worker", tools }] } },
     { readSchemaVersions },
@@ -56,6 +58,51 @@ describe("resolveClawToolPolicyConsent", () => {
     expect(resolve()).toEqual({ frozen: true });
     expect(resolve()).toEqual({ frozen: true });
     expect(readSchemaVersions).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates invalid provenance to its owning agent", () => {
+    const validTools = { profile: "full" as const, allow: ["read"] };
+    const invalidTools = { profile: "full" as const, allow: ["read"] };
+    const invalidError = new Error("unsupported schema version");
+    prepareClawToolPolicyConsent(
+      {
+        agents: {
+          list: [
+            { id: "valid", tools: validTools },
+            { id: "invalid", tools: invalidTools },
+          ],
+        },
+      },
+      {
+        readSchemaVersions: () =>
+          new Map([
+            [
+              "valid",
+              { kind: "ok" as const, schemaVersion: "openclaw.clawInstallRecord.v2" as const },
+            ],
+            ["invalid", { kind: "error" as const, error: invalidError }],
+          ]),
+      },
+    );
+
+    expect(
+      resolveClawToolPolicyConsent({
+        agentTools: validTools,
+        agentId: "valid",
+        profile: "full",
+        ownsProfile: true,
+        hasAgentAllowlist: true,
+      }),
+    ).toEqual({ frozen: true });
+    expect(() =>
+      resolveClawToolPolicyConsent({
+        agentTools: invalidTools,
+        agentId: "invalid",
+        profile: "full",
+        ownsProfile: true,
+        hasAgentAllowlist: true,
+      }),
+    ).toThrow("Cannot verify the installed tool authority");
   });
 
   it("does not treat an inherited global profile as Claw-owned authority", () => {

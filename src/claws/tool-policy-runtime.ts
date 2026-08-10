@@ -47,13 +47,23 @@ export function prepareClawToolPolicyConsent(
     return;
   }
   for (const candidate of candidates) {
-    const schemaVersion = schemaVersions.get(candidate.agentId);
-    if (!schemaVersion) {
+    const schemaVersionRead = schemaVersions.get(candidate.agentId);
+    if (!schemaVersionRead) {
       preparedClawToolPolicies.delete(candidate.tools);
       continue;
     }
+    if (schemaVersionRead.kind === "error") {
+      preparedClawToolPolicies.set(candidate.tools, {
+        kind: "state-error",
+        error: schemaVersionRead.error,
+      });
+      continue;
+    }
     preparedClawToolPolicies.set(candidate.tools, {
-      kind: schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION ? "current" : "legacy",
+      kind:
+        schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION
+          ? "current"
+          : "legacy",
     });
   }
 }

@@ -4,9 +4,16 @@ import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { parseClawInstallRecordSchemaVersion } from "./provenance-schema-version.js";
 
+export type ClawInstallSchemaVersionRead =
+  | {
+      kind: "ok";
+      schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;
+    }
+  | { kind: "error"; error: unknown };
+
 export function readExistingClawInstallSchemaVersionsSync(
   options: OpenClawStateDatabaseOptions = {},
-): Map<string, ReturnType<typeof parseClawInstallRecordSchemaVersion>> {
+): Map<string, ClawInstallSchemaVersionRead> {
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return new Map();
@@ -25,7 +32,19 @@ export function readExistingClawInstallSchemaVersionsSync(
         .prepare("SELECT agent_id, schema_version FROM claw_installs")
         .all() as Array<{ agent_id: string; schema_version: string }>;
     return new Map(
-      rows.map((row) => [row.agent_id, parseClawInstallRecordSchemaVersion(row.schema_version)]),
+      rows.map((row) => {
+        try {
+          return [
+            row.agent_id,
+            {
+              kind: "ok",
+              schemaVersion: parseClawInstallRecordSchemaVersion(row.schema_version),
+            },
+          ] as const;
+        } catch (error) {
+          return [row.agent_id, { kind: "error", error }] as const;
+        }
+      }),
     );
   } finally {
     db.close();

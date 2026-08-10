@@ -127,6 +127,58 @@ describe("Claw tool policy consent provenance", () => {
     ).toThrow("uses a legacy dynamic tool policy");
   });
 
+  it("isolates an unsupported install record from other agents", async () => {
+    const root = tempDirs.make("openclaw-claw-tool-consent-isolation-");
+    const env = stateEnv(root);
+    const validRoot = join(root, "valid");
+    const invalidRoot = join(root, "invalid");
+    mkdirSync(validRoot);
+    mkdirSync(invalidRoot);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const { plan: validPlan } = await makeProvenancePlan(
+      validRoot,
+      { schemaVersion: 1, agent: { id: "valid" } },
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    const { plan: invalidPlan } = await makeProvenancePlan(
+      invalidRoot,
+      { schemaVersion: 1, agent: { id: "invalid" } },
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(validPlan, { env });
+    persistClawInstallRecord(invalidPlan, { env });
+    openOpenClawStateDatabase({ env })
+      .db /* sqlite-allow-raw: test-only corruption verifies per-agent failure isolation. */
+      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+      .run("openclaw.clawInstallRecord.unsupported", "invalid");
+
+    const config = { agents: { list: [validPlan.agent.config, invalidPlan.agent.config] } };
+    setRuntimeConfigSnapshot(config);
+
+    expect(() =>
+      resolveConversationCapabilityProfile({
+        agentId: "valid",
+        config,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      resolveConversationCapabilityProfile({
+        agentId: "invalid",
+        config,
+      }),
+    ).toThrow("Cannot verify the installed tool authority");
+  });
+
   it("does not intersect a standalone Claw allowlist with the host profile", async () => {
     const root = tempDirs.make("openclaw-claw-standalone-tool-consent-");
     const env = stateEnv(root);
