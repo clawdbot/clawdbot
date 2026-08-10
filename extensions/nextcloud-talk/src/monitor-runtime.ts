@@ -18,6 +18,8 @@ const DEFAULT_WEBHOOK_PORT = 8788;
 const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 
+type NextcloudTalkMonitorDeliveryResult = Awaited<ReturnType<typeof handleNextcloudTalkInbound>>;
+
 function normalizeOrigin(value: string): string | null {
   try {
     return normalizeLowercaseStringOrEmpty(new URL(value).origin);
@@ -34,7 +36,7 @@ type NextcloudTalkMonitorOptions = {
   onMessage?: (
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
-  ) => void | Promise<void>;
+  ) => NextcloudTalkMonitorDeliveryResult | Promise<NextcloudTalkMonitorDeliveryResult>;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   createSpool?: typeof createNextcloudTalkWebhookSpool;
   createServer?: typeof createNextcloudTalkWebhookServer;
@@ -79,17 +81,16 @@ export async function monitorNextcloudTalkProvider(
         at: message.timestamp,
       });
       if (opts.onMessage) {
-        await opts.onMessage(message, lifecycle);
-      } else {
-        await handleNextcloudTalkInbound({
-          message,
-          account,
-          config: cfg,
-          runtime,
-          statusSink: opts.statusSink,
-          turnAdoptionLifecycle: lifecycle,
-        });
+        return await opts.onMessage(message, lifecycle);
       }
+      return await handleNextcloudTalkInbound({
+        message,
+        account,
+        config: cfg,
+        runtime,
+        statusSink: opts.statusSink,
+        turnAdoptionLifecycle: lifecycle,
+      });
     },
   });
 

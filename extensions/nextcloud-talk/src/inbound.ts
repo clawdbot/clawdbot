@@ -37,14 +37,19 @@ import {
   resolveNextcloudTalkAllowlistMatch,
   resolveNextcloudTalkRoomMatch,
 } from "./policy.js";
-import { resolveNextcloudTalkRoomKind } from "./room-info.js";
+import { resolveNextcloudTalkRoomKindResult } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import { NextcloudTalkRetryableWebhookError } from "./webhook-spool.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
 type NextcloudTalkRoomMatch = ReturnType<typeof resolveNextcloudTalkRoomMatch>;
+type NextcloudTalkIngressDispatchResult =
+  | { kind: "completed" }
+  | { kind: "deferred" }
+  | { kind: "failed-retryable"; error: unknown };
 
 function hasAllowEntries(entries: string[]): boolean {
   return normalizeNextcloudTalkAllowlist(entries).length > 0;
@@ -128,7 +133,7 @@ export async function handleNextcloudTalkInbound(params: {
   runtime: RuntimeEnv;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   turnAdoptionLifecycle?: Parameters<typeof bindIngressLifecycleToReplyOptions>[0];
-}): Promise<void> {
+}): Promise<NextcloudTalkIngressDispatchResult | void> {
   const { message, account, config, runtime, statusSink } = params;
   const core = getNextcloudTalkRuntime();
   const pairing = createChannelPairingController({
@@ -148,11 +153,19 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
-  const roomKind = await resolveNextcloudTalkRoomKind({
+  const roomKindResult = await resolveNextcloudTalkRoomKindResult({
     account,
     roomToken: message.roomToken,
     runtime,
   });
+  if (roomKindResult.source === "failed") {
+    const error = new NextcloudTalkRetryableWebhookError(
+      `Nextcloud Talk room lookup failed for ${message.roomToken}; retry webhook delivery`,
+    );
+    runtime.log?.(`nextcloud-talk: retry room ${message.roomToken} after room lookup failure`);
+    return { kind: "failed-retryable", error };
+  }
+  const roomKind = roomKindResult.kind;
   const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;
   const senderId = message.senderId;
   const senderName = message.senderName;

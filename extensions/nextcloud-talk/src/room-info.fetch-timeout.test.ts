@@ -1,9 +1,15 @@
 // Nextcloud Talk room info lookup tests cover real HTTP timeout behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind } from "./room-info.js";
+import { resolveNextcloudTalkRoomKindResult } from "./room-info.js";
 
 const REQUEST_TIMEOUT_MS = 500;
+
+async function resolveNextcloudTalkRoomKind(
+  params: Parameters<typeof resolveNextcloudTalkRoomKindResult>[0],
+) {
+  return (await resolveNextcloudTalkRoomKindResult(params)).kind;
+}
 
 describe("nextcloud talk room info fetch timeout", () => {
   it("bounds hanging room info GET requests", async () => {

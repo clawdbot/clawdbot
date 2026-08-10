@@ -4,6 +4,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { describe, expect, it, vi } from "vitest";
 import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
+import type { NextcloudTalkInboundMessage } from "./types.js";
+import { NextcloudTalkRetryableWebhookError } from "./webhook-spool.js";
 
 describe("Nextcloud Talk monitor abort", () => {
   it("stops both the webhook listener and durable spool after startup", async () => {
@@ -103,5 +105,67 @@ describe("Nextcloud Talk monitor abort", () => {
     expect(statusSink).not.toHaveBeenCalled();
     expect(serverStop).toHaveBeenCalledOnce();
     expect(spoolStop).toHaveBeenCalledOnce();
+  });
+
+  it("returns retryable monitor delivery results to the durable spool", async () => {
+    setNextcloudTalkRuntime(createPluginRuntimeMock() as unknown as PluginRuntime);
+    const expectedError = new NextcloudTalkRetryableWebhookError("room lookup unavailable");
+    const expectedResult = { kind: "failed-retryable" as const, error: expectedError };
+    let deliver:
+      | Parameters<
+          NonNullable<Parameters<typeof monitorNextcloudTalkProvider>[0]["createSpool"]>
+        >[0]["deliver"]
+      | undefined;
+    const createSpool = vi.fn((options) => {
+      deliver = options.deliver;
+      return {
+        receive: vi.fn(async () => "accepted" as const),
+        ready: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+        waitForIdle: vi.fn(async () => {}),
+      };
+    });
+    const createServer = vi.fn(() => ({
+      server: {} as never,
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    }));
+
+    const monitor = await monitorNextcloudTalkProvider({
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecret: "test-bot-secret",
+          },
+        },
+      },
+      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() as never },
+      createSpool,
+      createServer,
+      onMessage: vi.fn(async () => expectedResult),
+    });
+
+    const message: NextcloudTalkInboundMessage = {
+      messageId: "msg-retry",
+      roomToken: "room-direct",
+      roomName: "Direct room",
+      senderId: "user-1",
+      senderName: "Alice",
+      text: "hello",
+      mediaType: "text/plain",
+      timestamp: 1_700_000_000_000,
+      isGroupChat: true,
+    };
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    await expect(deliver?.(message, lifecycle)).resolves.toBe(expectedResult);
+    await monitor.stop();
   });
 });
