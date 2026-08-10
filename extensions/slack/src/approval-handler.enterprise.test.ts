@@ -39,7 +39,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
     });
   });
 
-  it("uses the team client for delivery and delayed updates", async () => {
+  it("uses the team client without requiring an Enterprise app id", async () => {
     const chatUpdate = vi.fn().mockResolvedValue({ ok: true });
     const teamClient = {
       chat: { update: chatUpdate },
@@ -49,7 +49,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
     const context = {
       app: { client: { chat: { update: vi.fn() } } },
       config: {},
-      enterprise: { apiAppId: "A123", enterpriseId: "E123" },
+      enterprise: { enterpriseId: "E123" },
       resolveClient,
     };
 
@@ -84,10 +84,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
       expect.objectContaining({
         client: teamClient,
         eventScope: {
-          apiAppId: "A123",
-          enterpriseId: "E123",
           teamId: "T123",
-          isEnterpriseInstall: true,
           client: teamClient,
         },
       }),
@@ -111,6 +108,30 @@ describe("Slack Enterprise Grid approval delivery", () => {
     });
   });
 
+  it.each([
+    ["missing", undefined],
+    ["unusable", () => undefined],
+  ])("fails closed when the workspace client resolver is %s", async (_name, resolveClient) => {
+    await expect(
+      slackApprovalNativeRuntime.transport.deliverPending({
+        cfg: {} as never,
+        accountId: "default",
+        context: {
+          app: { client: {} },
+          config: {},
+          enterprise: { enterpriseId: "E123" },
+          ...(resolveClient ? { resolveClient } : {}),
+        },
+        preparedTarget: {
+          to: "channel:C123",
+          teamId: "T123",
+        },
+        pendingPayload: { text: "approve", blocks: [] },
+      } as never),
+    ).rejects.toThrow("Slack Enterprise Grid approval client is unavailable");
+    expect(sendMessageSlackMock).not.toHaveBeenCalled();
+  });
+
   it("opens an approver DM with the same team client", async () => {
     const open = vi.fn().mockResolvedValue({ channel: { id: "D123" } });
     const teamClient = {
@@ -124,7 +145,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
       context: {
         app: { client: {} },
         config: {},
-        enterprise: { apiAppId: "A123", enterpriseId: "E123" },
+        enterprise: { enterpriseId: "E123" },
         resolveClient: () => teamClient,
       },
       preparedTarget: {

@@ -26,6 +26,7 @@ import {
 } from "./approval-native-gates.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
+import type { SlackEventScope } from "./monitor/event-scope.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 import { parseSlackTarget } from "./target-parsing.js";
@@ -60,7 +61,7 @@ type SlackExecApprovalConfig = NonNullable<
 type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
-  resolveClient?: (teamId?: string) => WebClient;
+  resolveClient?: (teamId?: string) => WebClient | undefined;
   enterprise?: {
     apiAppId?: string;
     enterpriseId: string;
@@ -513,9 +514,8 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       const to = preparedTarget.teamId
         ? await resolveEnterpriseApprovalChannel(client, preparedTarget.to)
         : preparedTarget.to;
-      const enterpriseEventScope = preparedTarget.teamId
-        ? resolveApprovalEnterpriseScope({
-            context: resolved.context,
+      const eventScope = preparedTarget.teamId
+        ? resolveApprovalEventScope({
             client,
             teamId: preparedTarget.teamId,
           })
@@ -526,7 +526,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
         client,
-        ...(enterpriseEventScope ? { eventScope: enterpriseEventScope } : {}),
+        ...(eventScope ? { eventScope } : {}),
       });
       return {
         channelId: message.channelId,
@@ -564,24 +564,16 @@ function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: st
   if (!context.enterprise || !context.resolveClient) {
     throw new Error("Slack Enterprise Grid approval client is unavailable");
   }
-  return context.resolveClient(teamId);
+  const client = context.resolveClient(teamId);
+  if (!client) {
+    throw new Error("Slack Enterprise Grid approval client is unavailable");
+  }
+  return client;
 }
 
-function resolveApprovalEnterpriseScope(params: {
-  context: SlackApprovalHandlerContext;
-  client: WebClient;
-  teamId: string;
-}) {
-  const apiAppId = normalizeOptionalString(params.context.enterprise?.apiAppId);
-  const enterpriseId = normalizeOptionalString(params.context.enterprise?.enterpriseId);
-  if (!apiAppId || !enterpriseId) {
-    throw new Error("Slack Enterprise Grid approval identity is unavailable");
-  }
+function resolveApprovalEventScope(params: { client: WebClient; teamId: string }): SlackEventScope {
   return {
-    apiAppId,
-    enterpriseId,
     teamId: params.teamId,
-    isEnterpriseInstall: true as const,
     client: params.client,
   };
 }
