@@ -1040,6 +1040,27 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each([
+    ["", "empty"],
+    ["   ", "whitespace"],
+    ["not-a-url", "malformed"],
+    ["ftp://example.invalid/hook", "non-http"],
+  ])("rejects blank/invalid --webhook (%s) before gateway RPC", async (value) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--webhook", value], { from: "user" });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("--webhook must be a valid http(s) URL"),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
   it("documents the delivery clear flags alongside the sibling --clear-model", () => {
     const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
     const help = editCommand?.helpInformation() ?? "";
