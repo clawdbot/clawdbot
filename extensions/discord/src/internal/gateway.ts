@@ -73,9 +73,6 @@ export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
-// Discord negotiates ~41s; a sub-second interval is a broken HELLO. sendHeartbeat
-// clears the ACK flag, so every sub-second cycle ends in a zombie reconnect.
-const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
 
 export class GatewayPlugin extends Plugin {
   readonly id = "gateway";
@@ -267,7 +264,7 @@ export class GatewayPlugin extends Plugin {
       case GatewayOpcodes.Hello: {
         this.startHeartbeat(
           asSafeIntegerInRange(asOptionalRecord(payload.d)?.heartbeat_interval, {
-            min: MIN_HEARTBEAT_INTERVAL_MS,
+            min: 1,
             max: MAX_TIMER_TIMEOUT_MS,
           }) ?? 45_000,
         );

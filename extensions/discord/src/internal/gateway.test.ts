@@ -866,7 +866,8 @@ describe("GatewayPlugin", () => {
     ["a scalar body", "hello", 45_000],
     ["a zero interval", { heartbeat_interval: 0 }, 45_000],
     ["a negative interval", { heartbeat_interval: -1 }, 45_000],
-    ["a sub-second interval", { heartbeat_interval: 1 }, 45_000],
+    ["a sub-second interval a compatible gateway may negotiate", { heartbeat_interval: 500 }, 500],
+    ["the smallest positive interval", { heartbeat_interval: 1 }, 1],
     ["a stringified interval", { heartbeat_interval: "45000" }, 45_000],
     ["an interval past the timer ceiling", { heartbeat_interval: Number.MAX_SAFE_INTEGER }, 45_000],
   ])(
