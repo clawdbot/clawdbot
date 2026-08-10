@@ -3260,7 +3260,7 @@ td.data-table-key-col {
   margin-top: 12px;
   column-gap: 10px;
   font-size: 13px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .exec-approval-skip input[type="checkbox"] {
