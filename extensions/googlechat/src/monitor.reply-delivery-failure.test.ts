@@ -158,11 +158,13 @@ async function runDelivery(params: {
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
       ...(params.withTypingMessage
         ? {
-            typingMessage: {
-              placement: "thread",
-              name: "spaces/AAA/messages/typing",
-              requestedThreadName: "spaces/AAA/threads/root",
-              deliveredThreadName: "spaces/AAA/threads/root",
+            typingMessageLease: {
+              current: {
+                placement: "thread" as const,
+                name: "spaces/AAA/messages/typing",
+                requestedThreadName: "spaces/AAA/threads/root",
+                deliveredThreadName: "spaces/AAA/threads/root",
+              },
             },
           }
         : {}),

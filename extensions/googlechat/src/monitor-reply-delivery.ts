@@ -5,7 +5,7 @@ import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { deleteGoogleChatMessage, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
-export type GoogleChatTypingMessage =
+type GoogleChatTypingMessage =
   | {
       placement: "top-level";
       name: string;
@@ -16,6 +16,10 @@ export type GoogleChatTypingMessage =
       requestedThreadName: string;
       deliveredThreadName: string;
     };
+
+export type GoogleChatTypingMessageLease = {
+  current?: GoogleChatTypingMessage;
+};
 
 export function createGoogleChatTypingMessage(params: {
   messageName: string;
@@ -35,6 +39,27 @@ export function createGoogleChatTypingMessage(params: {
   };
 }
 
+export async function cleanupGoogleChatTypingMessage(params: {
+  account: ResolvedGoogleChatAccount;
+  runtime: GoogleChatRuntimeEnv;
+  typingMessageLease: GoogleChatTypingMessageLease;
+}): Promise<void> {
+  const typingMessage = params.typingMessageLease.current;
+  if (!typingMessage) {
+    return;
+  }
+
+  try {
+    await deleteGoogleChatMessage({
+      account: params.account,
+      messageName: typingMessage.name,
+    });
+    params.typingMessageLease.current = undefined;
+  } catch (error) {
+    params.runtime.error?.(`Google Chat typing cleanup failed: ${String(error)}`);
+  }
+}
+
 export async function deliverGoogleChatReply(params: {
   payload: {
     text?: string;
@@ -48,12 +73,11 @@ export async function deliverGoogleChatReply(params: {
   core: GoogleChatCoreRuntime;
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  typingMessage?: GoogleChatTypingMessage;
+  typingMessageLease?: GoogleChatTypingMessageLease;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
-  // Clear this whenever the typing message is deleted or unavailable; otherwise
-  // text delivery can keep retrying a dead message and drop content.
-  let typingMessage = params.typingMessage;
+  const typingMessageLease = params.typingMessageLease;
+  let typingMessage = typingMessageLease?.current;
   const replyThreadName = payload.replyToId?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
   const text = reply.text;
@@ -69,10 +93,8 @@ export async function deliverGoogleChatReply(params: {
   if (typingMessage && !typingMatchesReply) {
     // Typing starts before reply directives are resolved. Never edit a placeholder
     // from one thread into a final reply targeted at another conversation surface.
-    try {
-      await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
-    } catch (err) {
-      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+    if (typingMessageLease) {
+      await cleanupGoogleChatTypingMessage({ account, runtime, typingMessageLease });
     }
     typingMessage = undefined;
   } else if (typingMessage?.placement === "thread") {
@@ -88,12 +110,8 @@ export async function deliverGoogleChatReply(params: {
   }
 
   if (reply.hasMedia && !reply.hasText) {
-    try {
-      if (typingMessage) {
-        await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
-      }
-    } catch (err) {
-      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+    if (typingMessage && typingMessageLease) {
+      await cleanupGoogleChatTypingMessage({ account, runtime, typingMessageLease });
     }
     throw new Error(
       "Google Chat outbound attachments require user OAuth and no text fallback is available.",
@@ -132,6 +150,10 @@ export async function deliverGoogleChatReply(params: {
           messageName: typingMessage.name,
           text: chunk,
         });
+        // The placeholder is now a real reply; a later chunk failure must not delete it.
+        if (typingMessageLease) {
+          typingMessageLease.current = undefined;
+        }
       } catch (err) {
         // The typing placeholder may already be gone; resend the chunk as a new
         // message below. Only the resend failing counts as a delivery failure.

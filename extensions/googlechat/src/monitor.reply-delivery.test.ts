@@ -2,6 +2,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import type { GoogleChatTypingMessageLease } from "./monitor-reply-delivery.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,6 +50,17 @@ function createRuntime() {
   } satisfies GoogleChatRuntimeEnv;
 }
 
+function createTypingMessageLease(): GoogleChatTypingMessageLease {
+  return {
+    current: {
+      placement: "thread",
+      name: "spaces/AAA/messages/typing",
+      requestedThreadName: "spaces/AAA/threads/root",
+      deliveredThreadName: "spaces/AAA/threads/root",
+    },
+  };
+}
+
 let createGoogleChatTypingMessage: typeof import("./monitor-reply-delivery.js").createGoogleChatTypingMessage;
 let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
 
@@ -68,6 +80,7 @@ describe("Google Chat reply delivery", () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
     const runtime = createRuntime();
     const statusSink = vi.fn();
+    const typingMessageLease = createTypingMessageLease();
     mocks.updateGoogleChatMessage.mockRejectedValueOnce(new Error("message not found"));
     mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/fallback" });
 
@@ -79,12 +92,7 @@ describe("Google Chat reply delivery", () => {
       core,
       config,
       statusSink,
-      typingMessage: {
-        placement: "thread",
-        name: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/root",
-        deliveredThreadName: "spaces/AAA/threads/root",
-      },
+      typingMessageLease,
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
@@ -109,6 +117,7 @@ describe("Google Chat reply delivery", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Google Chat message send failed: Error: message not found",
     );
+    expect(typingMessageLease.current?.name).toBe("spaces/AAA/messages/typing");
   });
 
   it("continues later chunks in the provider fallback thread", async () => {
@@ -150,6 +159,13 @@ describe("Google Chat reply delivery", () => {
   it("continues after a fallback typing placeholder in its delivered thread", async () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
     const runtime = createRuntime();
+    const typingMessageLease = {
+      current: createGoogleChatTypingMessage({
+        messageName: "spaces/AAA/messages/typing",
+        requestedThreadName: "spaces/AAA/threads/requested",
+        deliveredThreadName: "spaces/AAA/threads/fallback",
+      }),
+    } satisfies GoogleChatTypingMessageLease;
     mocks.sendGoogleChatMessage.mockResolvedValueOnce({
       messageName: "spaces/AAA/messages/second",
       threadName: "spaces/AAA/threads/fallback",
@@ -162,11 +178,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
-      typingMessage: createGoogleChatTypingMessage({
-        messageName: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/requested",
-        deliveredThreadName: "spaces/AAA/threads/fallback",
-      }),
+      typingMessageLease,
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
@@ -181,6 +193,7 @@ describe("Google Chat reply delivery", () => {
       text: "second chunk",
       thread: "spaces/AAA/threads/fallback",
     });
+    expect(typingMessageLease.current).toBeUndefined();
   });
 
   it("keeps the requested thread when the provider omits thread metadata", async () => {
@@ -250,9 +263,38 @@ describe("Google Chat reply delivery", () => {
     expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("disarms a successfully edited typing message before a later chunk fails", async () => {
+    const core = createCore({ chunks: ["first chunk", "second chunk"] });
+    const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
+    const sendError = new Error("API 500");
+    mocks.sendGoogleChatMessage.mockRejectedValueOnce(sendError);
+
+    await expect(
+      deliverGoogleChatReply({
+        payload: { text: "two chunks", replyToId: "spaces/AAA/threads/root" },
+        account,
+        spaceId: "spaces/AAA",
+        runtime,
+        core,
+        config,
+        typingMessageLease,
+      }),
+    ).rejects.toBe(sendError);
+
+    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+      text: "first chunk",
+    });
+    expect(typingMessageLease.current).toBeUndefined();
+    expect(mocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
   it("rejects when the fallback resend after a typing update failure also fails", async () => {
     const core = createCore({ chunks: ["only chunk"] });
     const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
     const fallbackError = new Error("quota exceeded");
     mocks.updateGoogleChatMessage.mockRejectedValueOnce(new Error("message not found"));
     mocks.sendGoogleChatMessage.mockRejectedValueOnce(fallbackError);
@@ -265,21 +307,18 @@ describe("Google Chat reply delivery", () => {
         runtime,
         core,
         config,
-        typingMessage: {
-          placement: "thread",
-          name: "spaces/AAA/messages/typing",
-          requestedThreadName: "spaces/AAA/threads/root",
-          deliveredThreadName: "spaces/AAA/threads/root",
-        },
+        typingMessageLease,
       }),
     ).rejects.toBe(fallbackError);
 
     expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(1);
+    expect(typingMessageLease.current?.name).toBe("spaces/AAA/messages/typing");
   });
 
   it("replaces a typing message when the final reply target changed", async () => {
     const core = createCore();
     const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
     mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
 
     await deliverGoogleChatReply({
@@ -289,12 +328,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
-      typingMessage: {
-        placement: "thread",
-        name: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/root",
-        deliveredThreadName: "spaces/AAA/threads/root",
-      },
+      typingMessageLease,
     });
 
     expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
@@ -308,6 +342,37 @@ describe("Google Chat reply delivery", () => {
       text: "top-level reply",
       thread: undefined,
     });
+    expect(typingMessageLease.current).toBeUndefined();
+  });
+
+  it("retains ownership when cleanup for a changed reply target fails", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
+    mocks.deleteGoogleChatMessage.mockRejectedValueOnce(new Error("cleanup unavailable"));
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "top-level reply" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      typingMessageLease,
+    });
+
+    expect(typingMessageLease.current?.name).toBe("spaces/AAA/messages/typing");
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "top-level reply",
+      thread: undefined,
+    });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Google Chat typing cleanup failed: Error: cleanup unavailable",
+    );
   });
 
   it("uses text fallback without loading outbound media", async () => {
@@ -315,6 +380,7 @@ describe("Google Chat reply delivery", () => {
       media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
     });
     const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
 
     await deliverGoogleChatReply({
       payload: {
@@ -327,12 +393,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
-      typingMessage: {
-        placement: "thread",
-        name: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/root",
-        deliveredThreadName: "spaces/AAA/threads/root",
-      },
+      typingMessageLease,
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
@@ -346,11 +407,13 @@ describe("Google Chat reply delivery", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
     );
+    expect(typingMessageLease.current).toBeUndefined();
   });
 
   it("cleans up typing and rejects media-only replies without provider upload access", async () => {
     const core = createCore();
     const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
 
     await expect(
       deliverGoogleChatReply({
@@ -363,12 +426,7 @@ describe("Google Chat reply delivery", () => {
         runtime,
         core,
         config,
-        typingMessage: {
-          placement: "thread",
-          name: "spaces/AAA/messages/typing",
-          requestedThreadName: "spaces/AAA/threads/root",
-          deliveredThreadName: "spaces/AAA/threads/root",
-        },
+        typingMessageLease,
       }),
     ).rejects.toThrow(
       "Google Chat outbound attachments require user OAuth and no text fallback is available.",
@@ -381,5 +439,35 @@ describe("Google Chat reply delivery", () => {
     expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
     expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(typingMessageLease.current).toBeUndefined();
+  });
+
+  it("retains a media-only typing message when its immediate cleanup fails", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+    const typingMessageLease = createTypingMessageLease();
+    mocks.deleteGoogleChatMessage.mockRejectedValueOnce(new Error("cleanup unavailable"));
+
+    await expect(
+      deliverGoogleChatReply({
+        payload: {
+          mediaUrl: "https://example.invalid/reply.png",
+          replyToId: "spaces/AAA/threads/root",
+        },
+        account,
+        spaceId: "spaces/AAA",
+        runtime,
+        core,
+        config,
+        typingMessageLease,
+      }),
+    ).rejects.toThrow(
+      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+    );
+
+    expect(typingMessageLease.current?.name).toBe("spaces/AAA/messages/typing");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Google Chat typing cleanup failed: Error: cleanup unavailable",
+    );
   });
 });

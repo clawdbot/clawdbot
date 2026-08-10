@@ -24,9 +24,10 @@ import {
   type GoogleChatIngressLifecycle,
 } from "./monitor-ingress.js";
 import {
+  cleanupGoogleChatTypingMessage,
   createGoogleChatTypingMessage,
   deliverGoogleChatReply,
-  type GoogleChatTypingMessage,
+  type GoogleChatTypingMessageLease,
 } from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
@@ -45,6 +46,10 @@ import { isGoogleChatGroupSpace } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
+
+type GoogleChatTurnAdoptionLifecycle = NonNullable<
+  Parameters<GoogleChatCoreRuntime["channel"]["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+>;
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
@@ -380,7 +385,7 @@ async function processMessageWithPipeline(params: {
     );
     typingIndicator = "message";
   }
-  let typingMessage: GoogleChatTypingMessage | undefined;
+  const typingMessageLease: GoogleChatTypingMessageLease = {};
   const typingMessageThreadName =
     account.config.replyToMode && account.config.replyToMode !== "off"
       ? replyThreadName
@@ -401,7 +406,7 @@ async function processMessageWithPipeline(params: {
         thread: typingMessageThreadName,
       });
       if (result?.messageName) {
-        typingMessage = createGoogleChatTypingMessage({
+        typingMessageLease.current = createGoogleChatTypingMessage({
           messageName: result.messageName,
           requestedThreadName: typingMessageThreadName,
           deliveredThreadName: result.threadName,
@@ -412,66 +417,105 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  await core.channel.inbound.run({
-    channel: "googlechat",
-    accountId: route.accountId,
-    raw: message,
-    ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-    adapter: {
-      ingest: () => ({
-        id: message.name ?? spaceId,
-        timestamp: timestampMs,
-        rawText: rawBody,
-        textForAgent: rawBody,
-        textForCommands: rawBody,
-        raw: message,
-      }),
-      resolveTurn: () => ({
-        cfg: config,
-        channel: "googlechat",
-        accountId: route.accountId,
-        route: { agentId: route.agentId, sessionKey: route.sessionKey },
-        ctxPayload,
-        delivery: {
-          durable: (payload, info) =>
-            resolveGoogleChatDurableReplyOptions({
-              payload,
-              infoKind: info.kind,
-              spaceId,
-              hasTypingMessage: Boolean(typingMessage),
-            }),
-          deliver: async (payload) => {
-            await deliverGoogleChatReply({
-              payload,
-              account,
-              spaceId,
-              runtime,
-              core,
-              config,
-              statusSink,
-              typingMessage,
-            });
-            // Only use typing message for first delivery
-            typingMessage = undefined;
+  // Failed placeholder edits still need cleanup, but only the first reply may reuse them.
+  let typingMessageAvailableForReply = Boolean(typingMessageLease.current);
+  let typingCleanupOwner: "handler" | "deferred-turn" = "handler";
+  let typingCleanup: Promise<void> | undefined;
+  const settleTypingMessage = () => {
+    typingCleanup ??= cleanupGoogleChatTypingMessage({ account, runtime, typingMessageLease });
+    return typingCleanup;
+  };
+  const ingressLifecycle = turnAdoptionLifecycle as GoogleChatTurnAdoptionLifecycle | undefined;
+  const typingTurnLifecycle =
+    ingressLifecycle && typingMessageLease.current
+      ? ({
+          ...ingressLifecycle,
+          onDeferred: () => {
+            const accepted = ingressLifecycle.onDeferred?.();
+            if (accepted !== false) {
+              // Deferred reply ownership outlives inbound.run; terminal queue settlement
+              // must own the placeholder so a later reply can still promote it.
+              typingCleanupOwner = "deferred-turn";
+            }
+            return accepted;
           },
-          onDelivered: () => {
-            statusSink?.({ lastOutboundAt: Date.now() });
+          onSettled: () => {
+            try {
+              ingressLifecycle.onSettled?.();
+            } finally {
+              void settleTypingMessage();
+            }
           },
-          onError: (err, info) => {
-            runtime.error?.(
-              `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-            );
+        } satisfies GoogleChatTurnAdoptionLifecycle)
+      : turnAdoptionLifecycle;
+  try {
+    await core.channel.inbound.run({
+      channel: "googlechat",
+      accountId: route.accountId,
+      raw: message,
+      ...(typingTurnLifecycle ? { turnAdoptionLifecycle: typingTurnLifecycle } : {}),
+      adapter: {
+        ingest: () => ({
+          id: message.name ?? spaceId,
+          timestamp: timestampMs,
+          rawText: rawBody,
+          textForAgent: rawBody,
+          textForCommands: rawBody,
+          raw: message,
+        }),
+        resolveTurn: () => ({
+          cfg: config,
+          channel: "googlechat",
+          accountId: route.accountId,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
+          ctxPayload,
+          delivery: {
+            durable: (payload, info) =>
+              resolveGoogleChatDurableReplyOptions({
+                payload,
+                infoKind: info.kind,
+                spaceId,
+                hasTypingMessage:
+                  typingMessageAvailableForReply && Boolean(typingMessageLease.current),
+              }),
+            deliver: async (payload) => {
+              await deliverGoogleChatReply({
+                payload,
+                account,
+                spaceId,
+                runtime,
+                core,
+                config,
+                statusSink,
+                ...(typingMessageAvailableForReply && typingMessageLease.current
+                  ? { typingMessageLease }
+                  : {}),
+              });
+              typingMessageAvailableForReply = false;
+            },
+            onDelivered: () => {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            },
+            onError: (err, info) => {
+              runtime.error?.(
+                `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+              );
+            },
           },
-        },
-        replyPipeline: {},
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+          replyPipeline: {},
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+            },
           },
-        },
-      }),
-    },
-  });
+        }),
+      },
+    });
+  } finally {
+    if (typingCleanupOwner === "handler") {
+      await settleTypingMessage();
+    }
+  }
 }
 
 async function downloadAttachment(
