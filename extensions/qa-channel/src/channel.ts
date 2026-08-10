@@ -225,6 +225,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   outbound: {
     base: {
       deliveryMode: "direct",
+      sendTextOnlyErrorPayloads: true,
       sendPayload: async (ctx) => {
         const result = await sendQaChannelMessagePayload(ctx);
         return { channel: QA_CHANNEL_ID, messageId: result.messageId };
