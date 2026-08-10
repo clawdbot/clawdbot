@@ -70,6 +70,8 @@ type RequesterToolPolicyParams = {
   groupPolicySessionKey?: string;
   /** Fail closed when scheduled authority names a removed non-default account. */
   requireConfiguredGroupAccount?: boolean;
+  /** Policy prepared by the trusted channel ingress owner for this conversation. */
+  conversationPolicy?: SandboxToolPolicy;
 };
 
 function policyFromEnvelope(
@@ -222,22 +224,24 @@ export function resolveRequesterToolPolicies(
   return {
     delegated: false,
     requesterPolicySource: "current-request",
-    groupPolicy: resolveGroupToolPolicy({
-      config: params.config,
-      sessionKey: params.groupPolicySessionKey ?? params.sessionKey,
-      spawnedBy: params.spawnedBy,
-      messageProvider: params.messageProvider ?? undefined,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      requireConfiguredAccount: params.requireConfiguredGroupAccount,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
-    }),
+    groupPolicy:
+      params.conversationPolicy ??
+      resolveGroupToolPolicy({
+        config: params.config,
+        sessionKey: params.groupPolicySessionKey ?? params.sessionKey,
+        spawnedBy: params.spawnedBy,
+        messageProvider: params.messageProvider ?? undefined,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        accountId: params.accountId,
+        requireConfiguredAccount: params.requireConfiguredGroupAccount,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
+      }),
     senderPolicy: shouldResolveSenderPolicy
       ? resolveSenderToolPolicy({
           config: params.config,

@@ -58,7 +58,11 @@ describe("release-note verification", () => {
   });
 
   it("accepts only canonical commit PR suffixes", () => {
+    const repeated = "Fix status (#102147) (#102147)";
+    const distinct = "Fix status (#120582) (#120584)";
     expect(pullRequestTitleFromCommitSubject("Fix status (#102147)", 102147)).toBe("Fix status");
+    expect(pullRequestTitleFromCommitSubject(repeated, 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject(distinct, 120584)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject("Fix status(#102147)", 102147)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject("Fix status (#0102147)", 102147)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject(" Fix status (#102147)", 102147)).toBeUndefined();
@@ -477,6 +481,12 @@ describe("release-note verification", () => {
         },
       ]),
     ).toEqual([mainCommit.hash]);
+    const backportSubject = "fix(gateway): retain work admission across hosted wizard steps";
+    mainCommit.subject = `${backportSubject} (#120582)`;
+    integratedBackport.subject = `${mainCommit.subject} (#120584)`;
+    expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    const malformed = { ...integratedBackport, subject: `${backportSubject}(#120582) (#120584)` };
+    expect(canonicalMainCommitMatches(malformed, [mainCommit])).toEqual([]);
     expect(canonicalPullRequests([456], [123])).toEqual([123]);
   });
 

@@ -19,11 +19,12 @@ import {
   renderChatModelPicker,
   type ChatModelCatalogState,
   type ChatModelPickerOption,
+  type ChatModelPickerTargetGroup,
 } from "./chat-model-picker.ts";
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
-export type ChatModelControlsProps = {
+type ChatModelControlsProps = {
   activeRunId: string | null;
   agentDefaultModel?: string;
   connected: boolean;
@@ -34,6 +35,7 @@ export type ChatModelControlsProps = {
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionRuntimeId?: string;
+  modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelSwitching: boolean;
   modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
@@ -47,6 +49,7 @@ export type ChatModelControlsProps = {
   thinkingSession?: GatewaySessionRow;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
+  onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
 };
@@ -292,12 +295,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,
+        targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: currentOverride,
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
+        onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
       ${renderChatEffortPicker({

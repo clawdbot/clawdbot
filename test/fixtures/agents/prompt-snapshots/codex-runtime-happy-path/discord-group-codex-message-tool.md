@@ -132,6 +132,12 @@
 
 ```json
 {
+  "additionalContext": {
+    "openclaw_current_sender": {
+      "kind": "untrusted",
+      "value": "{\"sender\":{\"id\":\"424242\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+    }
+  },
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "collaborationMode": {

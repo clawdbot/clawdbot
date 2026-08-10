@@ -51,10 +51,13 @@ describe("sessions tool self-archive", () => {
       }
 
       await vi.waitFor(() => {
-        expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.patch", {
-          key: sessionKey,
-          archived: true,
-          expectedSessionId: sessionId,
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
         });
       });
     });
@@ -90,10 +93,13 @@ describe("sessions tool self-archive", () => {
             archived: true,
           });
           expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
-          expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.patch", {
-            key: sessionKey,
-            label: "Finished research",
-            expectedSessionId: sessionId,
+          expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+            method: "sessions.patch",
+            params: {
+              key: sessionKey,
+              label: "Finished research",
+              expectedSessionId: sessionId,
+            },
           });
         });
       } finally {
@@ -103,10 +109,17 @@ describe("sessions tool self-archive", () => {
       await vi.waitFor(() => {
         expect(callGateway.mock.calls).toEqual([
           [
-            "sessions.patch",
-            { key: sessionKey, label: "Finished research", expectedSessionId: sessionId },
+            {
+              method: "sessions.patch",
+              params: { key: sessionKey, label: "Finished research", expectedSessionId: sessionId },
+            },
           ],
-          ["sessions.patch", { key: sessionKey, archived: true, expectedSessionId: sessionId }],
+          [
+            {
+              method: "sessions.patch",
+              params: { key: sessionKey, archived: true, expectedSessionId: sessionId },
+            },
+          ],
         ]);
       });
     });
@@ -216,10 +229,13 @@ describe("sessions tool self-archive", () => {
       }
 
       await vi.waitFor(() => {
-        expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.patch", {
-          key: sessionKey,
-          archived: true,
-          expectedSessionId: sessionId,
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
         });
       });
     });
@@ -243,7 +259,7 @@ describe("sessions tool self-archive", () => {
             identities: [sessionKey, sessionId],
             assertAllowed: () => {},
           });
-          throw new Error("Cannot archive a session with an active run.");
+          throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
         }
         return { ok: true };
       });
@@ -279,10 +295,13 @@ describe("sessions tool self-archive", () => {
 
       await vi.waitFor(() => {
         expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(callGateway).toHaveBeenLastCalledWith("sessions.patch", {
-          key: sessionKey,
-          archived: true,
-          expectedSessionId: sessionId,
+        expect(callGateway).toHaveBeenLastCalledWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
         });
       });
     });
@@ -308,7 +327,7 @@ describe("sessions tool self-archive", () => {
           });
           competingAdmission.release();
           competingTurnFinished = true;
-          throw new Error("Cannot archive a session with an active run.");
+          throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
         }
         return { ok: true };
       });
@@ -337,10 +356,13 @@ describe("sessions tool self-archive", () => {
 
       await vi.waitFor(() => {
         expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(callGateway).toHaveBeenLastCalledWith("sessions.patch", {
-          key: sessionKey,
-          archived: true,
-          expectedSessionId: sessionId,
+        expect(callGateway).toHaveBeenLastCalledWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
         });
       });
     });
@@ -384,10 +406,13 @@ describe("sessions tool self-archive", () => {
 
       await vi.waitFor(() => {
         expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(callGateway).toHaveBeenLastCalledWith("sessions.patch", {
-          key: sessionKey,
-          archived: true,
-          expectedSessionId: sessionId,
+        expect(callGateway).toHaveBeenLastCalledWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
         });
       });
     });
@@ -409,7 +434,9 @@ describe("sessions tool self-archive", () => {
         const callGateway = vi.fn(async () => {
           attempts += 1;
           if (attempts <= 10) {
-            throw new Error("Cannot archive a session with an active run.");
+            throw Object.assign(new Error("Session did not finish stopping."), {
+              retryable: true,
+            });
           }
           return { ok: true };
         });
@@ -438,10 +465,13 @@ describe("sessions tool self-archive", () => {
 
         await vi.advanceTimersByTimeAsync(30_000);
         expect(callGateway).toHaveBeenCalledTimes(11);
-        expect(callGateway).toHaveBeenLastCalledWith("sessions.patch", {
-          key: sessionKey,
-          archived: true,
-          expectedSessionId: sessionId,
+        expect(callGateway).toHaveBeenLastCalledWith({
+          method: "sessions.patch",
+          params: {
+            key: sessionKey,
+            archived: true,
+            expectedSessionId: sessionId,
+          },
         });
       });
     } finally {
@@ -474,9 +504,12 @@ describe("sessions tool self-archive", () => {
       try {
         await admission.run(async () => {
           await tool.execute("archive-main", { action: "patch", archived: true });
-          expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.patch", {
-            key: sessionKey,
-            archived: true,
+          expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+            method: "sessions.patch",
+            params: {
+              key: sessionKey,
+              archived: true,
+            },
           });
         });
       } finally {

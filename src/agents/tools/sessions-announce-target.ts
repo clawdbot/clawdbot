@@ -5,23 +5,19 @@
  */
 import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
   parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
-async function callGatewayLazy<T = unknown>(opts: CallGatewayOptions): Promise<T> {
-  const { callGateway } = await import("../../gateway/call.js");
-  return callGateway<T>(opts);
-}
-
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
   displayKey: string;
+  callGateway: AgentToolGatewayRequestCaller;
 }): Promise<AnnounceTarget | null> {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
@@ -45,7 +41,9 @@ export async function resolveAnnounceTarget(params: {
   }
 
   try {
-    const list = await callGatewayLazy<{ sessions: Array<GatewaySessionListRow> }>({
+    const list = await params.callGateway<{
+      sessions: Array<GatewaySessionListRow>;
+    }>({
       method: "sessions.list",
       params: {
         includeGlobal: true,

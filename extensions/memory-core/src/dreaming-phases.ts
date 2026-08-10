@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
@@ -623,7 +623,7 @@ async function collectSessionIngestionBatches(params: {
       }
       if (
         // Dreaming learns only from the live corpus. Retained reset/delete
-        // archives stay in the shared corpus for QMD and memory_search.
+        // archives stay in the shared corpus for memory_search.
         entry.artifactKind !== "active-session" ||
         isCheckpointSessionTranscriptPath(entry.sessionFile)
       ) {

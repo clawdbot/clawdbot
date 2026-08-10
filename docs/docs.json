@@ -630,7 +630,7 @@
     },
     {
       "source": "/mac/child-process",
-      "destination": "/platforms/mac/child-process"
+      "destination": "/platforms/mac/bundled-gateway"
     },
     {
       "source": "/mac/dev-setup",
@@ -1247,6 +1247,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
@@ -1260,11 +1261,9 @@
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
-                      "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
-                      "concepts/commitments",
                       "concepts/dreaming"
                     ]
                   },
@@ -1612,7 +1611,6 @@
                     "group": "Runtime",
                     "pages": [
                       "platforms/mac/bundled-gateway",
-                      "platforms/mac/child-process",
                       "platforms/mac/health",
                       "platforms/mac/logging",
                       "platforms/mac/remote",
@@ -1832,7 +1830,6 @@
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
-                      "cli/commitments",
                       "cli/message",
                       "cli/models",
                       "cli/promos",
@@ -1888,6 +1885,7 @@
                     "pages": [
                       "cli/attach",
                       "cli/dashboard",
+                      "cli/resume",
                       "cli/tui"
                     ]
                   },

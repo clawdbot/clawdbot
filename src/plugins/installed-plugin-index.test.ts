@@ -347,6 +347,37 @@ describe("installed plugin index", () => {
     expect(records[0]?.startup.sidecar).toBe(false);
   });
 
+  it("does not read inherited prototype names as install records", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+
+    const records = buildInstalledPluginIndexRecords({
+      candidates: [createPluginCandidate({ rootDir, idHint: "toString" })],
+      registry: {
+        plugins: [
+          {
+            id: "toString",
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "global",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            manifestPath,
+          } as unknown as PluginManifestRecord,
+        ],
+        diagnostics: [],
+      },
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    expect(records[0]?.pluginId).toBe("toString");
+    expect(records[0]?.installRecordHash).toBeUndefined();
+  });
+
   it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
     const rootDir = path.join(makeTempDir(), "workspace");
     writeManifestlessClaudeBundle(rootDir);

@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaModelsConfig,
+  discoverOllamaModelsForSetup,
   findAvailableOllamaModelName,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
   selectAppGuidedOllamaModelId,
 } from "./setup-model-selection.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+      once: true,
+    });
+  });
+}
 
 describe("Ollama onboarding model selection", () => {
   it("preserves catalog order while preferring an explicit latest tag", () => {
@@ -65,5 +79,52 @@ describe("Ollama onboarding model selection", () => {
         { id: "gemma4:e4b", contextWindow: 8_192, supportsTools: true },
       ]),
     ).toBe("qwen3:0.6b");
+  });
+
+  it("aborts pending model discovery with the setup signal", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
+        pendingAbortableResponse(init?.signal),
+      ),
+    );
+
+    const discovery = discoverOllamaModelsForSetup({
+      baseUrl: "http://127.0.0.1:11434",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+
+    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("aborts pending context enrichment with the setup signal", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (requestUrl(input).endsWith("/api/tags")) {
+          return new Response(JSON.stringify({ models: [{ name: "gemma4" }] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return pendingAbortableResponse(init?.signal);
+      }),
+    );
+
+    const discovery = discoverOllamaModelsForSetup({
+      baseUrl: "http://127.0.0.1:11434",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    });
+    controller.abort();
+
+    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
   });
 });

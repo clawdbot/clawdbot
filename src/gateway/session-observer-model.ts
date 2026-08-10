@@ -6,6 +6,7 @@ import {
   type SessionObserverHealth,
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
@@ -24,11 +25,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const HEADLINE_MAX_CHARS = 120;
 const ASSESSMENT_MAX_CHARS = 320;
@@ -38,10 +39,6 @@ const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
-
-export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
-  return sessionKey === "global" ? `agent:${normalizeAgentId(agentId)}:global` : sessionKey;
-}
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
@@ -125,7 +122,7 @@ export function rememberSessionObserverDormantRun(
       // map so a later resume cannot restart below an already broadcast revision.
       rememberSessionObserverRevisionFloor(
         floors,
-        sessionObserverScopeKey(evicted.sessionKey, evicted.agentId),
+        resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
         {
           revision: evicted.revision,
           previousDigest: evicted.previousDigest,
@@ -336,6 +333,13 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
   }
   const sessionId =
     params.source.state?.sessionId ?? params.dormant?.sessionId ?? session?.sessionId;
+  const terminalReply = params.source.event
+    ? normalizeAgentRunTerminalReplySnapshot(params.source.event.data.terminalReply)
+    : params.source.state?.terminalReply;
+  const terminalHeadline =
+    terminalReply?.disposition === "visible"
+      ? sanitizeSessionObserverModelText(terminalReply.text, HEADLINE_MAX_CHARS)
+      : undefined;
   const persistBounded = async (candidate: SessionObserverDigest): Promise<boolean> => {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -373,6 +377,7 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
     agentId,
     runId,
     health,
+    ...(terminalHeadline ? { headline: terminalHeadline } : {}),
     revision: previous.revision + 1,
     updatedAt: params.now(),
   };

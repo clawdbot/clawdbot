@@ -97,6 +97,12 @@ actor PortGuardian {
                 self.logger.warning(message)
                 continue
             }
+            if AppProfile.current.isActive {
+                self.logger.error(
+                    "profile port \(port, privacy: .public) held by \(listener.command, privacy: .public) " +
+                        "(pid \(listener.pid, privacy: .public)); preserving conflict")
+                continue
+            }
             if await Self.terminateProcess(listener.pid) {
                 let message = """
                 port \(port) was held by \(listener.command)

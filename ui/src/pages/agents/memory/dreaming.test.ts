@@ -1,5 +1,6 @@
 // Control UI tests cover dreaming behavior.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
@@ -98,19 +99,6 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
     lookupSchemaPath: vi.fn(async () => null),
     patch: vi.fn(async () => true),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred promise callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {

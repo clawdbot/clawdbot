@@ -127,6 +127,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "resume",
+    description: "Resume a recent Gateway session in the TUI",
+    hasSubcommands: false,
+  },
+  {
     name: "terminal",
     description: "Open a local terminal UI (alias for tui --local)",
     hasSubcommands: false,

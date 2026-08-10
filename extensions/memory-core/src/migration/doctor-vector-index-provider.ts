@@ -132,9 +132,6 @@ async function collectVectorProviderFindings(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): Promise<VectorProviderFinding[]> {
-  if (params.config.memory?.backend === "qmd") {
-    return [];
-  }
   const findings: VectorProviderFinding[] = [];
   for (const agentId of listConfiguredAgentIds(params.config)) {
     // Memory indexes always live in the canonical per-agent state DB; a custom

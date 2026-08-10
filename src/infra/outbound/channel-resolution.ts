@@ -24,13 +24,6 @@ export function normalizeDeliverableOutboundChannel(raw?: string | null): string
   return normalized;
 }
 
-function maybeBootstrapChannelPlugin(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-}): PluginRegistry | undefined {
-  return bootstrapOutboundChannelPlugin(params);
-}
-
 function getOutboundRuntimeRegistry(): PluginRegistry | null {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
 }
@@ -45,7 +38,8 @@ function normalizeOutboundChannelForResolution(params: {
   bootstrapRegistry?: PluginRegistry;
 } {
   const normalized = normalizeMessageChannel(params.channel);
-  const deliverable = normalizeDeliverableOutboundChannel(normalized);
+  const deliverable =
+    normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
   if (deliverable || !normalized || normalized === INTERNAL_MESSAGE_CHANNEL) {
     return { channel: deliverable, didBootstrap: false };
   }
@@ -66,7 +60,7 @@ function normalizeOutboundChannelForResolution(params: {
 
   // External channel ids remain normalized before their runtime is registered.
   // Bootstrap first, then let the runtime candidate lookup confirm sendability.
-  const bootstrapRegistry = maybeBootstrapChannelPlugin({
+  const bootstrapRegistry = bootstrapOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
   });
@@ -235,7 +229,7 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
-  const registry = maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const registry = bootstrapOutboundChannelPlugin({ channel: normalized, cfg: params.cfg });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
     runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, registry),
@@ -270,7 +264,7 @@ export function resolveOutboundChannelMessageAdapter(params: {
   if (current || params.allowBootstrap !== true || didBootstrap) {
     return current;
   }
-  const registry = maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const registry = bootstrapOutboundChannelPlugin({ channel: normalized, cfg: params.cfg });
   return (
     resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
     resolveValueFromRuntimeRegistry(normalized, resolveSendCapableMessageAdapter, registry) ??

@@ -199,14 +199,21 @@ private func transientVerificationErrorResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingSystemAgentChatTests {
-    @Test func `onboarding wires OpenClaw agent handoff`() {
+    @Test func `fresh inference connection finishes onboarding once`() {
         let state = AppState(preview: true)
         state.connectionMode = .local
-        let view = OnboardingView(state: state)
+        var dashboardOpenCount = 0
+        let view = OnboardingView(
+            state: state,
+            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
 
         view.prepareSystemAgentHandoff()
+        view.aiSetup.onConnected?()
 
-        #expect(view.systemAgentState.chat.onAgentHandoff != nil)
+        #expect(view.finishState.didFinish)
+        #expect(dashboardOpenCount == 1)
+        #expect(!view.finish())
+        #expect(dashboardOpenCount == 1)
     }
 
     @Test func `relaunch with pending inference resumes OpenClaw`() async throws {
@@ -242,28 +249,32 @@ struct OnboardingSystemAgentChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
+        var dashboardOpenCount = 0
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" },
+            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
 
         let task = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await task.value
 
-        #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
-        #expect(view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat.messages.map(\.text) == ["ready"])
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "existing-model")
+        #expect(view.finishState.didFinish)
+        #expect(dashboardOpenCount == 1)
+        #expect(!view.finish())
 
         let repeatedResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await repeatedResume.value
 
-        #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "existing-model")
+        #expect(dashboardOpenCount == 1)
         #expect(await methods.snapshot() == [
             "health",
             "openclaw.setup.verify",
-            "openclaw.chat",
         ])
     }
 
@@ -310,10 +321,8 @@ struct OnboardingSystemAgentChatTests {
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
 
         await view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5").value
-        #expect(!view.systemAgentState.isPresented)
 
         var scheduledDeadlines: [(deadline: Date, routeIdentity: String)] = []
         view.aiSetup.onPendingActivationDeadline = { deadline, routeIdentity in
@@ -332,8 +341,6 @@ struct OnboardingSystemAgentChatTests {
 
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat.messages.isEmpty)
         #expect(scheduledDeadlines.count == 1)
         #expect(scheduledDeadlines.first?.routeIdentity == "local")
         if case let .verified(deadline) = OnboardingSystemAgentResumeStore.pendingState(
@@ -354,7 +361,7 @@ struct OnboardingSystemAgentChatTests {
         ])
     }
 
-    @Test func `superseded resume cannot present a replacement route chat`() async throws {
+    @Test func `superseded resume cannot finish a replacement route handoff`() async throws {
         let suiteName = "OnboardingSupersededResumeTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -381,12 +388,13 @@ struct OnboardingSystemAgentChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
+        var dashboardOpenCount = 0
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" },
+            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
 
         let staleResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         for _ in 0..<200 {
@@ -396,8 +404,8 @@ struct OnboardingSystemAgentChatTests {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         view.resetGatewayBoundAIState()
-        // Simulate a newer route reaching connected state without presenting
-        // its chat. The stale wrapper must not infer success from this state.
+        // Simulate a newer route reaching connected state without handing off.
+        // The stale wrapper must not infer success from this state.
         view.aiSetup.onConnected = nil
         view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
@@ -405,8 +413,9 @@ struct OnboardingSystemAgentChatTests {
         await staleResume.value
 
         #expect(view.aiSetup.connected)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat.messages.isEmpty)
+        #expect(!view.finishState.didFinish)
+        #expect(dashboardOpenCount == 0)
+        #expect(await methods.snapshot() == ["health", "openclaw.setup.verify"])
     }
 
     @Test func `cold launch resumes a completed activation immediately`() async throws {
@@ -453,61 +462,35 @@ struct OnboardingSystemAgentChatTests {
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: defaults)
+        var dashboardOpenCount = 0
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { routeIdentity })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+            aiSetupRouteIdentityProvider: { routeIdentity },
+            dashboardOnboardingOpener: { dashboardOpenCount += 1 })
         let aiSetup = view.aiSetup
-        let systemAgentState = view.systemAgentState
 
         let initialProbe = try #require(view.onboardingDidAppear())
         await initialProbe.value
         for _ in 0..<200 {
-            if systemAgentState.chat.messages.map(\.text) == ["ready"] {
+            if aiSetup.connected {
                 break
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
         #expect(aiSetup.connected)
-        #expect(systemAgentState.isPresented)
-        #expect(systemAgentState.chat.messages.map(\.text) == ["ready"])
+        #expect(view.finishState.didFinish)
+        #expect(dashboardOpenCount == 1)
         #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
-            defaults: defaults) == .completed)
+            defaults: defaults) == .none)
         #expect(await methods.snapshot() == [
             "agents.list",
             "health",
             "openclaw.setup.verify",
-            "openclaw.chat",
         ])
-    }
-
-    @Test func `fresh inference presents and starts OpenClaw immediately`() async throws {
-        let session = GatewayTestWebSocketSession(taskFactory: {
-            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                guard sendIndex > 0,
-                      let id = GatewayWebSocketTestSupport.requestID(from: message)
-                else { return }
-                task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
-            })
-        })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let gateway = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-        let state = OnboardingSystemAgentChatState()
-        state.chat = SystemAgentOnboardingChatModel(gateway: gateway)
-
-        let task = state.presentAndStart()
-        await task.value
-
-        #expect(state.isPresented)
-        #expect(state.chat.messages.map(\.text) == ["ready"])
-        #expect(session.snapshotMakeCount() == 1)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
     }
 
     @Test func `typed question sends reply while transcript shows label`() async throws {
@@ -669,25 +652,22 @@ struct OnboardingSystemAgentChatTests {
         #expect(refreshCount == 1)
     }
 
-    @Test func `gateway reset invalidates queued send and restart tasks`() async throws {
+    @Test func `model invalidation cancels queued send and restart tasks`() async throws {
         let session = GatewayTestWebSocketSession()
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
         let chat = SystemAgentOnboardingChatModel(gateway: gateway)
-        let state = OnboardingSystemAgentChatState()
-        state.chat = chat
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
         chat.onAgentHandoff = { _ in handoffCount += 1 }
         chat.input = "route-bound secret"
-        state.isPresented = true
 
         let sendTask = try #require(chat.send())
         let restartTask = try #require(chat.restartAfterError())
-        state.resetForGatewayChange()
+        chat.invalidate()
         await sendTask.value
         await restartTask.value
 
@@ -695,8 +675,6 @@ struct OnboardingSystemAgentChatTests {
         #expect(chat.messages.isEmpty)
         #expect(replyCount == 0)
         #expect(handoffCount == 0)
-        #expect(!state.isPresented)
-        #expect(state.chat !== chat)
         #expect(chat.send() == nil)
         #expect(chat.restartAfterError() == nil)
     }

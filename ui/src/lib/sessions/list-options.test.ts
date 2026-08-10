@@ -38,7 +38,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
 }
 
 describe("session list replacement options", () => {
-  it("preserves derived-title hydration when refreshing after session patches", async () => {
+  it("preserves sidebar metadata hydration when refreshing after session patches", async () => {
     const key = "agent:main:untitled";
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.list") {
@@ -70,6 +70,7 @@ describe("session list replacement options", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
       force: true,
     });
     await sessions.patch(key, { pinned: true }, { agentId: "main" });
@@ -82,6 +83,7 @@ describe("session list replacement options", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
       limit: 50,
     });
     expect(request).toHaveBeenCalledWith("sessions.patch", {
@@ -273,7 +275,7 @@ describe("session list replacement options", () => {
 
   it("defers the canonical refresh for batch patches until the caller asks for it", async () => {
     const keys = ["agent:main:one", "agent:main:two", "agent:main:three"];
-    const request = vi.fn(async (method: string, _params?: unknown) => {
+    const request = vi.fn(async (method: string, _params?: unknown, _options?: unknown) => {
       if (method === "sessions.list") {
         return sessionsResult(
           keys.map((key) => ({ key, kind: "direct" as const, updatedAt: 1 })),
@@ -303,6 +305,9 @@ describe("session list replacement options", () => {
     expect(listCallsBeforeTail).toBe(1);
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(3);
+    for (const call of request.mock.calls.filter(([method]) => method === "sessions.patch")) {
+      expect(call[2]).toEqual({ timeoutMs: 10 * 60_000 });
+    }
     sessions.dispose();
   });
 

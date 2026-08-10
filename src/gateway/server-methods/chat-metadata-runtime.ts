@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotRevision,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -12,8 +13,9 @@ import {
   getPreparedModelCatalogOwnerSnapshot,
   type LoadPreparedModelCatalogParams,
 } from "../../agents/prepared-model-catalog.js";
+import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,6 +42,7 @@ type PreparedAgentFacts = {
   agentId: string;
   owner: PreparedModelRuntimeSnapshot;
   authStore: AuthProfileStore;
+  authStoreRevision: string;
   skillsVersion: number;
 };
 
@@ -85,6 +88,7 @@ type ChatMetadataRuntimeDeps = {
     agentDir?: string,
     inheritedAuthDir?: string,
   ) => AuthProfileStore | undefined;
+  getAuthStoreRevision: (agentDir?: string) => number;
   getSkillsVersion: (workspaceDir?: string) => number;
   getPluginRegistryVersion: () => number;
   buildCommands: (params: {
@@ -150,6 +154,7 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
         version: 1,
         profiles: {},
       },
+      authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
       skillsVersion: deps.getSkillsVersion(workspaceDir),
     };
   });
@@ -177,6 +182,7 @@ function generationFactsMatch(
     return (
       candidate?.agentId === agent.agentId &&
       candidate.owner === agent.owner &&
+      candidate.authStoreRevision === agent.authStoreRevision &&
       candidate.skillsVersion === agent.skillsVersion
     );
   });
@@ -235,6 +241,11 @@ async function defaultBuildProjection(params: {
     snapshot: params.facts.owner.modelCatalog,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
+    // The owner records usable auth at discovery; metadata must share that exact generation fact.
+    preparedRuntimeAuthModes: params.facts.owner.authModes,
+    preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(
+      params.facts.owner,
+    ),
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });
@@ -277,6 +288,7 @@ export function createGatewayChatMetadataRuntime(params: {
     getContext: params.getContext,
     getPreparedOwner: getPreparedModelCatalogOwnerSnapshot,
     getPreparedAuthStore: getPreparedRuntimeAuthProfileStoreSnapshot,
+    getAuthStoreRevision: getRuntimeAuthProfileStoreSnapshotRevision,
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
     buildCommands: defaultBuildCommands,

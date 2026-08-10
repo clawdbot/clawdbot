@@ -10,7 +10,7 @@ import {
   SCHEDULED_HOSTED_WORKFLOWS,
   workflowRunQueryPaths,
   workflowRunPageCount,
-} from "../../scripts/verify-pr-hosted-gates.mjs";
+} from "../../scripts/verify-pr-hosted-gates.mts";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
 const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
@@ -98,18 +98,8 @@ function collectHostedGateEvidence(options: Omit<CollectHostedGateOptions, "nowM
 }
 
 type GitExec = (args: string[], options?: { input?: string }) => string;
-type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0] & {
-  loadCiReuseCandidates?: () => Array<Record<string, unknown>>;
-  execGit?: GitExec;
-};
-type HostedGateEvidence = ReturnType<typeof collectHostedGateEvidenceRaw> & {
-  reusedFromSha?: string;
-  reusedRunId?: unknown;
-  patchIdMatched?: boolean;
-};
-const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw as unknown as (
-  options: CollectHostedGateOptions,
-) => HostedGateEvidence;
+type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0];
+const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw;
 
 function priorSuccessfulCiRun(overrides: Partial<WorkflowRunFixture> = {}): WorkflowRunFixture {
   return {

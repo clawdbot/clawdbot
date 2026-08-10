@@ -32,6 +32,109 @@ import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession loop correctness", () => {
+  it("publishes a queued user message only after its transcript entry is committed", async () => {
+    const { session, sessionManager } = await createTestSession();
+    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    const queuedMessages = (
+      session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
+    ).steeringQueue.messages;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start" | "message_end";
+      message: QueuedMessage;
+    }) => Promise<void>;
+    const observedPersistedMessages: boolean[] = [];
+    session.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "user") {
+        observedPersistedMessages.push(
+          sessionManager
+            .getEntries()
+            .some(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message.role === "user" &&
+                entry.message.timestamp === event.message.timestamp,
+            ),
+        );
+      }
+    });
+    const abortController = new AbortController();
+    const wait = steerActiveSessionWithOptionalDeliveryWait(session, "commit before receipt", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
+      const message = queuedMessages.shift();
+      expect(message).toBeDefined();
+      if (!message) {
+        return;
+      }
+      await handleAgentEvent({ type: "message_start", message });
+      await handleAgentEvent({ type: "message_end", message });
+      await expect(wait).resolves.toBeUndefined();
+
+      expect(observedPersistedMessages).toEqual([true]);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([wait]);
+    }
+  });
+
+  it("rejects a consumed steer immediately when its transcript append fails", async () => {
+    const { session, sessionManager } = await createTestSession();
+    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    const queuedMessages = (
+      session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
+    ).steeringQueue.messages;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start" | "message_end";
+      message: QueuedMessage;
+    }) => Promise<void>;
+    const persistenceError = new Error("SQLite transcript append failed");
+    vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
+      throw persistenceError;
+    });
+    const publishedUserMessages: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "user") {
+        publishedUserMessages.push(event.message);
+      }
+    });
+    let sourceConsumed = false;
+    const abortController = new AbortController();
+    const wait = steerActiveSessionWithOptionalDeliveryWait(session, "retain queued source", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      abortSignal: abortController.signal,
+    }).then(() => {
+      sourceConsumed = true;
+    });
+    const rejection = expect(wait).rejects.toBe(persistenceError);
+
+    try {
+      await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
+      const message = queuedMessages.shift();
+      expect(message).toBeDefined();
+      if (!message) {
+        return;
+      }
+      await handleAgentEvent({ type: "message_start", message });
+      await expect(handleAgentEvent({ type: "message_end", message })).rejects.toBe(
+        persistenceError,
+      );
+      await rejection;
+
+      expect(sourceConsumed).toBe(false);
+      expect(publishedUserMessages).toEqual([]);
+      expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toEqual([]);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([wait, rejection]);
+    }
+  });
+
   it.each([2, 3])(
     "confirms each of %i identical queued messages only after its own transcript commit",
     async (waiterCount) => {

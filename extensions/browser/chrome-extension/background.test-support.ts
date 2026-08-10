@@ -8,7 +8,14 @@ type SocketEvent = { data?: unknown };
 type SocketListener = (event: SocketEvent) => void;
 
 export type RuntimeMessageListener = (
-  message: { type: string; tabId?: number; note?: string; pairingString?: string },
+  message: {
+    type: string;
+    tabId?: number;
+    note?: string;
+    pairingString?: string;
+    accessMode?: string;
+    grant?: boolean;
+  },
   sender: unknown,
   sendResponse: (response: unknown) => void,
 ) => boolean;

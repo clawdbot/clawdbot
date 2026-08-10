@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import { createChannelInboundEnvelopeBuilder } from "./inbound-event/envelope.js";
-import { dispatchChannelInboundTurn } from "./turn/kernel.js";
+import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 
 export const DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS = 300_000;
 const MAX_RESPONSE_CHARS = 500;
@@ -151,7 +151,7 @@ export async function runChannelFeedbackReflection(params: {
     access: { commands: { authorized: false } },
   });
   const responses: string[] = [];
-  await dispatchChannelInboundTurn({
+  await dispatchRoutedChannelTurn({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,

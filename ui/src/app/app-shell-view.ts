@@ -20,7 +20,7 @@ import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
-import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -76,7 +76,7 @@ export interface ShellViewHost {
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
   refreshControlUi(): void;
-  replaceChatWithCurrentSession(): void;
+  replaceChatWithCurrentSession(): boolean;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
@@ -115,6 +115,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     context.config.current.terminalEnabled ?? false,
   );
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
+  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
@@ -124,7 +125,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
-  const settingsTakeover = isSettingsNavigationRoute(activeRoute);
+  // Onboarding renders without any navigation chrome, so the settings takeover
+  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  const settingsTakeover = isSettingsNavigationRoute(activeRoute) && !host.onboardingMode;
   const runtimeConfig = context.runtimeConfig.state;
   const settingsSearchBlocks = findSettingsSearchBlocks({
     query: host.settingsSearchQuery,
@@ -232,6 +235,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       onPairMobile: () => void context.overlays.openDevicePairSetup(),
       onNavigate: (routeId: string, options?: ApplicationNavigationOptions) =>
         host.navigate(routeId, options),
+      onCloseNavDrawer: () => host.closeNavDrawer({ restoreFocus: true }),
       onPreloadRoute: (routeId: string) =>
         isRouteId(routeId) ? context.preload(routeId) : Promise.resolve(),
     });
@@ -457,6 +461,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
+          .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
       <openclaw-terminal-panel
@@ -464,6 +469,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .available=${terminalAvailable}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
+        .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
@@ -476,6 +482,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           password: context.gateway.connection.password,
         })}
       ></openclaw-browser-panel>
+      <openclaw-desktop-panel
+        .client=${gatewayConnected ? gatewaySnapshot.client : null}
+        .available=${desktopPanelAvailable}
+        .suppressed=${settingsTakeover}
+      ></openclaw-desktop-panel>
       <openclaw-custodian-panel
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}

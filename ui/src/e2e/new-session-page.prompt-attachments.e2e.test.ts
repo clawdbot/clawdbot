@@ -128,7 +128,12 @@ suite.define(() => {
       const activeOutputTimestamp = Date.now() + 60_000;
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "sessions.create": { key: sessionKey, runStarted: true },
+          "sessions.create": {
+            key: sessionKey,
+            runId: "visible-initial-run",
+            runStarted: true,
+            messageSeq: 1,
+          },
           "sessions.list": createdSessionListResult(sessionKey),
           "chat.startup": {
             messages: [
@@ -186,7 +191,12 @@ suite.define(() => {
       const message = "keep this first prompt through reconnect";
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "sessions.create": { key: sessionKey, runStarted: true },
+          "sessions.create": {
+            key: sessionKey,
+            runId: "reconnected-initial-run",
+            runStarted: true,
+            messageSeq: 1,
+          },
           "sessions.list": createdSessionListResult(sessionKey),
           "chat.startup": {
             messages: [],
@@ -237,7 +247,6 @@ suite.define(() => {
           fullPage: true,
         });
       }
-
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
     });
@@ -246,38 +255,43 @@ suite.define(() => {
   it("reconciles an image-bearing initial prompt into one user row", async () => {
     await withNewSessionPage(async (page) => {
       const sessionKey = "agent:main:single-image-prompt";
+      const runId = "initial-image-send";
       const message = "testing if dual prompts show";
+      const authoritative = {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "url", url: "/persisted-image.png" },
+          },
+          { type: "text", text: message },
+        ],
+        timestamp: Date.now(),
+        __openclaw: {
+          id: "persisted-image-prompt",
+          idempotencyKey: `${runId}:user`,
+          seq: 1,
+        },
+      };
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.startup"],
         methodResponses: {
           "sessions.create": {
             key: sessionKey,
-            runId: "initial-image-send",
+            runId,
             runStarted: true,
             messageSeq: 1,
           },
           "sessions.list": createdSessionListResult(sessionKey),
           "chat.startup": {
-            messages: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "image",
-                    source: { type: "url", url: "/persisted-image.png" },
-                  },
-                  { type: "text", text: message },
-                ],
-                timestamp: Date.now(),
-                __openclaw: {
-                  id: "persisted-image-prompt",
-                  idempotencyKey: "initial-image-send:user",
-                  seq: 1,
-                },
-              },
-            ],
+            messages: [authoritative],
             sessionId: "single-image-prompt",
-            sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+            sessionInfo: {
+              activeRunIds: [runId],
+              hasActiveRun: true,
+              key: sessionKey,
+              status: "running",
+            },
           },
         },
       });
@@ -301,12 +315,40 @@ suite.define(() => {
       await pollLocatorText(userRow).toContain(message);
       await pollLocatorText(userRow).not.toContain("Attached image");
 
+      const promptBubbles = page.locator(".chat-bubble").filter({ hasText: message });
+      const durableBubble = page.locator('.chat-bubble[data-entry-id="persisted-image-prompt"]');
+      await expect.poll(() => promptBubbles.count()).toBe(1);
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [runId],
+        clientRunId: runId,
+        hasActiveRun: true,
+        message: authoritative,
+        messageId: "persisted-image-prompt",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: sessionKey,
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey,
+      });
+      await durableBubble.waitFor({ timeout: 10_000 });
+      await expect.poll(() => durableBubble.count()).toBe(1);
+      await expect.poll(() => promptBubbles.count()).toBe(1);
+      await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
+      await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
+
       await gateway.resolveDeferred("chat.startup");
 
       await expect.poll(() => userRow.count()).toBe(1);
       await expect.poll(() => userImage.count()).toBe(1);
       await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
       await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
+      await expect.poll(() => promptBubbles.count()).toBe(1);
+      await expect.poll(() => durableBubble.count()).toBe(1);
       await pollLocatorText(userRow).toContain(message);
       await pollLocatorText(userRow).not.toContain("Attached image");
     });

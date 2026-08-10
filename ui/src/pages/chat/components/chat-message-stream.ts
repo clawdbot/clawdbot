@@ -45,6 +45,7 @@ type StreamMessageOptions = Pick<
 export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
+  showAssistantAvatar?: boolean;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
   startupPhase?: ChatRunStartupPhase;
@@ -125,11 +126,12 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
-  // arrives with the first stream part.
+  // arrives with the first stream part unless the presentation opts out.
   const workingOnly = parts.every((part) => part.kind !== "stream");
-  const avatar = workingOnly
-    ? nothing
-    : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
+  const avatar =
+    workingOnly || opts.showAssistantAvatar === false
+      ? nothing
+      : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`

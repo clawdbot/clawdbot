@@ -13,8 +13,20 @@ import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../p
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
+const MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG = 64;
 let bootstrapRegistryGeneration: string | undefined;
 const bootstrapRegistriesByConfig = new Map<string, Map<string, PluginRegistry | null>>();
+
+function cacheBootstrapOutcome(
+  registries: Map<string, PluginRegistry | null>,
+  channel: string,
+  outcome: PluginRegistry | null,
+): void {
+  // Reinsert every outcome, including null, so reads and writes share LRU ordering.
+  registries.delete(channel);
+  registries.set(channel, outcome);
+  pruneMapToMaxSize(registries, MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG);
+}
 
 function resolveBootstrapRegistryGeneration(): string {
   return String(getActivePluginRegistryVersion());
@@ -84,8 +96,10 @@ export function bootstrapOutboundChannelPlugin(params: {
   }
 
   const registries = resolveBootstrapRegistries(cfg);
-  if (registries.has(params.channel)) {
-    return resolveSendCapableRegistry(registries.get(params.channel), params.channel);
+  const cachedRegistry = registries.get(params.channel);
+  if (cachedRegistry !== undefined) {
+    cacheBootstrapOutcome(registries, params.channel, cachedRegistry);
+    return resolveSendCapableRegistry(cachedRegistry, params.channel);
   }
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
@@ -101,6 +115,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   const activatedConfig =
     withActivatedPluginIds({ config: autoEnabled.config, pluginIds }) ?? autoEnabled.config;
   const activatedSourceConfig = withActivatedPluginIds({ config: cfg, pluginIds }) ?? cfg;
+  let sendRegistry: PluginRegistry | undefined;
   try {
     const registry = loadPluginRegistryHandle({
       config: activatedConfig,
@@ -112,12 +127,10 @@ export function bootstrapOutboundChannelPlugin(params: {
         allowGatewaySubagentBinding: true,
       },
     });
-    const sendRegistry = resolveSendCapableRegistry(registry, params.channel);
-    registries.set(params.channel, sendRegistry ?? null);
-    return sendRegistry;
+    sendRegistry = resolveSendCapableRegistry(registry, params.channel);
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
-    registries.set(params.channel, null);
-    return undefined;
   }
+  cacheBootstrapOutcome(registries, params.channel, sendRegistry ?? null);
+  return sendRegistry;
 }

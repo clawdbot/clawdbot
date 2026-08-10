@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
-import { resolvePnpmRunner } from "../pnpm-runner.mjs";
+import { resolvePnpmRunner } from "../pnpm-runner.mts";
 import { stageCodexAppServerProtocolArtifacts } from "./codex-app-server-protocol-artifacts.js";
 
 const PROTOCOL_SCHEMA_RELATIVE_PATH = "codex-rs/app-server-protocol/schema";
@@ -66,9 +66,9 @@ export function resolveCodexProtocolPnpmCommand(
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
     pnpmArgs: args,
-  });
+  }) as PnpmCommand;
   if (command.env === undefined) {
-    const invocation = { ...command };
+    const invocation: PnpmCommand = { ...command };
     delete invocation.env;
     return invocation;
   }

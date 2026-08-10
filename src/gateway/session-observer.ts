@@ -29,7 +29,6 @@ import {
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  sessionObserverScopeKey,
   synthesizeSessionObserverTerminalDigest,
 } from "./session-observer-model.js";
 import type {
@@ -41,6 +40,7 @@ import type {
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
 import { resolveStoredSessionKeyForAgentStore as resolveStoreKey } from "./session-store-key.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
@@ -76,7 +76,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     const cfg = deps.getConfig();
     const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const canonicalSessionKey = resolveStoreKey({ cfg, agentId, sessionKey });
-    const state = states.get(sessionObserverScopeKey(canonicalSessionKey, agentId));
+    const state = states.get(resolveSessionSubscriptionKey(canonicalSessionKey, agentId));
     if (state) {
       flushSessionActivityAssistantNote(state);
       return {
@@ -105,7 +105,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const runStillCurrent = (runId: string, sessionKey: string, agentId: string) => () =>
     !disposed &&
     !supersededRuns.has(runId) &&
-    (states.get(sessionObserverScopeKey(sessionKey, agentId))?.runId ?? runId) === runId;
+    (states.get(resolveSessionSubscriptionKey(sessionKey, agentId))?.runId ?? runId) === runId;
+
   const persistAcceptedDigest = createSessionObserverDigestPersister({
     now,
     persistDigest,
@@ -132,7 +133,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         "session.observer",
         digest,
         audience.recipients(state.sessionKey, state.agentId),
-        { dropIfSlow: true },
+        audience.deliveryOptions(state.sessionKey, state.agentId),
       );
       void persistAcceptedDigest(state, digest, false, "preamble");
     },
@@ -174,9 +175,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           "session.observer",
           digest,
           audience.recipients(digest.sessionKey, agentId),
-          {
-            dropIfSlow: true,
-          },
+          audience.deliveryOptions(digest.sessionKey, agentId),
         );
       }
     } catch (error) {
@@ -185,7 +184,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   }
 
   const stateIsTracked = (state: SessionObserverState): boolean =>
-    states.get(sessionObserverScopeKey(state.sessionKey, state.agentId)) === state;
+    states.get(resolveSessionSubscriptionKey(state.sessionKey, state.agentId)) === state;
 
   const dropState = (state: SessionObserverState) => {
     preamblePublisher.clear(state);
@@ -193,9 +192,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
     }
     modelSlots.invalidateRequest(state);
-    const scopeKey = sessionObserverScopeKey(state.sessionKey, state.agentId);
     if (stateIsTracked(state)) {
-      states.delete(scopeKey);
+      states.delete(resolveSessionSubscriptionKey(state.sessionKey, state.agentId));
     }
   };
 
@@ -417,7 +415,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         const recipients = criticalTransition
           ? audience.criticalRecipients(state.sessionKey, state.agentId)
           : audience.recipients(state.sessionKey, state.agentId);
-        deps.broadcastToConnIds("session.observer", digest, recipients, { dropIfSlow: true });
+        deps.broadcastToConnIds(
+          "session.observer",
+          digest,
+          recipients,
+          audience.deliveryOptions(state.sessionKey, state.agentId),
+        );
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);
@@ -479,7 +482,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (!agentId || !audience.has(sessionKey, agentId)) {
       return undefined;
     }
-    const scopeKey = sessionObserverScopeKey(sessionKey, agentId);
+    const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
     const cfg = deps.getConfig();
     if (cfg.gateway?.controlUi?.sessionObserver === false) {
       return undefined;
@@ -592,7 +595,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
-    const scopeKey = sessionObserverScopeKey(sessionKey, agentId);
+    const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
     if (terminal && audience.recipients(sessionKey, agentId).size === 0) {
       void synthesizeTerminalDigest({ event, state: states.get(scopeKey) });
       dormantRuns.delete(event.runId);
@@ -621,7 +624,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       const superseded = [...dormantRuns.values()]
         .filter(
           (run) =>
-            sessionObserverScopeKey(run.sessionKey, run.agentId) === scopeKey &&
+            resolveSessionSubscriptionKey(run.sessionKey, run.agentId) === scopeKey &&
             run.runId !== event.runId,
         )
         .toSorted(

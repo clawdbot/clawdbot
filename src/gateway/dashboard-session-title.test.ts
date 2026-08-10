@@ -13,6 +13,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry })
 
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ChatAttachment } from "./chat-attachments.js";
 import {
   generateDashboardSessionTitle,
   maybeGenerateDashboardSessionTitle,
@@ -261,6 +262,85 @@ describe("generateDashboardSessionTitle", () => {
     ).resolves.toBe("Worktree Naming Improvements");
   });
 
+  it("combines an ordinary command with large pasted text within the title-source cap", async () => {
+    const pastedText = `Release details ${"x".repeat(2_000)}`;
+
+    await generateDashboardSessionTitle({
+      cfg,
+      agentId: "main",
+      userMessage: "Review this rollout [[reply_to_current]]",
+      attachments: [textAttachment("Deployment context"), textAttachment(pastedText)],
+    });
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+      `Review this rollout\nDeployment context\n${pastedText}`.slice(0, 1_000),
+    );
+  });
+
+  it.each([
+    ["attachment-only", "", "Pasted migration checklist"],
+    ["slash command with attachment", "/status", "Pasted incident report"],
+  ])("titles an %s turn from its text attachment", async (_name, userMessage, text) => {
+    await generateDashboardSessionTitle({
+      cfg,
+      agentId: "main",
+      userMessage,
+      attachments: [textAttachment(text)],
+    });
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(text);
+  });
+
+  it.each([
+    ["malformed base64", { mimeType: "text/plain", content: "%%%" }],
+    [
+      "invalid UTF-8",
+      { mimeType: "text/plain", content: Buffer.from([0xc3, 0x28]).toString("base64") },
+    ],
+    ["non-text", { mimeType: "image/png", content: Buffer.from("not text").toString("base64") }],
+  ] satisfies Array<[string, ChatAttachment]>)(
+    "ignores %s attachments",
+    async (_name, attachment) => {
+      await expect(
+        generateDashboardSessionTitle({
+          cfg,
+          agentId: "main",
+          userMessage: "",
+          attachments: [attachment],
+        }),
+      ).resolves.toBeNull();
+      expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a long text attachment with malformed trailing base64", async () => {
+    const valid = Buffer.from("a".repeat(4_000)).toString("base64");
+    const malformed = `${valid.slice(0, -4)}AAA%`;
+
+    await expect(
+      generateDashboardSessionTitle({
+        cfg,
+        agentId: "main",
+        userMessage: "",
+        attachments: [{ mimeType: "text/plain", content: malformed }],
+      }),
+    ).resolves.toBeNull();
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+  });
+
+  it("keeps attachment-derived title input on a UTF-16 boundary", async () => {
+    await generateDashboardSessionTitle({
+      cfg,
+      agentId: "main",
+      userMessage: "",
+      attachments: [textAttachment(`${"a".repeat(999)}🚀tail`)],
+    });
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+      "a".repeat(999),
+    );
+  });
+
   it("uses a requested session model as the primary fallback", async () => {
     await generateDashboardSessionTitle({
       cfg,
@@ -288,3 +368,11 @@ describe("generateDashboardSessionTitle", () => {
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
   });
 });
+
+function textAttachment(text: string): ChatAttachment {
+  return {
+    type: "file",
+    mimeType: "text/plain",
+    content: Buffer.from(text).toString("base64"),
+  };
+}

@@ -1,7 +1,7 @@
 // Inventory of doctor compatibility migrations that outlive deprecated runtime/config paths.
-export type DoctorDeprecationCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
+type DoctorDeprecationCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
 
-export type DoctorDeprecationCompatOwner =
+type DoctorDeprecationCompatOwner =
   | "agent-runtime"
   | "audio"
   | "browser"
@@ -13,9 +13,9 @@ export type DoctorDeprecationCompatOwner =
   | "tools"
   | "tts";
 
-export type DoctorDeprecationCompatRecord<Code extends string = string> = {
+export type DoctorDeprecationCompatRecord = {
   /** Stable inventory code for a doctor compatibility surface. */
-  code: Code;
+  code: string;
   /** Current lifecycle state for the compatibility surface. */
   status: DoctorDeprecationCompatStatus;
   /** Area that owns the deprecated input or migration. */
@@ -35,25 +35,54 @@ export type DoctorDeprecationCompatRecord<Code extends string = string> = {
 
 const DEFAULT_TESTS = ["src/commands/doctor/shared/legacy-config-migrate.test.ts"] as const;
 
-function deprecatedCompatRecord<Code extends string>(
-  code: Code,
-  record: Omit<
-    DoctorDeprecationCompatRecord<Code>,
-    "code" | "introduced" | "deprecated" | "warningStarts" | "removeAfter" | "status" | "tests"
-  > &
-    Required<Pick<DoctorDeprecationCompatRecord<Code>, "introduced" | "removeAfter">> &
-    Partial<
-      Pick<DoctorDeprecationCompatRecord<Code>, "deprecated" | "status" | "warningStarts" | "tests">
-    >,
-): DoctorDeprecationCompatRecord<Code> {
+type CompatRecordInput = {
+  owner: DoctorDeprecationCompatOwner;
+  introduced: string;
+  deprecated?: string;
+  warningStarts?: string;
+  removeAfter: string;
+  source: string;
+  migration: string;
+  replacement: string;
+  docsPath: string;
+  tests?: readonly string[];
+  notes?: string;
+};
+
+function compatRecord(
+  code: string,
+  status: DoctorDeprecationCompatStatus,
+  record: CompatRecordInput,
+): DoctorDeprecationCompatRecord {
   return {
     code,
-    status: "deprecated",
+    status,
     deprecated: record.introduced,
     warningStarts: record.introduced,
     tests: DEFAULT_TESTS,
     ...record,
   };
+}
+
+function deprecatedCompatRecord(
+  code: string,
+  record: CompatRecordInput,
+): DoctorDeprecationCompatRecord {
+  return compatRecord(code, "deprecated", record);
+}
+
+function removalPendingCompatRecord(
+  code: string,
+  record: CompatRecordInput,
+): DoctorDeprecationCompatRecord {
+  return compatRecord(code, "removal-pending", record);
+}
+
+function removedCompatRecord(
+  code: string,
+  record: CompatRecordInput,
+): DoctorDeprecationCompatRecord {
+  return compatRecord(code, "removed", record);
 }
 
 // Doctor migrations and repair shims can outlive the runtime/config compatibility
@@ -120,7 +149,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-07-19",
     source: "systemAgent; crestodian; marketplaces; cli.banner.taglineMode; commitments",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.ts",
-    replacement: "built-in rescue, marketplace, banner, and disabled commitments behavior",
+    replacement: "built-in rescue, marketplace, banner, and retired commitments behavior",
     docsPath: "/gateway/doctor",
     tests: [
       "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts",
@@ -236,8 +265,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/channels/channel-routing",
     tests: ["src/config/dead-config-keys.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-agent-llm-timeout", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-agent-llm-timeout", {
     owner: "agent-runtime",
     introduced: "2026-04-27",
     removeAfter: "2026-07-26",
@@ -248,8 +276,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "The old agent-level idle timeout knob was collapsed into provider request timeout handling, bounded by the agent/run timeout ceiling.",
   }),
-  deprecatedCompatRecord("doctor-agent-runtime-embedded-harness", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-agent-runtime-embedded-harness", {
     owner: "agent-runtime",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -262,8 +289,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "Whole-agent runtime pins are retired; doctor preserves intent only when it can move the value to provider/model runtime policy.",
   }),
-  deprecatedCompatRecord("doctor-agent-embedded-pi-config", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-agent-embedded-pi-config", {
     owner: "agent-runtime",
     introduced: "2026-05-21",
     removeAfter: "2026-07-26",
@@ -274,8 +300,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "Runtime code no longer reads the legacy key; doctor keeps this migration only to preserve shipped configs during upgrade.",
   }),
-  deprecatedCompatRecord("doctor-agent-sandbox-persession", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-agent-sandbox-persession", {
     owner: "agent-runtime",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -302,8 +327,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "agents.defaults.typingMode or agents.list[].typingMode",
     docsPath: "/concepts/typing-indicators",
   }),
-  deprecatedCompatRecord("doctor-top-level-heartbeat", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-top-level-heartbeat", {
     owner: "config",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -312,8 +336,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "agents.defaults.heartbeat and channels.defaults.heartbeat",
     docsPath: "/automation",
   }),
-  deprecatedCompatRecord("doctor-mcp-server-type-alias", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-mcp-server-type-alias", {
     owner: "config",
     introduced: "2026-04-27",
     removeAfter: "2026-07-26",
@@ -324,8 +347,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "OpenClaw stores transport names; CLI backends receive their own type fields through runtime adapters.",
   }),
-  deprecatedCompatRecord("doctor-gateway-bind-host-aliases", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-gateway-bind-host-aliases", {
     owner: "gateway",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -334,8 +356,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "gateway.bind.mode values such as lan, loopback, custom, tailnet, and auto",
     docsPath: "/gateway/configuration",
   }),
-  deprecatedCompatRecord("doctor-audio-transcription-command", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-audio-transcription-command", {
     owner: "audio",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -344,8 +365,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "capability-tagged tools.media.models",
     docsPath: "/tools/media-overview",
   }),
-  deprecatedCompatRecord("doctor-channel-thread-binding-ttl", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-channel-thread-binding-ttl", {
     owner: "channel",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -354,8 +374,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "threadBindings.idleHours",
     docsPath: "/channels/channel-routing",
   }),
-  deprecatedCompatRecord("doctor-message-queue-steering-modes", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-message-queue-steering-modes", {
     owner: "config",
     introduced: "2026-05-04",
     removeAfter: "2026-07-26",
@@ -364,8 +383,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "steer, followup, collect, or interrupt queue modes",
     docsPath: "/concepts/queue",
   }),
-  deprecatedCompatRecord("doctor-channel-dm-aliases", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-channel-dm-aliases", {
     owner: "channel",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -375,8 +393,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/channels/channel-routing",
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-channel-streaming-aliases", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-channel-streaming-aliases", {
     owner: "channel",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -388,8 +405,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "Runtime reads are nested-only; doctor keeps this migration to move shipped configs during upgrade.",
   }),
-  deprecatedCompatRecord("doctor-webchat-channel-config", {
-    status: "removed",
+  removedCompatRecord("doctor-webchat-channel-config", {
     owner: "channel",
     introduced: "2026-05-18",
     deprecated: "2026-05-31",
@@ -412,8 +428,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-tts-provider-aliases", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-tts-provider-aliases", {
     owner: "tts",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -422,8 +437,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "tts.providers.<provider> and microsoft instead of edge",
     docsPath: "/tools/tts",
   }),
-  deprecatedCompatRecord("doctor-tts-enabled-auto-mode", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-tts-enabled-auto-mode", {
     owner: "tts",
     introduced: "2026-04-29",
     removeAfter: "2026-07-26",
@@ -435,8 +449,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-tts-speaker-selection-fields", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-tts-speaker-selection-fields", {
     owner: "tts",
     introduced: "2026-05-28",
     removeAfter: "2026-07-26",
@@ -446,8 +459,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-plugin-install-config-ledger", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-plugin-install-config-ledger", {
     owner: "plugin",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -462,8 +474,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
       "src/commands/doctor/shared/plugin-registry-migration.test.ts",
     ],
   }),
-  deprecatedCompatRecord("doctor-bundled-plugin-load-paths", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-bundled-plugin-load-paths", {
     owner: "plugin",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -475,8 +486,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/cli/plugins#registry",
     tests: ["src/commands/doctor/shared/bundled-plugin-load-paths.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-bundled-provider-discovery-allowlist", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-bundled-provider-discovery-allowlist", {
     owner: "plugin",
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
@@ -502,46 +512,42 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "The core bootstrap migration must remain available when the external Codex plugin is not installed yet.",
   }),
-  deprecatedCompatRecord("doctor-web-search-plugin-config", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-web-search-plugin-config", {
     owner: "provider",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
     source: "tools.web.search.apiKey and tools.web.search.<provider>",
-    migration: "src/commands/doctor/shared/legacy-web-search-migrate.ts",
+    migration: "src/commands/doctor/shared/legacy-web-tools-migrate.ts",
     replacement: "plugins.entries.<plugin>.config.webSearch",
     docsPath: "/tools/web",
-    tests: ["src/commands/doctor/shared/legacy-web-search-migrate.test.ts"],
+    tests: ["src/commands/doctor/shared/legacy-web-tools-migrate.test.ts"],
     notes:
       "Provider/plugin ownership can move as bundled providers externalize; verify the current manifest owner before deleting migration support.",
   }),
-  deprecatedCompatRecord("doctor-web-fetch-plugin-config", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-web-fetch-plugin-config", {
     owner: "provider",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
     source: "tools.web.fetch.firecrawl",
-    migration: "src/commands/doctor/shared/legacy-web-fetch-migrate.ts",
+    migration: "src/commands/doctor/shared/legacy-web-tools-migrate.ts",
     replacement: "plugins.entries.firecrawl.config.webFetch",
     docsPath: "/tools/web-fetch",
-    tests: ["src/commands/doctor/shared/legacy-web-fetch-migrate.test.ts"],
+    tests: ["src/commands/doctor/shared/legacy-web-tools-migrate.test.ts"],
   }),
-  deprecatedCompatRecord("doctor-x-search-plugin-config", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-x-search-plugin-config", {
     owner: "provider",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
     source: "tools.web.x_search.apiKey",
-    migration: "src/commands/doctor/shared/legacy-x-search-migrate.ts",
+    migration: "src/commands/doctor/shared/legacy-web-tools-migrate.ts",
     replacement: "plugins.entries.xai.config.webSearch.apiKey",
     docsPath: "/tools/grok-search",
     tests: [
-      "src/commands/doctor/shared/legacy-x-search-migrate.test.ts",
+      "src/commands/doctor/shared/legacy-web-tools-migrate.test.ts",
       "src/commands/doctor/shared/legacy-config-migrate.test.ts",
     ],
   }),
-  deprecatedCompatRecord("doctor-talk-provider-shape", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-talk-provider-shape", {
     owner: "tts",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -550,8 +556,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "talk.providers.<provider>",
     docsPath: "/tools/tts",
   }),
-  deprecatedCompatRecord("doctor-legacy-tools-by-sender", {
-    status: "removal-pending",
+  removalPendingCompatRecord("doctor-legacy-tools-by-sender", {
     owner: "tools",
     introduced: "2026-04-26",
     removeAfter: "2026-07-26",
@@ -563,38 +568,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   }),
 ] as const satisfies readonly DoctorDeprecationCompatRecord[];
 
-export type DoctorDeprecationCompatCode =
-  (typeof DOCTOR_DEPRECATION_COMPAT_RECORDS)[number]["code"];
-export type KnownDoctorDeprecationCompatRecord = DoctorDeprecationCompatRecord;
-
-const doctorDeprecationCompatRecordByCode = new Map<string, KnownDoctorDeprecationCompatRecord>(
-  DOCTOR_DEPRECATION_COMPAT_RECORDS.map((record) => [record.code, record]),
-);
-
 /** List every doctor compatibility record, including removed or still-active entries. */
-export function listDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
+export function listDoctorDeprecationCompatRecords(): readonly DoctorDeprecationCompatRecord[] {
   return DOCTOR_DEPRECATION_COMPAT_RECORDS;
-}
-
-/** List compatibility records currently in a deprecated/removal-pending lifecycle. */
-export function listDeprecatedDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
-  return DOCTOR_DEPRECATION_COMPAT_RECORDS.filter((record) =>
-    (["deprecated", "removal-pending"] as readonly string[]).includes(record.status),
-  );
-}
-
-/** Return true when a string is a known doctor compatibility inventory code. */
-export function isDoctorDeprecationCompatCode(code: string): code is DoctorDeprecationCompatCode {
-  return doctorDeprecationCompatRecordByCode.has(code);
-}
-
-/** Return a doctor compatibility record by code, throwing for impossible stale callers. */
-export function getDoctorDeprecationCompatRecord(
-  code: DoctorDeprecationCompatCode,
-): KnownDoctorDeprecationCompatRecord {
-  const record = doctorDeprecationCompatRecordByCode.get(code);
-  if (!record) {
-    throw new Error(`Unknown doctor deprecation compatibility code: ${code}`);
-  }
-  return record;
 }

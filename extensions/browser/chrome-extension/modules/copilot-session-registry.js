@@ -6,13 +6,23 @@ function emptyState() {
   return { sessions: {}, pendingArchives: [] };
 }
 
+function createStorageWriteQueue() {
+  let tail = Promise.resolve();
+  return (operation) => {
+    const result = tail.then(operation);
+    // Preserve this caller's error while keeping later writes ordered and runnable.
+    tail = result.catch(() => undefined);
+    return result;
+  };
+}
+
 /** Browser-instance-only capabilities bind same-path panel documents to tabs. */
 export class CopilotPanelBindingRegistry {
   constructor(storage = chrome.storage.session) {
     this.storage = storage;
     this.byTab = {};
     this.ready = null;
-    this.writeChain = Promise.resolve();
+    this.enqueueWrite = createStorageWriteQueue();
   }
 
   async initialize() {
@@ -27,19 +37,23 @@ export class CopilotPanelBindingRegistry {
 
   async bind(tabId) {
     await this.initialize();
-    let token;
-    this.writeChain = this.writeChain.then(async () => {
-      const current = this.byTab[String(tabId)];
+    return await this.enqueueWrite(async () => {
+      const key = String(tabId);
+      const current = this.byTab[key];
       if (typeof current === "string" && current) {
-        token = current;
-        return;
+        return current;
       }
-      token = crypto.randomUUID();
-      this.byTab[String(tabId)] = token;
-      await this.storage.set({ [PANEL_BINDINGS_KEY]: this.byTab });
+      const token = crypto.randomUUID();
+      this.byTab[key] = token;
+      try {
+        await this.storage.set({ [PANEL_BINDINGS_KEY]: this.byTab });
+      } catch (error) {
+        // An undurable capability must not make a queued bind skip persistence.
+        delete this.byTab[key];
+        throw error;
+      }
+      return token;
     });
-    await this.writeChain;
-    return token;
   }
 
   async resolve(token) {
@@ -60,11 +74,10 @@ export class CopilotPanelBindingRegistry {
   }
 
   async #mutate(run) {
-    this.writeChain = this.writeChain.then(async () => {
+    await this.enqueueWrite(async () => {
       run();
       await this.storage.set({ [PANEL_BINDINGS_KEY]: this.byTab });
     });
-    await this.writeChain;
   }
 }
 
@@ -75,7 +88,7 @@ export class CopilotSessionRegistry {
     this.state = emptyState();
     this.instanceId = null;
     this.ready = null;
-    this.writeChain = Promise.resolve();
+    this.enqueueWrite = createStorageWriteQueue();
   }
 
   async initialize(existingTabIds) {
@@ -145,7 +158,7 @@ export class CopilotSessionRegistry {
     await this.#mutate(() => {
       const current = this.state.sessions[String(tabId)];
       if (current && current.gatewayScope !== entry.gatewayScope) {
-        // The write chain transfers old-scope custody to the durable archive
+        // The write queue transfers old-scope custody to the durable archive
         // queue before replacement, so concurrent recovery cannot lose it.
         this.#queueArchive(current);
       }
@@ -332,11 +345,10 @@ export class CopilotSessionRegistry {
   }
 
   async #mutate(run) {
-    this.writeChain = this.writeChain.then(async () => {
+    await this.enqueueWrite(async () => {
       run();
       await this.#persist();
     });
-    await this.writeChain;
   }
 
   async #persist() {

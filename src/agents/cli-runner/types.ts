@@ -101,6 +101,10 @@ export type RunCliAgentParams = {
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
   storePath?: string;
+  /** Admission-time lifecycle half of the durable transcript writer fence. */
+  expectedLifecycleRevision?: string;
+  /** Exact admitted run allowed to append to the durable transcript. */
+  expectedWriterRunId?: string;
   /** Canonical user-turn recorder shared with gateway/queue dispatch. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Context engine resolved once by the outer logical-turn owner. */

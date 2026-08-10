@@ -351,9 +351,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       timedOutByRunBudget,
       resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
-      maybeEscalateRateLimitProfileFallback:
-        failoverRetryController.maybeEscalateRateLimitProfileFallback,
-      advanceAttemptAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
+      advanceAuthProfile: failoverRetryController.advanceAuthProfile,
+      advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
       maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
       maybeBackoffBeforeOverloadFailover:
         failoverRetryController.maybeBackoffBeforeOverloadFailover,

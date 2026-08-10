@@ -97,7 +97,7 @@ describe("session observer", () => {
       "session.observer",
       expect.objectContaining({ headline: "Inspecting mobile rows", health: "on-track" }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      expect.objectContaining({ dropIfSlow: true }),
     );
     expect(harness.persistDigest).toHaveBeenCalledOnce();
     harness.observer.dispose();
@@ -108,9 +108,13 @@ describe("session observer", () => {
     vi.setSystemTime(1_000);
     const harness = createHarness({ subscribe: false });
     harness.subscribers.subscribe("conn-main", "agent:main:global")?.commit();
+    harness.subscribers.subscribe("conn-legacy", "global")?.commit();
     harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
+    harness.subscribers.subscribe("conn-work-raw", "global")?.commit();
     declareObserverVisibility(harness.observer, "conn-main");
+    declareObserverVisibility(harness.observer, "conn-legacy");
     declareObserverVisibility(harness.observer, "conn-work");
+    declareObserverVisibility(harness.observer, "conn-work-raw");
 
     harness.observer.handleEvent(
       event({
@@ -136,14 +140,14 @@ describe("session observer", () => {
       [
         "session.observer",
         expect.objectContaining({ agentId: "main", revision: 1, sessionKey: "global" }),
-        new Set(["conn-main"]),
-        { dropIfSlow: true },
+        new Set(["conn-main", "conn-legacy", "conn-work-raw"]),
+        expect.objectContaining({ sessionKeys: ["agent:main:global", "global"] }),
       ],
       [
         "session.observer",
         expect.objectContaining({ agentId: "work", revision: 1, sessionKey: "global" }),
         new Set(["conn-work"]),
-        { dropIfSlow: true },
+        expect.objectContaining({ sessionKeys: ["agent:work:global"] }),
       ],
     ]);
     harness.observer.dispose();

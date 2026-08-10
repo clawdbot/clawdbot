@@ -195,7 +195,8 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
 
 type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => void;
+  onNotFound?: () => boolean | void;
+  notFoundRecoveryReady?: boolean;
 };
 
 class LitRouterOutletController<
@@ -240,10 +241,12 @@ class OpenClawRouterOutlet<
 > extends OpenClawLightDomElement {
   @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
   @property({ attribute: false }) retryContext?: TLoadContext;
-  @property({ attribute: false }) onNotFound?: () => void;
+  @property({ attribute: false }) onNotFound?: () => boolean | void;
+  @property({ attribute: false }) notFoundRecoveryReady?: boolean;
   private readonly outlet = new LitRouterOutletController(this, () => ({
     router: this.router,
     onNotFound: this.onNotFound,
+    notFoundRecoveryReady: this.notFoundRecoveryReady,
   }));
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 

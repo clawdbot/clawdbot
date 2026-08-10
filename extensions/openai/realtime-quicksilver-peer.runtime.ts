@@ -2,7 +2,7 @@
 import { randomInt } from "node:crypto";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import {
-  appendOpenAIQuicksilverPendingAudio,
+  OpenAIQuicksilverPendingAudio,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
 } from "./realtime-quicksilver-audio-buffer.js";
 
@@ -44,6 +44,7 @@ export type OpenAIQuicksilverAudioPeerCallbacks = {
 export type OpenAIQuicksilverAudioPeerContract = {
   createOffer(): Promise<string>;
   applyAnswer(answerSdp: string): Promise<void>;
+  adoptPendingAudio(pendingAudio: OpenAIQuicksilverPendingAudio): void;
   sendAudio(audio: Buffer): void;
   close(): void;
 };
@@ -168,7 +169,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private activeInboundSsrc: number | undefined;
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
-  private pendingAudio: Buffer = Buffer.alloc(0);
+  private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private sequenceNumber = randomInt(0x1_0000);
   private subscribedTracks = new Set<string>();
   private timestamp = randomInt(0x1_0000_0000);
@@ -219,11 +220,25 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     this.attachInboundTrack(this.state.transceiver.receiver.track);
   }
 
+  adoptPendingAudio(pendingAudio: OpenAIQuicksilverPendingAudio): void {
+    if (this.closed) {
+      pendingAudio.clear();
+      return;
+    }
+    // Bridge adoption happens before external sends; preexisting audio would violate
+    // single-owner handoff and must not be silently replaced.
+    if (this.pendingAudio.length > 0) {
+      pendingAudio.clear();
+      throw new Error("GPT-Live WebRTC peer already owns pending audio");
+    }
+    this.pendingAudio = pendingAudio;
+  }
+
   sendAudio(audio: Buffer): void {
     if (this.closed || audio.length < 2) {
       return;
     }
-    this.pendingAudio = appendOpenAIQuicksilverPendingAudio(this.pendingAudio, audio);
+    this.pendingAudio.append(audio);
   }
 
   close(): void {
@@ -235,7 +250,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       clearInterval(this.mediaTimer);
       this.mediaTimer = undefined;
     }
-    this.pendingAudio = Buffer.alloc(0);
+    this.pendingAudio.clear();
     this.resetInboundRtpState();
     this.state.encoder.free();
     this.state.decoder.free();
@@ -394,9 +409,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     if (this.mediaTimer || this.closed) {
       return;
     }
-    this.sendNextAudioFrame();
     this.mediaTimer = setInterval(() => this.sendNextAudioFrame(), OPUS_FRAME_DURATION_MS);
     this.mediaTimer.unref?.();
+    // Publish the timer before the first tick so synchronous error teardown can clear it.
+    this.sendNextAudioFrame();
   }
 
   private sendNextAudioFrame(): void {
@@ -433,11 +449,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     // Relay ticks are framing boundaries: pad partial PCM now, or its tail survives
     // silence and is prepended to a later utterance as stale audio.
     const frame = Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-    const queuedBytes = Math.min(this.pendingAudio.length, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-    if (queuedBytes > 0) {
-      this.pendingAudio.copy(frame, 0, 0, queuedBytes);
-      this.pendingAudio = this.pendingAudio.subarray(queuedBytes);
-    }
+    this.pendingAudio.readInto(frame);
     return frame;
   }
 }

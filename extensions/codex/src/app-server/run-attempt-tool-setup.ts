@@ -249,6 +249,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     workspaceDir: effectiveWorkspace,
     cwd: effectiveCwd ?? effectiveWorkspace,
     sandboxToolPolicy: sandbox?.tools,
+    conversationToolPolicy: params.conversationToolPolicy,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,

@@ -59,6 +59,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real
@@ -84,6 +85,7 @@ jobs:
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
+      frozen_target: ${{ steps.manifest.outputs.frozen_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
@@ -261,6 +263,10 @@ jobs:
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
           head_sha="$(git rev-parse HEAD)"
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
+            echo "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch." >&2
+            exit 1
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # A long-lived PR event can retain an old base SHA. The tested merge
             # commit's first parent is the exact target tree for this run.
@@ -379,6 +385,19 @@ jobs:
             node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"
           fi
 
+      - name: Setup manifest TypeScript runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup manifest pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install manifest dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Build CI manifest
         id: manifest
         env:
@@ -404,7 +423,7 @@ jobs:
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
-          node --input-type=module <<'EOF'
+          node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
@@ -423,7 +442,10 @@ jobs:
           const frozenTarget =
             eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
 
-          const nodeTestPlan = await import("./scripts/lib/ci-node-test-plan.mjs");
+          const nodeTestPlanPath = existsSync("./scripts/lib/ci-node-test-plan.mts")
+            ? "./scripts/lib/ci-node-test-plan.mts"
+            : "./scripts/lib/ci-node-test-plan.mjs";
+          const nodeTestPlan = await import(nodeTestPlanPath);
           const createNodeTestPlan =
             typeof nodeTestPlan.createNodeTestShardBundles === "function"
               ? nodeTestPlan.createNodeTestShardBundles
@@ -435,9 +457,14 @@ jobs:
           }
 
           let changedNodeTestPlan = {};
-          if (existsSync("./scripts/lib/ci-changed-node-test-plan.mjs")) {
+          const changedNodeTestPlanPath = existsSync(
+            "./scripts/lib/ci-changed-node-test-plan.mts",
+          )
+            ? "./scripts/lib/ci-changed-node-test-plan.mts"
+            : "./scripts/lib/ci-changed-node-test-plan.mjs";
+          if (existsSync(changedNodeTestPlanPath)) {
             try {
-              changedNodeTestPlan = await import("./scripts/lib/ci-changed-node-test-plan.mjs");
+              changedNodeTestPlan = await import(changedNodeTestPlanPath);
             } catch (error) {
               console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
             }
@@ -453,7 +480,9 @@ jobs:
             return {};
           };
           const channelContractPlan = await importTargetPlan(
-            "./scripts/lib/channel-contract-test-plan.mjs",
+            existsSync("./scripts/lib/channel-contract-test-plan.mts")
+              ? "./scripts/lib/channel-contract-test-plan.mts"
+              : "./scripts/lib/channel-contract-test-plan.mjs",
           );
           const createChannelContractTestShards =
             typeof channelContractPlan.createChannelContractTestShards === "function"
@@ -469,7 +498,9 @@ jobs:
           };
 
           const pluginContractPlan = await importTargetPlan(
-            "./scripts/lib/plugin-contract-test-plan.mjs",
+            existsSync("./scripts/lib/plugin-contract-test-plan.mts")
+              ? "./scripts/lib/plugin-contract-test-plan.mts"
+              : "./scripts/lib/plugin-contract-test-plan.mjs",
           );
           const createPluginContractTestShards =
             typeof pluginContractPlan.createPluginContractTestShards === "function"
@@ -683,6 +714,7 @@ jobs:
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
+            frozen_target: frozenTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
@@ -887,6 +919,10 @@ jobs:
         run: |
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
+            echo "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch." >&2
+            exit 1
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # Do not execute a helper from the untrusted PR tree before trusted
             # pre-commit configuration is selected.
@@ -1124,7 +1160,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/runtime-postbuild.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
@@ -1305,7 +1341,7 @@ jobs:
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
+              pnpm test:gateway:watch-regression -- --skip-build
           fi
 
           wait_checks
@@ -1314,7 +1350,7 @@ jobs:
           # starve the Gateway readiness deadline used by this regression gate.
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
             start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
+              pnpm test:gateway:watch-regression -- --skip-build
             wait_checks
           fi
 
@@ -1434,14 +1470,22 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Install Playwright Chromium
+      - &install_playwright_chromium
+        name: Install Playwright Chromium
+        env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         run: |
-          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+          if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]; then
             # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
             # Install the managed browser revision pinned by the selected target instead.
             pnpm --dir ui exec playwright install chromium
-          else
+          elif [[ -f scripts/ensure-playwright-chromium.mts ]]; then
+            node --import tsx scripts/ensure-playwright-chromium.mts
+          elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]; then
             node scripts/ensure-playwright-chromium.mjs
+          else
+            echo "Target does not provide a supported Playwright Chromium installer." >&2
+            exit 1
           fi
 
       - name: Lint Control UI window.open usage
@@ -1469,12 +1513,13 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # Chromium, Vite, and the Vitest coordinator share this runner even though
-    # files are serial. Four-vCPU runners let host-side CDP polling starve while
-    # the browser kept making progress, producing rotating timeout failures.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # First-attempt same-repo runs use Blacksmith; manual dispatches, forks, and
+    # same-repo PR retries use GitHub-hosted capacity as an independent fallback.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     # Keep Chromium ownership serial within each independently required shard.
     timeout-minutes: 25
+    env:
+      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -1487,12 +1532,11 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Fork PRs must never read or write repository-global sticky snapshots.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
+          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
-      - name: Install Playwright Chromium
-        run: node scripts/ensure-playwright-chromium.mjs
+      - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
         run: >-
@@ -1504,6 +1548,45 @@ jobs:
       - name: Test browser copilot end-to-end
         if: matrix.shard == 1
         run: pnpm test:e2e:browser-copilot
+
+  checks-ui-e2e-real-gateway:
+    permissions:
+      contents: read
+    name: checks-ui-e2e-real-gateway
+    needs: [preflight]
+    # Compatibility targets pin a frozen Control UI whose e2e expectations track
+    # that release, not current main.
+    if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    # First-attempt same-repo runs use Blacksmith; manual dispatches, forks, and
+    # same-repo PR retries use GitHub-hosted capacity as an independent fallback.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
+          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
+
+      - *install_playwright_chromium
+
+      - name: Test MCP app conformance with a real Gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/mcp-app-conformance.e2e.test.ts
+
+      - name: Test Control UI auth transports with a real Gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/control-ui-auth-transports.e2e.test.ts
 
   control-ui-i18n:
     permissions:
@@ -1670,7 +1753,7 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
-                node scripts/run-oxlint.mjs src ui/src packages extensions
+                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1
               fi
               ;;
             bun-launcher)
@@ -1732,18 +1815,22 @@ jobs:
         run: |
           # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
           unset OPENCLAW_BUILD_PRIVATE_QA
-          node scripts/build-all.mjs qaRuntime
+          pnpm build qaRuntime
           pnpm ui:build
           package_args=(
             --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
-          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+          package_script="scripts/package-openclaw-for-docker.mts"
+          if [[ ! -f "$package_script" ]]; then
+            package_script="scripts/package-openclaw-for-docker.mjs"
+          fi
+          if grep -Fq -- '--allow-unreleased-changelog' "$package_script"; then
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs qaRuntime
+          OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime
 
       - name: Run smoke profile part
         env:
@@ -2062,15 +2149,15 @@ jobs:
         # Frozen release targets can predate the workflow-owned shard runner.
         # Keep its implementation pinned to this workflow revision, while tests
         # continue to run against the checked-out candidate.
-        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}
+        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-workflow
           sparse-checkout: |
-            scripts/ci-run-node-test-shard.mjs
+            scripts/ci-run-node-test-shard.mts
             scripts/lib/direct-run.mjs
-            scripts/lib/local-heavy-check-runtime.mjs
+            scripts/lib/local-heavy-check-runtime.mts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -2093,12 +2180,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          runner="scripts/ci-run-node-test-shard.mjs"
+          runner="scripts/ci-run-node-test-shard.mts"
           if [[ ! -f "$runner" ]]; then
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node "$runner"
+          node --import tsx "$runner"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -2176,7 +2263,7 @@ jobs:
         env:
           # Config/toolchain inputs the tree-OID gate below cannot see; must
           # stay identical to the boundary lane's fingerprint composition.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2200,6 +2287,7 @@ jobs:
 
       - name: Run check shard
         env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
@@ -2219,18 +2307,10 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              if has_package_script "check:script-declarations"; then
-                pnpm check:script-declarations
-              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
-                echo "Current CI targets must provide the check:script-declarations package script." >&2
-                exit 1
-              else
-                echo "[skip] historical target predates the script declaration contract"
-              fi
-              if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-                echo "[skip] historical target skips the wall-clock doctor deprecation registry guard"
-              elif has_package_script "check:doctor-deprecation-registry"; then
+              if has_package_script "check:doctor-deprecation-registry"; then
                 pnpm check:doctor-deprecation-registry
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the wall-clock doctor deprecation registry guard"
               else
                 echo "Current CI targets must provide the check:doctor-deprecation-registry package script." >&2
                 exit 1
@@ -2279,7 +2359,7 @@ jobs:
                 pnpm lint "${lint_args[@]}"
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node scripts/run-oxlint-shards.mjs "${lint_args[@]}"
+                node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -2383,6 +2463,9 @@ jobs:
           - check_name: check-prompt-snapshots
             group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
+          - check_name: check-export-name-collisions
+            group: export-name-collisions
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -2452,7 +2535,7 @@ jobs:
         env:
           # Config/toolchain inputs the tree-OID gate below cannot see; must
           # stay identical to the seed step and check-lint's restore gate.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2490,7 +2573,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -2523,11 +2606,11 @@ jobs:
             packages/plugin-sdk/tsconfig.json \
             packages/llm-core/package.json \
             packages/model-catalog-core/package.json \
-            scripts/check-extension-package-tsc-boundary.mjs \
-            scripts/prepare-extension-package-boundary-artifacts.mjs \
+            scripts/check-extension-package-tsc-boundary.mts \
+            scripts/prepare-extension-package-boundary-artifacts.mts \
             scripts/write-plugin-sdk-entry-dts.ts \
             scripts/lib/plugin-sdk-entrypoints.json \
-            scripts/lib/plugin-sdk-entries.mjs \
+            scripts/lib/plugin-sdk-entries.mts \
             package.json \
             pnpm-lock.yaml
           )
@@ -2568,7 +2651,11 @@ jobs:
 
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
-              node scripts/run-additional-boundary-checks.mjs
+              boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)
+              if [[ ! -f scripts/run-additional-boundary-checks.mts ]]; then
+                boundary_runner=(node scripts/run-additional-boundary-checks.mjs)
+              fi
+              "${boundary_runner[@]}"
               ;;
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
@@ -2582,26 +2669,29 @@ jobs:
                 run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               fi
               ;;
+            export-name-collisions)
+              if [ ! -f scripts/check-export-name-collisions.mts ]; then
+                echo "[skip] export name collision check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:export-name-collisions"] ? 0 : 1);'; then
+                echo "[skip] export name collision script is not present in package.json"
+              else
+                run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions
+              fi
+              ;;
             session-accessor-boundary)
-              if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
-                echo "[skip] session accessor boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
                 echo "[skip] session accessor boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
-              if [ ! -f scripts/check-sqlite-transaction-boundary.mjs ]; then
-                echo "[skip] SQLite transaction boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
                 echo "[skip] SQLite transaction boundary script is not present in package.json"
               else
                 run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
               fi
               ;;
             session-transcript-reader-boundary)
-              if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
-                echo "[skip] session transcript reader boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
@@ -2650,7 +2740,7 @@ jobs:
         shell: bash
         env:
           # Must stay identical to the restore gates above.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -3582,6 +3672,7 @@ jobs:
       - native-i18n
       - checks-ui
       - checks-ui-e2e
+      - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-fast-core
       - qa-smoke-ci-profile
@@ -3614,6 +3705,7 @@ jobs:
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
+            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
@@ -3673,6 +3765,7 @@ jobs:
       - build-artifacts
       - checks-ui
       - checks-ui-e2e
+      - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard

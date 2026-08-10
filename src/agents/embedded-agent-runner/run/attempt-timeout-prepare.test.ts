@@ -1,8 +1,7 @@
 // Coverage for attempt timeout ownership and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddedAttemptRunAbort } from "./attempt-abort.js";
+import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
-import { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 
 function createTimeoutHarness(options?: { pendingCompaction?: boolean; timeoutMs?: number }) {
   const state = {
@@ -67,26 +66,21 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     harness.timeout.clearTimers();
   });
 
-  it("preserves the built-in deadline reason through a late prompt handoff", async () => {
-    const sessionLockController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
-      lockOptions: { sessionFile: "agent:main:main" },
-    });
+  it("propagates the built-in deadline reason", async () => {
     const runAbortController = new AbortController();
     const abortRun = createEmbeddedAttemptRunAbort({
       abortActiveSession: vi.fn(async () => {}),
       activeSession: { abortCompaction: vi.fn(), isCompacting: false },
       attempt: {
-        runId: "run-deadline-handoff",
+        runId: "run-deadline",
         sessionFile: "agent:main:main",
-        sessionId: "session-deadline-handoff",
+        sessionId: "session-deadline",
         sessionKey: "agent:main:main",
       },
       getQueueHandle: () => undefined,
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController,
       state: {
         markAborted: vi.fn(),
         markTimedOut: vi.fn(),
@@ -96,8 +90,8 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     });
     const timeout = prepareEmbeddedAttemptTimeout({
       attempt: {
-        runId: "run-deadline-handoff",
-        sessionId: "session-deadline-handoff",
+        runId: "run-deadline",
+        sessionId: "session-deadline",
         timeoutMs: 100,
       },
       activeSession: { isCompacting: false, isStreaming: false },
@@ -111,13 +105,10 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     await vi.advanceTimersByTimeAsync(100);
 
-    const timeoutReason = runAbortController.signal.reason;
-    expect(timeoutReason).toEqual(
+    expect(runAbortController.signal.reason).toEqual(
       expect.objectContaining({ name: "TimeoutError", message: "request timed out" }),
     );
-    await expect(sessionLockController.releaseForPrompt()).rejects.toBe(timeoutReason);
     timeout.clearTimers();
-    await sessionLockController.dispose();
   });
 
   it("grants one compaction grace window before aborting", async () => {

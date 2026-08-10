@@ -152,6 +152,35 @@ private actor GatewayEndpointRemoteEnsureGate {
 }
 
 struct GatewayEndpointStoreTests {
+    @MainActor
+    @Test func `live local source uses canonical default and named profile ports`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8)
+            .write(to: URL(fileURLWithPath: configPath))
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        try await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_GATEWAY_PORT": nil,
+            ],
+            defaults: ["gatewayPort": nil])
+        {
+            let state = AppState(preview: true)
+            let base = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                profile: AppProfile(environment: [:]),
+                beforeConfigRead: {})
+            let workProfile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+            let work = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                profile: workProfile,
+                beforeConfigRead: {})
+            #expect(base.localPort == 18789)
+            #expect(work.localPort == workProfile.defaultGatewayPort)
+        }
+    }
+
     private func makeLaunchAgentSnapshot(
         env: [String: String] = [:],
         token: String? = nil,
@@ -238,6 +267,7 @@ struct GatewayEndpointStoreTests {
             token: token,
             password: { nil },
             localPort: { 18789 },
+            localUnavailableReason: { nil },
             remoteRouteIfRunning: remoteRouteIfRunning,
             remoteRouteIsCurrent: remoteRouteIsCurrent,
             canStartRemoteTunnel: canStartRemoteTunnel,
@@ -262,6 +292,27 @@ struct GatewayEndpointStoreTests {
         }
         let root: [String: Any] = gateway.isEmpty ? [:] : ["gateway": gateway]
         return ConnectionModeResolver.resolve(root: root, defaults: defaults)
+    }
+
+    @Test func `local conflict remains unavailable across refresh until cleared`() async throws {
+        let source = self.source(mode: .local)
+        let store = self.makeStore(sourceSnapshot: { source })
+
+        await store.setLocalUnavailableReason("Profile port conflict")
+        await store.refresh()
+        #expect(await store.currentState() == .unavailable(
+            mode: .local,
+            reason: "Profile port conflict"))
+        await #expect(throws: Error.self) {
+            _ = try await store.requireEndpoint()
+        }
+
+        await store.setLocalUnavailableReason(nil)
+        await store.refresh()
+        guard case .ready = await store.currentState() else {
+            Issue.record("Expected local endpoint to recover after conflict clears")
+            return
+        }
     }
 
     private func dashboardURL(
@@ -554,8 +605,7 @@ extension GatewayEndpointStoreTests {
             let sourceGate = GatewayEndpointSourceGate(source)
             let store = self.makeStore(
                 sourceSnapshot: { await sourceGate.snapshot() },
-                liveSourceIsCurrent: { $0.routingGeneration == 7 },
-            )
+                liveSourceIsCurrent: { $0.routingGeneration == 7 })
 
             _ = try await store.requireEndpoint()
             #expect(await sourceGate.reads() == 1)
@@ -651,8 +701,7 @@ extension GatewayEndpointStoreTests {
             let routeGate = GatewayEndpointRouteLookupGate()
             let store = self.makeStore(
                 sourceSnapshot: { await sourceGate.snapshot() },
-                remoteRouteIfRunning: { await routeGate.lookup() },
-            )
+                remoteRouteIfRunning: { await routeGate.lookup() })
 
             let staleRequest = Task { try await store.requireEndpoint() }
             await routeGate.waitUntilStarted()
@@ -741,8 +790,7 @@ extension GatewayEndpointStoreTests {
             let sourceGate = GatewayEndpointSourceGate(fallbackSource)
             let store = self.makeStore(
                 sourceSnapshot: { await sourceGate.snapshot() },
-                token: { "local-token" },
-            )
+                token: { "local-token" })
             let initialURL = try #require(URL(string: "ws://127.0.0.1:18789"))
 
             await sourceGate.suspendNextRead()
@@ -813,8 +861,7 @@ extension GatewayEndpointStoreTests {
                 sourceSnapshot: { source },
                 remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
-                ensureRemoteTunnel: { await remoteGate.ensure() },
-            )
+                ensureRemoteTunnel: { await remoteGate.ensure() })
 
             let cancelledWaiter = Task { try await store.requireEndpoint() }
             await remoteGate.waitUntilEnsureStarts()
@@ -849,8 +896,7 @@ extension GatewayEndpointStoreTests {
                 sourceSnapshot: { source },
                 remoteRouteIfRunning: { await remoteGate.routeIfRunning() },
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
-                ensureRemoteTunnel: { await remoteGate.ensure() },
-            )
+                ensureRemoteTunnel: { await remoteGate.ensure() })
 
             let first = Task { try await store.requireEndpoint() }
             await remoteGate.waitUntilEnsureStarts()

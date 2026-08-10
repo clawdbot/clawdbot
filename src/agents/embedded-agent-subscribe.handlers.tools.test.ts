@@ -1435,6 +1435,46 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 
+  it("clears a failed multi-file patch after every target is recovered", async () => {
+    const { ctx } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "apply_patch",
+      toolCallId: "tool-patch-failed",
+      args: {
+        input: [
+          " *** Begin Patch",
+          " *** Add File: /tmp/day-1.md",
+          "+new",
+          " *** Add File: /tmp/day-2.md",
+          "+new",
+          " *** End Patch",
+        ].join("\n"),
+      },
+      isError: true,
+      result: { error: "Path escapes sandbox root" },
+    });
+
+    await executeTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-recovery",
+      args: { path: "/tmp/day-2.md", content: "new" },
+      isError: false,
+      result: { ok: true },
+    });
+    expect(ctx.state.lastToolError?.toolName).toBe("apply_patch");
+
+    await executeTool(ctx, {
+      toolName: "edit",
+      toolCallId: "tool-edit-recovery",
+      args: { path: "/tmp/day-1.md", edits: [{ oldText: "old", newText: "new" }] },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
   it("emits a prepared validation diagnostic without model arguments", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =

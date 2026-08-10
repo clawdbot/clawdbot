@@ -6,27 +6,21 @@ import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-core.js";
 export { normalizeMessageChannel } from "./message-channel-core.js";
 
-const listPluginChannelIds = (): string[] => {
-  return listRegisteredChannelPluginIds();
-};
-
 /** Lists built-in and registered plugin channel ids that can receive delivery. */
 export const listDeliverableMessageChannels = (): string[] =>
-  uniqueStrings([...CHANNEL_IDS, ...listPluginChannelIds()]);
-
-const listGatewayMessageChannels = (): string[] => [
-  ...listDeliverableMessageChannels(),
-  INTERNAL_MESSAGE_CHANNEL,
-];
+  uniqueStrings([...CHANNEL_IDS, ...listRegisteredChannelPluginIds()]);
 
 /** Returns whether a normalized id is valid for Gateway routing. */
 export function isGatewayMessageChannel(value: string): boolean {
-  return listGatewayMessageChannels().includes(value);
+  return value === INTERNAL_MESSAGE_CHANNEL || isDeliverableMessageChannel(value);
 }
 
 /** Returns whether a normalized id is a deliverable non-internal channel. */
 export function isDeliverableMessageChannel(value: string): boolean {
-  return listDeliverableMessageChannels().includes(value);
+  return (
+    CHANNEL_IDS.some((channelId) => channelId === value) ||
+    listRegisteredChannelPluginIds().includes(value)
+  );
 }
 
 /** Normalizes and validates a raw channel value for Gateway routing. */

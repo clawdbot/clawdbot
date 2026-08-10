@@ -6,7 +6,6 @@ import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import { NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-import { SessionSendPolicySchema } from "./zod-schema.session.js";
 
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
@@ -96,25 +95,6 @@ export const AccessGroupsSchema = z
   )
   .optional();
 
-const MemoryQmdPathSchema = z.strictObject({
-  path: z.string(),
-  name: z.string().optional(),
-  pattern: z.string().optional(),
-});
-
-const MemoryQmdSessionSchema = z.strictObject({
-  enabled: z.boolean().optional(),
-  exportDir: z.string().optional(),
-  retentionDays: z.number().int().nonnegative().optional(),
-});
-
-const MemoryQmdLimitsSchema = z.strictObject({
-  maxResults: z.number().int().positive().optional(),
-  maxSnippetChars: z.number().int().positive().optional(),
-  maxInjectedChars: z.number().int().positive().optional(),
-  timeoutMs: z.number().int().nonnegative().optional(),
-});
-
 export const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -125,24 +105,10 @@ export const LoggingLevelSchema = z.union([
   z.literal("trace"),
 ]);
 
-const MemoryQmdSchema = z.strictObject({
-  command: z.string().optional(),
-  searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
-  rerank: z.boolean().optional(),
-  searchTool: z.string().trim().min(1).optional(),
-  includeDefaultMemory: z.boolean().optional(),
-  paths: z.array(MemoryQmdPathSchema).optional(),
-  sessions: MemoryQmdSessionSchema.optional(),
-  limits: MemoryQmdLimitsSchema.optional(),
-  scope: SessionSendPolicySchema.optional(),
-});
-
 export const MemorySchema = z
   .strictObject({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     search: MemorySearchSchema,
-    qmd: MemoryQmdSchema.optional(),
   })
   .optional();
 

@@ -8,7 +8,6 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
@@ -28,6 +27,10 @@ import {
   readStringParam,
   ToolInputError,
 } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
@@ -75,7 +78,7 @@ const SessionsHistoryOutputSchema = Type.Union([
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 type ChatHistoryPaginationMetadata = {
   offset?: number;
   nextOffset?: number;
@@ -392,10 +395,21 @@ export function createSessionsHistoryTool(opts?: {
     outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const gatewayCall = opts?.callGateway ?? callGateway;
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const sessionKeyParam = readStringParam(params, "sessionKey", {
         required: true,
       });
+      const limit = readPositiveIntegerParam(params, "limit");
+      const offset = readOffsetParam(params);
+      const messageId = readStringParam(params, "messageId");
+      const sessionId = readStringParam(params, "sessionId");
+      if (offset !== undefined && messageId) {
+        throw new ToolInputError("offset and messageId cannot be used together");
+      }
+      if (sessionId && !messageId) {
+        throw new ToolInputError("sessionId requires messageId");
+      }
+      const includeTools = Boolean(params.includeTools);
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
@@ -409,6 +423,7 @@ export function createSessionsHistoryTool(opts?: {
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
+        callGateway: gatewayCall,
       });
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
@@ -419,6 +434,7 @@ export function createSessionsHistoryTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKeyParam,
+        callGateway: gatewayCall,
       });
       if (!visibleSession.ok) {
         return jsonResult({
@@ -441,6 +457,7 @@ export function createSessionsHistoryTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
+        callGateway: gatewayCall,
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
@@ -450,17 +467,6 @@ export function createSessionsHistoryTool(opts?: {
         });
       }
 
-      const limit = readPositiveIntegerParam(params, "limit");
-      const offset = readOffsetParam(params);
-      const messageId = readStringParam(params, "messageId");
-      const sessionId = readStringParam(params, "sessionId");
-      if (offset !== undefined && messageId) {
-        throw new ToolInputError("offset and messageId cannot be used together");
-      }
-      if (sessionId && !messageId) {
-        throw new ToolInputError("sessionId requires messageId");
-      }
-      const includeTools = Boolean(params.includeTools);
       const result = await runWithScopedSessionAccess({
         cfg,
         expectedSessionId: access.expectedSessionId,

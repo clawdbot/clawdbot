@@ -1,8 +1,8 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   readTranscriptRawDelta,
   replaceTranscriptEventsSync,
+  updateSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -22,7 +23,7 @@ import {
   type SessionMessageEntry,
 } from "./session-manager.js";
 
-const tempPaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function openMarker(marker: string, sessionKey: string, cwd: string): SessionManager {
   const target = parseSqliteSessionFileMarker(marker);
@@ -32,21 +33,9 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
   return SessionManager.open({ ...target, sessionKey }, cwd);
 }
 
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-manager-"));
-  tempPaths.push(dir);
-  return dir;
-}
-
 describe("SessionManager.open", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-session";
     const sessionKey = "agent:main:dashboard:sqlite";
@@ -161,7 +150,7 @@ describe("SessionManager.open", () => {
   });
 
   it("rejects persisted legacy transcripts until doctor or import migrates them", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "legacy-persisted-session";
     const sessionKey = "agent:main:legacy-persisted-session";
@@ -213,7 +202,7 @@ describe("SessionManager.open", () => {
   });
 
   it("skips malformed null rows while opening a persisted transcript", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-malformed-row",
@@ -237,7 +226,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists explicit leaf controls across SQLite reopen", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-leaf-control",
@@ -275,7 +264,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists the current header before a first non-message entry", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-model-change-first",
@@ -307,7 +296,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists a fresh SQLite session header and first message", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-fresh-session",
@@ -340,7 +329,7 @@ describe("SessionManager.open", () => {
   });
 
   it("does not rewrite an existing session row when opening an empty transcript", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-empty-existing-row-target",
@@ -360,7 +349,7 @@ describe("SessionManager.open", () => {
   });
 
   it("does not overwrite a rebound session row when the first append seeds its header", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-stale-appender",
@@ -415,7 +404,7 @@ describe("SessionManager.open", () => {
   });
 
   it("refreshes cwd when switching persisted targets and rejects identity reset", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const firstTarget = {
       agentId: "main",
@@ -450,7 +439,7 @@ describe("SessionManager.open", () => {
   });
 
   it("reloads prompt-time SQLite appends before the attempt resumes", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const target = {
       agentId: "main",
       sessionId: "prompt-reload",
@@ -473,7 +462,7 @@ describe("SessionManager.open", () => {
   });
 
   it("clears side-append mode when switching to a header-only target", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const firstTarget = {
       agentId: "main",
@@ -563,7 +552,7 @@ describe("SessionManager.open", () => {
   });
 
   it("keeps stale appenders valid across a reset while snapshot replacement rotates generation", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-reset-stale-appender",
@@ -626,7 +615,7 @@ describe("SessionManager.open", () => {
   });
 
   it("reuses a pre-persisted user as the canonical SQLite parent", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-runtime-user-parent";
     const sessionKey = "agent:main:dashboard:sqlite-runtime-user-parent";
@@ -739,7 +728,7 @@ describe("SessionManager.open", () => {
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-opaque-header";
     const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
@@ -763,76 +752,8 @@ describe("SessionManager.open", () => {
     expect(loaded.getCwd()).toBe(dir);
   });
 
-  it("persists prompt-released leaf controls through SQLite markers", async () => {
-    const dir = await makeTempDir();
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-prompt-release";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release";
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionFile: marker,
-        sessionId,
-        updatedAt: 10,
-      },
-    );
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "user-message",
-      message: { role: "user", content: "question" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "base-answer",
-      message: buildAssistantMessage("base answer"),
-      parentId: user.messageId,
-    });
-    const sessionManager = openMarker(marker, sessionKey, dir);
-    const sideEntry = {
-      type: "message" as const,
-      id: "side-delivery",
-      parentId: assistant.messageId,
-      timestamp: "2026-06-15T00:00:03.000Z",
-      message: buildAssistantMessage("side delivery"),
-    };
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: sideEntry.id,
-      message: sideEntry.message,
-      parentId: sideEntry.parentId,
-    });
-
-    const mergeResult = sessionManager.mergePromptReleasedSessionEntries([sideEntry], {
-      persistLeaf: true,
-    });
-
-    expect(mergeResult?.publishedEntries).toEqual([{ kind: "id", id: expect.any(String) }]);
-    const records = await loadTranscriptEvents(scope);
-    expect(records.at(-1)).toMatchObject({
-      type: "leaf",
-      parentId: sideEntry.id,
-      targetId: assistant.messageId,
-      appendParentId: sideEntry.id,
-      appendMode: "side",
-    });
-    expect(sessionManager.getAppendParentId()).toBe(sideEntry.id);
-    expect(sessionManager.getAppendMode()).toBe("side");
-    const reopened = openMarker(marker, sessionKey, dir);
-    expect(reopened.getAppendParentId()).toBe(sideEntry.id);
-    expect(reopened.getAppendMode()).toBe("side");
-    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("rejects a prompt-released leaf control after the session target rebounds", async () => {
-    const dir = await makeTempDir();
+  it("rejects persistence after the session target rebounds", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
     const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
@@ -851,19 +772,6 @@ describe("SessionManager.open", () => {
       parentId: user.messageId,
     });
     const sessionManager = openMarker(marker, sessionKey, dir);
-    const sideEntry = {
-      type: "message" as const,
-      id: "rebound-side-delivery",
-      parentId: assistant.messageId,
-      timestamp: "2026-07-26T00:00:00.000Z",
-      message: buildAssistantMessage("side delivery"),
-    };
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: sideEntry.id,
-      message: sideEntry.message,
-      parentId: sideEntry.parentId,
-    });
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
@@ -883,9 +791,6 @@ describe("SessionManager.open", () => {
       });
     }
 
-    expect(() =>
-      sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
-    ).toThrow("leaf control was not persisted");
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
     const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
@@ -904,7 +809,7 @@ describe("SessionManager.open", () => {
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "legacy-sqlite-marker-reload";
     const sessionKey = "agent:main:dashboard:legacy-sqlite-marker-reload";
@@ -955,7 +860,7 @@ describe("SessionManager.open", () => {
   });
 
   it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-branch-source";
     const sessionKey = "agent:main:dashboard:sqlite-branch-source";
@@ -987,7 +892,7 @@ describe("SessionManager.open", () => {
     });
 
     const sessionManager = openMarker(marker, sessionKey, dir);
-    const branchedMarker = sessionManager.createBranchedSession(assistant.messageId);
+    const branchedMarker = await sessionManager.createBranchedSession(assistant.messageId);
     const branchedSessionId = sessionManager.getSessionId();
 
     expect(branchedMarker).toBe(branchedSessionId);
@@ -1019,8 +924,75 @@ describe("SessionManager.open", () => {
     ]);
   });
 
+  it("rejects a queued branch when lifecycle ownership changes before persistence", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-branch-race-source";
+    const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, {
+      lifecycleRevision: "branch-original-revision",
+      sessionFile: marker,
+      sessionId,
+      updatedAt: 10,
+    });
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "branch-race-user",
+      message: { role: "user", content: "question before raced branch" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "branch-race-assistant",
+      message: buildAssistantMessage("answer before raced branch"),
+      parentId: user.messageId,
+    });
+    const sessionManager = openMarker(marker, sessionKey, dir);
+
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionEntry(scope, async () => {
+      markOwnerChangeStarted();
+      await ownerChangeGate;
+      return { lifecycleRevision: "branch-replacement-revision" };
+    });
+    await ownerChangeStarted;
+
+    const branch = sessionManager.createBranchedSession(assistant.messageId);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(branch).rejects.toMatchObject({
+      cause: {
+        code: "session-rebound",
+        expectedSessionId: sessionId,
+        sessionKey,
+      },
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      lifecycleRevision: "branch-replacement-revision",
+      sessionId,
+    });
+    expect(sessionManager.getSessionId()).toBe(sessionId);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+  });
+
   it("persists user turns when a SQLite marker has no external recorder", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-direct-user-session";
     const sessionKey = "agent:main:voice:direct-user";

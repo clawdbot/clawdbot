@@ -12,7 +12,7 @@ vi.mock("../provider-auth-recovery-hint.js", () => ({
     `${LOGIN_HINT_SENTINEL}:${params.provider}`,
 }));
 
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../failover/signal.js";
 import { formatAuthProfileFailureMessage } from "./failure-copy.js";
 
 const PROVIDER = "openai-codex";

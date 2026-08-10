@@ -19,6 +19,7 @@ type TelegramReplyParameters = {
 
 type TelegramThreadReplyParams = {
   message_thread_id?: number;
+  direct_messages_topic_id?: number;
   reply_parameters?: TelegramReplyParameters;
   reply_to_message_id?: number;
   allow_sending_without_reply?: true;
@@ -26,16 +27,21 @@ type TelegramThreadReplyParams = {
 
 export function resolveTelegramSendThreadSpec(params: {
   targetMessageThreadId?: number;
+  targetDirectMessagesTopicId?: number;
   messageThreadId?: number;
   chatType?: "direct" | "group" | "unknown";
 }): TelegramThreadSpec | undefined {
+  if (params.targetDirectMessagesTopicId != null) {
+    return { id: params.targetDirectMessagesTopicId, scope: "direct-messages" };
+  }
   const messageThreadId =
     params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
   if (messageThreadId == null) {
     return undefined;
   }
-  // Telegram supports DM topics; keep direct chat thread IDs and let invalid
-  // topics fail closed instead of sending to the base chat.
+  // Bot-private topics retain the historical dm scope. A :topic: marker on a
+  // group remains forum semantics; channel Direct Messages require their
+  // distinct :direct-topic: marker and never infer from a negative chat id.
   return {
     id: messageThreadId,
     scope: params.chatType === "direct" ? "dm" : "forum",
@@ -51,11 +57,7 @@ export function buildTelegramThreadReplyParams(opts?: {
   replyQuoteEntities?: unknown[];
   useReplyIdAsQuoteSource?: boolean;
 }): TelegramThreadReplyParams {
-  const params: TelegramThreadReplyParams = {};
-  const threadParams = buildTelegramThreadParams(opts?.thread);
-  if (threadParams) {
-    params.message_thread_id = threadParams.message_thread_id;
-  }
+  const params: TelegramThreadReplyParams = { ...buildTelegramThreadParams(opts?.thread) };
 
   const replyToMessageId = normalizeTelegramReplyToMessageId(opts?.replyToMessageId);
   if (replyToMessageId == null) {

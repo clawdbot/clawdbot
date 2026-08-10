@@ -9,4 +9,4 @@
 export {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,
-} from "../channels/streaming.js";
+} from "../channels/streaming-config-readers.js";

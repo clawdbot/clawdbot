@@ -164,6 +164,14 @@ function primeBlockedUpdateConfig(section: "hooks" | "plugins", config: OpenClaw
   });
 }
 
+function primePluginUpdate(
+  config: OpenClawConfig,
+  outcomes: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>["outcomes"] = [],
+  changed = false,
+): void {
+  updateNpmInstalledPlugins.mockResolvedValue({ config, changed, outcomes });
+}
+
 function primeBravePluginRecordUpdate(config: OpenClawConfig) {
   const previousRecords = {
     brave: {
@@ -183,17 +191,17 @@ function primeBravePluginRecordUpdate(config: OpenClawConfig) {
     },
   } as const;
   setInstalledPluginIndexInstallRecords(previousRecords);
-  updateNpmInstalledPlugins.mockResolvedValue({
-    config: {
+  primePluginUpdate(
+    {
       ...config,
       plugins: {
         ...config.plugins,
         installs: nextRecords,
       },
     } as OpenClawConfig,
-    changed: true,
-    outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
-  });
+    [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    true,
+  );
   return { previousRecords, nextRecords };
 }
 
@@ -216,18 +224,14 @@ async function expectSkippedClawHubPluginUpdate(params: {
   } as OpenClawConfig;
   loadConfig.mockReturnValue(config);
   setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-  updateNpmInstalledPlugins.mockResolvedValue({
-    outcomes: [
-      {
-        pluginId: "demo",
-        status: "skipped",
-        code: params.code,
-        message: params.message,
-      },
-    ],
-    changed: false,
-    config,
-  });
+  primePluginUpdate(config, [
+    {
+      pluginId: "demo",
+      status: "skipped",
+      code: params.code,
+      message: params.message,
+    },
+  ]);
   updateNpmInstalledHookPacks.mockResolvedValue({ outcomes: [], changed: false, config });
 
   await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
@@ -292,17 +296,13 @@ describe("plugins cli update", () => {
     });
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [
-        {
-          pluginId: "alpha",
-          status: "updated",
-          message: "Would update alpha: 1.0.0 -> 1.1.0.",
-        },
-      ],
-    });
+    primePluginUpdate(config, [
+      {
+        pluginId: "alpha",
+        status: "updated",
+        message: "Would update alpha: 1.0.0 -> 1.1.0.",
+      },
+    ]);
     const lifecycleLease = await import("../plugins/plugin-lifecycle-lease.js");
     const acquireLease = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
 
@@ -331,11 +331,9 @@ describe("plugins cli update", () => {
   ])("rejects untracked update target $id $args", async ({ id, args }) => {
     const config = {} as OpenClawConfig;
     primeUpdateConfigSnapshot({ config });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [{ pluginId: id, status: "skipped", message: `No install record for "${id}".` }],
-    });
+    primePluginUpdate(config, [
+      { pluginId: id, status: "skipped", message: `No install record for "${id}".` },
+    ]);
 
     await expect(runPluginsCommand(["plugins", "update", id, ...args])).rejects.toThrow(
       "__exit__:1",
@@ -394,11 +392,7 @@ describe("plugins cli update", () => {
         resolvedName: "@acme/demo-hooks",
       },
     });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: cfg,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(cfg);
     updateNpmInstalledHookPacks.mockResolvedValue({
       config: nextConfig,
       changed: true,
@@ -523,17 +517,13 @@ describe("plugins cli update", () => {
       },
     });
     setInstalledPluginIndexInstallRecords(persistedRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          installs: persistedRecords,
-        },
-      } as OpenClawConfig,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate({
+      ...cfg,
+      plugins: {
+        ...cfg.plugins,
+        installs: persistedRecords,
+      },
+    } as OpenClawConfig);
 
     await runPluginsCommand(["plugins", "update", "alpha"]);
 
@@ -588,17 +578,17 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     primeBlockedUpdateConfig("plugins", cfg);
     setInstalledPluginIndexInstallRecords(pluginRecords ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: nextConfig,
-      changed: true,
-      outcomes: [
+    primePluginUpdate(
+      nextConfig,
+      [
         {
           pluginId: "@openclaw/voice-call",
           status: "updated",
           message: "Updated @openclaw/voice-call.",
         },
       ],
-    });
+      true,
+    );
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -634,11 +624,11 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     primeBlockedUpdateConfig("plugins", cfg);
     setInstalledPluginIndexInstallRecords(pluginRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: nextConfig,
-      changed: true,
-      outcomes: [{ pluginId, status: "updated", message: `Updated ${pluginId}.` }],
-    });
+    primePluginUpdate(
+      nextConfig,
+      [{ pluginId, status: "updated", message: `Updated ${pluginId}.` }],
+      true,
+    );
 
     await runPluginsCommand(["plugins", "update", pluginId]);
 
@@ -726,11 +716,11 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     primeUpdateConfigSnapshot({ config: cfg });
     setInstalledPluginIndexInstallRecords(previousRecords);
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: nextConfig,
-      changed: true,
-      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
-    });
+    primePluginUpdate(
+      nextConfig,
+      [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+      true,
+    );
 
     await runPluginsCommand(["plugins", "update", "brave"]);
 
@@ -1159,11 +1149,9 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     primeBlockedUpdateConfig("plugins", cfg);
     setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: cfg,
-      changed: false,
-      outcomes: [{ pluginId: "linked", status: "skipped", message: "Skipping linked." }],
-    });
+    primePluginUpdate(cfg, [
+      { pluginId: "linked", status: "skipped", message: "Skipping linked." },
+    ]);
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -1188,17 +1176,13 @@ describe("plugins cli update", () => {
         installPath: "/tmp/demo",
       },
     });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: cfg,
-      changed: false,
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          message: 'Skipping "demo" (missing ClawHub package metadata).',
-        },
-      ],
-    });
+    primePluginUpdate(cfg, [
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message: 'Skipping "demo" (missing ClawHub package metadata).',
+      },
+    ]);
 
     await runPluginsCommand(["plugins", "update", "demo"]);
 
@@ -1242,11 +1226,7 @@ describe("plugins cli update", () => {
     });
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand([
       "plugins",
@@ -1290,11 +1270,7 @@ describe("plugins cli update", () => {
       config.update = { channel: updateChannel };
       loadConfig.mockReturnValue(config);
       setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-      updateNpmInstalledPlugins.mockResolvedValue({
-        config,
-        changed: false,
-        outcomes: [],
-      });
+      primePluginUpdate(config);
 
       await runPluginsCommand(["plugins", "update", "codex"]);
 
@@ -1316,11 +1292,7 @@ describe("plugins cli update", () => {
     });
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "codex"]);
 
@@ -1341,11 +1313,7 @@ describe("plugins cli update", () => {
     config.update = { channel: "beta" };
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -1364,11 +1332,7 @@ describe("plugins cli update", () => {
     });
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -1387,11 +1351,7 @@ describe("plugins cli update", () => {
     config.update = { channel: "extended-stable" };
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "--all"]);
 
@@ -1411,11 +1371,7 @@ describe("plugins cli update", () => {
     });
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand([
       "plugins",
@@ -1441,11 +1397,7 @@ describe("plugins cli update", () => {
     });
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(config);
 
     await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server", "--dry-run"]);
 
@@ -1494,11 +1446,11 @@ describe("plugins cli update", () => {
       },
     });
     setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha -> 1.1.0" }],
-      changed: true,
-      config: nextRuntimeConfig,
-    });
+    primePluginUpdate(
+      nextRuntimeConfig,
+      [{ pluginId: "alpha", status: "updated", message: "Updated alpha -> 1.1.0" }],
+      true,
+    );
     updateNpmInstalledHookPacks.mockResolvedValue({
       outcomes: [],
       changed: false,
@@ -1562,14 +1514,14 @@ describe("plugins cli update", () => {
     } as OpenClawConfig;
     loadConfig.mockReturnValue(cfg);
     setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      outcomes: [
+    primePluginUpdate(
+      nextConfig,
+      [
         { pluginId: "alpha", status: "updated", message: "Updated alpha -> 1.1.0" },
         { pluginId: "beta", status: "error", message: "Failed to update beta: registry timeout" },
       ],
-      changed: true,
-      config: nextConfig,
-    });
+      true,
+    );
     updateNpmInstalledHookPacks.mockResolvedValue({
       outcomes: [],
       changed: false,
@@ -1626,11 +1578,7 @@ describe("plugins cli update", () => {
         resolvedName: "@acme/demo-hooks",
       },
     });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: cfg,
-      changed: false,
-      outcomes: [],
-    });
+    primePluginUpdate(cfg);
     updateNpmInstalledHookPacks.mockResolvedValue({
       config: cfg,
       changed: false,

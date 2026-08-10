@@ -3,6 +3,7 @@
  * Resolved url/headers are credentials — never log, fingerprint, or persist them.
  */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
@@ -14,7 +15,6 @@ import type {
   McpServerConnectionResolveContext,
   OpenClawPluginMcpServerConnectionResolver,
 } from "../plugins/types.js";
-import { isMcpConfigRecord } from "./mcp-config-shared.js";
 
 export type { McpServerConnectionResolved };
 
@@ -250,7 +250,7 @@ export async function resolveRequesterScopedMcpConnections(params: {
           return null;
         }
         const headers =
-          result.headers && isMcpConfigRecord(result.headers)
+          result.headers && isRecord(result.headers)
             ? Object.fromEntries(
                 Object.entries(result.headers)
                   .filter(
@@ -295,7 +295,7 @@ export function applyMcpConnectionOverride(
   rawServer: unknown,
   override: McpServerConnectionResolved,
 ): Record<string, unknown> {
-  const base = isMcpConfigRecord(rawServer) ? { ...rawServer } : {};
+  const base = isRecord(rawServer) ? { ...rawServer } : {};
   base.url = override.url;
   if (override.headers) {
     base.headers = { ...override.headers };
@@ -336,7 +336,7 @@ export function redactMcpServersForFingerprint(
       redacted[serverName] = rawServer;
       continue;
     }
-    if (!isMcpConfigRecord(rawServer)) {
+    if (!isRecord(rawServer)) {
       redacted[serverName] = { connection: "requester-scoped" };
       continue;
     }

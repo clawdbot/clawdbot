@@ -47,9 +47,6 @@ export const hookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const acquireSessionWriteLockMock = vi.fn(async (_params?: unknown) => ({
-  release: vi.fn(async () => {}),
-}));
 export const resolveContextEngineMock = vi.fn(async () => ({
   info: { ownsCompaction: true as boolean },
   compact: contextEngineCompactMock,
@@ -566,7 +563,6 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
-  acquireSessionWriteLockMock.mockClear();
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -638,7 +634,6 @@ export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
   testing: typeof import("./compact.js").testing;
-  withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
@@ -794,23 +789,6 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../sandbox.js", () => ({
     resolveSandboxContext: resolveSandboxContextMock,
   }));
-
-  vi.doMock("../session-write-lock.js", async () => {
-    const { resolveSessionWriteLockTargetKey } = await vi.importActual<
-      typeof import("../session-write-lock.js")
-    >("../session-write-lock.js");
-    return {
-      acquireSessionWriteLock: acquireSessionWriteLockMock,
-      resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
-      resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
-      resolveSessionWriteLockOptions: vi.fn(() => ({
-        timeoutMs: 60_000,
-        staleMs: 1_800_000,
-        maxHoldMs: 300_000,
-      })),
-      resolveSessionWriteLockTargetKey,
-    };
-  });
 
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
@@ -1099,20 +1077,17 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  const [compactModule, compactQueuedModule, transcriptEvents, transcriptWriteContext] =
-    await Promise.all([
-      import("./compact.js"),
-      import("./compact.queued.js"),
-      import("../../sessions/transcript-events.js"),
-      import("../../config/sessions/transcript-write-context.js"),
-    ]);
+  const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
+    import("./compact.js"),
+    import("./compact.queued.js"),
+    import("../../sessions/transcript-events.js"),
+  ]);
 
   return {
     ...compactModule,
     compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
-    withOwnedSessionTranscriptWrites: transcriptWriteContext.withOwnedSessionTranscriptWrites,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

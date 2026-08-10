@@ -32,6 +32,7 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
@@ -44,7 +45,6 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
-import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
@@ -64,10 +64,6 @@ type AuthenticatedNodePairingAdmission = {
   authenticated: { nodeId: string; publicKey: string; token: string };
   identity: NodePairingIdentity;
   generation?: NodePairingGeneration;
-};
-
-type AuthenticatedUserProfileDisplay = NonNullable<GatewayWsClient["authenticatedUserProfile"]> & {
-  avatarRevision: string;
 };
 
 function isReleasedVersion(version: string): boolean {
@@ -200,7 +196,7 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
-  let authenticatedUserProfile: AuthenticatedUserProfileDisplay | undefined;
+  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
   if (authenticatedUserId) {
     try {
       const profile = authResult.tailscaleIdentity
@@ -462,32 +458,12 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
-  const buildAuthenticatedPresenceUser = () => {
-    if (!authenticatedUserId) {
-      return undefined;
-    }
-    if (!authenticatedUserProfile) {
-      return {
-        id: authenticatedUserId,
-        ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
-      };
-    }
-    return {
-      id: authenticatedUserProfile.profileId,
-      ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
-      ...(authenticatedUserProfile.displayName
-        ? { name: authenticatedUserProfile.displayName }
-        : {}),
-      // This authenticated route resolves the uploaded avatar first, then the
-      // gateway-side Gravatar proxy, so clients never need an email-hash URL.
-      // The revision changes when the profile avatar changes, so reconnecting
-      // viewers refetch instead of reusing a stale route response.
-      avatarUrl: formatUserProfileAvatarPath(
-        authenticatedUserProfile.profileId,
-        authenticatedUserProfile.avatarRevision,
-      ),
-    };
-  };
+  const currentAuthenticatedPresenceUser = () =>
+    buildAuthenticatedPresenceUser({
+      authenticatedUserId,
+      authenticatedUserIsTailscaleProvider,
+      authenticatedUserProfile: nextClient.authenticatedUserProfile,
+    });
 
   if (presenceKey) {
     upsertPresence(presenceKey, {
@@ -502,7 +478,7 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-      ...(authenticatedUserId ? { user: buildAuthenticatedPresenceUser() } : {}),
+      ...(authenticatedUserId ? { user: currentAuthenticatedPresenceUser() } : {}),
       reason: "connect",
     });
     incrementPresenceVersion();
@@ -604,7 +580,7 @@ export async function attachAuthenticatedGatewayConnect(
         if (isClosed() || !presenceKey) {
           return;
         }
-        upsertPresence(presenceKey, { user: buildAuthenticatedPresenceUser() });
+        upsertPresence(presenceKey, { user: currentAuthenticatedPresenceUser() });
         const requestContext = buildRequestContext();
         broadcastPresenceSnapshot({
           broadcast: requestContext.broadcast,

@@ -58,7 +58,6 @@ import {
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 export type QueuedRenderedMessageBatchPlan = {
   payloadCount: number;
@@ -80,7 +79,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
-  channel: OutboundChannel;
+  channel: string;
   to: string;
   accountId?: string;
   /** Original queue durability policy when known. */

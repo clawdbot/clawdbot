@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -35,7 +36,6 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -725,6 +725,17 @@ describe("gateway server chat", () => {
           ts: 1_006,
           data: { phase: "result", name: "read", toolCallId: "tool-active", result: "stale" },
         });
+        handler({
+          runId: "provider-run",
+          seq: 6,
+          stream: "item",
+          ts: 1_006,
+          data: {
+            kind: "preamble",
+            itemId: "preamble-2",
+            progressText: "Autoreview is running",
+          },
+        });
 
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         await callDirectChat(method, {
@@ -779,6 +790,18 @@ describe("gateway server chat", () => {
                 name: "read",
                 toolCallId: "tool-active",
                 partialResult: "halfway",
+              },
+            },
+            {
+              runId: "run-active",
+              seq: 6,
+              stream: "item",
+              ts: 1_006,
+              sessionKey: "main",
+              data: {
+                kind: "preamble",
+                itemId: "preamble-2",
+                progressText: "Autoreview is running",
               },
             },
           ],

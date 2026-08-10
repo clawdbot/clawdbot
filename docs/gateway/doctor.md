@@ -203,7 +203,7 @@ Flags:
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
     - Skills readiness check for the default agent; reports allowed skills with missing bins, env, config, or OS requirements, and `--fix` can disable unavailable skills in `skills.entries`.
     - Shell completion status check and auto-install/upgrade.
-    - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
+    - Memory search embedding provider readiness check (local model or remote API key).
     - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
     - Writes updated config + wizard metadata.
 
@@ -561,9 +561,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor runs a health check and offers to restart the gateway when it looks unhealthy.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
-    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured backend and provider:
+    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
 
-    - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including `npm install -g @tobilu/qmd` (or the Bun equivalent) and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
     - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.

@@ -2,15 +2,18 @@
 // options, session history, turn source, bindings, and channel route hooks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelId,
+  ChannelOutboundTargetMode,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import { listRouteBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -30,6 +33,7 @@ import {
 type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
   resolvedChannel: string;
+  plugin?: ChannelPlugin;
   resolvedTo?: string;
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;
@@ -96,7 +100,7 @@ function resolveAgentDeliveryPlan(params: {
       ? normalizedTurnSource
       : undefined;
   const turnSourceTo = normalizeOptionalString(params.turnSourceTo) ?? undefined;
-  const turnSourceAccountId = normalizeAccountId(params.turnSourceAccountId);
+  const turnSourceAccountId = normalizeOptionalAccountId(params.turnSourceAccountId);
   const turnSourceThreadId =
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
       ? params.turnSourceThreadId
@@ -141,7 +145,7 @@ function resolveAgentDeliveryPlan(params: {
       : undefined;
 
   const resolvedAccountId =
-    normalizeAccountId(params.accountId) ??
+    normalizeOptionalAccountId(params.accountId) ??
     (deliveryTargetMode === "implicit" ? baseDelivery.accountId : undefined);
 
   let resolvedTo = explicitTo;
@@ -169,6 +173,8 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     agentId: string;
     currentSessionKey?: string;
     sessionRouteMode?: "plugin-only" | "allow-fallback";
+    /** Channel plugin already selected and bootstrapped by the caller. */
+    preparedPlugin?: ChannelPlugin;
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
@@ -176,14 +182,17 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   if (!params.wantsDelivery || !isDeliverableMessageChannel(resolvedChannel)) {
     return plan;
   }
-  const plugin = resolveOutboundChannelPlugin({
-    channel: resolvedChannel,
-    cfg: params.cfg,
-    allowBootstrap: true,
-  });
+  const plugin =
+    params.preparedPlugin ??
+    resolveOutboundChannelPlugin({
+      channel: resolvedChannel,
+      cfg: params.cfg,
+      allowBootstrap: true,
+    });
   if (!plugin) {
     return plan;
   }
+  const pluginPlan = { ...plan, plugin };
   const hasPluginSessionRoute = Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
   const hasPluginTargetResolver = Boolean(plugin?.messaging?.targetResolver);
   // Only concrete plugin resolution makes a directory miss authoritative.
@@ -194,17 +203,20 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     !hasPluginTargetResolver &&
     params.sessionRouteMode !== "allow-fallback"
   ) {
-    return plan;
+    return pluginPlan;
   }
   const resolvedAccountId =
-    plan.resolvedAccountId ??
+    pluginPlan.resolvedAccountId ??
     (params.sessionRouteMode === "allow-fallback"
       ? resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })
       : undefined);
   const routedPlan =
-    resolvedAccountId === plan.resolvedAccountId ? plan : { ...plan, resolvedAccountId };
+    resolvedAccountId === pluginPlan.resolvedAccountId
+      ? pluginPlan
+      : { ...pluginPlan, resolvedAccountId };
   const normalizedTarget = resolveOutboundTarget({
     channel: resolvedChannel,
+    plugin,
     to: routedPlan.resolvedTo,
     cfg: params.cfg,
     accountId: routedPlan.resolvedAccountId,
@@ -433,6 +445,7 @@ export function resolveAgentOutboundTarget(params: {
   }
   const resolvedTarget = resolveOutboundTarget({
     channel: params.plan.resolvedChannel,
+    ...(params.plan.plugin ? { plugin: params.plan.plugin } : {}),
     to: params.plan.resolvedTo,
     cfg: params.cfg,
     accountId: params.plan.resolvedAccountId,

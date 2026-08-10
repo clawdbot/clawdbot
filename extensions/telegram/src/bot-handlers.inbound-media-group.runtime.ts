@@ -33,8 +33,8 @@ import {
   buildTelegramThreadParams,
   getTelegramTextParts,
   hasBotMention,
+  resolveTelegramMessageThreadSpec,
   resolveTelegramPrimaryMedia,
-  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
@@ -98,6 +98,7 @@ export function createTelegramInboundMediaGroupRuntime(
   } = params;
   const {
     resolveMediaRuntime,
+    recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
@@ -347,6 +348,7 @@ export function createTelegramInboundMediaGroupRuntime(
           continue;
         }
         if (media) {
+          await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
@@ -373,11 +375,7 @@ export function createTelegramInboundMediaGroupRuntime(
               `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
                 ...buildTelegramThreadParams(
-                  resolveTelegramThreadSpec({
-                    isGroup: entry.isGroup,
-                    isForum: entry.isForum,
-                    messageThreadId: entry.resolvedThreadId ?? entry.dmThreadId,
-                  }),
+                  resolveTelegramMessageThreadSpec(primary.msg, entry.isForum),
                 ),
                 reply_parameters: {
                   message_id: primary.msg.message_id,

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -40,6 +41,17 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(
         "⚠️ /btw is unavailable because the active agent directory could not be resolved.",
       );
+    }
+
+    if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
+          btw: { question },
+          isError: true,
+        },
+      };
     }
 
     try {

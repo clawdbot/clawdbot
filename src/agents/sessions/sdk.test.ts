@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
-// session write-lock behavior.
+// session write-settlement behavior.
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -393,6 +393,37 @@ describe("AgentSession tree navigation", () => {
 });
 
 describe("AgentSession queued user turns", () => {
+  it("rechecks captured steering ownership after transcript preparation", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    let resolveInput!: () => void;
+    const inputReady = new Promise<void>((resolve) => {
+      resolveInput = resolve;
+    });
+    const recorder = createUserTurnTranscriptRecorder({
+      resolveInput: async () => {
+        await inputReady;
+        return { text: "visible prompt" };
+      },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    let canInject = true;
+    const queued = session.steer(
+      "runtime prompt",
+      undefined,
+      recorder,
+      undefined,
+      undefined,
+      "queue-identity",
+      () => canInject,
+    );
+    canInject = false;
+    resolveInput();
+
+    await expect(queued).rejects.toThrow("active session is finalizing");
+    expect(steer).not.toHaveBeenCalled();
+  });
+
   it("carries prepared transcript context on the exact steered message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const recorder = createUserTurnTranscriptRecorder({
@@ -644,9 +675,9 @@ describe("createAgentSession tool defaults", () => {
     expect(exactPromptOptions.promptGuidelines).toEqual(["Use custom_lookup for test values."]);
   });
 
-  it("runs session message persistence under the configured write lock", async () => {
-    // Transcript writes share the caller-provided lock so concurrent event
-    // handlers cannot interleave JSONL persistence.
+  it("runs session message persistence under the configured write settlement", async () => {
+    // Transcript writes share the caller-provided settlement boundary so
+    // concurrent event handlers cannot interleave persistence.
     const events: string[] = [];
     const sessionManager = SessionManager.inMemory();
     const { session } = await createAgentSession({
@@ -655,12 +686,12 @@ describe("createAgentSession tool defaults", () => {
       sessionManager,
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteLock: async (run) => {
-        events.push("lock:start");
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
         try {
           return await run();
         } finally {
-          events.push("lock:end");
+          events.push("settlement:end");
         }
       },
     });
@@ -678,11 +709,11 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["lock:start", "lock:end"]);
+    expect(events).toEqual(["settlement:start", "settlement:end"]);
     expect(sessionManager.getEntries().some((entry) => entry.type === "message")).toBe(true);
   });
 
-  it("runs write-capable tool hooks under the configured write lock", async () => {
+  it("runs write-capable tool hooks under the configured write settlement", async () => {
     const events: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       [
@@ -702,12 +733,12 @@ describe("createAgentSession tool defaults", () => {
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteLock: async (run) => {
-        events.push("lock:start");
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
         try {
           return await run();
         } finally {
-          events.push("lock:end");
+          events.push("settlement:end");
         }
       },
     });
@@ -739,12 +770,12 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["lock:start", "hook", "lock:end"]);
+    expect(events).toEqual(["settlement:start", "hook", "settlement:end"]);
   });
 
   it("fences tool execution when no extension hook is registered", async () => {
-    // Write-capable tools still enter the lock even without hooks; the lock is
-    // about shared session state, not just extension execution.
+    // Write-capable tools still enter the settlement boundary even without hooks;
+    // it covers shared session state, not just extension execution.
     const events: string[] = [];
     const { session } = await createAgentSession({
       model: testModel,
@@ -752,12 +783,12 @@ describe("createAgentSession tool defaults", () => {
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteLock: async (run) => {
-        events.push("lock:start");
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
         try {
           return await run();
         } finally {
-          events.push("lock:end");
+          events.push("settlement:end");
         }
       },
     });
@@ -789,7 +820,7 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["lock:start", "lock:end"]);
+    expect(events).toEqual(["settlement:start", "settlement:end"]);
   });
 });
 

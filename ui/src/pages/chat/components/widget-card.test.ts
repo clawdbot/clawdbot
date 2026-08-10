@@ -298,7 +298,7 @@ describe("widget-card", () => {
       pinned,
     );
     expect(pinned.querySelector<HTMLButtonElement>("[data-pin-widget]")?.disabled).toBe(true);
-    expect(pinned.querySelector("[data-pin-widget]")?.textContent).toContain("Pinned");
+    expect(pinned.querySelector("[data-pin-widget]")?.getAttribute("aria-label")).toBe("Pinned");
 
     const external = document.createElement("div");
     render(

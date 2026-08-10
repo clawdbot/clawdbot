@@ -625,7 +625,7 @@ Resolution for direct messages follows the identical pattern against the `direct
 This account-replaces-root behavior for prompt resolution is a plain shallow override: any account `groups`/`direct` key, including an explicit empty object, replaces the root map. It differs from the group-membership allowlist check described above, which has a single-account safety net for an accidentally empty `groups: {}`.
 </Note>
 
-**Difference from Telegram:** Telegram suppresses root `groups` for every account in a multi-account setup (even accounts with no `groups` of their own) to stop a bot receiving group messages for groups it does not belong to. WhatsApp does not apply that guard — root `groups`/`direct` are inherited by any account without its own override, regardless of account count. In a multi-account WhatsApp setup, define the full map under each account explicitly if you want per-account prompts.
+**Difference from Telegram:** Telegram uses the same whole-map account override for `groups` in multi-account configs, but a single account's empty `groups: {}` falls back to root groups as a migration safety net. Telegram's `direct` map also has separate DM-topic semantics. In WhatsApp—or for one account among several Telegram accounts—use an explicit empty `groups: {}` when that account should not inherit root group defaults.
 
 Important behavior:
 

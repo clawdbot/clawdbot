@@ -157,7 +157,7 @@ async function loadCodexEffectiveMcpCatalogFromThread(params: {
   return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
 }
 
-/** Loads MCP inventory only from the already-bound Codex process and thread. */
+/** Loads MCP inventory from the bound Codex client while retaining its lease through all pages. */
 export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
   options: { bindingStore: CodexAppServerBindingStore },
@@ -178,7 +178,7 @@ export async function loadCodexEffectiveMcpCatalog(
     return undefined;
   }
   try {
-    return loadCodexEffectiveMcpCatalogFromThread({
+    return await loadCodexEffectiveMcpCatalogFromThread({
       client: retained.client,
       threadId: binding.threadId,
       mcpServerNames: params.mcpServerNames,

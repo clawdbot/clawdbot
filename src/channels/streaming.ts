@@ -13,7 +13,6 @@ import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   ChannelStreamingCommandTextMode,
-  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
   StreamingMode,
   TextChunkMode,
@@ -23,8 +22,16 @@ import {
   selectProgressLabel,
 } from "../shared/progress-labels.js";
 import { asBoolean } from "../utils/boolean.js";
+import {
+  getChannelStreamingConfigObject,
+  type StreamingCompatEntry,
+} from "./streaming-config-readers.js";
 
-export type StreamingCompatEntry = { streaming?: unknown };
+export {
+  getChannelStreamingConfigObject,
+  resolveChannelStreamingNativeTransport,
+} from "./streaming-config-readers.js";
+export type { StreamingCompatEntry } from "./streaming-config-readers.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -37,7 +44,6 @@ export type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 // Runtime reads are nested-only; doctor migrates legacy streaming spellings.
 
@@ -756,13 +762,6 @@ export function createChannelProgressDraftGate(params: {
   };
 }
 
-export function getChannelStreamingConfigObject(
-  entry: StreamingCompatEntry | null | undefined,
-): ChannelStreamingConfig | undefined {
-  const streaming = asObjectRecord(entry?.streaming);
-  return streaming ? (streaming as ChannelStreamingConfig) : undefined;
-}
-
 export function resolveChannelStreamingChunkMode(
   entry: StreamingCompatEntry | null | undefined,
 ): TextChunkMode | undefined {
@@ -909,12 +908,6 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     return true;
   }
   return options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
-}
-
-export function resolveChannelStreamingNativeTransport(
-  entry: StreamingCompatEntry | null | undefined,
-): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.nativeTransport);
 }
 
 export function resolveChannelPreviewStreamMode(

@@ -1,11 +1,14 @@
-import { pathToFileURL } from "node:url";
 import {
   listDoctorDeprecationCompatRecords,
   type DoctorDeprecationCompatRecord,
 } from "../src/commands/doctor/shared/deprecation-compat.js";
+import { hasValidIsoCalendarComponents } from "../src/shared/iso-time.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 type DeadlineRecord = Pick<DoctorDeprecationCompatRecord, "code" | "status" | "removeAfter">;
 type ExpiredDeadlineRecord = DeadlineRecord & { removeAfter: string };
+type OutputWriter = { write(chunk: string): unknown };
+type RegistryCheckIo = { stdout: OutputWriter; stderr: OutputWriter };
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -27,11 +30,7 @@ export function findExpiredDeprecatedDoctorRecords(
 }
 
 function isUtcDate(value: string): boolean {
-  if (!DATE_PATTERN.test(value)) {
-    return false;
-  }
-  const timestamp = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+  return DATE_PATTERN.test(value) && hasValidIsoCalendarComponents(value);
 }
 
 function parseAsOf(argv: readonly string[]): string | undefined {
@@ -46,35 +45,40 @@ function parseAsOf(argv: readonly string[]): string | undefined {
   );
 }
 
-function main(argv = process.argv.slice(2)): void {
+function writeLine(writer: OutputWriter, message: string): void {
+  writer.write(`${message}\n`);
+}
+
+export function main(argv = process.argv.slice(2), io: RegistryCheckIo = process): 0 | 1 | 2 {
   let requestedAsOf: string | undefined;
   try {
     requestedAsOf = parseAsOf(argv);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 2;
-    return;
+    writeLine(io.stderr, error instanceof Error ? error.message : String(error));
+    return 2;
   }
 
   const asOf = requestedAsOf ?? new Date().toISOString().slice(0, 10);
   const expired = findExpiredDeprecatedDoctorRecords(listDoctorDeprecationCompatRecords(), asOf);
   if (expired.length === 0) {
-    console.log(`[doctor-deprecation-registry] OK as of ${asOf}`);
-    return;
+    writeLine(io.stdout, `[doctor-deprecation-registry] OK as of ${asOf}`);
+    return 0;
   }
 
-  console.error(
+  writeLine(
+    io.stderr,
     `[doctor-deprecation-registry] ${expired.length} deprecated record(s) reached removeAfter by ${asOf}:`,
   );
   for (const record of expired) {
-    console.error(`- ${record.code}: removeAfter ${record.removeAfter}`);
+    writeLine(io.stderr, `- ${record.code}: removeAfter ${record.removeAfter}`);
   }
-  console.error(
+  writeLine(
+    io.stderr,
     "Remove each migration after supported-upgrade proof, or move it to removal-pending with a documented blocker.",
   );
-  process.exitCode = 1;
+  return 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main();
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  process.exitCode = main();
 }

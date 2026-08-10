@@ -14,7 +14,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { planSqliteSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 

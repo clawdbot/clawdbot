@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import { buildUpdateCommandRunner, DEFAULT_TIMEOUT_MS } from "./update-runner-command.js";
 import type {
   CommandRunner,
@@ -99,14 +100,6 @@ export async function findPackageRoot(candidates: string[]) {
   return null;
 }
 
-export async function resolveComparablePath(target: string): Promise<string> {
-  return await fs.realpath(target).catch(() => path.resolve(target));
-}
-
-export async function pathsReferToSameLocation(left: string, right: string): Promise<boolean> {
-  return (await resolveComparablePath(left)) === (await resolveComparablePath(right));
-}
-
 export async function looksLikeGitCheckout(root: string): Promise<boolean> {
   try {
     await fs.access(path.join(root, ".git"));
@@ -125,13 +118,13 @@ export async function resolveUpdateInstallSurface(
   const packageRoot = await findPackageRoot(candidates);
 
   let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
-  if (gitRoot && packageRoot && path.resolve(gitRoot) !== path.resolve(packageRoot)) {
+  if (gitRoot && packageRoot && !updateInstallRootsMatch(gitRoot, packageRoot)) {
     gitRoot = null;
   }
   if (gitRoot && !packageRoot) {
-    return { kind: "missing", mode: "unknown", root: gitRoot };
+    return { kind: "missing", mode: "unknown", root: resolveUpdateInstallRoot(gitRoot) };
   }
-  if (gitRoot && packageRoot && path.resolve(gitRoot) === path.resolve(packageRoot)) {
+  if (gitRoot && packageRoot) {
     return { kind: "git", mode: "git", root: gitRoot, packageRoot };
   }
   if (!packageRoot) {

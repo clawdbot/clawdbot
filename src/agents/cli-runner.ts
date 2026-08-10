@@ -40,7 +40,7 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import type { CliOutput } from "./cli-output.js";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
 import {
@@ -444,6 +444,12 @@ async function persistCliAssistantTranscript(params: {
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
       expectedSessionId: runParams.sessionId,
+      ...(runParams.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: runParams.expectedLifecycleRevision }
+        : {}),
+      ...(runParams.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: runParams.expectedWriterRunId }
+        : {}),
       storePath: runParams.storePath,
       idempotencyKey: `cli-assistant:${runParams.runId}`,
       config: runParams.config,

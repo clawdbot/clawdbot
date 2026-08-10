@@ -28,6 +28,8 @@ const JSON_NOT_APPLICABLE = {
     commands: [
       "backup",
       "backup sqlite",
+      "database",
+      "database ownership",
       "message",
       "message thread",
       "message emoji",
@@ -111,6 +113,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp login",
       "attach",
       "tui",
+      "resume",
       "update wizard",
     ],
   },
@@ -311,6 +314,7 @@ describe("root command descriptions", () => {
   });
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     const program = await registerAllBuiltInCommands();
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves
