@@ -1,6 +1,8 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
@@ -41,6 +43,12 @@ export async function restartGatewayChannels(options: {
     logSuppressedChannelRestart,
     scheduleRecoveryRestart,
   } = options;
+  // Reload restarts outlive the request that selected the prior generation.
+  // Pin startup to the published registry so stale request scope cannot revive it.
+  const startChannelFromActiveRegistry = (channel: ChannelKind, accountId?: string) =>
+    withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+      runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel, accountId)),
+    );
   // Suppressed and normal reloads share fallback selection so stale account
   // ids always reach the wholesale path that evicts their old runtime.
   const collectChannelAccountTargets = (): Array<[ChannelKind, string]> => {
@@ -145,7 +153,7 @@ export async function restartGatewayChannels(options: {
             if (isLifecycleReloadAborted()) {
               continue;
             }
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel, accountId));
+            await startChannelFromActiveRegistry(channel, accountId);
           } catch (err) {
             accountRestartFailures.push(`${channel}[${accountId}]`);
             params.logChannels.error(
@@ -164,7 +172,7 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+          await startChannelFromActiveRegistry(name);
         };
         const restartFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,

@@ -32,8 +32,12 @@ import {
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
-import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
+import {
+  createPluginCommandRuntime,
+  type PluginCommandCatalogDecision,
+} from "../plugins/plugin-command-runtime.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -5035,6 +5039,7 @@ describe("gateway plugin hot reload handlers", () => {
     expect(staleDispatch.kind).toBe("plugin");
 
     const events: string[] = [];
+    let restartedDispatch: PluginCommandCatalogDecision | undefined;
     const handlers = createReloadHandlersForTest(
       undefined,
       {
@@ -5043,6 +5048,9 @@ describe("gateway plugin hot reload handlers", () => {
         }),
         start: vi.fn(async (channel) => {
           events.push(`start:${channel}`);
+          restartedDispatch = createPluginCommandRuntime()
+            .listNativeCandidates("discord")[0]!
+            .prepareDispatch();
         }),
       },
       vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
@@ -5063,10 +5071,17 @@ describe("gateway plugin hot reload handlers", () => {
       }),
     );
 
-    await handlers.applyHotReload(
-      createPluginReloadPlan(),
-      { plugins: { enabled: true } },
-      { publish: async (commit) => await commit(), isCurrent: () => true },
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        isWebchatConnect: () => false,
+        pluginRegistry: oldRegistry,
+      },
+      () =>
+        handlers.applyHotReload(
+          createPluginReloadPlan(),
+          { plugins: { enabled: true } },
+          { publish: async (commit) => await commit(), isCurrent: () => true },
+        ),
     );
 
     expect(events).toEqual(["stop:discord", "registry:next", "start:discord"]);
@@ -5080,13 +5095,10 @@ describe("gateway plugin hot reload handlers", () => {
         }),
       ).resolves.toMatchObject({ text: expect.stringContaining("registry changed") });
     }
-    const nextDispatch = createPluginCommandRuntime()
-      .listNativeCandidates("discord")[0]!
-      .prepareDispatch();
-    expect(nextDispatch.kind).toBe("plugin");
-    if (nextDispatch.kind === "plugin") {
+    expect(restartedDispatch?.kind).toBe("plugin");
+    if (restartedDispatch?.kind === "plugin") {
       await expect(
-        nextDispatch.execute({
+        restartedDispatch.execute({
           channel: "discord",
           isAuthorizedSender: true,
           commandBody: "/refresh",
