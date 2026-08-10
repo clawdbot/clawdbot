@@ -973,3 +973,53 @@ describe("Claude live turn output bounds and result projection", () => {
     });
   });
 });
+
+describe("Claude live-process bundle-MCP ownership", () => {
+  // The live process is the longest-lived holder of a bundled MCP config
+  // (#73244), so it must inherit the ownership descriptor. An earlier revision
+  // wired the descriptor only into the per-turn spawn and left this route on
+  // the timing-based recheck it was meant to replace.
+  it("hands the ownership descriptor to the live-process child", async () => {
+    mockClaudeLiveRun(supervisorSpawnMock, {
+      events: [
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "live-owned",
+          claude_code_version: "2.1.206",
+          capabilities: ["interrupt_receipt_v1", "msg_lifecycle_v1"],
+        },
+        { type: "result", subtype: "success", session_id: "live-owned", result: "done" },
+      ],
+    });
+
+    await expect(
+      startLiveTurn("run-owned", false, { context: { ownershipFd: 42 } }),
+    ).resolves.toMatchObject({
+      output: { text: "done" },
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledWith(expect.objectContaining({ inheritFd: 42 }));
+  });
+
+  it("omits the descriptor when the prepared run has none", async () => {
+    mockClaudeLiveRun(supervisorSpawnMock, {
+      events: [
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "live-unowned",
+          claude_code_version: "2.1.206",
+          capabilities: ["interrupt_receipt_v1", "msg_lifecycle_v1"],
+        },
+        { type: "result", subtype: "success", session_id: "live-unowned", result: "done" },
+      ],
+    });
+
+    await expect(startLiveTurn("run-unowned", false)).resolves.toMatchObject({
+      output: { text: "done" },
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ inheritFd: expect.anything() }),
+    );
+  });
+});

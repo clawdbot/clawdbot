@@ -147,6 +147,8 @@ export type PreparedCliRunContextOverrides = {
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
   liveSessionRequirement?: PreparedCliRunContext["backendResolved"]["liveSessionRequirement"];
+  /** Bundle-MCP ownership descriptor the spawned child should inherit. */
+  ownershipFd?: number;
 };
 
 export function buildPreparedCliRunContext(
@@ -248,6 +250,7 @@ export function buildPreparedCliRunContext(
       backend,
       env: overrides.preparedEnv ?? {},
       ...(overrides.mcpConfigHash ? { mcpConfigHash: overrides.mcpConfigHash } : {}),
+      ...(overrides.ownershipFd === undefined ? {} : { ownershipFd: overrides.ownershipFd }),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,

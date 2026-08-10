@@ -452,6 +452,9 @@ export async function spawnClaudeProcess(params: {
     env: params.env,
     captureKey: params.mcpCaptureKey,
   });
+  // Inherited at `fork`, so the child holds a claim on its MCP temp dir from
+  // before it `exec`s — the window in which argv cannot show one.
+  const inheritOwnershipFd = params.context.preparedBackend.ownershipFd;
   let managedRun: ManagedRun;
   try {
     managedRun = await params.supervisor.spawn({
@@ -465,6 +468,7 @@ export async function spawnClaudeProcess(params: {
       env: mcpCaptureAttempt.env ?? params.env,
       stdinMode: "pipe-open",
       secretInput: params.context.preparedBackend.secretInput,
+      ...(inheritOwnershipFd === undefined ? {} : { inheritFd: inheritOwnershipFd }),
       captureOutput: false,
       onStdout: (chunk) => {
         if (session) {
