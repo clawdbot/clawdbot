@@ -45,14 +45,6 @@
     "sdk": true
   },
   {
-    "name": "buildApprovalPresentation",
-    "files": [
-      "src/infra/approval-presentation.ts",
-      "src/infra/exec-approval-reply.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "buildBundleMcpToolsFromCatalog",
     "files": [
       "src/agents/agent-bundle-mcp-materialize.ts",
