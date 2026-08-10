@@ -877,9 +877,7 @@ describe("connected identity health", () => {
       lastError: null,
     });
     expect(getSlackInstallationKind("default")).toBeUndefined();
-    expect(() => assertSlackDetachedTargetAllowed("default")).toThrow(
-      "unsupported_enterprise_slack_delivery",
-    );
+    expect(() => assertSlackDetachedTargetAllowed("default")).not.toThrow();
   });
 
   it("promotes recovered Enterprise identity before dispatching its first event", async () => {
