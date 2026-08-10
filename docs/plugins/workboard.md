@@ -63,6 +63,22 @@ openclaw plugins disable workboard
 openclaw gateway restart
 ```
 
+## Skill Workshop proposal follow-up
+
+When Workboard is enabled, it automatically creates a `todo` review card for
+each committed, pending [Skill Workshop proposal](/tools/skill-workshop). The
+card is created after a `created`, `revised`, or `evaluation_completed`
+proposal event and links back to the proposal.
+
+Repeated events for the same proposal reuse one card. That card is labeled
+`skill-workshop` and `proposal-review`; it records the proposal kind and source
+when available, but it does not copy mutable proposal content. Terminal or
+non-pending proposal events do not create cards.
+
+This integration is review-only. A Workboard card cannot apply, publish,
+reject, quarantine, or otherwise modify a proposal. Those decisions remain in
+Skill Workshop. If card capture fails, the committed proposal is unaffected.
+
 ## Card fields
 
 | Field       | Values                                                                                                        |
