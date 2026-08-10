@@ -1625,6 +1625,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("no codex app-server thread binding");
+    expect(result.failure?.disposition).toBe("fallback");
     expect(result.failure?.reason).toBe("missing_thread_binding");
     expect(result.result).toBeUndefined();
   });
@@ -1661,6 +1662,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("thread not found: thread-1");
+    expect(result.failure?.disposition).toBe("fallback");
     expect(result.failure?.reason).toBe("stale_thread_binding");
     expect(result.result).toBeUndefined();
     expect(fake.closeAndWait).not.toHaveBeenCalled();

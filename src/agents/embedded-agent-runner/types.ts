@@ -7,6 +7,7 @@ import type {
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import type { CompactionFailure } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
@@ -260,13 +261,17 @@ export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
-  /** Structured failure metadata used by model fallback classification. */
-  failure?: {
-    reason?: string;
-    status?: number;
-    code?: string;
-    rawError?: string;
-  };
+  /** Sanitized, authoritative failure identity used by recovery policy. */
+  failure?:
+    | CompactionFailure
+    | {
+        /** Shipped plugin compatibility; legacy metadata is fail-closed. */
+        disposition?: never;
+        reason?: string;
+        status?: number;
+        code?: string;
+        rawError?: string;
+      };
   result?: {
     summary: string;
     firstKeptEntryId: string;

@@ -4,6 +4,10 @@
  * CLI compaction uses these guards to recognize thread-binding failures that can
  * fall back to context-engine compaction after clearing stale session bindings.
  */
+import {
+  hasCompactionFailureDisposition,
+  isStructuredCompactionFailure,
+} from "../embedded-agent-runner/compaction-failure.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 
 /** Returns whether a native harness failure reason indicates a recoverable binding issue. */
@@ -24,9 +28,19 @@ function isRecoverableNativeHarnessBindingReason(reason: unknown): boolean {
 export function isRecoverableNativeHarnessBindingFailure(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
+  if (result?.ok !== false) {
+    return false;
+  }
+  if (isStructuredCompactionFailure(result.failure)) {
+    return result.failure.disposition === "fallback";
+  }
+  if (hasCompactionFailureDisposition(result.failure)) {
+    return false;
+  }
+  // Released harness plugins predate the typed fallback disposition. Keep the
+  // legacy reason reader only at this native-binding migration boundary.
   return (
-    result?.ok === false &&
-    (isRecoverableNativeHarnessBindingReason(result.failure?.reason) ||
-      isRecoverableNativeHarnessBindingReason(result.reason))
+    isRecoverableNativeHarnessBindingReason(result.failure?.reason) ||
+    isRecoverableNativeHarnessBindingReason(result.reason)
   );
 }

@@ -9,6 +9,7 @@ export type CompactionNoticePhase =
   | "end"
   | "incomplete"
   | "skipped"
+  | "transient_failure"
   | "memory_flush_degraded";
 
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
@@ -16,6 +17,7 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   end: "🧹 Compaction complete",
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
+  transient_failure: "⚠️ Compaction temporarily failed; continuing your reply.",
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
 };
 

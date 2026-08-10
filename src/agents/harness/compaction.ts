@@ -8,6 +8,7 @@ import { resolveUserPath } from "../../utils.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
+import { terminalCompactionFailure } from "../embedded-agent-runner/compaction-failure.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
@@ -458,7 +459,7 @@ export async function maybeCompactAgentHarnessSession(
         ok: false,
         compacted: false,
         reason: `Agent harness "${harness.id}" does not support compaction.`,
-        failure: { reason: "unsupported_harness_compaction" },
+        failure: terminalCompactionFailure("unsupported_harness_compaction"),
       };
     }
     return undefined;
@@ -500,7 +501,7 @@ export async function maybeCompactAgentHarnessSession(
         ok: false,
         compacted: false,
         reason: `Agent harness "${harness.id}" does not support compaction.`,
-        failure: { reason: "unsupported_harness_compaction" },
+        failure: terminalCompactionFailure("unsupported_harness_compaction"),
       };
     }
     return undefined;

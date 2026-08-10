@@ -19,9 +19,13 @@ import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import { classifyCompactionResultForModelFallback } from "./embedded-agent-runner/compaction-failure.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import type {
+  EmbeddedAgentCompactResult,
+  EmbeddedAgentRunResult,
+} from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import {
@@ -2698,6 +2702,33 @@ describe("runWithModelFallback", () => {
     expect(result.result).toEqual({ payloads: [{ text: "ok" }] });
     expect(run).toHaveBeenCalledTimes(1);
     expect(result.attempts).toStrictEqual([]);
+  });
+
+  it("does not attempt a configured model fallback for an alternate-owner compaction result", async () => {
+    const cfg = makeProviderFallbackCfg("openai");
+    const ownerFallback = {
+      ok: false,
+      compacted: false,
+      reason: "no codex app-server thread binding",
+      failure: { disposition: "fallback", reason: "missing_thread_binding" },
+    } satisfies EmbeddedAgentCompactResult;
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(ownerFallback)
+      .mockResolvedValueOnce({ ok: true, compacted: true });
+
+    const result = await runWithModelFallback<EmbeddedAgentCompactResult>({
+      cfg,
+      provider: "openai",
+      model: "m1",
+      run,
+      classifyResult: ({ result: compactResult }) =>
+        classifyCompactionResultForModelFallback(compactResult),
+    });
+
+    expect(result.result).toBe(ownerFallback);
+    expect(result.attempts).toStrictEqual([]);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("keeps tool-executing empty GPT-5 runs out of fallback", () => {

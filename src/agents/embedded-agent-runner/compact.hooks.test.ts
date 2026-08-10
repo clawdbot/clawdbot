@@ -1759,7 +1759,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     }
   });
 
-  it("preserves compaction failure status and code metadata", async () => {
+  it("preserves compaction failure status while sanitizing provider metadata", async () => {
     sessionCompactImpl.mockRejectedValueOnce(
       Object.assign(new Error("primary compaction rate limited"), {
         status: 429,
@@ -1790,10 +1790,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       compacted: false,
     });
     expect(result.failure).toEqual({
+      disposition: "retryable",
       reason: "rate_limit",
       status: 429,
-      code: "rate_limit_exceeded",
-      rawError: "primary compaction rate limited",
     });
   });
 
@@ -3639,7 +3638,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: false,
       compacted: false,
       reason: "no codex app-server thread binding",
-      failure: { reason: "missing_thread_binding" },
+      failure: { disposition: "fallback", reason: "missing_thread_binding" },
     });
 
     const result = await compactEmbeddedAgentSession(
@@ -3671,7 +3670,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: false,
       compacted: false,
       reason: "no codex app-server thread binding",
-      failure: { reason: "missing_thread_binding" },
+      failure: { disposition: "fallback", reason: "missing_thread_binding" },
     });
   });
 
@@ -3686,7 +3685,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         ok: false,
         compacted: false,
         reason,
-        failure: { reason: failureReason },
+        failure: { disposition: "fallback", reason: failureReason },
       });
 
       const result = await compactEmbeddedAgentSession(
@@ -3702,7 +3701,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(result).toMatchObject({
         ok: false,
         compacted: false,
-        failure: { reason: failureReason },
+        failure: { disposition: "fallback", reason: failureReason },
       });
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
@@ -3951,6 +3950,28 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("omits malformed typed failures returned by a context engine", async () => {
+    contextEngineCompactMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "malformed failure",
+      failure: {
+        disposition: "retryable",
+        reason: "rate_limit",
+        rawError: "provider detail",
+      },
+    } as never);
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "malformed failure",
+    });
+    expect(result).not.toHaveProperty("failure");
   });
 
   it("surfaces a hung/throwing engine compact() as a clean ok:false result", async () => {

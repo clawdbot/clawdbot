@@ -28,6 +28,10 @@ import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
 } from "../embedded-agent-runner/compact-reasons.js";
+import {
+  hasCompactionFailureDisposition,
+  isStructuredCompactionFailure,
+} from "../embedded-agent-runner/compaction-failure.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../embedded-agent-runner/compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -210,7 +214,13 @@ function isNativeHarnessCompactionSession(
 function isUnsupportedNativeHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
-  return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
+  if (result?.ok !== false || result.failure?.reason !== "unsupported_harness_compaction") {
+    return false;
+  }
+  if (isStructuredCompactionFailure(result.failure)) {
+    return result.failure.disposition === "terminal";
+  }
+  return !hasCompactionFailureDisposition(result.failure);
 }
 
 function isIntentionalNativeAutoCompactionSkip(

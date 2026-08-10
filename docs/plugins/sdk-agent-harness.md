@@ -349,6 +349,30 @@ runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
 
+### Compaction failure contract
+
+Harness and context-engine compaction results may include `failure`, a
+sanitized closed discriminated union. The field separates failures that may
+recover on another compaction route or later turn from failures that must stop
+the current reply or move to a different compaction owner:
+
+- `disposition: "retryable"` is limited to transient conditions such as rate
+  limits, overload, server errors, timeouts, and empty provider responses.
+- `disposition: "fallback"` is limited to native thread-binding failures that
+  happen before model work starts. It asks the host to run its synchronous
+  context-engine compactor; it never permits an un-compacted reply or a model
+  fallback attempt.
+- `disposition: "terminal"` covers cancellation, authentication, billing,
+  malformed-request, persistence, unsupported-runtime, and unknown failures.
+
+Return the typed identity at the boundary that owns the failure. Do not infer
+it later from error prose. Hosts must treat missing, malformed, or unknown
+legacy failure data as terminal. A retryable identity permits only bounded
+host recovery; it does not guarantee continuation, bypass configured context
+headroom, or weaken cancellation and binding checks. A fallback identity is
+valid only when the harness has not started model or tool work and the host has
+an explicit alternative compaction owner.
+
 ### Native MCP inventory
 
 A harness that owns MCP connections outside OpenClaw's in-process MCP runtime

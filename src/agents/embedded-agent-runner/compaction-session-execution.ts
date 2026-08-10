@@ -9,7 +9,9 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
+  consumeCompactionSafeguardCancelError,
   consumeCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancelError,
   setCompactionSafeguardCancelReason,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
@@ -406,6 +408,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
+              setCompactionSafeguardCancelError(compactionSessionManager, undefined);
               return resolveEffectiveCompactionMode(params.config) === "default" &&
                 trigger !== "manual"
                 ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
@@ -546,11 +549,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       await runtime.disposeToolRuntimes();
     }
   } catch (err) {
+    const safeguardCancelError = consumeCompactionSafeguardCancelError(compactionSessionManager);
     const reason = resolveCompactionFailureReason({
       reason: formatErrorMessage(err),
       safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
     });
-    return fail(reason, err);
+    return fail(reason, safeguardCancelError ?? err);
   } finally {
     if (!checkpointSnapshotRetained) {
       await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
