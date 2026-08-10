@@ -11,7 +11,7 @@ import {
   migrateLegacyCronDeliveryThreadIds,
   repairLegacyTaskAgentAttribution,
   repairLegacyTaskDeliveryStatuses,
-  repairLegacySubagentAttachmentRoots,
+  retireLegacySubagentAttachmentCleanup,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
@@ -405,7 +405,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
   repairLegacySubagentSuspensionReasons(db);
-  repairLegacySubagentAttachmentRoots(db);
+  retireLegacySubagentAttachmentCleanup(db);
   repairLegacySubagentExecutionPayloads(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");

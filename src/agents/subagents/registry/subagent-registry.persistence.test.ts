@@ -954,7 +954,10 @@ describe("subagent registry persistence", () => {
         await fs.access(attachmentsDir);
         return false;
       } catch (err) {
-        return (err as NodeJS.ErrnoException).code === "ENOENT";
+        return (
+          (err as NodeJS.ErrnoException).code === "ENOENT" &&
+          readPersistedRegistry().runs?.["run-orphan-attachments"] === undefined
+        );
       }
     });
 

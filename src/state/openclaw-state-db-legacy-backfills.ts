@@ -126,8 +126,8 @@ export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
 const GENERATED_SUBAGENT_ATTACHMENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Re-root shipped attachment receipts before canonical registry hydration. */
-export function repairLegacySubagentAttachmentRoots(db: DatabaseSync): void {
+/** Retire shipped unconfined attachment cleanup before canonical registry hydration. */
+export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
   if (!tableExists(db, "subagent_runs")) {
     return;
   }
@@ -143,6 +143,14 @@ export function repairLegacySubagentAttachmentRoots(db: DatabaseSync): void {
     if (!payload || !storedRoot || !storedDir) {
       continue;
     }
+    if (
+      Object.hasOwn(payload, "attachmentsSandboxSessionKey") ||
+      Object.hasOwn(payload, "attachmentsSandboxAgentId") ||
+      Object.hasOwn(payload, "attachmentsSandboxWorkspaceDir") ||
+      Object.hasOwn(payload, "attachmentsSandboxDir")
+    ) {
+      continue;
+    }
     const rootDir = path.resolve(storedRoot);
     const attachmentsDir = path.resolve(storedDir);
     const attachmentId = path.relative(rootDir, attachmentsDir);
@@ -154,9 +162,11 @@ export function repairLegacySubagentAttachmentRoots(db: DatabaseSync): void {
     ) {
       continue;
     }
-    // v2026.7.x stored the attachment container as the root. Re-root lexically;
-    // cleanup must still traverse .openclaw through the no-symlink filesystem owner.
-    payload.attachmentsRootDir = path.dirname(path.dirname(rootDir));
+    // v2026.7.x stored no sandbox cleanup boundary. A host removal can race a
+    // writable sandbox, so retire this transient receipt without touching its path.
+    delete payload.attachmentsDir;
+    delete payload.attachmentsRootDir;
+    delete payload.retainAttachmentsOnKeep;
     update.run(JSON.stringify(payload), row.run_id);
   }
 }

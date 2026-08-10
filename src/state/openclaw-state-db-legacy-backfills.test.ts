@@ -3,9 +3,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  repairLegacySubagentAttachmentRoots,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
+  retireLegacySubagentAttachmentCleanup,
 } from "./openclaw-state-db-legacy-backfills.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -21,8 +21,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 
 const ATTACHMENT_ID = "12345678-1234-4123-8123-123456789abc";
 
-describe("repairLegacySubagentAttachmentRoots", () => {
-  it("canonicalizes only shipped direct generated attachment roots", () => {
+describe("retireLegacySubagentAttachmentCleanup", () => {
+  it("retires only shipped unconfined generated attachment receipts", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(`
       CREATE TABLE subagent_runs (
@@ -38,6 +38,15 @@ describe("repairLegacySubagentAttachmentRoots", () => {
       JSON.stringify({
         attachmentsRootDir: legacyRootDir,
         attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
+        retainAttachmentsOnKeep: true,
+      }),
+    );
+    insert.run(
+      "sandbox-owned",
+      JSON.stringify({
+        attachmentsRootDir: legacyRootDir,
+        attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
+        attachmentsSandboxSessionKey: "agent:main:main",
       }),
     );
     insert.run(
@@ -48,11 +57,11 @@ describe("repairLegacySubagentAttachmentRoots", () => {
       }),
     );
 
-    repairLegacySubagentAttachmentRoots(db);
+    retireLegacySubagentAttachmentCleanup(db);
     const firstPass = db
       .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
       .all();
-    repairLegacySubagentAttachmentRoots(db);
+    retireLegacySubagentAttachmentCleanup(db);
     const secondPass = db
       .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
       .all();
@@ -64,7 +73,10 @@ describe("repairLegacySubagentAttachmentRoots", () => {
         JSON.parse(String(row.payload_json)) as Record<string, unknown>,
       ]),
     );
-    expect(payloads.legacy?.attachmentsRootDir).toBe(workspaceDir);
+    expect(payloads.legacy).not.toHaveProperty("attachmentsDir");
+    expect(payloads.legacy).not.toHaveProperty("attachmentsRootDir");
+    expect(payloads.legacy).not.toHaveProperty("retainAttachmentsOnKeep");
+    expect(payloads["sandbox-owned"]?.attachmentsRootDir).toBe(legacyRootDir);
     expect(payloads.unexpected?.attachmentsRootDir).toBe(legacyRootDir);
   });
 });

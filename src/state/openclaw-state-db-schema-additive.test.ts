@@ -37,7 +37,7 @@ it("keeps secret-store first use from installing later additive schema", () => {
 const ATTACHMENT_ID = "12345678-1234-4123-8123-123456789abc";
 
 describe("ensureAdditiveStateColumns", () => {
-  it("repairs shipped attachment roots before registry reads", () => {
+  it("retires shipped unconfined attachment cleanup before registry reads", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
     const workspaceDir = path.resolve("/tmp/openclaw-additive-workspace");
@@ -66,6 +66,8 @@ describe("ensureAdditiveStateColumns", () => {
     const row = db
       .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
       .get("legacy-attachment-root") as { payload_json: string };
-    expect(JSON.parse(row.payload_json).attachmentsRootDir).toBe(workspaceDir);
+    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("attachmentsDir");
+    expect(payload).not.toHaveProperty("attachmentsRootDir");
   });
 });
