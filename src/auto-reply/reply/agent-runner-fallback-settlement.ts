@@ -1,5 +1,9 @@
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import {
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  renderControlUiAgentFailureCopy,
+} from "../../agents/failover/user-copy.js";
+import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
@@ -9,10 +13,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import {
-  buildControlUiAgentFailureText,
-  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-} from "./agent-runner-failure-copy.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
 import type {
@@ -119,7 +119,7 @@ export async function settleAgentFallbackCycle(params: {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: cycle.shouldSurfaceToControlUi
-          ? buildControlUiAgentFailureText(embeddedErrorText)
+          ? renderControlUiAgentFailureCopy(embeddedErrorText)
           : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       }),
     };

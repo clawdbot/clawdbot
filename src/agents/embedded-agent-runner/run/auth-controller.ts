@@ -13,7 +13,6 @@ import {
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
-import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -21,6 +20,7 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
   getApiKeyForModel,
   MissingProviderAuthError,
@@ -403,7 +403,7 @@ export function createEmbeddedRunAuthController(params: {
     });
     const message =
       failoverParams.message?.trim() ||
-      formatAuthProfileFailureMessage({
+      renderAuthProfileFailoverCopy({
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,

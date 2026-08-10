@@ -1,13 +1,20 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import {
-  formatRateLimitOrOverloadedErrorCopy,
   isCompactionFailureError,
   isLikelyContextOverflowError,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
-import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderBillingReplyCopy,
+  renderControlUiAgentFailureCopy,
+  renderRateLimitOrOverloadedCopy,
+  renderRateLimitReplyCopy,
+  renderUserFacingText,
+} from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -24,18 +31,11 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  buildControlUiAgentFailureText,
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "./agent-runner-failure-copy.js";
-import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
-  buildRateLimitCooldownMessage,
   isNonDirectConversationContext,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
-  resolveBillingFailureReplyText,
   resolveExternalRunFailureTextForConversation,
   resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
@@ -159,7 +159,7 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal()?.emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? buildControlUiAgentFailureText(
+      ? renderControlUiAgentFailureCopy(
           "model switch could not be completed. The requested model may be temporarily unavailable.",
         )
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
@@ -424,13 +424,16 @@ export async function handleAgentExecutionError(params: {
     ? isPureTransientSummary
     : failoverReason === "rate_limit" || failoverReason === "overloaded";
   const rateLimitOrOverloadedCopy =
-    !hasFallbackAttempts || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(
-          isFailoverError(err) && failoverReason === "overloaded" ? "overloaded" : message,
-        )
+    (!hasFallbackAttempts &&
+      (failoverReason === "rate_limit" || failoverReason === "overloaded")) ||
+    isPureTransientSummary
+      ? renderRateLimitOrOverloadedCopy({
+          reason: isOverloaded ? "overloaded" : "rate_limit",
+          raw: message,
+        })
       : undefined;
   const userFacingMessage = isTransientHttp
-    ? sanitizeUserFacingText(message, { errorContext: true })
+    ? renderUserFacingText(message, { errorContext: true })
     : message;
   const externalRunFailureReply =
     !isBilling &&
@@ -450,15 +453,15 @@ export async function handleAgentExecutionError(params: {
         )
       : undefined;
   const fallbackText = isBilling
-    ? resolveBillingFailureReplyText(err)
+    ? renderBillingReplyCopy(err)
     : isRateLimit && !isOverloaded
-      ? buildRateLimitCooldownMessage(err)
+      ? renderRateLimitReplyCopy(err)
       : rateLimitOrOverloadedCopy
         ? rateLimitOrOverloadedCopy
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : params.shouldSurfaceToControlUi
-            ? buildControlUiAgentFailureText(userFacingMessage)
+            ? renderControlUiAgentFailureCopy(userFacingMessage)
             : (externalRunFailureReply?.text ??
               (turn.isHeartbeat
                 ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT

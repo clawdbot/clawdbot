@@ -171,7 +171,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
   );
   return {
     ...actual,
-    BILLING_ERROR_USER_MESSAGE: "billing",
     formatBillingErrorMessage: actual.formatBillingErrorMessage,
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
