@@ -20,10 +20,28 @@ import { getArchivedSkillFiles } from "./curator.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 
+type CopyDirectoryHook = (
+  source: unknown,
+  destination: unknown,
+  options?: unknown,
+) => Promise<void>;
+
+const copyDirectoryBefore = vi.hoisted(() => vi.fn<CopyDirectoryHook>(async () => {}));
+const copyDirectoryAfter = vi.hoisted(() => vi.fn<CopyDirectoryHook>(async () => {}));
 const dispatchCommittedSkillChangeBestEffort = vi.hoisted(() =>
   vi.fn(async (_event: { action: string }) => {}),
 );
 const snapshotCommittedSkillArtifactBestEffort = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const cp: typeof actual.cp = async (source, destination, options) => {
+    await copyDirectoryBefore(source, destination, options);
+    await actual.cp(source, destination, options);
+    await copyDirectoryAfter(source, destination, options);
+  };
+  const patched = { ...actual, cp };
+  return { ...patched, default: patched };
+});
 vi.mock("../lifecycle/skill-change-hook.js", () => ({
   hasCommittedSkillChangeHooks: () => true,
   snapshotCommittedSkillArtifactBestEffort,
@@ -35,6 +53,10 @@ let testState: OpenClawTestState;
 let workspaceDir: string;
 
 beforeEach(async () => {
+  copyDirectoryBefore.mockReset();
+  copyDirectoryBefore.mockResolvedValue(undefined);
+  copyDirectoryAfter.mockReset();
+  copyDirectoryAfter.mockResolvedValue(undefined);
   dispatchCommittedSkillChangeBestEffort.mockClear();
   snapshotCommittedSkillArtifactBestEffort.mockReset();
   snapshotCommittedSkillArtifactBestEffort.mockResolvedValue(undefined);
@@ -239,9 +261,7 @@ describe("skill collection reconciliation", () => {
     await fs.mkdir(path.dirname(supportFile), { recursive: true });
     await fs.writeFile(supportFile, "Before\n", "utf8");
     const receipt = await readCollectionReceipt();
-    const copy = fs.cp.bind(fs);
-    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
-      await copy(source, destination, options);
+    copyDirectoryAfter.mockImplementationOnce(async () => {
       await fs.appendFile(supportFile, "External edit\n", "utf8");
     });
 
@@ -260,7 +280,7 @@ describe("skill collection reconciliation", () => {
         ],
       }),
     ).rejects.toThrow("Skill tree changed before collection mutation: procedure");
-    copySpy.mockRestore();
+    copyDirectoryAfter.mockReset();
 
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "# Original",
@@ -450,12 +470,16 @@ describe("skill collection reconciliation", () => {
         },
       ],
     });
-    const skillDir = path.join(workspaceDir, "skills", "procedure");
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+    const skillDir = path.join(canonicalWorkspaceDir, "skills", "procedure");
     const skillFile = path.join(skillDir, "SKILL.md");
-    const backupRoot = path.join(testState.stateDir, "skill-workshop", "collection-backups");
-    const originalCopy = fs.cp.bind(fs);
+    const backupRoot = path.join(
+      await fs.realpath(testState.stateDir),
+      "skill-workshop",
+      "collection-backups",
+    );
     let failed = false;
-    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+    copyDirectoryBefore.mockImplementation(async (source, destination) => {
       if (
         !failed &&
         String(source).startsWith(backupRoot) &&
@@ -465,7 +489,6 @@ describe("skill collection reconciliation", () => {
         failed = true;
         throw new Error("forced restore copy failure");
       }
-      await originalCopy(source, destination, options);
     });
 
     try {
@@ -473,7 +496,7 @@ describe("skill collection reconciliation", () => {
         restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
       ).rejects.toThrow("forced restore copy failure");
     } finally {
-      copySpy.mockRestore();
+      copyDirectoryBefore.mockReset();
     }
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Clean");
 
@@ -498,14 +521,12 @@ describe("skill collection reconciliation", () => {
         },
       ],
     });
-    const skillDir = path.join(workspaceDir, "skills", "procedure");
+    const skillDir = path.join(await fs.realpath(workspaceDir), "skills", "procedure");
     const beforeVersion = getSkillsSnapshotVersion();
-    const originalCopy = fs.cp.bind(fs);
-    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+    copyDirectoryBefore.mockImplementation(async (source, destination) => {
       if (path.resolve(String(destination)) === path.resolve(skillDir)) {
         throw new Error(`forced restore copy failure: ${String(source)}`);
       }
-      await originalCopy(source, destination, options);
     });
 
     try {
@@ -513,7 +534,7 @@ describe("skill collection reconciliation", () => {
         restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
       ).rejects.toThrow("current collection was not restored");
     } finally {
-      copySpy.mockRestore();
+      copyDirectoryBefore.mockReset();
     }
 
     expect(getSkillsSnapshotVersion()).toBeGreaterThan(beforeVersion);

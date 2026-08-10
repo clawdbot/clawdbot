@@ -367,6 +367,7 @@ describe("skill collection review", () => {
 
   it("groups symlink aliases before comparing shared-workspace identities", async () => {
     const workspaceDir = await tempDirs.make("openclaw-collection-review-real-workspace-");
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
     const aliasParent = await tempDirs.make("openclaw-collection-review-alias-parent-");
     const workspaceAlias = path.join(aliasParent, "workspace-alias");
     await fs.symlink(
@@ -400,7 +401,7 @@ describe("skill collection review", () => {
       onError,
     });
 
-    expect(onError).toHaveBeenCalledWith(expect.any(Error), workspaceDir);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), canonicalWorkspaceDir);
     expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
@@ -450,6 +451,7 @@ describe("skill collection review", () => {
 
   it("admits and reports each workspace independently", async () => {
     const oversizedWorkspace = await tempDirs.make("openclaw-collection-review-failed-");
+    const canonicalOversizedWorkspace = await fs.realpath(oversizedWorkspace);
     const healthyWorkspace = await tempDirs.make("openclaw-collection-review-healthy-");
     await writeWorkspaceSkills(oversizedWorkspace, [
       { name: "oversized", description: "Oversized", body: "x".repeat(240_001) },
@@ -489,7 +491,7 @@ describe("skill collection review", () => {
     });
 
     expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(2);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error), oversizedWorkspace);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), canonicalOversizedWorkspace);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
