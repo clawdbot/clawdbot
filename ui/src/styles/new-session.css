@@ -78,8 +78,13 @@ openclaw-new-session-page {
 .new-session-page__composer:hover .new-session-page__visibility,
 .new-session-page__composer:focus-within .new-session-page__visibility,
 .new-session-page__visibility--active {
-  color: var(--text);
   opacity: 1;
+}
+
+/* Active mode stays readable without hover; inactive revealed pills keep the
+   muted resting color until directly hovered. */
+.new-session-page__visibility--active {
+  color: var(--text);
 }
 
 .new-session-page__visibility:disabled {
