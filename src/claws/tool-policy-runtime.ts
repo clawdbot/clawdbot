@@ -87,10 +87,14 @@ registerClawInstallSchemaVersionSnapshotListener(() => applyPreparedClawToolPoli
 registerRuntimeConfigSnapshotPreparer((config) => prepareClawToolPolicyConsent(config));
 
 class ClawToolProfileConsentError extends Error {
-  constructor(agentId: string) {
+  constructor(agentId: string, options: { unboundedFullProfile?: boolean } = {}) {
     super(
-      `Claw-managed agent ${JSON.stringify(agentId)} uses a legacy dynamic tool policy. ` +
-        `Run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority before running it.`,
+      options.unboundedFullProfile
+        ? `Claw-managed agent ${JSON.stringify(agentId)} uses the legacy unbounded full tool profile. ` +
+            "Add an explicit tools.allow list to its package OpenClaw profile, then " +
+            `run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority.`
+        : `Claw-managed agent ${JSON.stringify(agentId)} uses a legacy dynamic tool policy. ` +
+            `Run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority before running it.`,
     );
     this.name = "ClawToolProfileConsentError";
   }
@@ -128,7 +132,10 @@ export function resolveClawToolPolicyConsent(params: {
     prepared.kind === "legacy" ||
     (params.ownsProfile && (params.profile !== "full" || !params.hasAgentAllowlist))
   ) {
-    throw new ClawToolProfileConsentError(params.agentId);
+    throw new ClawToolProfileConsentError(params.agentId, {
+      unboundedFullProfile:
+        prepared.kind === "legacy" && params.profile === "full" && !params.hasAgentAllowlist,
+    });
   }
   return { frozen: params.hasAgentAllowlist };
 }

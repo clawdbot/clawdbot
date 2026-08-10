@@ -48,6 +48,39 @@ describe("resolveClawToolPolicyConsent", () => {
     ).toThrow("uses a legacy dynamic tool policy");
   });
 
+  it("gives legacy unbounded full profiles an actionable repair path", () => {
+    const tools = { profile: "full" as const };
+    prepareClawToolPolicyConsent(
+      { agents: { list: [{ id: "worker", tools }] } },
+      {
+        readSchemaVersions: () => ({
+          kind: "ready",
+          schemaVersions: new Map([
+            [
+              "worker",
+              {
+                kind: "ok",
+                schemaVersion: "openclaw.clawInstallRecord.v1",
+              },
+            ],
+          ]),
+        }),
+      },
+    );
+
+    expect(() =>
+      resolveClawToolPolicyConsent({
+        agentTools: tools,
+        agentId: "worker",
+        profile: "full",
+        ownsProfile: true,
+        hasAgentAllowlist: false,
+      }),
+    ).toThrow(
+      "Add an explicit tools.allow list to its package OpenClaw profile, then run `openclaw claws update worker`",
+    );
+  });
+
   it("reuses prepared current provenance without runtime reads", () => {
     const { tools, readSchemaVersions } = prepare("openclaw.clawInstallRecord.v2");
     const resolve = () =>

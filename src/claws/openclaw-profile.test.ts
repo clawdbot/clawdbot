@@ -191,6 +191,34 @@ describe("OpenClaw profile reader", () => {
     });
   });
 
+  it("requires package authors to bound a legacy full profile before update", async () => {
+    const root = tempDirs.make("openclaw-claw-legacy-full-profile-");
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "openclaw.claw.json"),
+      JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: full\n",
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(join(root, "openclaw.claw.json"), {
+      allowLegacyDynamicToolProfile: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({
+          message: expect.stringContaining("bounded explicit allowlist"),
+        }),
+      ],
+    });
+  });
+
   it("rejects a hardlinked profile", async () => {
     const root = tempDirs.make("openclaw-claw-profile-hardlink-");
     await mkdir(join(root, "profiles"));
