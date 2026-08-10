@@ -120,6 +120,7 @@ describe("sanitizeDiagnosticPayload", () => {
   });
 
   it.each([
+    ["credential", false],
     ["privateKey", false],
     ["signingKey", false],
     ["secretAccessKey", false],

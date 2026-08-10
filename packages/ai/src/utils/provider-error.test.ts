@@ -444,6 +444,7 @@ describe("projectProviderError", () => {
   });
 
   it.each([
+    ["credential", false],
     ["privateKey", false],
     ["signingKey", false],
     ["secretAccessKey", false],

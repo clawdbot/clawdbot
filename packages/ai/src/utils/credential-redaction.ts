@@ -10,7 +10,7 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "tokens",
 ]);
 const CREDENTIAL_FIELD_SUFFIX_RE =
-  /(?:apikey|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
+  /(?:apikey|credential|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
 const MEDIA_PAYLOAD_SUFFIXES =
   "base64|blob|buffer|bytes|data|delta|frames?|output|result|(?:file|media|source)?(?:uri|url)";
 const MEDIA_FIELD_NAME_RE = new RegExp(
