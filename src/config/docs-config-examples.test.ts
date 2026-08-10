@@ -73,6 +73,28 @@ describe("docs config examples", () => {
       issuePath: "",
     },
     {
+      name: "reports a retired bundled channel key",
+      markdown: '```json5\n{ channels: { slack: { identity: "bot" } } }\n```',
+      findings: 1,
+      skipped: undefined,
+      issuePath: "channels.slack",
+    },
+    {
+      name: "reports an unsupported OpenAI plugin config key",
+      markdown:
+        '```json5\n{ plugins: { entries: { openai: { config: { personalityy: "friendly" } } } } }\n```',
+      findings: 1,
+      skipped: undefined,
+      issuePath: "plugins.entries.openai.config",
+    },
+    {
+      name: "accepts a supported OpenAI plugin config value",
+      markdown:
+        '```json5\n{ plugins: { entries: { openai: { config: { personality: "off" } } } } }\n```',
+      findings: 0,
+      skipped: undefined,
+    },
+    {
       name: "drops nested include directives before validation",
       markdown:
         '```json5\n{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }\n```',

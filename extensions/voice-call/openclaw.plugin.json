@@ -237,6 +237,11 @@
       "label": "Session Scope",
       "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
     },
+    "agentId": {
+      "label": "Voice Agent",
+      "help": "Agent used for response generation and session storage.",
+      "advanced": true
+    },
     "responseModel": {
       "label": "Response Model",
       "help": "Optional override. Falls back to the runtime default model when unset.",
@@ -712,7 +717,7 @@
                   "model": {
                     "type": "string"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
                   },
                   "speed": {
@@ -735,7 +740,7 @@
                   "baseUrl": {
                     "type": "string"
                   },
-                  "voiceId": {
+                  "speakerVoiceId": {
                     "type": "string"
                   },
                   "modelId": {
@@ -791,7 +796,7 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
                   },
                   "lang": {
@@ -829,7 +834,7 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
                   },
                   "lang": {
@@ -895,6 +900,10 @@
       "sessionScope": {
         "type": "string",
         "enum": ["per-phone", "per-call"]
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
       },
       "responseModel": {
         "type": "string"
