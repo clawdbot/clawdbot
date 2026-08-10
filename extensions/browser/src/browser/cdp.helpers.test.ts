@@ -2,7 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertChromeMcpExplicitCdpUrlAllowed,
+  assertChromeMcpCdpTransportAllowed,
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { resolveCdpReachabilityTimeouts } from "./cdp-timeouts.js";
@@ -618,18 +618,28 @@ describe("CDP reachability policy", () => {
     });
   });
 
-  it("preserves Chrome MCP explicit CDP URL profiles under the default policy", () => {
+  it.each([
+    ["cdpUrl", { cdpUrl: "http://127.0.0.1:9222" }],
+    ["--browserUrl", { cdpUrl: "", mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] }],
+    ["-u", { cdpUrl: "", mcpArgs: ["-u", "http://127.0.0.1:9222"] }],
+    ["--u", { cdpUrl: "", mcpArgs: ["--u", "http://127.0.0.1:9222"] }],
+    ["--wsEndpoint", { cdpUrl: "", mcpArgs: ["--wsEndpoint=ws://127.0.0.1:9222"] }],
+    ["-w", { cdpUrl: "", mcpArgs: ["-w", "ws://127.0.0.1:9222"] }],
+    ["--w", { cdpUrl: "", mcpArgs: ["--w=ws://127.0.0.1:9222"] }],
+  ])("rejects Chrome MCP explicit %s endpoints under the default policy", (_source, endpoint) => {
     const profile = createProfile({
       driver: "existing-session",
-      cdpUrl: "http://127.0.0.1:9222",
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
+      ...endpoint,
     });
 
-    expect(() => assertChromeMcpExplicitCdpUrlAllowed(profile, {})).not.toThrow();
+    expect(() => assertChromeMcpCdpTransportAllowed(profile, {})).toThrow(
+      /cannot carry that pinned transport/i,
+    );
   });
 
-  it("preserves Chrome MCP explicit CDP URL profiles after default CDP scoping", () => {
+  it("rejects Chrome MCP explicit CDP URL profiles after default CDP scoping", () => {
     const profile = createProfile({
       driver: "existing-session",
       cdpUrl: "http://127.0.0.1:9222",
@@ -639,7 +649,9 @@ describe("CDP reachability policy", () => {
     const cdpPolicy = resolveCdpReachabilityPolicy(profile, {});
 
     expect(cdpPolicy).toEqual({ allowedHostnames: ["127.0.0.1"] });
-    expect(() => assertChromeMcpExplicitCdpUrlAllowed(profile, cdpPolicy)).not.toThrow();
+    expect(() => assertChromeMcpCdpTransportAllowed(profile, cdpPolicy)).toThrow(
+      /cannot carry that pinned transport/i,
+    );
   });
 
   it("preserves Chrome MCP explicit CDP URL profiles when private CDP endpoints are trusted", () => {
@@ -651,7 +663,7 @@ describe("CDP reachability policy", () => {
     });
 
     expect(() =>
-      assertChromeMcpExplicitCdpUrlAllowed(profile, { dangerouslyAllowPrivateNetwork: true }),
+      assertChromeMcpCdpTransportAllowed(profile, { dangerouslyAllowPrivateNetwork: true }),
     ).not.toThrow();
   });
 
@@ -664,7 +676,7 @@ describe("CDP reachability policy", () => {
     });
 
     expect(() =>
-      assertChromeMcpExplicitCdpUrlAllowed(profile, { dangerouslyAllowPrivateNetwork: false }),
+      assertChromeMcpCdpTransportAllowed(profile, { dangerouslyAllowPrivateNetwork: false }),
     ).toThrow(/cannot carry that pinned transport/i);
   });
 
@@ -683,7 +695,7 @@ describe("CDP reachability policy", () => {
       dangerouslyAllowPrivateNetwork: false,
       allowedHostnames: ["127.0.0.1"],
     });
-    expect(() => assertChromeMcpExplicitCdpUrlAllowed(profile, cdpPolicy)).toThrow(
+    expect(() => assertChromeMcpCdpTransportAllowed(profile, cdpPolicy)).toThrow(
       /cannot carry that pinned transport/i,
     );
   });
@@ -697,7 +709,7 @@ describe("CDP reachability policy", () => {
     });
 
     expect(() =>
-      assertChromeMcpExplicitCdpUrlAllowed(profile, { allowedHostnames: ["127.0.0.1"] }),
+      assertChromeMcpCdpTransportAllowed(profile, { allowedHostnames: ["127.0.0.1"] }),
     ).toThrow(/cannot carry that pinned transport/i);
   });
 
@@ -710,7 +722,7 @@ describe("CDP reachability policy", () => {
     });
 
     expect(() =>
-      assertChromeMcpExplicitCdpUrlAllowed(profile, {
+      assertChromeMcpCdpTransportAllowed(profile, {
         dangerouslyAllowPrivateNetwork: true,
         allowedHostnames: ["127.0.0.1"],
       }),

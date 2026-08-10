@@ -9,10 +9,10 @@ import WebSocket from "ws";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { getDirectAgentForCdp, withManagedProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { getPlaywrightUserAgent } from "./playwright-core.runtime.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
-const PLAYWRIGHT_CDP_USER_AGENT = "Playwright/unknown";
 const PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE = {
   clientNoContextTakeover: true,
   zlibDeflateOptions: { level: 3 },
@@ -44,7 +44,7 @@ function withDefaultPlaywrightUserAgent(headers: Record<string, string>): Record
   if (Object.keys(headers).some((key) => key.trim().toLowerCase() === "user-agent")) {
     return headers;
   }
-  return { ...headers, "User-Agent": PLAYWRIGHT_CDP_USER_AGENT };
+  return { ...headers, "User-Agent": getPlaywrightUserAgent() };
 }
 
 function cdpWebSocketAuthority(url: string): string {

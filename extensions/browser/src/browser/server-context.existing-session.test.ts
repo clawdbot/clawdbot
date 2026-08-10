@@ -37,6 +37,7 @@ type ChromeLiveProfile = {
   name?: string;
   cdpUrl?: string;
   userDataDir?: string;
+  mcpArgs?: string[];
 };
 
 function deferred<T>() {
@@ -128,32 +129,27 @@ afterEach(() => {
 });
 
 describe("browser server-context existing-session profile", () => {
-  it("preserves explicit Chrome MCP cdpUrl under the default CDP policy", async () => {
+  it("fails closed for Chrome MCP endpoint mcpArgs under the default CDP policy", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     state.resolved.ssrfPolicy = {};
     state.resolved.profiles["chrome-live"] = {
       ...state.resolved.profiles["chrome-live"],
-      cdpUrl: "http://127.0.0.1:9222",
+      mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"],
     };
     const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
 
-    await expect(live.listTabs()).resolves.toEqual([
-      expect.objectContaining({
-        targetId: "7",
-        title: "",
-        url: "https://example.com",
-        type: "page",
-      }),
-    ]);
-    await expect(live.openTab("https://example.com")).resolves.toEqual(
-      expect.objectContaining({ targetId: "8", url: "about:blank" }),
+    await expect(live.listTabs()).rejects.toThrow(/Chrome MCP cannot carry that pinned transport/);
+    await expect(live.openTab("https://example.com")).rejects.toThrow(
+      /remove cdpUrl and browserUrl\/wsEndpoint mcpArgs/,
     );
-    await expect(live.ensureBrowserAvailable()).resolves.toBeUndefined();
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(
+      /attach to a host-local Chrome profile/,
+    );
 
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalled();
-    expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledTimes(1);
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledTimes(1);
+    expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
+    expect(chromeMcp.openChromeMcpTab).not.toHaveBeenCalled();
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
   });
 
   it("fails closed for explicit Chrome MCP cdpUrl under explicit restrictive CDP policy", async () => {
@@ -171,7 +167,7 @@ describe("browser server-context existing-session profile", () => {
       /Use driver "openclaw" for guarded CDP endpoints/,
     );
     await expect(live.ensureBrowserAvailable()).rejects.toThrow(
-      /remove cdpUrl from this existing-session profile/,
+      /remove cdpUrl and browserUrl\/wsEndpoint mcpArgs/,
     );
 
     expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();

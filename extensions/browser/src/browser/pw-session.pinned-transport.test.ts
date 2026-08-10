@@ -325,4 +325,46 @@ describe("pw-session pinned Playwright transport", () => {
       });
     }
   });
+
+  it("propagates pinned WebSocket protocol errors through transport closure", async () => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => {
+      server.once("listening", () => resolve());
+    });
+    const port = (server.address() as { port: number }).port;
+    const cdpUrl = `ws://127.0.0.1:${port}/devtools/browser/test`;
+    const serverSocket = new Promise<import("ws").WebSocket>((resolve) => {
+      server.on("connection", (socket) => resolve(socket));
+    });
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: cdpUrl,
+      lookup: pinnedLoopbackLookup(),
+    });
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
+      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      const closed = new Promise<string | undefined>((resolve) => {
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onclose property.
+        transport.onclose = (reason) => resolve(reason);
+      });
+      const socket = (await serverSocket) as import("ws").WebSocket & {
+        _socket: { write(data: Buffer): void };
+      };
+      // Send an invalid reserved opcode so the real ws client emits an error.
+      socket._socket.write(Buffer.from([0x83, 0x00]));
+      await expect(closed).resolves.toContain("Invalid WebSocket frame");
+      return browser.browser;
+    }) as never);
+
+    try {
+      await expect(listPagesViaPlaywright({ cdpUrl, ssrfPolicy: {} })).resolves.toEqual([
+        expect.objectContaining({ targetId: "A" }),
+      ]);
+      expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 });

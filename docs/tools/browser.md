@@ -327,13 +327,13 @@ main model can read the screenshot directly.
   keep the approved endpoint bound to the actual socket. Use the regular
   `openclaw` driver for Browserless, Browserbase, Notte, or other guarded
   remote CDP providers. `existing-session`/Chrome MCP profiles with an explicit
-  `cdpUrl` remain supported under the default Browser policy and trusted-private
-  policy. They are rejected only when explicit Browser CDP restrictions require
-  a pinned endpoint, because Chrome MCP accepts only `--browserUrl`/`--wsEndpoint`
-  subprocess flags and cannot carry OpenClaw's pinned DNS lookup or guarded
-  discovery result. For Chrome MCP under explicit CDP restrictions, either omit
-  `cdpUrl` and attach to a host-local Chrome profile, or switch the profile to
-  the regular driver for guarded CDP.
+  `cdpUrl` or `--browserUrl`/`--wsEndpoint` MCP argument are rejected under the
+  default strict Browser policy because Chrome MCP cannot carry OpenClaw's
+  pinned DNS lookup or guarded discovery result across its subprocess boundary.
+  They remain supported only when private-network Browser access is explicitly
+  trusted. Otherwise, omit the explicit endpoint and attach Chrome MCP to a
+  host-local Chrome profile, or switch the profile to the regular driver for
+  guarded CDP.
 - Redirecting CDP discovery to a different authority remains unsupported unless
   the active policy explicitly allows that authority change. Revalidating a
   returned hostname is not enough; the WebSocket transport must use the endpoint
