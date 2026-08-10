@@ -92,6 +92,6 @@ describe("secrets store view", () => {
     const container = mount([], { canSet: false, canDelete: false });
 
     expect(container.querySelector("button")).toBeNull();
-    expect(container.textContent).toContain("No team secrets yet");
+    expect(container.textContent).toContain("Secrets");
   });
 });

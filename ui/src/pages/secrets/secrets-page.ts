@@ -8,7 +8,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   bulkSetSecretsStoreEntries,
   createInitialSecretsStoreState,
@@ -62,21 +62,22 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private get canList(): boolean {
-    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.list", "operator.admin", {
-      requireAdvertisement: true,
-    });
+    return this.canCall("secrets.store.list");
   }
 
   private get canSet(): boolean {
-    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.set", "operator.admin", {
-      requireAdvertisement: true,
-    });
+    return this.canCall("secrets.store.set");
   }
 
   private get canDelete(): boolean {
-    return canCallGatewayMethod(this.gateway.snapshot, "secrets.store.delete", "operator.admin", {
-      requireAdvertisement: true,
-    });
+    return this.canCall("secrets.store.delete");
+  }
+
+  private canCall(method: "secrets.store.list" | "secrets.store.set" | "secrets.store.delete") {
+    return (
+      isGatewayMethodAdvertised(this.gateway.snapshot ?? {}, method) === true &&
+      canCallGatewayMethod(this.gateway.snapshot, method, "operator.admin")
+    );
   }
 
   private ensureInitialData() {
@@ -155,17 +156,17 @@ class SecretsPage extends OpenClawLightDomElement {
 
   private validateDraft(): string | null {
     if (!ENV_SECRET_REF_ID_RE.test(this.draft.name)) {
-      return t("secretsStore.invalidName");
+      return t("secretsStore.badName");
     }
     if (
       this.dialogMode === "edit" &&
       this.draft.kind === "secret" &&
       this.draft.value.length === 0
     ) {
-      return t("secretsStore.replacementRequired");
+      return t("secretsStore.required");
     }
     if (new TextEncoder().encode(this.draft.value).byteLength > MAX_VALUE_BYTES) {
-      return t("secretsStore.valueTooLarge");
+      return t("secretsStore.tooLarge");
     }
     return null;
   }
@@ -225,18 +226,18 @@ class SecretsPage extends OpenClawLightDomElement {
     }
     const parsed = this.bulkParsed;
     if (parsed.invalidNames.length > 0) {
-      this.formError = `${t("secretsStore.invalidName")} ${parsed.invalidNames.join(", ")}`;
+      this.formError = `${t("secretsStore.badName")} ${parsed.invalidNames.join(", ")}`;
       return;
     }
     if (parsed.entries.length === 0) {
-      this.formError = t("secretsStore.noBulkEntries");
+      this.formError = t("secretsStore.required");
       return;
     }
     const oversized = parsed.entries.find(
       (entry) => new TextEncoder().encode(entry.value).byteLength > MAX_VALUE_BYTES,
     );
     if (oversized) {
-      this.formError = `${oversized.name}: ${t("secretsStore.valueTooLarge")}`;
+      this.formError = `${oversized.name}: ${t("secretsStore.tooLarge")}`;
       return;
     }
     void this.runStoreTask(async (store) => {
@@ -251,8 +252,8 @@ class SecretsPage extends OpenClawLightDomElement {
       this.bulkOpen = false;
       this.formError = null;
       this.notice = result.warningCount
-        ? `${t("secretsStore.bulkSaved", { count: String(result.saved) })} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
-        : t("secretsStore.bulkSaved", { count: String(result.saved) });
+        ? `${t("secretsStore.savedMany", { count: String(result.saved) })} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
+        : t("secretsStore.savedMany", { count: String(result.saved) });
     });
   }
 
@@ -261,7 +262,7 @@ class SecretsPage extends OpenClawLightDomElement {
       !this.canDelete ||
       !(await showConfirmDialog({
         title: t("common.delete"),
-        message: t("secretsStore.deleteConfirm", { name: entry.name }),
+        message: t("secretsStore.confirmDelete", { name: entry.name }),
         confirmLabel: t("common.delete"),
         danger: true,
       }))

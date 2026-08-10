@@ -35,8 +35,8 @@ export function isGatewayCapabilityAdvertised(
 
 /**
  * Combines the active connection, advertised method catalog, and operator
- * scopes. Older Gateways may omit either metadata surface, so callers can
- * explicitly require method advertisement for newly additive UI surfaces.
+ * scopes. Older Gateways may omit either metadata surface, so only explicit
+ * method absence or an explicit insufficient scope blocks the action.
  */
 export function canCallGatewayMethod(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
@@ -47,11 +47,9 @@ export function canCallGatewayMethod(
   if (!snapshot?.client || snapshot.phase !== "connected") {
     return false;
   }
-  const advertised = isGatewayMethodAdvertised(snapshot, method);
   if (
-    options.requireAdvertisement === true
-      ? advertised !== true
-      : options.requireAdvertisement !== false && advertised === false
+    options.requireAdvertisement !== false &&
+    isGatewayMethodAdvertised(snapshot, method) === false
   ) {
     return false;
   }

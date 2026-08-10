@@ -57,7 +57,7 @@ const SECRET_MASK = "••••••••";
 function updatedLabel(entry: SecretStoreEntry): string {
   const relative = formatRelativeTimestamp(entry.updatedAtMs, { fallback: t("common.unknown") });
   return entry.updatedBy
-    ? t("secretsStore.updatedBy", { time: relative, name: entry.updatedBy })
+    ? t("secretsStore.by", { time: relative, name: entry.updatedBy })
     : relative;
 }
 
@@ -101,7 +101,7 @@ function renderEntryMenu(props: SecretsStoreViewProps, entry: SecretStoreEntry):
 
 function renderTable(props: SecretsStoreViewProps): TemplateResult {
   if (!props.canList) {
-    return renderSettingsEmpty(t("secretsStore.unavailable"));
+    return renderSettingsEmpty(t("secretsStore.unavail"));
   }
   if (props.loading && !props.entries.length) {
     return renderSettingsEmpty(t("common.loading"));
@@ -109,8 +109,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
   if (!props.entries.length) {
     return html`
       <div class="secrets-store__empty">
-        ${renderSettingsEmpty(t("secretsStore.empty"))}
-        ${renderDocsLink(DOCS_URL, t("common.docs"))}
+        ${renderSettingsEmpty(t("tabs.secrets"))} ${renderDocsLink(DOCS_URL, t("common.docs"))}
       </div>
     `;
   }
@@ -121,7 +120,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
           <tr>
             <th scope="col">${t("secretsStore.name")}</th>
             <th scope="col">${t("secretsStore.value")}</th>
-            <th scope="col">${t("secretsStore.lastUpdated")}</th>
+            <th scope="col">${t("secretsStore.updated")}</th>
             <th scope="col" class="secrets-store__actions-heading">
               <span class="settings-control__sr-label">${t("secretsStore.actions")}</span>
             </th>
@@ -172,7 +171,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
   return html`
     <openclaw-modal-dialog
       label=${editing ? t("secretsStore.edit") : t("secretsStore.add")}
-      description=${t("secretsStore.secretHint")}
+      description=${t("secretsStore.hint")}
       @modal-cancel=${props.onCloseDialog}
     >
       <form
@@ -185,7 +184,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
       >
         <div class="secrets-store-dialog__header">
           <h2>${editing ? t("secretsStore.edit") : t("secretsStore.add")}</h2>
-          <p>${t("secretsStore.secretHint")}</p>
+          <p>${t("secretsStore.hint")}</p>
         </div>
         <label class="secrets-store-field">
           <span>${t("secretsStore.name")}</span>
@@ -225,7 +224,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
           />
           <span>
             <strong>${t("secretsStore.secret")}</strong>
-            <small>${t("secretsStore.secretHint")}</small>
+            <small>${t("secretsStore.hint")}</small>
           </span>
         </label>
         ${props.formError
@@ -249,7 +248,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
     return nothing;
   }
   return html`
-    <openclaw-modal-dialog label=${t("secretsStore.bulkAdd")} @modal-cancel=${props.onCloseBulk}>
+    <openclaw-modal-dialog label=${t("secretsStore.bulk")} @modal-cancel=${props.onCloseBulk}>
       <form
         class="secrets-store-dialog"
         aria-busy=${props.busy ? "true" : "false"}
@@ -259,10 +258,10 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
         }}
       >
         <div class="secrets-store-dialog__header">
-          <h2>${t("secretsStore.bulkAdd")}</h2>
+          <h2>${t("secretsStore.bulk")}</h2>
         </div>
         <label class="secrets-store-field">
-          <span>${t("secretsStore.bulkValues")}</span>
+          <span>${t("secretsStore.value")}</span>
           <textarea
             class="settings-input secrets-store-dialog__bulk"
             name="bulk-values"
@@ -276,7 +275,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
           ></textarea>
         </label>
         <div class="secrets-store-bulk__summary" aria-live="polite">
-          ${t("secretsStore.secretCount", { count: String(props.bulkSecretCount) })}
+          ${t("secretsStore.detected", { count: String(props.bulkSecretCount) })}
         </div>
         <label class="secrets-store-checkbox">
           <input
@@ -287,12 +286,12 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
               props.onBulkAutoDetectChange((event.currentTarget as HTMLInputElement).checked)}
           />
           <span>
-            <strong>${t("secretsStore.autoDetect")}</strong>
+            <strong>${t("secretsStore.detect")}</strong>
           </span>
         </label>
         ${props.bulkInvalidNames.length
           ? html`<div class="callout danger" role="alert">
-              ${t("secretsStore.invalidName")} ${props.bulkInvalidNames.join(", ")}
+              ${t("secretsStore.badName")} ${props.bulkInvalidNames.join(", ")}
             </div>`
           : nothing}
         ${props.formError
@@ -324,7 +323,7 @@ export function renderSecretsStore(props: SecretsStoreViewProps): TemplateResult
           ?disabled=${props.busy}
           @click=${props.onOpenBulk}
         >
-          ${t("secretsStore.bulkAdd")}
+          ${t("secretsStore.bulk")}
         </button>
         <button
           class="btn btn--sm primary"
@@ -367,7 +366,7 @@ export function renderSecretsStore(props: SecretsStoreViewProps): TemplateResult
           renderTable(props),
         )}
       `,
-      { wide: true, intro: t("secretsStore.intro") },
+      { wide: true, intro: t("secretsStore.hint") },
     )}
     ${renderEntryDialog(props)} ${renderBulkDialog(props)}
   `;

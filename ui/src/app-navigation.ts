@@ -378,7 +378,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.notifications",
   },
   security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
-  secrets: { titleKey: "tabs.secrets", subtitleKey: "subtitles.secrets" },
+  secrets: { titleKey: "tabs.secrets", subtitleKey: "secretsStore.hint" },
   advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },

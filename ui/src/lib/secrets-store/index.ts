@@ -166,7 +166,7 @@ export async function bulkSetSecretsStoreEntries(
     }
   } catch (error) {
     mutationError = new Error(
-      t("secretsStore.bulkPartialFailure", {
+      t("secretsStore.partial", {
         saved: String(saved),
         total: String(entries.length),
         error: formatUiError(error),

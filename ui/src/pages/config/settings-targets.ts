@@ -64,7 +64,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "tabs.secrets",
     hash: "",
     searchKeys: [],
-    aliases: "env credentials tokens team store",
+    aliases: "env team store",
   },
   system: {
     routeId: "connection",
