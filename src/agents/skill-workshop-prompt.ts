@@ -9,7 +9,8 @@ export function buildSkillWorkshopPromptSection(): string[] {
   return [
     "## Skill Workshop",
     "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-    "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+    "Used skill proved wrong or incomplete: call `skill_workshop` read, then patch the existing skill and apply that patch now; do not wait for background review. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
+    "Other generated work = pending proposal. Apply/reject/quarantine only explicit user ask.",
     "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
     "",
   ];

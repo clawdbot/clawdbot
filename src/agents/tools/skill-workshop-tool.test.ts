@@ -38,7 +38,9 @@ describe("skill_workshop tool", () => {
     const schema = JSON.stringify(tool.parameters);
 
     expect(schema).toContain("create = new skill");
-    expect(schema).toContain("update = existing live skill");
+    expect(schema).toContain("patch = targeted");
+    expect(schema).toContain("read = existing live skill");
+    expect(schema).toContain("update = full-body rewrite");
     expect(schema).toContain("revise = existing pending proposal");
     expect(schema).toContain("evaluate runs plugin evaluators");
     expect(schema).toContain("not filesystem search");
@@ -773,6 +775,47 @@ describe("skill_workshop tool", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
     ).rejects.toThrow();
+  });
+
+  it("repairs an existing live skill through read, patch, and apply", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const created = await tool.execute("repair-create", {
+      action: "create",
+      name: "Weather Planner",
+      description: "Plan around current weather",
+      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    });
+    await tool.execute("repair-create-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+    });
+
+    await expect(
+      tool.execute("repair-without-read", {
+        action: "patch",
+        skill_name: "weather-planner",
+        old_string: "Check weather before outdoor recommendations.",
+        new_string: "Check weather and alerts before outdoor recommendations.",
+      }),
+    ).rejects.toThrow("read the live skill first");
+
+    await tool.execute("repair-read", { action: "read", skill_name: "weather-planner" });
+    const patch = await tool.execute("repair-patch", {
+      action: "patch",
+      skill_name: "weather-planner",
+      old_string: "Check weather before outdoor recommendations.",
+      new_string: "Check weather and alerts before outdoor recommendations.",
+    });
+    expect(patch.details).toMatchObject({ status: "pending", kind: "update" });
+    await tool.execute("repair-apply", {
+      action: "apply",
+      proposal_id: (patch.details as { id: string }).id,
+    });
+
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
+    ).resolves.toContain("Check weather and alerts before outdoor recommendations.");
   });
 
   it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {

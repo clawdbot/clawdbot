@@ -324,7 +324,7 @@ describe("skill_workshop review mode", () => {
     const text = (read.content[0] as { text: string }).text;
     expect(read.details).toMatchObject({ skillKey: "big-skill", truncated: true });
     expect(text.length).toBeLessThanOrEqual(20_000 + 100);
-    expect(text).toContain("[truncated: skill exceeds the reviewer read budget]");
+    expect(text).toContain("[truncated: skill exceeds the Workshop read budget]");
 
     await expect(
       reviewTool.execute("oversized-patch", {
