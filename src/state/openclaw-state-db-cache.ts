@@ -6,7 +6,9 @@ import {
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import { readOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-maintenance.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 
@@ -126,6 +128,31 @@ export function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
     throw terminalFailure;
+  }
+}
+
+/** Reject a fresh shared-state open after known corruption until repair clears it. */
+export function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  assertOpenClawStateDatabaseOpenAllowed(pathname);
+  let quarantineFailure: Error | undefined;
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      quarantineFailure = createOpenClawDatabaseVerificationError(
+        "state",
+        pathname,
+        quarantine.reason,
+      );
+    }
+  } catch {
+    // A broken quarantine store must not brick every state read.
+    // The process latch and daily verifier still cover known damage.
+  }
+  if (quarantineFailure) {
+    throw quarantineFailure;
   }
 }
 

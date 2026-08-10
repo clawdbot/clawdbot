@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -36,22 +37,9 @@ import {
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { VERSION } from "../version.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  readOpenClawDatabaseQuarantine,
-} from "./openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
-import {
-  assertOpenClawStateDatabaseOpenAllowed,
-  clearOpenClawStateDatabaseOpenFailure,
-  closeOpenClawStateDatabaseHandle,
-  closeStaleCachedOpenClawStateDatabase,
-  evictCachedOpenClawStateDatabase,
-  getCachedOpenClawStateDatabase,
-  getOpenClawStateDatabaseIfOpenAtPath,
-  publishOpenClawStateDatabase,
-  recordOpenClawStateDatabaseOpenFailure,
-} from "./openclaw-state-db-cache.js";
+import * as stateDbCacheImpl from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -65,7 +53,6 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertSupportedSchemaVersion,
-  createOpenClawDatabaseVerificationError,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -107,15 +94,6 @@ export {
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-repair.js";
 export { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-state-db-startup-checkpoint.js";
-export {
-  clearOpenClawStateDatabaseOpenFailure,
-  closeOpenClawStateDatabase,
-  closeOpenClawStateDatabaseByPath,
-  closeOpenClawStateDatabaseForTest,
-  evictOpenClawStateDatabaseAfterCorruption,
-  isOpenClawStateDatabaseOpen,
-  recordOpenClawStateDatabaseOpenFailure,
-} from "./openclaw-state-db-cache.js";
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
 export function confirmOpenClawStateDatabaseIntegrity(
@@ -126,30 +104,29 @@ export function confirmOpenClawStateDatabaseIntegrity(
   return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }
 
+/** Latch background verification damage so later opens fail without rescanning. */
+export function recordOpenClawStateDatabaseOpenFailure(
+  pathname: string,
+  error: Error,
+  generation?: SqliteFileGeneration,
+): boolean {
+  return stateDbCacheImpl.recordOpenClawStateDatabaseOpenFailure(pathname, error, generation);
+}
+
+/** Clear a terminal open failure after doctor rewrites the database file. */
+export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
+  stateDbCacheImpl.clearOpenClawStateDatabaseOpenFailure(pathname);
+}
+
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
 export function assertOpenClawStateDatabaseFreshOpenAllowed(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  assertOpenClawStateDatabaseOpenAllowed(resolveDatabasePath(options));
   const env = options.env ?? process.env;
-  const pathname = resolveDatabasePath(options);
-  let quarantineFailure: Error | undefined;
-  try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      quarantineFailure = createOpenClawDatabaseVerificationError(
-        "state",
-        pathname,
-        quarantine.reason,
-      );
-    }
-  } catch {
-    // A broken quarantine store must not brick every state read.
-    // The process latch and daily verifier still cover known damage.
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
+  stateDbCacheImpl.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+    resolveDatabasePath(options),
+    env,
+  );
 }
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
@@ -589,8 +566,8 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
   // every open fails fast here until doctor repairs the file and clears it.
-  assertOpenClawStateDatabaseOpenAllowed(pathname);
-  const cached = getCachedOpenClawStateDatabase(pathname);
+  stateDbCacheImpl.assertOpenClawStateDatabaseOpenAllowed(pathname);
+  const cached = stateDbCacheImpl.getCachedOpenClawStateDatabase(pathname);
   if (cached?.db.isOpen) {
     assertOpenClawStateWriteAllowed({ database: cached.db, databasePath: pathname, env });
     return cached;
@@ -604,7 +581,7 @@ export function openOpenClawStateDatabase(
       () => {
         if (cached) {
           // A closed handle can leave Kysely and WAL helpers cached; clear both under access.
-          closeStaleCachedOpenClawStateDatabase(cached);
+          stateDbCacheImpl.closeStaleCachedOpenClawStateDatabase(cached);
         }
         return (unpublished = openUnpublishedOpenClawStateDatabase(pathname, env));
       },
@@ -613,7 +590,7 @@ export function openOpenClawStateDatabase(
     if (!unpublished) {
       throw error;
     }
-    const cleanup = closeOpenClawStateDatabaseHandle(unpublished);
+    const cleanup = stateDbCacheImpl.closeOpenClawStateDatabaseHandle(unpublished);
     if (cleanup.caught) {
       // oxlint-disable-next-line preserve-caught-error -- AggregateError retains every cleanup failure in its error list and the primary failure as its third-argument cause.
       throw new AggregateError(
@@ -624,7 +601,7 @@ export function openOpenClawStateDatabase(
     }
     throw error;
   }
-  return publishOpenClawStateDatabase(unpublished);
+  return stateDbCacheImpl.publishOpenClawStateDatabase(unpublished);
 }
 
 /** Run a synchronous immediate transaction against the shared state database. */
@@ -642,7 +619,7 @@ export function runOpenClawStateWriteTransaction<T>(
     database = openOpenClawStateDatabase(options);
   } catch (error) {
     if (cachedBeforeOpen && isSqliteCorruptionError(error)) {
-      evictCachedOpenClawStateDatabase(cachedBeforeOpen);
+      stateDbCacheImpl.evictCachedOpenClawStateDatabase(cachedBeforeOpen);
     }
     throw error;
   }
@@ -667,7 +644,7 @@ export function runOpenClawStateWriteTransaction<T>(
     );
   } catch (error) {
     if (isSqliteCorruptionError(error)) {
-      evictCachedOpenClawStateDatabase(database);
+      stateDbCacheImpl.evictCachedOpenClawStateDatabase(database);
     }
     throw error;
   }
@@ -689,5 +666,33 @@ export function runOpenClawStateWriteTransaction<T>(
 export function getOpenClawStateDatabaseIfOpen(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase | undefined {
-  return getOpenClawStateDatabaseIfOpenAtPath(resolveDatabasePath(options));
+  return stateDbCacheImpl.getOpenClawStateDatabaseIfOpenAtPath(resolveDatabasePath(options));
+}
+
+/** Evict an exact cached shared-state owner after a proven corruption read. */
+export function evictOpenClawStateDatabaseAfterCorruption(
+  database: OpenClawStateDatabase,
+  error: unknown,
+): boolean {
+  return stateDbCacheImpl.evictOpenClawStateDatabaseAfterCorruption(database, error);
+}
+
+/** Close one cached shared state database handle by exact pathname. */
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+  return stateDbCacheImpl.closeOpenClawStateDatabaseByPath(pathname);
+}
+
+/** Close all cached shared state database handles. */
+export function closeOpenClawStateDatabase(): void {
+  stateDbCacheImpl.closeOpenClawStateDatabase();
+}
+
+/** Test whether any cached shared state database handle is still open. */
+export function isOpenClawStateDatabaseOpen(): boolean {
+  return stateDbCacheImpl.isOpenClawStateDatabaseOpen();
+}
+
+/** Close shared state handles and clear terminal failure latches for test isolation. */
+export function closeOpenClawStateDatabaseForTest(): void {
+  stateDbCacheImpl.closeOpenClawStateDatabaseForTest();
 }
