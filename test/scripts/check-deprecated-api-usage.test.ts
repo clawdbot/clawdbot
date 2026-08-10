@@ -148,12 +148,8 @@ describe("scripts/check-deprecated-api-usage", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "skills/taskflow/SKILL.md:2: api.runtime.tasks.flow",
-    );
-    expect(result.stderr).toContain(
-      "skills/taskflow/SKILL.md:3: api.runtime.taskFlow",
-    );
+    expect(result.stderr).toContain("skills/taskflow/SKILL.md:2: api.runtime.tasks.flow");
+    expect(result.stderr).toContain("skills/taskflow/SKILL.md:3: api.runtime.taskFlow");
   });
 
   it("passes bundled skill docs that use the canonical managedFlows/flows surfaces", () => {
