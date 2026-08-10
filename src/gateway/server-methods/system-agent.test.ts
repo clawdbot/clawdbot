@@ -29,7 +29,10 @@ import type {
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
+import {
+  runExclusiveSystemAgentSetupActivation,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -405,7 +408,9 @@ describe("openclaw.setup", () => {
       step: { type: "note", title: "Pair GitHub", message: "Open the browser and enter ABCD" },
     });
     await session.answer(first.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    const terminal = await session.next();
+    await whenAdmittedWizardSessionSettled(session);
+    expect(terminal).toMatchObject({ done: true, status: "done" });
   });
   it("runs the selected provider method in a shared wizard session and commits its config", async () => {
     const preparedConfig: OpenClawConfig = {
@@ -454,7 +459,9 @@ describe("openclaw.setup", () => {
       }),
     );
     await session.answer(note.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({
+    const terminal = await session.next();
+    await whenAdmittedWizardSessionSettled(session);
+    expect(terminal).toMatchObject({
       done: true,
       status: "done",
       preparedModelRef: "ollama/qwen3:0.6b",
