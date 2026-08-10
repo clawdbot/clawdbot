@@ -195,6 +195,17 @@
   -webkit-mask: var(--github-mark) center / contain no-repeat;
 }
 
+/* The glyph already marks these as links; a resting underline doubles the
+   signal and clutters dense URL text. Hover restores it as the affordance,
+   like the file-link convention below. */
+.chat-text :where(a.markdown-github-link) {
+  text-decoration: none;
+}
+
+.chat-text :where(a.markdown-github-link:hover) {
+  text-decoration: underline;
+}
+
 /* The inherited `overflow-wrap: anywhere` breaks a word only once every other
    option is gone, so a long URL is pushed whole onto the next line — stranding
    the mark alone at the end of the previous one. Unconditional break points
