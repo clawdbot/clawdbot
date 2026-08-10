@@ -137,6 +137,78 @@ describe("plugin state keyed-store expiration migration", () => {
     });
   });
 
+  it("rejects transient writes to migrated stores while preserving normal per-record TTLs", async () => {
+    await withOpenClawTestState({ label: "plugin-state-expiry-migration" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(5_000);
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "slack",
+          namespace: "threads",
+          key: "migrated",
+          value: 1,
+          createdAt: 1_000,
+          expiresAt: 2_000,
+        },
+      ]);
+
+      const options = {
+        namespace: "threads",
+        maxEntries: 10,
+        clearExistingExpiryOnOpen: true,
+      };
+      const existingStore = createPluginStateSyncKeyedStore<number>("slack", {
+        namespace: "threads",
+        maxEntries: 10,
+      });
+      const store = createPluginStateSyncKeyedStore<number>("slack", options);
+      const reopenedWithoutMigration = createPluginStateSyncKeyedStore<number>("slack", {
+        namespace: "threads",
+        maxEntries: 10,
+      });
+      const updateValue = vi.fn(() => 4);
+
+      for (const handle of [existingStore, store, reopenedWithoutMigration]) {
+        expect(() => handle.register("transient-register", 2, { ttlMs: 1_000 })).toThrow(
+          PluginStateStoreError,
+        );
+        expect(() => handle.registerIfAbsent("transient-claim", 3, { ttlMs: 1_000 })).toThrow(
+          PluginStateStoreError,
+        );
+        expect(() => handle.update?.("migrated", updateValue, { ttlMs: 1_000 })).toThrow(
+          PluginStateStoreError,
+        );
+      }
+      expect(updateValue).not.toHaveBeenCalled();
+
+      store.register("durable-register", 2);
+      expect(store.registerIfAbsent("durable-claim", 3)).toBe(true);
+      expect(store.update?.("migrated", (current) => (current ?? 0) + 1)).toBe(true);
+
+      const reopened = createPluginStateSyncKeyedStore<number>("slack", options);
+      expect(reopened.entries()).toEqual([
+        { key: "durable-claim", value: 3, createdAt: 5_000 },
+        { key: "durable-register", value: 2, createdAt: 5_000 },
+        { key: "migrated", value: 2, createdAt: 5_000 },
+      ]);
+
+      const normalStore = createPluginStateSyncKeyedStore<number>("discord", {
+        namespace: "threads",
+        maxEntries: 10,
+      });
+      normalStore.register("transient", 4, { ttlMs: 1_000 });
+      expect(normalStore.entries()).toEqual([
+        { key: "transient", value: 4, createdAt: 5_000, expiresAt: 6_000 },
+      ]);
+
+      vi.advanceTimersByTime(1_001);
+      expect(normalStore.lookup("transient")).toBeUndefined();
+      expect(reopened.lookup("migrated")).toBe(2);
+      expect(reopened.lookup("durable-register")).toBe(2);
+      expect(reopened.lookup("durable-claim")).toBe(3);
+    });
+  });
+
   it("rejects clearing existing expiry for expiring or reject-new namespaces", async () => {
     await withOpenClawTestState({ label: "plugin-state-expiry-migration" }, async () => {
       expect(() =>

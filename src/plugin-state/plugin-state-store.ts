@@ -58,6 +58,7 @@ type StoreOptionSignature = {
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
+  prohibitPerRecordTtl?: boolean;
 };
 
 type PreparedRegisterParams = {
@@ -169,12 +170,12 @@ function assertConsistentOptions(
   pluginId: string,
   namespace: string,
   signature: StoreOptionSignature,
-): void {
+): StoreOptionSignature {
   const key = `${pluginId}\0${namespace}`;
   const existing = namespaceOptionSignatures.get(key);
   if (!existing) {
     namespaceOptionSignatures.set(key, signature);
-    return;
+    return signature;
   }
   if (
     existing.maxEntries !== signature.maxEntries ||
@@ -188,6 +189,7 @@ function assertConsistentOptions(
       "open",
     );
   }
+  return existing;
 }
 
 function createKeyedStoreForPluginId<T>(
@@ -233,14 +235,28 @@ function createSyncKeyedStoreForPluginId<T>(
       "open",
     );
   }
-  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
+  const optionSignature = assertConsistentOptions(pluginId, namespace, {
+    maxEntries,
+    overflowPolicy,
+    defaultTtlMs,
+  });
   if (options.clearExistingExpiryOnOpen) {
     // This idempotent open-time upgrade does not change the namespace's storage contract.
     pluginStateClearExistingExpiry({ pluginId, namespace, maxEntries, ...(env ? { env } : {}) });
+    optionSignature.prohibitPerRecordTtl = true;
   }
+  const validateWriteOptions = (opts?: { ttlMs?: number }) => {
+    if (optionSignature.prohibitPerRecordTtl && opts?.ttlMs !== undefined) {
+      throw invalidInput(
+        "plugin state clearExistingExpiryOnOpen stores do not support per-record ttlMs",
+        "register",
+      );
+    }
+  };
 
   return {
     register(key, value, opts) {
+      validateWriteOptions(opts);
       const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       pluginStateRegister({
         pluginId,
@@ -254,6 +270,7 @@ function createSyncKeyedStoreForPluginId<T>(
       });
     },
     registerIfAbsent(key, value, opts) {
+      validateWriteOptions(opts);
       const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       return pluginStateRegisterIfAbsent({
         pluginId,
@@ -267,6 +284,7 @@ function createSyncKeyedStoreForPluginId<T>(
       });
     },
     update(key, updateValue, opts) {
+      validateWriteOptions(opts);
       const normalizedKey = validateKey(key, "register");
       return pluginStateUpdate({
         pluginId,
