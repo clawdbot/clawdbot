@@ -19,6 +19,7 @@ import {
   rejectSkillProposal,
   resolvePendingSkillProposal,
   reviseSkillProposal,
+  SkillProposalStaleTargetError,
 } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import type {
@@ -620,10 +621,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         return proposalResult(proposal, { contentText });
       } catch (error) {
         if (reservesMutation && options.proposalMutationBudget) {
-          // A service-side patch composition failure means the target changed in the
-          // instant between prevalidation and the service read — not a model error.
-          // Refund so the reviewer can re-read and retry within its budget.
-          if (action === "patch" && error instanceof Error && error.message.startsWith("Patch ")) {
+          // A concurrent live edit is not a reviewer mutation. Preserve the budget
+          // so the reviewer can re-read the new body and redraft either update form.
+          if (error instanceof SkillProposalStaleTargetError) {
             options.proposalMutationBudget.remaining += 1;
           }
           options.proposalMutationBudget.failedMutations =

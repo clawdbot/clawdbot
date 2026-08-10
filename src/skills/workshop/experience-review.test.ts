@@ -837,6 +837,31 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("Prefer improving a used writable workspace skill");
   });
 
+  it("sorts and caps the complete used-skill receipt", () => {
+    const params = completedRun();
+    const usedSkills = Array.from({ length: 120 }, (_, index) => ({
+      name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
+      source: index % 2 === 0 ? ("workspace" as const) : ("bundled" as const),
+      activation: index % 3 === 0 ? ("command" as const) : ("read" as const),
+    }));
+    const build = (skills: typeof usedSkills) =>
+      buildSkillExperienceReviewPrompt({
+        ctx: params.ctx,
+        transcript: formatSkillExperienceReviewTranscript(params.event.messages),
+        modelIterations: 10,
+        usedSkills: skills,
+      });
+    const prompt = build(usedSkills.toReversed());
+
+    expect(prompt).toBe(build(usedSkills));
+    const receiptStart = prompt.indexOf("Skills actually used in this trajectory");
+    const receiptEnd = prompt.indexOf("\nModel iterations in turn:", receiptStart);
+    const receipt = prompt.slice(receiptStart, receiptEnd);
+    expect(receipt.length).toBeLessThanOrEqual(2_000);
+    expect(receipt).toContain("- skill-000-");
+    expect(receipt).toContain("more used skills omitted");
+  });
+
   it("caps the existing-skill list injected into the review prompt", () => {
     const params = completedRun();
     const prompt = buildSkillExperienceReviewPrompt({

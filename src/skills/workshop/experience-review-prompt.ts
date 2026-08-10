@@ -6,6 +6,7 @@ import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js
 const EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS = 60_000;
 const EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES = 50;
 const EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS = 200;
+const EXPERIENCE_REVIEW_MAX_USED_SKILLS_CHARS = 2_000;
 
 type ExperienceReviewPromptCandidate = {
   ctx: { runId?: string };
@@ -112,23 +113,49 @@ function renderExistingSkillsSection(
   ];
 }
 
+function compareRunSkillUsage(left: RunSkillUsage, right: RunSkillUsage): number {
+  for (const field of ["name", "source", "activation"] as const) {
+    if (left[field] !== right[field]) {
+      return left[field] < right[field] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 function renderUsedSkillsSection(
   usedSkills: ExperienceReviewPromptCandidate["usedSkills"],
 ): string[] {
   if (!usedSkills?.length) {
     return [];
   }
-  const shown = usedSkills.slice(0, EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES);
+  const shown = usedSkills
+    .toSorted(compareRunSkillUsage)
+    .slice(0, EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES);
+  const header = "Skills actually used in this trajectory (authoritative runtime receipt):";
+  const preference =
+    "Prefer improving a used writable workspace skill when it governs the learning.";
+  const reservedOmission = `(+${usedSkills.length} more used skills omitted)`;
+  const entries: string[] = [];
+  for (const skill of shown) {
+    const line = truncateUtf16Safe(
+      `- ${skill.name} (${skill.source}, ${skill.activation})`,
+      EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS,
+    );
+    if (
+      ["", header, ...entries, line, reservedOmission, preference].join("\n").length >
+      EXPERIENCE_REVIEW_MAX_USED_SKILLS_CHARS
+    ) {
+      break;
+    }
+    entries.push(line);
+  }
+  const omitted = usedSkills.length - entries.length;
   return [
     "",
-    "Skills actually used in this trajectory (authoritative runtime receipt):",
-    ...shown.map((skill) =>
-      truncateUtf16Safe(
-        `- ${skill.name} (${skill.source}, ${skill.activation})`,
-        EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS,
-      ),
-    ),
-    "Prefer improving a used writable workspace skill when it governs the learning.",
+    header,
+    ...entries,
+    ...(omitted > 0 ? [`(+${omitted} more used skills omitted)`] : []),
+    preference,
   ];
 }
 
