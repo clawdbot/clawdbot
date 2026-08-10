@@ -1,7 +1,7 @@
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
-  assertNoEnterpriseSlackBindings,
+  assertEnterpriseSlackBindingsAreWorkspaceQualified,
   assertEnterpriseSlackPolicyConfig,
   resolveSlackInstallationIdentity,
 } from "./enterprise-install.js";
@@ -95,7 +95,11 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
         config: {
           allowFrom: ["U01234567", "slack:W01234567", "user:U12345678"],
           dm: { groupChannels: ["G01234567", "channel:G12345678"] },
-          mentionPatterns: { mode: "allow" },
+          mentionPatterns: {
+            mode: "allow",
+            allowIn: ["team:T01234567:channel:C01234567"],
+            denyIn: ["team:T12345678:channel:C12345678"],
+          },
           channels: {
             C01234567: {
               users: ["U01234567", "slack:W01234567", "user:U12345678"],
@@ -115,14 +119,14 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
   });
 
   it.each(["allowIn", "denyIn"] as const)(
-    "rejects workspace-scoped mention pattern policy %s",
+    "rejects unqualified Enterprise mention pattern policy %s",
     (field) => {
       expect(() =>
         assertEnterpriseSlackPolicyConfig({
           accountId: "org",
           config: { mentionPatterns: { [field]: ["C123"] } },
         }),
-      ).toThrow(/cannot use mentionPatterns\.allowIn or mentionPatterns\.denyIn/);
+      ).toThrow(/stable Slack IDs.*mentionPatterns/);
     },
   );
 
@@ -234,8 +238,8 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
   });
 });
 
-describe("assertNoEnterpriseSlackBindings", () => {
-  it("rejects omitted accounts only when the enterprise account is default", () => {
+describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
+  it("requires workspace scope only on bindings that apply to the Enterprise account", () => {
     const cfg = {
       channels: {
         slack: { defaultAccount: "workspace", accounts: { workspace: {}, enterprise: {} } },
@@ -243,9 +247,83 @@ describe("assertNoEnterpriseSlackBindings", () => {
       bindings: [{ match: { channel: "slack" }, agentId: "main" }],
     } as never;
 
-    expect(() => assertNoEnterpriseSlackBindings({ cfg, accountId: "enterprise" })).not.toThrow();
-    expect(() => assertNoEnterpriseSlackBindings({ cfg, accountId: "workspace" })).toThrow(
-      /cannot use configured Slack bindings/,
-    );
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: "enterprise" }),
+    ).not.toThrow();
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: "workspace" }),
+    ).toThrow(/requires match\.teamId/);
+  });
+
+  it("accepts team-scoped and workspace-qualified peer bindings", () => {
+    const cfg = {
+      channels: { slack: { defaultAccount: "org", accounts: { org: {} } } },
+      bindings: [
+        { match: { channel: "slack", teamId: "T01234567" }, agentId: "team" },
+        {
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
+          },
+          agentId: "channel",
+        },
+      ],
+    } as never;
+
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: "org" }),
+    ).not.toThrow();
+  });
+
+  it("rejects unqualified or conflicting Enterprise peer bindings", () => {
+    const unqualified = {
+      channels: { slack: { defaultAccount: "org", accounts: { org: {} } } },
+      bindings: [
+        {
+          match: { channel: "slack", peer: { kind: "channel", id: "C01234567" } },
+          agentId: "channel",
+        },
+      ],
+    } as never;
+    const conflicting = {
+      channels: { slack: { defaultAccount: "org", accounts: { org: {} } } },
+      bindings: [
+        {
+          match: {
+            channel: "slack",
+            teamId: "T99999999",
+            peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
+          },
+          agentId: "channel",
+        },
+      ],
+    } as never;
+
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg: unqualified, accountId: "org" }),
+    ).toThrow(/requires configured Slack binding peers/);
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg: conflicting, accountId: "org" }),
+    ).toThrow(/conflicting workspace IDs/);
+  });
+
+  it("retains the workspace boundary for configured ACP bindings", () => {
+    const cfg = {
+      channels: { slack: { defaultAccount: "org", accounts: { org: {} } } },
+      bindings: [
+        {
+          type: "acp",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
+          },
+          agentId: "channel",
+        },
+      ],
+    } as never;
+
+    expect(() =>
+      assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: "org" }),
+    ).toThrow(/cannot use configured ACP bindings/);
   });
 });

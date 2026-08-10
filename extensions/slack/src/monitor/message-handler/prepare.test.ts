@@ -510,6 +510,94 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  it("applies workspace-qualified Enterprise mention pattern policy", async () => {
+    const cfg = {
+      messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+      channels: { slack: { enabled: true, groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const ctx = createInboundSlackCtx({ cfg, defaultRequireMention: true, groupPolicy: "open" });
+    ctx.botUserId = "";
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    const account = createSlackAccount({
+      groupPolicy: "open",
+      mentionPatterns: {
+        mode: "deny",
+        allowIn: ["team:T123ENTERPRISE:channel:C123CHANNEL"],
+      },
+    });
+    const message = createSlackMessage({
+      channel: "C123CHANNEL",
+      channel_type: "channel",
+      user: "U123",
+      text: "Bill, please check this",
+    });
+
+    const allowed = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T123ENTERPRISE", client: ctx.app.client },
+      },
+    });
+    const otherWorkspace = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T456ENTERPRISE", client: ctx.app.client },
+      },
+    });
+
+    assertPrepared(allowed, "workspace-qualified mention policy");
+    expect(otherWorkspace).toBeNull();
+  });
+
+  it("routes Enterprise messages through workspace-qualified configured bindings", async () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "strategist" }] },
+      bindings: [
+        {
+          agentId: "strategist",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "team:T123ENTERPRISE:channel:C123CHANNEL" },
+          },
+        },
+      ],
+      channels: { slack: { enabled: true, groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const ctx = createInboundSlackCtx({
+      cfg,
+      defaultRequireMention: false,
+      groupPolicy: "open",
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ groupPolicy: "open" }),
+      message: createSlackMessage({
+        channel: "C123CHANNEL",
+        channel_type: "channel",
+        user: "U123",
+        text: "hello",
+      }),
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T123ENTERPRISE", client: ctx.app.client },
+      },
+    });
+
+    assertPrepared(prepared, "workspace-qualified configured binding");
+    expect(prepared.route.agentId).toBe("strategist");
+    expect(prepared.route.matchedBy).toBe("binding.peer");
+  });
+
   it("routes a self-threaded Agent View root before capability detection completes", async () => {
     const ctx = createDefaultSlackCtx();
     const prepared = await prepareMessageWith(

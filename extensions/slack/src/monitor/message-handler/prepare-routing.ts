@@ -81,10 +81,11 @@ function normalizeSlackRouteBindingPeer(peer: SlackRouteBindingPeer): SlackRoute
       return undefined;
     }
   })();
-  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind) || target.id === peer.id) {
+  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind)) {
     return peer;
   }
-  return { ...peer, id: target.id };
+  const normalizedId = target.teamId ? target.normalized : target.id;
+  return normalizedId === peer.id ? peer : { ...peer, id: normalizedId };
 }
 
 function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawConfig {

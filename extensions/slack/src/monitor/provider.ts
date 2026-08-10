@@ -61,8 +61,8 @@ import {
 } from "./config.runtime.js";
 import { createSlackMonitorContext, type SlackMonitorContext } from "./context.js";
 import {
+  assertEnterpriseSlackBindingsAreWorkspaceQualified,
   assertEnterpriseSlackPolicyConfig,
-  assertNoEnterpriseSlackBindings,
   resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
@@ -546,7 +546,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
     assertEnterpriseSlackPolicyConfig({ config: account.config, accountId: account.accountId });
-    assertNoEnterpriseSlackBindings({ cfg, accountId: account.accountId });
+    assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: account.accountId });
   };
   const installationIdentity = resolveSlackInstallationIdentity({
     auth: authTestError === undefined ? authTestIdentity : undefined,

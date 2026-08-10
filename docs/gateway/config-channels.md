@@ -475,15 +475,16 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
 - Slack detects Enterprise Grid org-wide installations automatically from the
   bot token with `auth.test`; no installation-mode setting is required.
-  Enterprise DMs must be disabled or use `dmPolicy: "open"` with an effective
-  `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
-  mutable names and unsupported channel prefixes fail startup. Direct Socket
-  Mode or HTTP messages, mentions, workspace-qualified actions, deferred
-  delivery, proactive sends, supported event listeners and interactions, and
-  Slack-native approvals from workspace-qualified turns are supported. Relay,
-  channel-ID-change events, App Home, Agent and Assistant lifecycle events,
-  configured static bindings, and runtime current-conversation bindings remain
-  unavailable. See
+  Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
+  `pairing`. Channel and user policies must use stable Slack IDs; mutable names
+  and unsupported channel prefixes fail startup. Mention-pattern channel
+  scopes and static route-binding peers use workspace-qualified Slack targets.
+  Direct Socket Mode or HTTP messages, mentions, workspace-qualified actions,
+  deferred delivery, proactive sends, supported event listeners and
+  interactions, static route bindings, and Slack-native approvals from
+  workspace-qualified turns are supported. Relay, channel-ID-change events,
+  App Home, Agent and Assistant lifecycle events, configured ACP bindings, and
+  runtime current-conversation bindings remain unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
 - The retired `enterpriseOrgInstall` key is removed by `openclaw doctor --fix`

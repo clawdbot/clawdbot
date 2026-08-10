@@ -340,9 +340,9 @@ describe("auth.test boot call", () => {
       appToken: "xapp-1-A1-opaque",
     });
     await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
-    expect(getSlackTestState().interactionRegistrations).toEqual([
-      "command",
+    expect([...getSlackTestState().interactionRegistrations].sort()).toEqual([
       "action",
+      "command",
       "shortcut",
       "view",
       "view",
@@ -374,7 +374,7 @@ describe("auth.test boot call", () => {
     expect(getSlackInstallationKind("default")).toBeUndefined();
   });
 
-  it("rejects enterprise startup with the default pairing DM policy", async () => {
+  it("starts Enterprise Grid with the default pairing DM policy", async () => {
     resetSlackTestState({
       channels: {
         slack: {},
@@ -388,9 +388,9 @@ describe("auth.test boot call", () => {
     });
 
     const monitor = startSlackMonitor(monitorSlackProvider);
-    await expect(monitor.run).rejects.toThrow(
-      /supports DMs only with dm\.enabled=false.*dmPolicy="open"/,
-    );
+    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+    expect(getSlackInstallationKind("default")).toBe("enterprise");
+    await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
   });
 });
 
@@ -892,7 +892,7 @@ describe("connected identity health", () => {
   });
 
   it("validates Enterprise policy before promoting recovered identity", async () => {
-    resetSlackTestState({ channels: { slack: {} } });
+    resetSlackTestState({ channels: { slack: { dangerouslyAllowNameMatching: true } } });
     const client = getSlackClient();
     client.auth.test.mockRejectedValueOnce(new Error("request_timeout")).mockResolvedValue({
       user_id: "UENTERPRISE",
@@ -908,9 +908,7 @@ describe("connected identity health", () => {
       expect.objectContaining({
         connected: true,
         lifecycle: "blocked",
-        lastError: expect.stringMatching(
-          /supports DMs only with dm\.enabled=false.*dmPolicy="open"/,
-        ),
+        lastError: expect.stringMatching(/cannot use dangerouslyAllowNameMatching/),
       }),
     );
     expect(getSlackHandlers().has("reaction_added")).toBe(true);

@@ -2,6 +2,7 @@
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "../accounts.js";
+import { parseSlackTarget } from "../target-parsing.js";
 
 export type SlackInstallationIdentity =
   | {
@@ -94,6 +95,23 @@ function assertStableEntries(params: {
   }
 }
 
+function isWorkspaceQualifiedSlackTarget(value: unknown, kind: "channel" | "user"): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    const target = parseSlackTarget(value);
+    const idPattern = kind === "channel" ? SLACK_CHANNEL_ID_RE : SLACK_USER_ID_RE;
+    return (
+      target?.kind === kind &&
+      /^T[A-Z0-9]{8,}$/.test(target.teamId ?? "") &&
+      idPattern.test(target.id)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Validate every policy surface that would otherwise require name resolution. */
 export function assertEnterpriseSlackPolicyConfig(params: {
   config: SlackAccountConfig;
@@ -105,14 +123,16 @@ export function assertEnterpriseSlackPolicyConfig(params: {
       `Slack Enterprise Grid org account "${accountId}" cannot use dangerouslyAllowNameMatching`,
     );
   }
-  if (
-    config.mentionPatterns?.allowIn !== undefined ||
-    config.mentionPatterns?.denyIn !== undefined
-  ) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${accountId}" cannot use mentionPatterns.allowIn or mentionPatterns.denyIn because Slack channel IDs are not workspace-qualified`,
-    );
-  }
+  assertStableEntries({
+    values: config.mentionPatterns?.allowIn,
+    path: `channels.slack.accounts.${accountId}.mentionPatterns.allowIn`,
+    predicate: (value) => isWorkspaceQualifiedSlackTarget(value, "channel"),
+  });
+  assertStableEntries({
+    values: config.mentionPatterns?.denyIn,
+    path: `channels.slack.accounts.${accountId}.mentionPatterns.denyIn`,
+    predicate: (value) => isWorkspaceQualifiedSlackTarget(value, "channel"),
+  });
   assertStableEntries({
     values: config.allowFrom,
     path: `channels.slack.accounts.${accountId}.allowFrom`,
@@ -149,12 +169,12 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   }
 }
 
-export function assertNoEnterpriseSlackBindings(params: {
+export function assertEnterpriseSlackBindingsAreWorkspaceQualified(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }) {
   const defaultAccountId = resolveDefaultSlackAccountId(params.cfg);
-  const configured = params.cfg.bindings?.find((binding) => {
+  const configured = params.cfg.bindings?.filter((binding) => {
     if (binding.match.channel.trim().toLowerCase() !== "slack") {
       return false;
     }
@@ -165,10 +185,39 @@ export function assertNoEnterpriseSlackBindings(params: {
       (!accountId && params.accountId === defaultAccountId)
     );
   });
-  if (configured) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${params.accountId}" cannot use configured Slack bindings`,
-    );
+  for (const binding of configured ?? []) {
+    if (binding.type === "acp") {
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" cannot use configured ACP bindings because current-conversation bindings are not workspace-qualified`,
+      );
+    }
+    const peerId = binding.match.peer?.id.trim();
+    if (!peerId || peerId === "*") {
+      if (/^T[A-Z0-9]{8,}$/.test(binding.match.teamId?.trim() ?? "")) {
+        continue;
+      }
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" requires match.teamId on configured Slack bindings without a workspace-qualified peer`,
+      );
+    }
+    let target: ReturnType<typeof parseSlackTarget>;
+    try {
+      target = parseSlackTarget(peerId);
+    } catch {
+      target = undefined;
+    }
+    const expectedKind = binding.match.peer?.kind === "direct" ? "user" : "channel";
+    if (!target?.teamId || !isWorkspaceQualifiedSlackTarget(peerId, expectedKind)) {
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" requires configured Slack binding peers to use team:<team-id>:channel:<channel-id> or team:<team-id>:user:<user-id>`,
+      );
+    }
+    const matchTeamId = binding.match.teamId?.trim();
+    if (matchTeamId && matchTeamId.toLowerCase() !== target.teamId.toLowerCase()) {
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" has conflicting workspace IDs in configured Slack binding match.teamId and peer.id`,
+      );
+    }
   }
 }
 

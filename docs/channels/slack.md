@@ -280,10 +280,10 @@ to a workspace installation or an Enterprise Grid org-wide installation. No
 installation-mode setting is required. Slack remains the source of truth for
 which workspaces have granted the installation; OpenClaw then applies the
 configured channel, user, DM, and mention policies to each delivered event.
-Enterprise installs reject all
-bot-authored `message` and `app_mention` events before dispatch, regardless of
-`allowBots`, because org installs do not provide a stable workspace-qualified
-bot identity for loop prevention.
+Enterprise installs reject bot-authored `message` and `app_mention` events by
+default. Set `allowBots` on the account or channel to admit them under the same
+loop-prevention rules used by workspace installs. OpenClaw retains the org
+installation's `auth.test` `user_id` and `bot_id` for that check.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
 membership, reaction, pin, channel-created, channel-renamed, Block Kit action,
@@ -293,8 +293,12 @@ workspace-qualified outbound messages. Add any shortcuts to the app manifest's
 interaction path. The manifest examples register the single `/openclaw`
 command; native command mode still requires the administrator-managed command
 entries described below. Relay mode, channel-ID-change events, App Home, Agent
-and Assistant lifecycle events, configured static bindings, and runtime
+and Assistant lifecycle events, configured ACP bindings, and runtime
 current-conversation bindings remain unavailable for an enterprise account.
+Static agent route bindings are supported when a binding without a peer
+specifies `match.teamId`, or a peer ID uses
+`team:<team-id>:channel:<channel-id>` or
+`team:<team-id>:user:<user-id>`.
 Slack-native approvals that originate from a delivered, workspace-qualified
 Slack turn are supported; approval buttons use the same listener-owned,
 workspace-scoped interaction path. Slack action tools are supported for
@@ -328,22 +332,21 @@ and email addresses fail startup. IDs must use Slack's canonical uppercase
 prefix and body (for example, `C0123456789` or `U0123456789`); lowercase and
 short lookalikes fail startup. Enterprise accounts cannot enable
 `dangerouslyAllowNameMatching`. Enterprise accounts may set the global
-`mentionPatterns.mode`, but `mentionPatterns.allowIn` and
-`mentionPatterns.denyIn` fail startup because bare Slack channel IDs are not
-workspace-qualified and can be reused across workspaces. Workspace installs
-retain the existing scoped mention-pattern behavior. Each accepted workspace
+`mentionPatterns.mode`. Enterprise `mentionPatterns.allowIn` and
+`mentionPatterns.denyIn` entries use
+`team:<team-id>:channel:<channel-id>`; bare channel IDs fail startup because
+they can be reused across workspaces. Workspace installs retain the existing
+bare-channel scoped mention-pattern behavior. Each accepted workspace
 gets separate routing, session, transcript, dedupe, history, and cache identity
 even when Slack IDs overlap. Within the `message` stream, ordinary user messages
 and user-authored `file_share` events are supported; other message subtypes are
 rejected before authorization or system-event handling.
 
-Enterprise DMs must either be disabled (`dm.enabled=false` or
-`dmPolicy="disabled"`) or explicitly open with `dmPolicy="open"` and
-an effective account `allowFrom` containing the literal `"*"`. An empty
-allowlist or user-specific IDs without `"*"` fails startup. Pairing and
-per-user DM allowlists are rejected because Slack user IDs are not
-workspace-qualified in those authorization stores. Channel and sender policy
-continues to apply to channel messages.
+Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
+policies as workspace installs. Pairing approvals are stored as
+`team:<team-id>:user:<user-id>` and are applied only to events from that
+workspace. Explicit account `allowFrom` entries remain organization-wide;
+channel and sender policy continues to apply to channel messages.
 
 ## Install
 

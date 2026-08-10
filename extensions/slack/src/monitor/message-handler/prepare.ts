@@ -909,7 +909,11 @@ export async function prepareSlackMessage(params: {
   const buildPolicyMentionRegexes = (agentId: string | undefined) =>
     resolveCachedMentionRegexes(ctx, agentId, {
       provider: "slack",
-      conversationId: message.channel,
+      conversationId: formatSlackTarget({
+        teamId: opts.eventScope?.teamId,
+        kind: "channel",
+        id: message.channel,
+      }),
       providerPolicy: account.config.mentionPatterns,
     });
   let mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
