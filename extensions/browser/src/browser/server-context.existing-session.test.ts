@@ -143,9 +143,7 @@ describe("browser server-context existing-session profile", () => {
     await expect(live.openTab("https://example.com")).rejects.toThrow(
       /remove cdpUrl and browserUrl\/wsEndpoint mcpArgs/,
     );
-    await expect(live.ensureBrowserAvailable()).rejects.toThrow(
-      /attach to a host-local Chrome profile/,
-    );
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(/host-local Chrome profile/);
 
     expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
     expect(chromeMcp.openChromeMcpTab).not.toHaveBeenCalled();
