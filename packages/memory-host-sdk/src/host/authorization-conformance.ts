@@ -474,8 +474,19 @@ function hasAuthorizedResourceHandle(params: {
     return false;
   }
   const handle = decision.handle;
+  const prototype = Object.getPrototypeOf(handle);
+  const ownKeys = Reflect.ownKeys(handle);
   // The opaque ID has no prescribed encoding; its surrounding facts prevent it becoming a bearer grant.
   return (
+    (prototype === Object.prototype || prototype === null) &&
+    ownKeys.length === 7 &&
+    ownKeys.includes("version") &&
+    ownKeys.includes("handleId") &&
+    ownKeys.includes("planId") &&
+    ownKeys.includes("contextFingerprint") &&
+    ownKeys.includes("resourceRevision") &&
+    ownKeys.includes("policyRevision") &&
+    ownKeys.includes("expiresAt") &&
     handle.version === MEMORY_AUTHORIZATION_CONTRACT_VERSION &&
     isNonEmptyText(handle.handleId) &&
     isNonEmptyText(handle.planId) &&
