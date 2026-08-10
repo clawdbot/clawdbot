@@ -27,6 +27,9 @@ import {
   requestSessionReset,
 } from "./session-requests.ts";
 
+/** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
+type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
+
 type SessionMutationsHost = {
   connection: SessionConnectionOwner;
   readState: () => SessionState;
@@ -41,7 +44,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
     string,
     { token: symbol; previous: string | null | undefined; revision: number }
   >();
-  const pendingPinPatches = new Map<string, { token: symbol; previous: boolean; next: boolean }>();
+  const pendingPinPatches = new Map<
+    string,
+    { token: symbol; previous: SessionPinFields; next: SessionPinFields }
+  >();
   const preparedWorkSessionKeys = new Set<string>();
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
@@ -93,8 +99,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
-  const rowPinned = (key: string) =>
-    host.readState().result?.sessions.find((row) => row.key === key)?.pinned === true;
+  const sessionRow = (key: string) =>
+    host.readState().result?.sessions.find((row) => row.key === key);
+
+  // The Gateway derives `pinned` from `pinnedAt` and both row comparators order
+  // by `pinnedAt` inside each pin group, so an optimistic write has to move the
+  // pair or the row lands in a slot the Gateway would never produce.
+  const pinRowFields = (pinned: boolean, pinnedAt: number | undefined): SessionPinFields =>
+    pinned
+      ? { pinned: true, pinnedAt: pinnedAt ?? Date.now() }
+      : { pinned: false, pinnedAt: undefined };
 
   const retireModelOverride = (key: string) => {
     const normalizedKey = key.trim();
@@ -206,15 +220,17 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return;
       }
       const pendingPinPatch = pendingPinPatches.get(normalizedKey);
+      const row = sessionRow(normalizedKey);
       pinPatchStarted = true;
+      const next = pinRowFields(nextPinned, row?.pinnedAt);
       // `previous` chains through an in-flight pin so a rollback lands on the
       // last Gateway-confirmed value instead of an older operation's guess.
       pendingPinPatches.set(normalizedKey, {
         token: pinPatchToken,
-        previous: pendingPinPatch ? pendingPinPatch.previous : rowPinned(normalizedKey),
-        next: nextPinned,
+        previous: pendingPinPatch?.previous ?? pinRowFields(row?.pinned === true, row?.pinnedAt),
+        next,
       });
-      patchRowLocal(normalizedKey, { pinned: nextPinned });
+      patchRowLocal(normalizedKey, next);
     };
     const startOptimisticPatch = () => {
       startModelPatch();
@@ -242,20 +258,17 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return;
       }
       if (pendingPinPatch.token !== pinPatchToken) {
-        // A newer pin intent owns this row. A completed patch republishes
-        // Gateway truth that predates that intent, so restore the newer value
-        // and hand it this confirmed baseline for its own rollback.
+        // A newer pin intent owns this row; republishing it is the canonical
+        // overlay's job. Hand that intent the baseline this patch just
+        // confirmed so its own rollback lands on Gateway truth.
         if (completed) {
-          pendingPinPatch.previous = nextPinned;
-          if (host.connection.isCurrent(scope)) {
-            patchRowLocal(normalizedKey, { pinned: pendingPinPatch.next });
-          }
+          pendingPinPatch.previous = pinRowFields(nextPinned, undefined);
         }
         return;
       }
       pendingPinPatches.delete(normalizedKey);
       if (!completed && host.connection.isCurrent(scope)) {
-        patchRowLocal(normalizedKey, { pinned: pendingPinPatch.previous });
+        patchRowLocal(normalizedKey, pendingPinPatch.previous);
       }
     };
     const settleOptimisticPatch = (completed: boolean) => {
@@ -403,6 +416,27 @@ export function createSessionMutations(host: SessionMutationsHost) {
     deleteMany: removeMany,
     patch,
     patchRowLocal,
+    /**
+     * Re-asserts in-flight pin intents over canonical Gateway rows: every
+     * `sessions.changed` payload and list refresh carries the server's pin
+     * state, which is the pre-click value until this operation's patch lands.
+     */
+    applyPendingPins(result: SessionsListResult | null): SessionsListResult | null {
+      if (!result || pendingPinPatches.size === 0) {
+        return result;
+      }
+      let changed = false;
+      const sessions = result.sessions.map((row) => {
+        const pendingPinPatch = pendingPinPatches.get(row.key);
+        // Once the Gateway agrees, its own `pinnedAt` is authoritative again.
+        if (!pendingPinPatch || (row.pinned === true) === pendingPinPatch.next.pinned) {
+          return row;
+        }
+        changed = true;
+        return { ...row, ...pendingPinPatch.next };
+      });
+      return changed ? { ...result, sessions } : result;
+    },
     reset,
     retireModelOverride,
     setModelOverride,

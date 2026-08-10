@@ -9,8 +9,24 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+
 function rowPinned(result: SessionsListResult | null, key: string): boolean {
   return result?.sessions.find((row) => row.key === key)?.pinned === true;
+}
+
+// Shape of `buildGatewaySessionEventFields`: every payload carries the server's
+// current pin state, which is the pre-click value while a patch is in flight.
+function sessionChangedPayload(key: string, pinned: boolean) {
+  return {
+    sessionKey: key,
+    reason: "send",
+    key,
+    kind: "direct",
+    updatedAt: 3,
+    pinned,
+    pinnedAt: pinned ? 2 : null,
+  };
 }
 
 function pinHarness(options: {
@@ -66,10 +82,45 @@ describe("session pin mutations", () => {
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: key, reason: "send", key, kind: "direct", updatedAt: 3 },
+      payload: sessionChangedPayload(key, true),
     });
     expect(rowPinned(sessions.state.result, key)).toBe(true);
     sessions.dispose();
+  });
+
+  it("keeps a pending pin through a stale Gateway event and its canonical refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const committed = deferred<unknown>();
+      let serverPinned = false;
+      const { gateway, key, emitEvent } = pinHarness({
+        patchResponse: () => committed.promise,
+        serverPinned: () => serverPinned,
+      });
+      const sessions = createSessionCapability(gateway);
+
+      await sessions.refresh({ force: true });
+      const operation = sessions.patch(key, { pinned: true });
+      expect(rowPinned(sessions.state.result, key)).toBe(true);
+
+      // A routine turn event for the same row, still carrying the pre-patch pin
+      // value, reaches both the direct merge and the canonical list refresh.
+      const stalePayload = sessionChangedPayload(key, false);
+      sessions.reconcileChanged(stalePayload);
+      expect(rowPinned(sessions.state.result, key)).toBe(true);
+
+      emitEvent({ type: "event", event: "sessions.changed", payload: stalePayload });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      expect(rowPinned(sessions.state.result, key)).toBe(true);
+
+      serverPinned = true;
+      committed.resolve({ ok: true, key, path: "", entry: {} });
+      await expect(operation).resolves.toBeTruthy();
+      expect(rowPinned(sessions.state.result, key)).toBe(true);
+      sessions.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rolls a rejected unpin back to the pinned row and publishes the error", async () => {
