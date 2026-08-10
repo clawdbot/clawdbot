@@ -66,6 +66,7 @@ import {
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { getHostOwnedMcpRelayPayloadUrls } from "./mcp-tool-result-media-provenance.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -434,9 +435,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
         : withToolMedia;
-    const taggedMetadata = getReplyPayloadMetadata(taggedPayload);
     if (
-      taggedMetadata?.hostOwnedToolMediaUrls?.length &&
+      getHostOwnedMcpRelayPayloadUrls(taggedPayload)?.length &&
       !normalizeOptionalString(taggedPayload.text)
     ) {
       setReplyPayloadMetadata(taggedPayload, { deliverDespiteSourceReplySuppression: true });
@@ -861,7 +861,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     };
     if (filteredMediaArtifact?.hostOwnedMediaUrls?.length) {
       setReplyPayloadMetadata(toolResultPayload, {
-        hostOwnedToolMediaUrls: filteredMediaArtifact.hostOwnedMediaUrls,
         deliverDespiteSourceReplySuppression: true,
       });
     }

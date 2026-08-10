@@ -9,6 +9,8 @@ type HostOwnedMcpRelayMediaEntry = {
 
 type HostOwnedMcpRelayMediaRegistry = Map<string, HostOwnedMcpRelayMediaEntry>;
 
+const hostOwnedMcpRelayPayloadUrls = new WeakMap<object, readonly string[]>();
+
 const HOST_OWNED_MCP_RELAY_MEDIA_REGISTRY_SYMBOL = Symbol.for(
   "openclaw.mcp-relay-media-provenance.v1",
 );
@@ -145,4 +147,23 @@ export function isHostOwnedMcpRelayMedia(media: unknown): media is object {
       registered.fingerprint === provenance.fingerprint
     );
   });
+}
+
+/** Carries verified MCP attachment ownership without expanding the public reply metadata API. */
+export function markHostOwnedMcpRelayPayload<T extends object>(
+  payload: T,
+  mediaUrls: readonly string[],
+): T {
+  const normalized = Array.from(
+    new Set(mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
+  );
+  if (normalized.length > 0) {
+    hostOwnedMcpRelayPayloadUrls.set(payload, Object.freeze(normalized));
+  }
+  return payload;
+}
+
+export function getHostOwnedMcpRelayPayloadUrls(payload: object): string[] | undefined {
+  const mediaUrls = hostOwnedMcpRelayPayloadUrls.get(payload);
+  return mediaUrls ? [...mediaUrls] : undefined;
 }

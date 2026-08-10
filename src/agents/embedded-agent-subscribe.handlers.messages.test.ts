@@ -2,7 +2,6 @@
 // block replies, directives, media, and message-tool reply suppression.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
@@ -25,6 +24,7 @@ import {
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
+import { getHostOwnedMcpRelayPayloadUrls } from "./mcp-tool-result-media-provenance.js";
 
 function updateMessage(
   context: EmbeddedAgentSubscribeContext,
@@ -1487,9 +1487,7 @@ describe("consumePendingToolMediaReply", () => {
       audioAsVoice: undefined,
       trustedLocalMedia: true,
     });
-    expect(getReplyPayloadMetadata(reply ?? {})).toEqual({
-      hostOwnedToolMediaUrls: ["/tmp/mcp-image.png"],
-    });
+    expect(getHostOwnedMcpRelayPayloadUrls(reply ?? {})).toEqual(["/tmp/mcp-image.png"]);
     expect(state.pendingToolMediaHostOwnedUrls.size).toBe(0);
   });
 

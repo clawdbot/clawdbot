@@ -1,7 +1,6 @@
 /**
  * Projects stream state into the stable embedded-attempt result contract.
  */
-import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
@@ -13,6 +12,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { getHostOwnedMcpRelayPayloadUrls } from "../../mcp-tool-result-media-provenance.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
@@ -286,8 +286,8 @@ export function completeEmbeddedAttemptResult(
     successfulCronAdds: getSuccessfulCronAdds(),
   });
   const pendingToolMediaReply = getPendingToolMediaReply();
-  const pendingToolMediaMetadata = pendingToolMediaReply
-    ? getReplyPayloadMetadata(pendingToolMediaReply)
+  const pendingHostOwnedToolMediaUrls = pendingToolMediaReply
+    ? getHostOwnedMcpRelayPayloadUrls(pendingToolMediaReply)
     : undefined;
   const replayMetadata = replayMetadataFromState(
     observeReplayMetadata(getReplayState(), observedReplayMetadata),
@@ -400,7 +400,7 @@ export function completeEmbeddedAttemptResult(
     heartbeatToolResponse,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolMediaAttachments: pendingToolMediaReply?.attachments,
-    hostOwnedToolMediaUrls: pendingToolMediaMetadata?.hostOwnedToolMediaUrls,
+    hostOwnedToolMediaUrls: pendingHostOwnedToolMediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
     hasToolMediaBlockReply: hasToolMediaBlockReplyNow,

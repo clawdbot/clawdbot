@@ -8,7 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -49,6 +49,7 @@ import {
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
+import { markHostOwnedMcpRelayPayload } from "./mcp-tool-result-media-provenance.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
   hasNonzeroUsage,
@@ -511,10 +512,7 @@ function attachHostOwnedToolMediaMetadata(
   const hostOwnedToolMediaUrls = uniqueStrings(
     mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0),
   );
-  if (hostOwnedToolMediaUrls.length > 0) {
-    setReplyPayloadMetadata(payload, { hostOwnedToolMediaUrls });
-  }
-  return payload;
+  return markHostOwnedMcpRelayPayload(payload, hostOwnedToolMediaUrls);
 }
 
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
