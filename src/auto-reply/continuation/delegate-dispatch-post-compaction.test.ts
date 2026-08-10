@@ -18,7 +18,7 @@ const mockState = vi.hoisted(() => ({
 }));
 
 // Mock spawnSubagentDirect — this is what we'll make throw
-vi.mock("../../agents/subagent-spawn.js", () => ({
+vi.mock("../../agents/subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: mockState.spawnSubagentDirect,
 }));
 

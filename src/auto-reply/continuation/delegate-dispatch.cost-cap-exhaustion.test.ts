@@ -51,7 +51,7 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
 
-vi.mock("../../agents/subagent-spawn.js", () => ({
+vi.mock("../../agents/subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
 

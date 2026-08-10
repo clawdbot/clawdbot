@@ -73,7 +73,7 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { drainSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
-import * as subagentSpawn from "./subagent-spawn.js";
+import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
 
 type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
 

@@ -219,7 +219,10 @@ function collectContinuationSurfaceFiles(): string[] {
       name.startsWith("reply-run-")
     );
   });
-  const agentFiles = ["src/agents/subagent-announce.ts", "src/agents/subagent-spawn.ts"];
+  const agentFiles = [
+    "src/agents/subagent-announce.ts",
+    "src/agents/subagents/spawn/subagent-spawn.ts",
+  ];
 
   return [...new Set([...continuationFiles, ...replyFiles, ...agentFiles])].toSorted();
 }

@@ -41,7 +41,7 @@ let updateSessionStoreForRecoveryShouldThrow = false;
 let updateSessionStoreForRecoveryRequiredWriteCalls = 0;
 let updateSessionStoreForRecoveryThrowOnRequiredWriteCall: number | undefined;
 
-vi.mock("../../agents/subagent-spawn.js", () => ({
+vi.mock("../../agents/subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
 

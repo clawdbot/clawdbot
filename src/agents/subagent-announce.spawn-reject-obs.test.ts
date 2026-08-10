@@ -123,7 +123,7 @@ import {
 import { resolveStorePath } from "../config/sessions.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
-import * as subagentSpawn from "./subagent-spawn.js";
+import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
 
 type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
 

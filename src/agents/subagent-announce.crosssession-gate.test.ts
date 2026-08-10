@@ -68,7 +68,7 @@ vi.mock("./cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
 }));
 
-vi.mock("./subagent-spawn.js", () => ({
+vi.mock("./subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   SUBAGENT_SPAWN_SANDBOX_MODES: ["inherit", "require"],
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],

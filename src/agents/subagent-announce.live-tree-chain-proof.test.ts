@@ -81,7 +81,7 @@ import { listSubagentRunsForRequester } from "./subagent-registry-announce-read.
 import { getSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import "./subagent-registry.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 
 const rootSessionKey = "agent:main:root";
 let stateDir: string;

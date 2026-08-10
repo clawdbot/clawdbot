@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
-import type { SpawnSubagentResult } from "./subagent-spawn.js";
+import type { SpawnSubagentResult } from "./subagents/spawn/subagent-spawn.js";
 
 // Verify subagent-announce drains the child session's continue_delegate
 // queue after the child settles, using the child's inherited chain state
@@ -271,7 +271,7 @@ vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", async (i
     stagePostCompactionDelegateMock(sessionKey, delegate),
 }));
 
-vi.mock("./subagent-spawn.js", () => ({
+vi.mock("./subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: (params: Record<string, unknown>, ctx: unknown) =>
     spawnSubagentDirectMock(params, ctx),
 }));
