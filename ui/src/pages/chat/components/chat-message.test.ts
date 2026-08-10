@@ -4563,7 +4563,10 @@ describe("grouped chat rendering", () => {
       },
     );
     const imageBlob = new Blob(["png"], { type: "image/png" });
-    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => imageBlob }));
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({
+      ok: true,
+      blob: async () => imageBlob,
+    }));
     vi.stubGlobal("fetch", fetchMock);
     let copiedBlob: Blob | undefined;
     class ClipboardItemMock {
