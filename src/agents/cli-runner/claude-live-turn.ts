@@ -5,7 +5,6 @@ import {
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
 } from "../../infra/diagnostic-events.js";
-import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type {
   CliBackendConfig,
   CliBackendParseJsonlEvent,
@@ -30,8 +29,13 @@ import {
 } from "../cli-output-stream.js";
 import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { type CliTimeoutContext, FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import {
+  armClaudeTurnTimers,
+  clearClaudeTurnTimers,
+  resetClaudeNoOutputTimer,
+} from "./claude-live-turn-timeouts.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import { createCliOutputFailoverError } from "./output-error.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -108,17 +112,6 @@ export type ClaudeLiveTurnHost = {
   cleanupAfterExit(): void;
 };
 
-function clearTurnTimers(turn: ClaudeLiveTurn): void {
-  if (turn.noOutputTimer) {
-    clearTimeout(turn.noOutputTimer);
-    turn.noOutputTimer = null;
-  }
-  if (turn.timeoutTimer) {
-    clearTimeout(turn.timeoutTimer);
-    turn.timeoutTimer = null;
-  }
-}
-
 function finishClaudeTurn(host: ClaudeLiveTurnHost, output: CliOutput): void {
   const turn = host.currentTurn;
   if (!turn) {
@@ -129,7 +122,7 @@ function finishClaudeTurn(host: ClaudeLiveTurnHost, output: CliOutput): void {
   );
   turn.streamingParser.finish();
   failActiveClaudeLiveTools(turn, new Error("Tool result missing before turn completed"));
-  clearTurnTimers(turn);
+  clearClaudeTurnTimers(turn);
   host.outstandingBackgroundTaskIds.clear();
   host.currentTurn = null;
   turn.resolve(output);
@@ -147,26 +140,10 @@ export function failClaudeTurn(host: ClaudeLiveTurnHost, error: unknown): void {
   );
   turn.streamingParser.finish();
   failActiveClaudeLiveTools(turn, error);
-  clearTurnTimers(turn);
+  clearClaudeTurnTimers(turn);
   host.outstandingBackgroundTaskIds.clear();
   host.currentTurn = null;
   turn.reject(error);
-}
-
-function createClaudeTimeoutError(
-  host: ClaudeLiveTurnHost,
-  message: string,
-  code?: string,
-  cliTimeout?: CliTimeoutContext,
-): FailoverError {
-  return new FailoverError(message, {
-    reason: "timeout",
-    provider: host.providerId,
-    model: host.modelId,
-    status: resolveFailoverStatus("timeout"),
-    code,
-    cliTimeout,
-  });
 }
 
 export function createClaudeOutputLimitError(
@@ -360,59 +337,6 @@ function noteClaudeLiveProgress(
   emitProgress(turn, "cli_live:stream_progress");
 }
 
-function armNoOutputTimer(host: ClaudeLiveTurnHost, turn: ClaudeLiveTurn, delayMs: number): void {
-  if (turn.noOutputTimer) {
-    clearTimeout(turn.noOutputTimer);
-  }
-  turn.noOutputTimer = setTimeout(() => {
-    const quietSinceMs = turn.lastOutputAtMs ?? turn.startedAtMs;
-    const hasOutstandingWork =
-      turn.activeTools.size > 0 || host.outstandingBackgroundTaskIds.size > 0;
-    if (hasOutstandingWork) {
-      const remainingMs =
-        quietSinceMs +
-        Math.max(host.noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS) -
-        Date.now();
-      if (remainingMs > 0) {
-        armNoOutputTimer(host, turn, remainingMs);
-        return;
-      }
-    }
-    const retryableResumeStall =
-      turn.useResume &&
-      host.stdoutBuffer.pending.trim().length === 0 &&
-      !turn.hasReplayUnsafeActivity &&
-      turn.toolEventCount === 0 &&
-      turn.activeTools.size === 0 &&
-      host.outstandingBackgroundTaskIds.size === 0;
-    host.close(
-      "abort",
-      createClaudeTimeoutError(
-        host,
-        `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
-        turn.lastOutputAtMs === null || retryableResumeStall ? "cli_no_output_timeout" : undefined,
-        {
-          mode: "no-output",
-          timeoutSeconds: Math.round((Date.now() - quietSinceMs) / 1000),
-          observedActivity:
-            turn.lastOutputAtMs !== null || turn.toolEventCount > 0 || turn.rawLines.length > 0,
-          activeToolCount: turn.activeTools.size,
-          backgroundTaskCount: host.outstandingBackgroundTaskIds.size,
-        },
-      ),
-    );
-  }, delayMs);
-}
-
-export function resetClaudeNoOutputTimer(host: ClaudeLiveTurnHost): void {
-  const turn = host.currentTurn;
-  if (!turn) {
-    return;
-  }
-  turn.lastOutputAtMs = Date.now();
-  armNoOutputTimer(host, turn, host.noOutputTimeoutMs);
-}
-
 const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
 
 function applyBackgroundTasksChanged(
@@ -556,7 +480,7 @@ function acceptClaudeLine(host: ClaudeLiveTurnHost, line: string): void {
 
 export function acceptClaudeStdout(host: ClaudeLiveTurnHost, chunk: string): void {
   host.currentTurn?.onCliOutput?.(chunk, "stdout");
-  resetClaudeNoOutputTimer(host);
+  resetClaudeNoOutputTimer(host, host.currentTurn);
   const maxPendingLineChars =
     host.currentTurn?.outputLimits.maxPendingLineChars ??
     CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
@@ -706,26 +630,6 @@ export function createClaudeTurn(params: {
     resolve: params.resolve,
     reject: params.reject,
   };
-  armNoOutputTimer(params.host, turn, params.host.noOutputTimeoutMs);
-  turn.timeoutTimer = setTimeout(
-    () =>
-      params.host.close(
-        "abort",
-        createClaudeTimeoutError(
-          params.host,
-          `CLI exceeded timeout (${Math.round(params.context.params.timeoutMs / 1000)}s) and was terminated.`,
-          "cli_overall_timeout",
-          {
-            mode: "overall",
-            timeoutSeconds: Math.round(params.context.params.timeoutMs / 1000),
-            observedActivity:
-              turn.observedStdout || turn.rawLines.length > 0 || turn.toolEventCount > 0,
-            activeToolCount: turn.activeTools.size,
-            backgroundTaskCount: params.host.outstandingBackgroundTaskIds.size,
-          },
-        ),
-      ),
-    params.context.params.timeoutMs,
-  );
+  armClaudeTurnTimers(params.host, turn, params.context.params.timeoutMs);
   return turn;
 }

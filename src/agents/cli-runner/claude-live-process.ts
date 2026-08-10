@@ -33,6 +33,7 @@ import {
   requestClaudeNativeToolApproval,
   resolveClaudeNativeToolApprovalPlan,
 } from "./claude-live-tool-approval.js";
+import { resetClaudeNoOutputTimer } from "./claude-live-turn-timeouts.js";
 import {
   acceptClaudeExit,
   acceptClaudeStdout,
@@ -40,7 +41,6 @@ import {
   createClaudeTurn,
   failClaudeTurn,
   markClaudeLiveToolDenied,
-  resetClaudeNoOutputTimer,
   type ClaudeLiveExecPermission,
   type ClaudeLiveToolTerminalOutcome,
   type ClaudeLiveTurn,
@@ -539,7 +539,7 @@ export async function spawnClaudeProcess(params: {
           );
           return;
         }
-        resetClaudeNoOutputTimer(session);
+        resetClaudeNoOutputTimer(session, session.currentTurn);
       },
     });
   } catch (error) {
