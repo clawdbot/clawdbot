@@ -96,6 +96,8 @@ const TRAIN_2026_8_METHODS = [
   "sessions.patchMany",
   "sessions.goal.update",
   "sessions.goal.clear",
+  "sessions.groups.add",
+  "sessions.groups.reorder",
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",

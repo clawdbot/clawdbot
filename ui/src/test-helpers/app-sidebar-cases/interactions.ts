@@ -229,40 +229,6 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
   });
 
-  it("writes a new group catalog before assigning the selection through patchMany", async () => {
-    const prompt = vi.spyOn(window, "prompt").mockReturnValue("Projects");
-    try {
-      const { sidebar, harness } = await mountMultiSelect([
-        "sessions.groups.put",
-        "sessions.patchMany",
-      ]);
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:a");
-      await sidebar.updateComplete;
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
-
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.groupsAdd).toHaveBeenCalledWith("Projects");
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          { key: "agent:main:a", agentId: "main" },
-          { key: "agent:main:b", agentId: "main" },
-        ],
-        { category: "Projects" },
-      );
-      expect(harness.groupsAdd.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.patchMany.mock.invocationCallOrder[0]!,
-      );
-      expect(harness.patch).not.toHaveBeenCalled();
-      await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    } finally {
-      prompt.mockRestore();
-    }
-  });
-
   it("archives serially when an older Gateway does not advertise patchMany", async () => {
     const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
 

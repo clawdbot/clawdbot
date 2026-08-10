@@ -252,6 +252,57 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("falls back to put when adding a group on a gateway without method metadata", async () => {
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "sessions.groups.put") {
+        return {
+          ok: true,
+          groups: (params.names as string[]).map((name, position) => ({ name, position })),
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsAdd("New");
+
+    expect(sessions.state.groups).toEqual(["New"]);
+    expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["New"] });
+    expect(request).not.toHaveBeenCalledWith("sessions.groups.add", expect.any(Object));
+    sessions.dispose();
+  });
+
+  it("falls back to put when reordering groups on a gateway without method metadata", async () => {
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "sessions.groups.put") {
+        return {
+          ok: true,
+          groups: (params.names as string[]).map((name, position) => ({ name, position })),
+          sectionOrder: params.sectionOrder,
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsReorder(
+      ["Beta", "Alpha"],
+      ["work", "category:Beta", "category:Alpha", "ungrouped"],
+    );
+
+    expect(sessions.state.groups).toEqual(["Beta", "Alpha"]);
+    expect(request).toHaveBeenCalledWith("sessions.groups.put", {
+      names: ["Beta", "Alpha"],
+      sectionOrder: ["work", "category:Beta", "category:Alpha", "ungrouped"],
+    });
+    expect(request).not.toHaveBeenCalledWith("sessions.groups.reorder", expect.any(Object));
+    sessions.dispose();
+  });
+
   it("reports a group rename as stale after a same-client reconnect", async () => {
     const renamed = createDeferred<{ groups: Array<{ name: string }> }>();
     const request = vi.fn(async (method: string) => {

@@ -377,18 +377,11 @@ export function reorderSessionGroups(
         );
       }
       if (shouldPersistSectionOrder) {
-        ensureSidebarSectionsSchema(env);
         const normalizedSectionOrder = normalizeSidebarSectionOrder(
           sectionOrder,
           resultingCatalogNames,
         );
-        executeSqliteQuerySync(db, kysely.deleteFrom("sidebar_sections"));
-        normalizedSectionOrder.forEach((sectionId, idx) => {
-          executeSqliteQuerySync(
-            db,
-            kysely.insertInto("sidebar_sections").values({ section_id: sectionId, position: idx }),
-          );
-        });
+        updateSidebarSectionOrder(db, () => normalizedSectionOrder);
       }
     },
     { env },

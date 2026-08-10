@@ -107,7 +107,11 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     }
     try {
       addSessionGroup(params.name);
-      respond(true, { ok: true, groups: listSessionGroups() }, undefined);
+      respond(
+        true,
+        { ok: true, groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
+        undefined,
+      );
       emitSessionsChanged(context, { reason: "groups" });
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));

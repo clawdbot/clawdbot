@@ -347,7 +347,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       return "stale";
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), "sessions.groups.add");
-    if (advertised === false) {
+    if (advertised !== true) {
       return put([...host.readState().groups, name]);
     }
     try {
@@ -400,7 +400,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       return "stale";
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), "sessions.groups.reorder");
-    if (advertised === false) {
+    if (advertised !== true) {
       return put(names, sectionOrder);
     }
     try {

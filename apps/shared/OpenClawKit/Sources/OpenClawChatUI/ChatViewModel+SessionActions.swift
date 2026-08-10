@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OSLog
 
 private let chatSessionActionsLogger = Logger(
@@ -182,7 +183,10 @@ extension OpenClawChatViewModel {
         let response: OpenClawChatSessionGroupsMutationResponse
         do {
             response = try await routeLease.addGroup(name: name)
-        } catch {
+        } catch let error as GatewayResponseError
+            where error.code == "INVALID_REQUEST" && error.message.contains("unknown method: sessions.groups.add") {
+            // Older gateways do not advertise sessions.groups.add; fall back to the
+            // legacy read-modify-write replacement only for that recognized case.
             let current = try await self.fetchSessionGroups(using: routeLease)
             response = try await routeLease.putGroups(names: current.map(\.name) + [name])
         }

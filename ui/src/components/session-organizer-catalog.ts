@@ -35,14 +35,14 @@ export async function rememberSessionGroup(
   }
   if (
     !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.put",
+      method: "sessions.groups.add",
       requiredScope: "operator.write",
     })
   ) {
     return "failed";
   }
   try {
-    const written = await scope.sessions.groupsPut([...groups, name]);
+    const written = await scope.sessions.groupsAdd(name);
     // The catalog owns the authoritative stale signal; the mutation scope adds
     // its own. Either one retiring means no confirmed entry to assign against.
     return written === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
@@ -191,9 +191,9 @@ export async function reorderSidebarSection(
     const nextGroups = next.flatMap((token) =>
       token.startsWith("category:") ? [token.slice("category:".length)] : [],
     );
-    // No capability gate: the gateway serves this UI from its own dist, so a
-    // newer UI never talks to an older gateway's closed put schema outside dev.
-    await scope.sessions.groupsPut(nextGroups, next);
+    // Newer gateways expose sessions.groups.reorder so cross-section ordering
+    // can be persisted atomically without replacing the whole catalog.
+    await scope.sessions.groupsReorder(nextGroups, next);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

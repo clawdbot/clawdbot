@@ -79,6 +79,7 @@ private actor SessionActionTransportState {
     var patchIdentities: [(key: String, expectedSessionID: String?)] = []
     var deletedKeys: [String] = []
     var groupPuts: [[String]] = []
+    var groupAdds: [String] = []
     var createdKeys: [String] = []
     var createdAgentIDs: [String?] = []
     var createdParentKeys: [String?] = []
@@ -125,6 +126,10 @@ private actor SessionActionTransportState {
 
     func recordGroupPut(_ names: [String]) {
         self.groupPuts.append(names)
+    }
+
+    func recordGroupAdd(_ name: String) {
+        self.groupAdds.append(name)
     }
 
     func recordDelete(_ key: String) {
@@ -202,6 +207,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let historyGates: [Int: SessionActionCompletionGate]
     private let historyFailureIndices: Set<Int>
     private let sendSucceeds: Bool
+    private let addGroupError: GatewayResponseError?
 
     init(
         createGate: SessionActionCompletionGate? = nil,
@@ -222,7 +228,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         branchListFailureIndices: Set<Int> = [],
         historyGates: [Int: SessionActionCompletionGate] = [:],
         historyFailureIndices: Set<Int> = [],
-        sendSucceeds: Bool = false)
+        sendSucceeds: Bool = false,
+        addGroupError: GatewayResponseError? = nil)
     {
         self.createGate = createGate
         self.resetGate = resetGate
@@ -243,6 +250,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.historyGates = historyGates
         self.historyFailureIndices = historyFailureIndices
         self.sendSucceeds = sendSucceeds
+        self.addGroupError = addGroupError
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -356,6 +364,19 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
                     },
                     updatedSessions: nil)
             },
+            addGroup: { name in
+                await state.recordGroupAdd(name)
+                if let addGroupError = self.addGroupError {
+                    throw addGroupError
+                }
+                return OpenClawChatSessionGroupsMutationResponse(
+                    ok: true,
+                    groups: [
+                        OpenClawChatSessionGroup(name: "Existing", position: 0),
+                        OpenClawChatSessionGroup(name: name, position: 1),
+                    ],
+                    updatedSessions: nil)
+            },
             renameGroup: { _, _ in
                 OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
             },
@@ -462,6 +483,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.state.groupPuts
     }
 
+    func groupAdds() async -> [String] {
+        await self.state.groupAdds
+    }
+
     func deletedKeys() async -> [String] {
         await self.state.deletedKeys
     }
@@ -558,7 +583,7 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.patchIdentities().map(\.expectedSessionID) == ["session-durable"])
     }
 
-    @Test func `group create lists and replaces through one captured route lease`() async throws {
+    @Test func `group create uses atomic add through one captured route lease`() async throws {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         let lease = try await viewModel.sessionGroupsRouteLease()
@@ -566,10 +591,44 @@ struct ChatViewModelSessionActionTests {
         let groups = try await viewModel.createSessionGroup(named: "New", using: lease)
 
         #expect(groups.map(\.name) == ["Existing", "New"])
-        #expect(await transport.groupPuts() == [["Existing", "New"]])
+        #expect(await transport.groupAdds() == ["New"])
+        #expect(await transport.groupPuts().isEmpty)
         // Catalog-only mutations must bump the revision so sidebar group fetches
         // keyed on it refetch instead of staying stale until reconnect.
         #expect(viewModel.sessionGroupsRevision == 1)
+    }
+
+    @Test func `group create falls back to put when add is unsupported`() async throws {
+        let transport = SessionActionTransport(addGroupError: GatewayResponseError(
+            method: "sessions.groups.add",
+            code: "INVALID_REQUEST",
+            message: "unknown method: sessions.groups.add",
+            details: [:]))
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let lease = try await viewModel.sessionGroupsRouteLease()
+
+        let groups = try await viewModel.createSessionGroup(named: "New", using: lease)
+
+        #expect(groups.map(\.name) == ["Existing", "New"])
+        #expect(await transport.groupAdds() == ["New"])
+        #expect(await transport.groupPuts() == [["Existing", "New"]])
+        #expect(viewModel.sessionGroupsRevision == 1)
+    }
+
+    @Test func `group create does not fall back to put for non-unsupported errors`() async {
+        let transport = SessionActionTransport(addGroupError: GatewayResponseError(
+            method: "sessions.groups.add",
+            code: "FORBIDDEN",
+            message: "not allowed",
+            details: [:]))
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let lease = try await viewModel.sessionGroupsRouteLease()
+
+        await #expect(throws: GatewayResponseError.self) {
+            try await viewModel.createSessionGroup(named: "New", using: lease)
+        }
+        #expect(await transport.groupAdds() == ["New"])
+        #expect(await transport.groupPuts().isEmpty)
     }
 
     @Test func `remote group mutations bump the catalog revision`() async {
