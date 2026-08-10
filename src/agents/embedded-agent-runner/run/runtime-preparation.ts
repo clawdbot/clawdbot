@@ -1,3 +1,7 @@
+import {
+  publishPreparedHarnessSourceReplyDeliveryMode,
+  readSourceReplyDeliveryModeOrigin,
+} from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -496,7 +500,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedRunAdmission: params.preparedRunAdmission,
   });
 
-  if (params.onPreparedHarnessSourceReplyDeliveryMode) {
+  if (readSourceReplyDeliveryModeOrigin(params) === "runtime_default") {
     // Route/auth/transport preparation owns the final harness selection. Publishing
     // an earlier guess can either suppress a valid final or leak a private one.
     const visibleReplies =
@@ -505,7 +509,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     const mode = visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
     params.sourceReplyDeliveryMode = mode;
     params.forceMessageTool = mode === "message_tool_only";
-    params.onPreparedHarnessSourceReplyDeliveryMode(mode);
+    publishPreparedHarnessSourceReplyDeliveryMode(params, mode);
   }
   return {
     admittedRunContext,

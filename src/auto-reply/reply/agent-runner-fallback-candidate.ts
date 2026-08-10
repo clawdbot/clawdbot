@@ -276,17 +276,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             assistantErrorPersistedAcrossFallback = true;
           },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
-          onPreparedHarnessSourceReplyDeliveryMode:
-            sourceReplyDeliveryModeOrigin === "runtime_default"
-              ? (mode) => {
-                  candidateRun.sourceReplyDeliveryMode = mode;
-                  turn.followupRun.run.sourceReplyDeliveryMode = mode;
-                  if (turn.opts) {
-                    turn.opts.sourceReplyDeliveryMode = mode;
-                  }
-                  sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(mode);
-                }
-              : undefined,
           messageToolDeliveryState,
           onCompactionCount: (count) => {
             params.state.autoCompactionCount += count;

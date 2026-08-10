@@ -2,6 +2,7 @@
 import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
+import { copySourceReplyDeliveryRuntimeBinding } from "./source-reply-delivery-runtime.js";
 
 /** Callback used to detect providers that require final-answer tags. */
 type ReasoningTagProviderResolver = (
@@ -89,7 +90,7 @@ export function buildEmbeddedRunBaseParams(params: {
     params.isReasoningTagProvider,
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  return {
+  const runParams = {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
@@ -128,4 +129,6 @@ export function buildEmbeddedRunBaseParams(params: {
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
+  copySourceReplyDeliveryRuntimeBinding(params.run, runParams);
+  return runParams;
 }

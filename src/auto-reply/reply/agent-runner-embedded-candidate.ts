@@ -43,6 +43,10 @@ import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
+import {
+  readPreparedHarnessSourceReplyDeliveryMode,
+  type SourceReplyDeliveryRuntimeOptions,
+} from "./source-reply-delivery-runtime.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -89,9 +93,6 @@ export async function runEmbeddedFallbackCandidate(params: {
   >;
   notifyAgentRunStart: () => void;
   notifyUserAboutCompaction: boolean;
-  onPreparedHarnessSourceReplyDeliveryMode?: NonNullable<
-    RunEmbeddedAgentParams["onPreparedHarnessSourceReplyDeliveryMode"]
-  >;
   messageToolDeliveryState: MessageToolDeliveryState;
   preserveProgressCallbackStartOrder: boolean;
   presentation: EmbeddedPresentation;
@@ -103,6 +104,9 @@ export async function runEmbeddedFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const sourceReplyDeliveryRuntimeOptions = turn.opts as
+    | SourceReplyDeliveryRuntimeOptions
+    | undefined;
   const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
     run: {
       ...params.candidateRun,
@@ -198,7 +202,7 @@ export async function runEmbeddedFallbackCandidate(params: {
       milestone: "before_embedded_run",
     });
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
-    const result = await params.timing.measure("embedded_run", () =>
+    const embeddedRun = params.timing.measure("embedded_run", () =>
       runEmbeddedAgent({
         preparedRunAdmission: params.preparedRunAdmission,
         ...embeddedContext,
@@ -233,7 +237,6 @@ export async function runEmbeddedFallbackCandidate(params: {
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
-        onPreparedHarnessSourceReplyDeliveryMode: params.onPreparedHarnessSourceReplyDeliveryMode,
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -364,7 +367,8 @@ export async function runEmbeddedFallbackCandidate(params: {
             lifecycleBackstop,
             notifyAgentRunStart: params.notifyAgentRunStart,
             sourceRepliesAreToolOnly:
-              turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+              (readPreparedHarnessSourceReplyDeliveryMode(params.candidateRun) ??
+                turn.followupRun.run.sourceReplyDeliveryMode) === "message_tool_only",
             messageToolDeliveryState: params.messageToolDeliveryState,
             provider: params.provider,
             model: params.model,
@@ -423,6 +427,18 @@ export async function runEmbeddedFallbackCandidate(params: {
           : undefined,
       }),
     );
+    const result = await embeddedRun.finally(() => {
+      const mode = readPreparedHarnessSourceReplyDeliveryMode(params.candidateRun);
+      if (!mode) {
+        return;
+      }
+      params.candidateRun.sourceReplyDeliveryMode = mode;
+      turn.followupRun.run.sourceReplyDeliveryMode = mode;
+      if (turn.opts) {
+        turn.opts.sourceReplyDeliveryMode = mode;
+      }
+      sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(mode);
+    });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
