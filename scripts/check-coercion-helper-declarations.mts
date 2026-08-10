@@ -91,6 +91,12 @@ export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
       "Dependency-free validator intentionally accepts arrays before JSON type-specific checks.",
   },
   {
+    file: "ui/src/test-helpers/control-ui-e2e.ts",
+    name: "isRecord",
+    count: 1,
+    reason: "Serialized mock Gateway closure cannot capture module imports.",
+  },
+  {
     file: "scripts/android-release-signing.mjs",
     name: "asRecord",
     count: 1,
