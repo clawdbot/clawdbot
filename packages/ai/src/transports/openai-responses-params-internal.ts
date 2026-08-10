@@ -383,7 +383,12 @@ export function buildOpenAIResponsesParams(
       if (reasoningEffort) {
         params.reasoning = {
           effort: reasoningEffort,
-          ...(reasoningEffort === "none" ? {} : { summary: options?.reasoningSummary || "auto" }),
+          ...(reasoningEffort === "none"
+            ? {}
+            : {
+                summary:
+                  options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
+              }),
         };
         if (reasoningEffort !== "none") {
           params.include = ["reasoning.encrypted_content"];

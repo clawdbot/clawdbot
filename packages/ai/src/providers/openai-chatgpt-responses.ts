@@ -755,7 +755,8 @@ function buildRequestBody(
     if (effort !== null) {
       body.reasoning = {
         effort,
-        summary: options.reasoningSummary ?? "auto",
+        // Preserve explicit null; only default when the field was omitted.
+        summary: options.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
       };
     }
   }
