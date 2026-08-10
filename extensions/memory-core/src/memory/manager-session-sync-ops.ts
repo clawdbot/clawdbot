@@ -177,7 +177,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (hasStaleIndexedPaths) {
       this.sessionsDirty = true;
-      this.sessionsFullRetryDirty = true;
+      this.sessionsReconcileDirty = true;
     }
     for (const file of dirtyFiles) {
       this.sessionsDirtyFiles.add(file);
@@ -190,7 +190,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
     const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
-    if ((dirtyFiles.length === 0 && !this.sessionsFullRetryDirty) || this.closed) {
+    if (!this.sessionsDirty || this.closed) {
       return dirtyFiles;
     }
     void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
@@ -344,7 +344,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-      dirtySessionFileCount: this.sessionsDirtyFiles.size,
       sync: params,
       needsFullReindex,
     });

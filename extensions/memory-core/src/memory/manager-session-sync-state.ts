@@ -44,7 +44,6 @@ export function resolveMemorySessionSyncPlan(params: {
   needsFullReindex: boolean;
   files: string[];
   targetSessionFiles: Set<string> | null;
-  sessionsDirtyFiles: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
 }): {
@@ -61,9 +60,6 @@ export function resolveMemorySessionSyncPlan(params: {
     activePaths,
     existingRows,
     existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
-    indexAll:
-      params.needsFullReindex ||
-      Boolean(params.targetSessionFiles) ||
-      params.sessionsDirtyFiles.size === 0,
+    indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

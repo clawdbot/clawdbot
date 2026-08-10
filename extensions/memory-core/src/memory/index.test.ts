@@ -5187,10 +5187,9 @@ describe("memory index", () => {
     }
   });
 
-  it("status detects and no-force sync prunes indexed sessions removed from the corpus", async () => {
-    forceNoProvider = true;
+  it("prunes removed sessions without re-embedding unchanged survivors", async () => {
     const cfg = createCfg({
-      provider: "none",
+      provider: "gemini",
       sources: ["sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -5199,6 +5198,8 @@ describe("memory index", () => {
     setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
     const sessionId = "status-stale-session-test";
     const sessionKey = `agent:main:memory:${sessionId}`;
+    const survivorId = "status-stale-session-survivor";
+    const survivorKey = `agent:main:memory:${survivorId}`;
     const storePath = path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json");
     try {
       await seedMemoryIndexSessionTranscript({
@@ -5212,6 +5213,17 @@ describe("memory index", () => {
           },
         ],
       });
+      await seedMemoryIndexSessionTranscript({
+        sessionId: survivorId,
+        sessionKey: survivorKey,
+        messages: [
+          {
+            role: "user",
+            timestamp: 2,
+            content: "Surviving session index canary ORBIT-SURVIVE-92.",
+          },
+        ],
+      });
 
       const initial = await getFreshManager(cfg, "cli");
       managersForCleanup.add(initial);
@@ -5220,6 +5232,10 @@ describe("memory index", () => {
         initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
       ).resolves.not.toEqual([]);
       await initial.close?.();
+      const agentDb = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+      agentDb.exec("DELETE FROM memory_embedding_cache");
+      agentDb.close();
+      embedBatchCalls = 0;
 
       await expect(
         deleteSessionEntry({
@@ -5236,14 +5252,20 @@ describe("memory index", () => {
       expect(statusManager.status().dirty).toBe(true);
 
       await statusManager.sync({ reason: "cli" });
+      expect(embedBatchCalls).toBe(0);
+      const deletedResults = await statusManager.search("ORBIT-DELETE-91", {
+        minScore: 0,
+        sources: ["sessions"],
+      });
+      expect(deletedResults.some((result) => result.path.includes(sessionId))).toBe(false);
       await expect(
-        statusManager.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
-      ).resolves.toEqual([]);
+        statusManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
+      ).resolves.not.toEqual([]);
       const db = Reflect.get(statusManager, "db") as DatabaseSync;
       const sourceCount = db
         .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
         .get() as { count: number };
-      expect(sourceCount.count).toBe(0);
+      expect(sourceCount.count).toBe(1);
     } finally {
       restoreMemoryIndexStateDir();
     }
