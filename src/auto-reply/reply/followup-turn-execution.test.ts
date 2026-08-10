@@ -215,6 +215,61 @@ describe("executeFollowupTurn", () => {
     expect(call.resolvedVerboseLevel).toBe("off");
   });
 
+  it.each([
+    {
+      initialLevel: "off",
+      queuedLevel: "on",
+      expectedDurableCommentary: true,
+    },
+    {
+      initialLevel: "on",
+      queuedLevel: "off",
+      expectedDurableCommentary: false,
+    },
+  ] as const)(
+    "refreshes commentary ownership for a queued $initialLevel-to-$queuedLevel transition",
+    async ({ initialLevel, queuedLevel, expectedDurableCommentary }) => {
+      let verboseLevel = queuedLevel;
+      let isVerboseProgressActive = () => initialLevel !== "off";
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        expect(params.resolvedVerboseLevel).toBe(queuedLevel);
+        expect(params.opts?.commentaryPayloadsEnabled).toBe(expectedDurableCommentary);
+        verboseLevel = queuedLevel === "off" ? "on" : "off";
+        expect(isVerboseProgressActive()).toBe(queuedLevel !== "off");
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+
+      const result = await executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: {
+            commentaryPayloadsEnabled: true,
+            shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
+            onVerboseProgressVisibility: (getter) => {
+              isVerboseProgressActive = getter;
+            },
+          },
+        },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+
+      expect(result.commentaryPayloadsEnabled).toBe(expectedDurableCommentary);
+    },
+  );
+
   it("keeps room-event progress, tool summaries, and typing silent", async () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },

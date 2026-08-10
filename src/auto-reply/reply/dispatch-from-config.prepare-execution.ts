@@ -12,6 +12,7 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
+import { resolveTurnCommentaryPayloadsEnabled } from "./commentary-progress-owner.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import {
   hasAskUserPayload,
@@ -367,17 +368,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     deliverStandaloneCommentaryProgress &&
     shouldSendVerboseProgressMessages() &&
     !shouldSuppressProgressDelivery();
-  const shouldDeliverCommentaryPayloads = params.replyOptions?.shouldDeliverCommentaryPayloads;
-  // New commentary-owner consumers share one per-turn decision between the
-  // draft and durable lanes. Legacy visibility listeners remain live.
-  const frozenCommentaryProgressVisibility = shouldDeliverCommentaryPayloads
-    ? resolveVerboseProgressVisibility()
-    : undefined;
-  params.replyOptions?.onVerboseProgressVisibility?.(
-    frozenCommentaryProgressVisibility === undefined
-      ? resolveVerboseProgressVisibility
-      : () => frozenCommentaryProgressVisibility,
-  );
+  const commentaryPayloadsEnabled = resolveTurnCommentaryPayloadsEnabled({
+    commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
+    options: params.replyOptions,
+    resolveVerboseProgressVisibility,
+  });
 
   const replyResolver =
     params.replyResolver ??
@@ -414,8 +409,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     deliverStandaloneCommentaryProgress,
     canForwardSuppressedSourceItemEvents,
     onItemEvent,
-    commentaryPayloadsEnabled:
-      state.commentaryPayloadsEnabled && (shouldDeliverCommentaryPayloads?.() ?? true),
+    commentaryPayloadsEnabled,
     replyResolver,
     replyConfig,
     progressState,
