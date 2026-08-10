@@ -1,10 +1,10 @@
 // WhatsApp monitor inbox behavior split by ownership.
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
-import { describe, expect, it, vi } from "vitest";
 import {
   admitFollowupRunLifecycle,
   markFollowupRunEnqueued,
-} from "../../../src/auto-reply/reply/queue/types.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { describe, expect, it, vi } from "vitest";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
