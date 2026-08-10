@@ -10,6 +10,8 @@ import "./app-host.ts";
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
+  devicePairSetupRenderer: unknown;
+  devicePairSetupLoadFailed: boolean;
 };
 
 type PairingSidebar = HTMLElement & {
@@ -110,7 +112,7 @@ function createPairingShell(params: {
     });
   };
 
-  return { snapshot, openDevicePairSetup, renderSidebar, renderPairingDialog, container };
+  return { shell, snapshot, openDevicePairSetup, renderSidebar, renderPairingDialog, container };
 }
 
 afterEach(() => {
@@ -166,6 +168,31 @@ describe("application shell pairing access", () => {
     });
 
     expect(renderSidebar().canPairDevice).toBe(false);
+  });
+
+  it("keeps a failed pairing dialog load visible and retryable", () => {
+    const { shell, renderSidebar, container } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      setupCode: "pair-mobile-secret",
+    });
+    renderSidebar();
+
+    // Force the rejected-chunk state the shell reaches when the lazy pairing
+    // import fails while its overlay is already open.
+    shell.devicePairSetupRenderer = null;
+    shell.devicePairSetupLoadFailed = true;
+    render(shell.render(), container);
+
+    const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
+    expect(dialog?.textContent).toContain("Could not load the pairing dialog");
+    const actions = [
+      ...container.querySelectorAll<HTMLButtonElement>(".device-pair-setup__footer button"),
+    ];
+    expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+
+    actions[0]?.click();
+
+    expect(shell.devicePairSetupLoadFailed).toBe(false);
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

@@ -65,7 +65,9 @@ export interface ShellViewHost {
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
+  readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
+  retryDevicePairSetupRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
@@ -101,8 +103,45 @@ function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupPr
   if (renderer) {
     return renderer(props);
   }
+  if (host.devicePairSetupLoadFailed) {
+    return renderDevicePairSetupLoadFailure(host, props);
+  }
   host.loadDevicePairSetupRenderer();
   return nothing;
+}
+
+// The pairing chunk failed to load while its overlay is open. Reuse the eager
+// modal chrome so the operator still gets a dialog, a reason, and a retry
+// instead of a silently empty surface.
+function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("devices.pairing.loadFailed");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p>${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button
+          class="btn btn--primary"
+          type="button"
+          @click=${() => host.retryDevicePairSetupRenderer()}
+        >
+          ${t("common.retry")}
+        </button>
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
 }
 
 export function renderApplicationShell(host: ShellViewHost) {

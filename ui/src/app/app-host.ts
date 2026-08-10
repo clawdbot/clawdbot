@@ -184,17 +184,27 @@ class OpenClawShell
   @state() devicePairSetupRenderer:
     | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
     | null = null;
+  // A rejected chunk must stay visible: the overlay is already open, so the
+  // shell renders a recoverable failure instead of an empty dialog frame.
+  @state() devicePairSetupLoadFailed = false;
   private devicePairSetupRuntime: Promise<unknown> | null = null;
 
   loadDevicePairSetupRenderer(): void {
     this.devicePairSetupRuntime ??= import("../pages/devices/view-pairing.runtime.ts")
       .then((module) => {
         this.devicePairSetupRenderer = module.renderDevicePairSetup;
+        this.devicePairSetupLoadFailed = false;
       })
       .catch(() => {
-        // Allow a later open to retry; the modal renders nothing until it loads.
+        // Clearing the promise is what makes the retry below able to refetch.
+        this.devicePairSetupLoadFailed = true;
         this.devicePairSetupRuntime = null;
       });
+  }
+
+  retryDevicePairSetupRenderer(): void {
+    this.devicePairSetupLoadFailed = false;
+    this.loadDevicePairSetupRenderer();
   }
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);

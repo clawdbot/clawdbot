@@ -524,6 +524,7 @@ export const en: TranslationMap = {
         "This Gateway URL uses plaintext ws://. Use wss:// or Tailscale Serve, then create a new code for full access.",
       failed: "Could not create a setup code.",
       statusFailed: "Could not verify whether pairing completed.",
+      loadFailed: "Could not load the pairing dialog. Check your connection and try again.",
       qrAlt: "OpenClaw mobile pairing QR code",
       qrUnavailable: "QR unavailable. Copy the setup code instead.",
       copySetupCode: "Copy setup code",
