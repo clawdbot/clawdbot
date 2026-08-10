@@ -1,6 +1,5 @@
 // SQLite trajectory runtime store owns session-scoped runtime event rows.
 
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   executeSqliteQuerySync,
@@ -360,7 +359,8 @@ function trajectoryJsonlRowBytes(eventJson: string): number {
 }
 
 function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {
-  return parseDateTimestampMs(event.ts);
+  const parsed = Date.parse(event.ts);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function normalizeSqliteNumber(value: number | bigint): number {
