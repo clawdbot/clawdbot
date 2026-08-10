@@ -1033,24 +1033,57 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each([[""], ["   "]])(
+    "rejects blank --command-cwd (%j) before forging a command payload",
+    async (value) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+      const program = createCronProgram();
+
+      await program.parseAsync(["edit", "job-1", "--command-cwd", value], { from: "user" });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("--command-cwd must not be blank"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    },
+  );
+
   it.each([
-    ["--command-cwd", ""],
-    ["--command-cwd", "   "],
-    ["--command-input", ""],
-    ["--command-input", "   "],
-  ])("rejects blank %s before forging a command payload", async (flag, value) => {
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
-    const program = createCronProgram();
+    ["", ""],
+    ["   ", "   "],
+  ])(
+    "preserves empty/whitespace --command-input (%j) for command stdin",
+    async (value, expectedInput) => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return {
+            id: "job-1",
+            payload: { kind: "command", argv: ["sh", "-lc", "cat"] },
+          };
+        }
+        return { ok: true };
+      });
+      const program = createCronProgram();
 
-    await program.parseAsync(["edit", "job-1", flag, value], { from: "user" });
+      await program.parseAsync(["edit", "job-1", "--command-input", value], { from: "user" });
 
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`${flag} must not be blank`));
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
-
-    errorSpy.mockRestore();
-    exitSpy.mockRestore();
-  });
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "command",
+            input: expectedInput,
+          },
+        },
+      });
+    },
+  );
 
   it("rejects --webhook combined with a delivery clear flag", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

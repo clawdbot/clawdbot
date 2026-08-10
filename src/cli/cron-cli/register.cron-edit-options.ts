@@ -120,19 +120,16 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Use --account or --clear-account, not both");
   }
 
-  // Blank --command-cwd / --command-input must not count as a command payload
-  // edit: presence-only checks forged `{ kind: "command" }` patches and could
-  // convert agentTurn/script jobs into empty command payloads.
+  // Blank --command-cwd must not count as a command payload edit: presence-only
+  // checks forged `{ kind: "command" }` patches with no usable cwd. Empty
+  // --command-input stays allowed (Gateway stdin is an unrestricted string;
+  // "" / whitespace clears or sets stdin on command jobs).
   const commandCwd = normalizeOptionalString(opts.commandCwd);
   if (typeof opts.commandCwd === "string" && !commandCwd) {
     throw new Error("--command-cwd must not be blank");
   }
-  const commandInput =
-    typeof opts.commandInput === "string" ? String(opts.commandInput) : undefined;
-  if (commandInput !== undefined && commandInput.trim() === "") {
-    throw new Error("--command-input must not be blank");
-  }
-  const hasCommandInput = commandInput !== undefined;
+  const hasCommandInput = typeof opts.commandInput === "string";
+  const commandInput = hasCommandInput ? String(opts.commandInput) : undefined;
   const hasCommandSpecificPayloadField =
     Boolean(commandShell) ||
     Boolean(commandArgv) ||
