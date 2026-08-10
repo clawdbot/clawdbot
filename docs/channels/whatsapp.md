@@ -302,9 +302,15 @@ immediately, and are physically removed from disk the next time the
 framework's plugin-state maintenance task runs (periodic, not synchronous
 with expiry) — so a small window can exist where expired key material is
 unreadable but not yet erased from the underlying database file. A vote
-arriving after the retention window (or an unrelated poll's leftover state)
-is not decodable and the hook simply does not fire for it — no error is
-raised. `pollVoteRetentionMs` accepts any positive value up to a hard
+arriving after the retention window is not decodable and the hook does not
+fire for it. That outcome is **logged**, not silent: alongside each poll's
+decoding state OpenClaw writes a small tombstone that outlives it by one
+hour and holds no decryption material — only the fact that this account
+created that poll id. When a late vote matches a tombstone, OpenClaw logs a
+warning naming the poll and the configured retention, so the lost vote is
+diagnosable and the fix (raising `pollVoteRetentionMs`) is actionable. A
+vote on a poll OpenClaw never created stays silent by design — reporting it
+would leak that a third party's poll is being observed. `pollVoteRetentionMs` accepts any positive value up to a hard
 maximum of `86400000` (24 hours); larger configured values are rejected by
 config validation. Configure the window channel-wide or per account:
 

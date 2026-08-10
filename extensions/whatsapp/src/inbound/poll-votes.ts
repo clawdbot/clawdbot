@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -478,6 +479,31 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     // "polls OpenClaw created" boundary rather than exposing third-party
     // participants' vote selections to opted-in plugins. Account-scoped so
     // one connected account's poll can't authorize another account's hook.
+    //
+    // One case inside this branch is NOT a third-party poll: a vote on our
+    // own poll whose decoding state has already expired. That vote is
+    // genuinely lost, and with the hook enabled an operator needs a way to
+    // tell it apart from the (correct, silent) third-party case — otherwise
+    // late votes just vanish with nothing to diagnose. The keyless tombstone
+    // makes exactly that distinction observable.
+    if (
+      creationKey?.id &&
+      remoteJid &&
+      resolvePollStore(params.store).wasOwnPollCreation(
+        params.accountId,
+        remoteJid,
+        creationKey.id,
+      )
+    ) {
+      getChildLogger({ module: "whatsapp-poll-votes" }).warn(
+        {
+          accountId: params.accountId,
+          pollMessageId: creationKey.id,
+          retentionMs: resolveWhatsAppPollVoteRetentionMs(params.cfg, params.accountId),
+        },
+        "poll_vote_received not dispatched: this poll's decoding state expired; raise channels.whatsapp.pollVoteRetentionMs to keep accepting later votes",
+      );
+    }
     return;
   }
   const voteUpdateId = params.key.id;

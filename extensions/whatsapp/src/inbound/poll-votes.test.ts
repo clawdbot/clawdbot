@@ -573,3 +573,89 @@ describe("poll vote dedupe follows hook admission, not attempted dispatch", () =
     expect(store.isVoteDedup("acct", CHAT_JID, "VOTE-NO-HANDLER")).toBe(false);
   });
 });
+
+describe("expired poll state is an observable outcome, not a silent drop", () => {
+  let dir: string;
+  let store: WhatsAppPollStore;
+  const CFG = {
+    channels: {
+      whatsapp: {
+        allowFrom: ["*"],
+        pluginHooks: { pollVoteReceived: true },
+        // Smallest window the schema allows, so the state can genuinely
+        // expire inside the test without faking the clock.
+        pollVoteRetentionMs: 1,
+      },
+    },
+  } as never;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-poll-expiry-"));
+    store = new WhatsAppPollStore({ ...process.env, OPENCLAW_STATE_DIR: dir });
+    runPollVoteReceivedMock.mockClear();
+  });
+
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a keyless tombstone once the poll's decoding state has expired", async () => {
+    // Regression: with only the state record, the dispatch gate could not
+    // tell "our poll, expired" from "someone else's poll" — so a late vote
+    // on our own poll vanished with nothing an operator could diagnose.
+    rememberWhatsAppOwnPollCreation("acct", CHAT_JID, "POLL-EXPIRY-TOMBSTONE", CFG, store);
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    // The state itself (which carries the decryption material) is gone...
+    expect(store.isOwnPollCreation("acct", CHAT_JID, "POLL-EXPIRY-TOMBSTONE")).toBe(false);
+    // ...but the fact that we created it survives, so the loss is reportable.
+    expect(store.wasOwnPollCreation("acct", CHAT_JID, "POLL-EXPIRY-TOMBSTONE")).toBe(true);
+  });
+
+  it("does not claim a poll it never created", () => {
+    // The tombstone must not widen the ownership boundary: a third party's
+    // poll stays unknown, so the gate stays silent for it rather than
+    // reporting that a stranger's poll was observed.
+    expect(store.wasOwnPollCreation("acct", CHAT_JID, "POLL-NEVER-OURS")).toBe(false);
+  });
+
+  it("still refuses to dispatch a vote whose poll state expired", async () => {
+    // Observability must not become a decode path: the tombstone holds no
+    // key material, so an expired poll's vote is reported, never delivered.
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["A", "B"],
+    });
+    rememberWhatsAppOwnPollCreation("acct", CHAT_JID, "POLL-EXPIRY-NO-DISPATCH", CFG, store);
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["A"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: "POLL-EXPIRY-NO-DISPATCH",
+      voterJid: VOTER_JID,
+    });
+    maybeEmitWhatsAppPollVoteReceivedHook({
+      cfg: CFG,
+      accountId: "acct",
+      message: buildPollUpdateMessageForTests({
+        creationKey: creationKeyFor("POLL-EXPIRY-NO-DISPATCH"),
+        vote,
+      }),
+      key: voteKeyFor("VOTE-AFTER-EXPIRY"),
+      getCachedMessage: () => pollCreationMessage,
+      selfJid: POLL_CREATOR_JID,
+      store,
+    });
+
+    expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+  });
+});

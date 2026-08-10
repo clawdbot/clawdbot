@@ -16,6 +16,19 @@ import { BufferJSON } from "../session.runtime.js";
 const WHATSAPP_PLUGIN_ID = "whatsapp";
 const POLL_STATE_MAX_ENTRIES = 2000;
 
+/**
+ * How long a poll's expiry tombstone outlives the poll state itself.
+ *
+ * A tombstone exists purely so a vote arriving after the retention window
+ * can be reported as "this poll's state expired" instead of being
+ * indistinguishable from a vote on a stranger's poll. It therefore holds
+ * NO decryption material and no message content — only the fact that this
+ * account once created this poll id — and cannot be used to decode a vote.
+ * The window is bounded so the metadata does not outlive its diagnostic
+ * purpose.
+ */
+const POLL_EXPIRY_TOMBSTONE_GRACE_MS = 60 * 60 * 1000;
+
 type PollCreationRecord = {
   ownedAt: number;
   /** Set once the poll creation message's own content (with its decryption key) is known. */
@@ -47,6 +60,7 @@ function voteDedupKey(accountId: string, remoteJid: string, voteId: string): str
 export class WhatsAppPollStore {
   private readonly creations: PluginStateSyncKeyedStore<PollCreationRecord>;
   private readonly votes: PluginStateSyncKeyedStore<true>;
+  private readonly expiredCreations: PluginStateSyncKeyedStore<true>;
 
   constructor(env?: NodeJS.ProcessEnv) {
     const baseOptions: Omit<OpenKeyedStoreOptions, "namespace"> = {
@@ -61,6 +75,10 @@ export class WhatsAppPollStore {
     this.votes = createPluginStateSyncKeyedStore<true>(WHATSAPP_PLUGIN_ID, {
       ...baseOptions,
       namespace: "poll-vote-dedup",
+    });
+    this.expiredCreations = createPluginStateSyncKeyedStore<true>(WHATSAPP_PLUGIN_ID, {
+      ...baseOptions,
+      namespace: "poll-creation-tombstones",
     });
   }
 
@@ -101,10 +119,28 @@ export class WhatsAppPollStore {
       (current) => ({ ...current, ownedAt: current?.ownedAt ?? Date.now() }),
       { ttlMs: anchoredTtlMs },
     );
+    // Written alongside the state it will outlive, with no key material, so
+    // the dispatch gate can still tell "our poll, expired" from "not ours"
+    // once the record above is swept. Anchored the same way, so a replay
+    // confirms the original window rather than extending it.
+    this.expiredCreations.register(key, true, {
+      ttlMs: anchoredTtlMs + POLL_EXPIRY_TOMBSTONE_GRACE_MS,
+    });
   }
 
   isOwnPollCreation(accountId: string, remoteJid: string, messageId: string): boolean {
     return Boolean(this.creations.lookup(creationKey(accountId, remoteJid, messageId)));
+  }
+
+  /**
+   * True when this account created the poll but its decoding state has
+   * already expired. Lets the dispatch gate report a lost vote as an
+   * expiry instead of silently conflating it with a third-party poll.
+   * Anchored to the same `ownedAt` as the state it outlives, so a replayed
+   * write can never extend it.
+   */
+  wasOwnPollCreation(accountId: string, remoteJid: string, messageId: string): boolean {
+    return Boolean(this.expiredCreations.lookup(creationKey(accountId, remoteJid, messageId)));
   }
 
   /**
