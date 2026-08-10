@@ -365,6 +365,46 @@ describe("skill collection review", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("groups symlink aliases before comparing shared-workspace identities", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-real-workspace-");
+    const aliasParent = await tempDirs.make("openclaw-collection-review-alias-parent-");
+    const workspaceAlias = path.join(aliasParent, "workspace-alias");
+    await fs.symlink(
+      workspaceDir,
+      workspaceAlias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await writeWorkspaceSkills(workspaceDir, [{ name: "alpha", description: "Alpha procedure" }]);
+    const onError = vi.fn();
+
+    await runScheduledSkillCollectionReviews({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "alpha-agent",
+              default: true,
+              workspace: workspaceDir,
+              model: "openai/gpt-5.5",
+            },
+            {
+              id: "beta-agent",
+              workspace: workspaceAlias,
+              model: "openai/gpt-5.6-sol",
+            },
+          ],
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      },
+      env: testState.env,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), workspaceDir);
+    expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("claims a due workspace before dispatching the model", async () => {
     const workspaceDir = await tempDirs.make("openclaw-collection-review-claim-");
     await writeWorkspaceSkills(workspaceDir, [{ name: "useful", description: "Useful procedure" }]);

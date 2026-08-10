@@ -13,6 +13,7 @@ import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
+import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -159,7 +160,9 @@ export async function runScheduledSkillCollectionReviews(params: {
   }
   const workspaceAgents = new Map<string, string[]>();
   for (const agentId of listAgentIds(params.config)) {
-    const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, params.env);
+    const workspaceDir = canonicalizePath(
+      resolveAgentWorkspaceDir(params.config, agentId, params.env),
+    );
     const agentIds = workspaceAgents.get(workspaceDir) ?? [];
     agentIds.push(agentId);
     workspaceAgents.set(workspaceDir, agentIds);
