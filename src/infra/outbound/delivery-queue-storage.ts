@@ -590,7 +590,11 @@ export async function markDeliveryPlatformSendDispatched(
       producerClaimId: undefined,
       platformSendStartedAt: Date.now(),
       ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
-      recoveryState: "send_attempt_started",
+      // A later send in the same batch cannot erase earlier recipient-visible evidence.
+      recoveryState:
+        entry.recoveryState === "unknown_after_send"
+          ? "unknown_after_send"
+          : "send_attempt_started",
     }),
     expectedPlatformSendAttemptId,
   );

@@ -95,10 +95,13 @@ const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChan
       cfg: plan.cfg,
       dispatcherOptions: {
         ...plan.dispatcherOptions,
-        deliver:
+        deliver: async (payload, info) =>
           "deliverWithProviderMessageSending" in plan.delivery
-            ? plan.delivery.deliverWithProviderMessageSending
-            : plan.delivery.deliver,
+            ? await plan.delivery.deliverWithProviderMessageSending(payload, {
+                ...info,
+                onPlatformSendDispatch: info.onPlatformSendDispatch ?? (() => Promise.resolve()),
+              })
+            : await plan.delivery.deliver(payload, info),
         onError: plan.delivery.onError,
       },
       replyOptions: plan.replyOptions,
