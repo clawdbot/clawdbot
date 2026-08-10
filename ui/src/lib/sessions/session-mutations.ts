@@ -465,6 +465,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     },
     retireConnection() {
       pendingModelPatches.clear();
+      // Pin intents live inside `result`, which the replacement connection
+      // rehydrates wholesale; only the model-override side map outlives that
+      // replacement, so it is the one that needs an explicit rollback below.
       pendingPinPatches.clear();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
