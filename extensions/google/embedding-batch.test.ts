@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 
+const debugEmbeddingsLogMock = vi.hoisted(() => vi.fn());
+
 // Pass-through so onResponse receives real Response objects (required by
 // readProviderJsonResponse which needs a real .body ReadableStream).
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
@@ -11,13 +13,15 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
   return {
     ...actual,
+    debugEmbeddingsLog: debugEmbeddingsLogMock,
     withRemoteHttpResponse: async <T>(params: {
       url: string;
       ssrfPolicy?: unknown;
       init?: RequestInit;
+      signal?: AbortSignal;
       onResponse: (response: Response) => Promise<T>;
     }): Promise<T> => {
-      const response = await fetch(params.url, params.init);
+      const response = await fetch(params.url, { ...params.init, signal: params.signal });
       return await params.onResponse(response);
     },
   };
@@ -25,6 +29,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -44,6 +49,17 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+async function requestBodyText(init?: RequestInit): Promise<string> {
+  const body = init?.body;
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof Blob) {
+    return await body.text();
+  }
+  throw new Error("expected string or Blob request body");
 }
 
 async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
@@ -81,6 +97,9 @@ function makeGeminiClient(
 }
 
 type GeminiBatchRequest = Parameters<typeof runGeminiEmbeddingBatches>[0]["requests"][number];
+type SubmissionLifecycle = NonNullable<
+  Parameters<typeof runGeminiEmbeddingBatches>[0]["submissionLifecycle"]
+>;
 
 function batchRequest(customId: string, text: string): GeminiBatchRequest {
   return {
@@ -142,12 +161,16 @@ function defaultBatchResponse(stage: BatchStage): Response {
 }
 
 function stubBatchFetch(
-  override?: (stage: BatchStage, url: string, init?: RequestInit) => Response | undefined,
+  override?: (
+    stage: BatchStage,
+    url: string,
+    init?: RequestInit,
+  ) => Response | undefined | Promise<Response | undefined>,
 ): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = fetchInputUrl(input);
     const stage = batchStageForUrl(url);
-    return override?.(stage, url, init) ?? defaultBatchResponse(stage);
+    return (await override?.(stage, url, init)) ?? defaultBatchResponse(stage);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -156,6 +179,7 @@ function stubBatchFetch(
 function runBatch(
   requests = singleRequest(),
   gemini = makeGeminiClient(),
+  submissionLifecycle?: SubmissionLifecycle,
 ): Promise<Map<string, number[]>> {
   return runGeminiEmbeddingBatches({
     gemini,
@@ -165,7 +189,16 @@ function runBatch(
     concurrency: 1,
     pollIntervalMs: 1,
     timeoutMs: 5_000,
+    ...(submissionLifecycle ? { submissionLifecycle } : {}),
   });
+}
+
+function createSubmissionLifecycle() {
+  return {
+    started: vi.fn<SubmissionLifecycle["started"]>(),
+    accepted: vi.fn<SubmissionLifecycle["accepted"]>(),
+    rejected: vi.fn<SubmissionLifecycle["rejected"]>(),
+  } satisfies SubmissionLifecycle;
 }
 
 async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
@@ -229,7 +262,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
     const rejection = captureRejection(result);
 
     await expect(rejection).resolves.toMatchObject({
-      message: "gemini batch batches/b-0 timed out after 1000ms",
+      message: "gemini embedding batch timed out after 1000ms",
     });
     expect(
       fetchMock.mock.calls.filter(([input]) => fetchInputUrl(input).includes("/batches/")),
@@ -253,20 +286,31 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 
   it.each([
-    { stage: "upload", label: "gemini.batch-file-upload" },
-    { stage: "create", label: "gemini.batch-create" },
-    { stage: "status", label: "gemini.batch-status" },
-    { stage: "download", label: "gemini.batch-file-content" },
-  ] as const)("bounds oversized $stage errors", async ({ stage, label }) => {
-    const streamed = makeOversizedResponse(503);
-    stubBatchFetch((candidate) => (candidate === stage ? streamed.response : undefined));
+    { stage: "upload", label: "gemini.batch-file-upload", attempts: 1 },
+    { stage: "create", label: "gemini.batch-create", attempts: 1 },
+    { stage: "status", label: "gemini.batch-status", attempts: 2 },
+    { stage: "download", label: "gemini.batch-file-content", attempts: 2 },
+  ] as const)("bounds oversized $stage errors", async ({ stage, label, attempts }) => {
+    const streamed: ReturnType<typeof makeOversizedResponse>[] = [];
+    const fetchMock = stubBatchFetch((candidate) => {
+      if (candidate !== stage) {
+        return undefined;
+      }
+      const next = makeOversizedResponse(503);
+      streamed.push(next);
+      return next.response;
+    });
 
     const error = await captureRejection(runBatch());
 
     expect(error).toMatchObject({ name: "ProviderHttpError", status: 503, statusCode: 503 });
     expect((error as Error).message).toContain(label);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(streamed.getReadCount()).toBeLessThan(20);
+    expect(streamed).toHaveLength(attempts);
+    expect(streamed.every((item) => item.wasCanceled())).toBe(true);
+    expect(streamed.every((item) => item.getReadCount() < 20)).toBe(true);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => batchStageForUrl(fetchInputUrl(input)) === stage),
+    ).toHaveLength(attempts);
   });
 
   it("marks create 404 as unavailable while preserving the structured cause", async () => {
@@ -311,6 +355,284 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       batch: { inputConfig: { file_name: "files/f-ok" } },
     });
+  });
+
+  it("retries status reads against the acknowledged batch without resubmitting", async () => {
+    let statusAttempts = 0;
+    const fetchMock = stubBatchFetch((stage) => {
+      if (stage === "status" && statusAttempts++ === 0) {
+        return jsonResponse({ error: { message: "temporary" } }, 503);
+      }
+      return undefined;
+    });
+
+    await expect(runBatch()).resolves.toEqual(new Map([["r0", [1, 0, 0]]]));
+
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages.filter((stage) => stage === "upload")).toHaveLength(1);
+    expect(stages.filter((stage) => stage === "create")).toHaveLength(1);
+    expect(stages.filter((stage) => stage === "status")).toHaveLength(2);
+    expect(stages.filter((stage) => stage === "download")).toHaveLength(1);
+  });
+
+  it("retries a partial output into attempt-local state and commits once", async () => {
+    const requests = [batchRequest("r0", "hello"), batchRequest("r1", "world")];
+    let downloadAttempts = 0;
+    const encoder = new TextEncoder();
+    const fetchMock = stubBatchFetch((stage) => {
+      if (stage !== "download") {
+        return undefined;
+      }
+      downloadAttempts += 1;
+      if (downloadAttempts === 1) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `${JSON.stringify({ key: "r0", response: { embedding: { values: [9, 9] } } })}\n`,
+                ),
+              );
+              controller.error(
+                Object.assign(new TypeError("fetch failed"), { code: "ECONNRESET" }),
+              );
+            },
+          }),
+        );
+      }
+      return new Response(
+        [
+          JSON.stringify({ key: "r0", response: { embedding: { values: [1, 0] } } }),
+          JSON.stringify({ key: "r1", response: { embedding: { values: [0, 1] } } }),
+          JSON.stringify({ key: "r0", response: { embedding: { values: [0, 1] } } }),
+        ].join("\n"),
+      );
+    });
+
+    await expect(runBatch(requests)).resolves.toEqual(
+      new Map([
+        ["r0", [1, 0]],
+        ["r1", [0, 1]],
+      ]),
+    );
+    expect(downloadAttempts).toBe(2);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => batchStageForUrl(fetchInputUrl(input)) === "create"),
+    ).toHaveLength(1);
+  });
+
+  it("does not retry or split an ambiguous batch-create failure", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "create"
+        ? jsonResponse({ error: { message: "temporary upstream failure" } }, 503)
+        : undefined,
+    );
+
+    await expect(
+      runBatch([batchRequest("r0", "a"), batchRequest("r1", "b")], makeGeminiClient(), lifecycle),
+    ).rejects.toThrow("gemini.batch-create");
+
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages.filter((stage) => stage === "upload")).toHaveLength(1);
+    expect(stages.filter((stage) => stage === "create")).toHaveLength(1);
+    expect(lifecycle.started).toHaveBeenCalledOnce();
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).not.toHaveBeenCalled();
+  });
+
+  it("releases durable ownership when cancellation prevents create from starting", async () => {
+    const controller = new AbortController();
+    const lifecycle = createSubmissionLifecycle();
+    lifecycle.started.mockImplementation(async () => {
+      controller.abort(new Error("manager closing"));
+    });
+    const fetchMock = stubBatchFetch();
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini: makeGeminiClient(),
+        agentId: "main",
+        requests: singleRequest(),
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1,
+        timeoutMs: 5_000,
+        signal: controller.signal,
+        submissionLifecycle: lifecycle,
+      }),
+    ).rejects.toThrow("manager closing");
+
+    const submissionId = lifecycle.started.mock.calls[0]?.[0].submissionId;
+    expect(fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)))).toEqual([
+      "upload",
+    ]);
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).toHaveBeenCalledWith({ submissionId });
+  });
+
+  it("rejects disabled waiting before any remote side effect", async () => {
+    const fetchMock = stubBatchFetch();
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini: makeGeminiClient(),
+        agentId: "main",
+        requests: singleRequest(),
+        wait: false,
+        concurrency: 1,
+        pollIntervalMs: 1_000,
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow("require remote.batch.wait=true");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("splits only a definitive oversized-upload rejection", async () => {
+    const requests = [batchRequest("r0", "hello"), batchRequest("r1", "world")];
+    const fetchMock = stubBatchFetch(async (stage, url, init) => {
+      if (stage === "upload") {
+        const body = await requestBodyText(init);
+        const keys = [...body.matchAll(/"key":"([^"]+)"/g)].map((match) => match[1]);
+        if (keys.length > 1) {
+          return jsonResponse({ error: { message: "payload too large" } }, 413);
+        }
+        return jsonResponse({ file: { name: `files/input-${keys[0]}` } });
+      }
+      if (stage === "create") {
+        const fileName = JSON.parse(await requestBodyText(init)).batch.inputConfig
+          .file_name as string;
+        const key = fileName.replace("files/input-", "");
+        return jsonResponse({
+          name: `batches/b-${key}`,
+          done: true,
+          response: { responsesFile: `files/output-${key}` },
+        });
+      }
+      if (stage === "download") {
+        const key = url.match(/files\/output-([^:]+):download/)?.[1] ?? "missing";
+        return new Response(
+          JSON.stringify({
+            key,
+            response: { embedding: { values: key === "r0" ? [1, 0] : [0, 1] } },
+          }),
+        );
+      }
+      return undefined;
+    });
+
+    await expect(runBatch(requests)).resolves.toEqual(
+      new Map([
+        ["r0", [1, 0]],
+        ["r1", [0, 1]],
+      ]),
+    );
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages.filter((stage) => stage === "upload")).toHaveLength(3);
+    expect(stages.filter((stage) => stage === "create")).toHaveLength(2);
+  });
+
+  it("does not split a create-time quota rejection", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    const requests = [batchRequest("r0", "hello"), batchRequest("r1", "world")];
+    const fetchMock = stubBatchFetch((stage) => {
+      if (stage === "upload") {
+        return jsonResponse({ file: { name: "files/input-1" } });
+      }
+      if (stage === "create") {
+        return jsonResponse({ error: { message: "batch enqueued token quota exceeded" } }, 429);
+      }
+      return undefined;
+    });
+
+    await expect(runBatch(requests, makeGeminiClient(), lifecycle)).rejects.toThrow(
+      "gemini.batch-create",
+    );
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages.filter((stage) => stage === "upload")).toHaveLength(1);
+    expect(stages.filter((stage) => stage === "create")).toHaveLength(1);
+    expect(lifecycle.started).toHaveBeenCalledOnce();
+    expect(lifecycle.accepted).not.toHaveBeenCalled();
+    expect(lifecycle.rejected).toHaveBeenCalledWith({
+      submissionId: lifecycle.started.mock.calls[0]?.[0].submissionId,
+    });
+  });
+
+  it("persists ownership before create and records the acknowledged provider job", async () => {
+    const lifecycle = createSubmissionLifecycle();
+    stubBatchFetch((stage) => {
+      if (stage === "create") {
+        expect(lifecycle.started).toHaveBeenCalledOnce();
+        expect(lifecycle.accepted).not.toHaveBeenCalled();
+      }
+      return undefined;
+    });
+
+    await expect(runBatch(singleRequest(), makeGeminiClient(), lifecycle)).resolves.toEqual(
+      new Map([["r0", [1, 0, 0]]]),
+    );
+    const submissionId = lifecycle.started.mock.calls[0]?.[0].submissionId;
+    expect(lifecycle.accepted).toHaveBeenCalledWith({
+      submissionId,
+      batchName: "batches/b-0",
+    });
+    expect(lifecycle.rejected).not.toHaveBeenCalled();
+  });
+
+  it("uses content-independent submission ids for provider correlation without logging input", async () => {
+    const uploadBodies: string[] = [];
+    const createBodies: string[] = [];
+    stubBatchFetch(async (stage, _url, init) => {
+      if (stage === "upload") {
+        uploadBodies.push(await requestBodyText(init));
+      }
+      if (stage === "create") {
+        createBodies.push(await requestBodyText(init));
+      }
+      return undefined;
+    });
+
+    await runBatch();
+    await runBatch();
+
+    expect(uploadBodies).toHaveLength(2);
+    const displayNames = createBodies.map(
+      (body) => (JSON.parse(body) as { batch: { displayName: string } }).batch.displayName,
+    );
+    expect(displayNames[0]).toMatch(
+      /^openclaw-memory-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(displayNames[1]).not.toBe(displayNames[0]);
+    expect(uploadBodies[0]).toContain(displayNames[0]);
+    expect(uploadBodies[1]).toContain(displayNames[1]);
+    for (const [, metadata] of debugEmbeddingsLogMock.mock.calls) {
+      expect(metadata).not.toHaveProperty("requestFingerprint");
+    }
+    expect(JSON.stringify(debugEmbeddingsLogMock.mock.calls)).not.toContain("hello");
+  });
+
+  it("cancels pending work without polling or resubmitting", async () => {
+    const controller = new AbortController();
+    const fetchMock = stubBatchFetch();
+    const pending = runGeminiEmbeddingBatches({
+      gemini: makeGeminiClient(),
+      agentId: "main",
+      requests: singleRequest(),
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 60_000,
+      timeoutMs: 120_000,
+      signal: controller.signal,
+      debug: (message) => {
+        if (message.includes("batches/b-0 pending")) {
+          controller.abort(new Error("manager closing"));
+        }
+      },
+    });
+
+    await expect(pending).rejects.toThrow("manager closing");
+    const stages = fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)));
+    expect(stages).toEqual(["upload", "create"]);
   });
 
   it("preserves a configured gateway prefix for output downloads", async () => {

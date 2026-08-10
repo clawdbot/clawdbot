@@ -162,6 +162,11 @@ export abstract class MemoryManagerSyncBase {
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
+  protected readonly batchSubmissionKeysPendingCommit = new Set<string>();
+  /** Override when full reindexes temporarily swap `db` to a shadow database. */
+  protected getBatchSubmissionDatabase(): DatabaseSync {
+    return this.db;
+  }
   protected abstract computeProviderKey(): string;
   protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
   protected abstract sync(params?: MemorySyncParams): Promise<void>;

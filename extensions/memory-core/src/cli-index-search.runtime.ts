@@ -115,6 +115,21 @@ export async function runMemoryIndex(
           defaultRuntime.log("Memory backend does not support manual reindex.");
           return;
         }
+        if (opts.clearBatchQuarantine) {
+          if (!opts.force) {
+            throw new Error("--clear-batch-quarantine requires --force");
+          }
+          const clearFn = manager.clearBatchSubmissionQuarantine?.bind(manager);
+          if (!clearFn) {
+            throw new Error("Memory backend does not support native-batch quarantine recovery.");
+          }
+          const cleared = clearFn();
+          defaultRuntime.log(
+            cleared
+              ? `Memory batch quarantine cleared (${agentId}); starting forced reindex.`
+              : `No memory batch quarantine was active (${agentId}); starting forced reindex.`,
+          );
+        }
         await withProgressTotals(
           {
             label: "Indexing memory…",

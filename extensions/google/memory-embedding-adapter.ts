@@ -40,6 +40,7 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       provider,
       runtime: {
         id: "gemini",
+        batchFailureMode: "error",
         cacheKeyData: {
           provider: "gemini",
           baseUrl: client.baseUrl,
@@ -74,6 +75,10 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
             concurrency: batch.concurrency,
             pollIntervalMs: batch.pollIntervalMs,
             timeoutMs: batch.timeoutMs,
+            ...(batch.signal ? { signal: batch.signal } : {}),
+            ...(batch.submissionLifecycle
+              ? { submissionLifecycle: batch.submissionLifecycle }
+              : {}),
             debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);

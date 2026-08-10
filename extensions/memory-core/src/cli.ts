@@ -144,6 +144,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
           ],
           ["openclaw memory status --deep", "Probe embedding provider readiness."],
           ["openclaw memory index --force", "Force a full reindex."],
+          [
+            "openclaw memory index --force --clear-batch-quarantine",
+            "Resume after reconciling an ambiguous provider batch.",
+          ],
           ['openclaw memory search "meeting notes"', "Quick search using positional query."],
           [
             'openclaw memory search --query "deployment" --max-results 20',
@@ -199,6 +203,11 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .description("Reindex memory files")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--force", "Force full reindex", false)
+    .option(
+      "--clear-batch-quarantine",
+      "Clear an ambiguous native-batch quarantine after provider reconciliation (requires --force)",
+      false,
+    )
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       await runMemoryIndex(opts, hostOptions);

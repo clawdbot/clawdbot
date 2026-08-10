@@ -154,4 +154,28 @@ describe("buildEmbeddingBatchGroupOptions", () => {
       }),
     ).rejects.toThrow(uploadTooLarge);
   });
+
+  it("does not start queued groups after batch cancellation", async () => {
+    const controller = new AbortController();
+    const calls: string[][] = [];
+
+    await expect(
+      runEmbeddingBatchGroups({
+        requests: ["one", "two"],
+        maxRequests: 1,
+        wait: true,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+        concurrency: 1,
+        signal: controller.signal,
+        debugLabel: "embedding batch submit",
+        runGroup: async ({ group }) => {
+          calls.push([...group]);
+          controller.abort(new Error("manager closing"));
+        },
+      }),
+    ).rejects.toThrow("manager closing");
+
+    expect(calls).toEqual([["one"]]);
+  });
 });

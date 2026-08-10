@@ -68,6 +68,7 @@ export { registerMemoryEmbeddingProvider } from "../plugins/memory-embedding-pro
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
+  MemoryEmbeddingBatchSubmissionLifecycle,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCallOptions,

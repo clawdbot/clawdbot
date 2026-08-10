@@ -5,6 +5,7 @@ export type MemoryCommandOptions = {
   deep?: boolean;
   index?: boolean;
   force?: boolean;
+  clearBatchQuarantine?: boolean;
   fix?: boolean;
   verbose?: boolean;
 };

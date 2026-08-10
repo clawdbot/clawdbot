@@ -435,6 +435,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private closePromise: Promise<void> | null = null;
   private closeTeardownComplete = false;
   private closing = false;
+  private readonly batchAbortController = new AbortController();
+  protected readonly batchAbortSignal = this.batchAbortController.signal;
   private activeManagerOperations = 0;
   private managerIdleWaiters = new Set<() => void>();
   protected override fallbackFrom?: EmbeddingProviderId;
@@ -454,6 +456,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
   protected db: DatabaseSync;
+  private liveBatchSubmissionDb: DatabaseSync;
   protected override readonly sources: Set<MemorySource>;
   protected override providerKey: string;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
@@ -508,6 +511,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
       ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
     });
+  }
+
+  protected override getBatchSubmissionDatabase(): DatabaseSync {
+    return this.liveBatchSubmissionDb;
   }
 
   static async get(params: {
@@ -634,6 +641,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
+    this.liveBatchSubmissionDb = this.db;
     try {
       this.providerKey = this.computeProviderKey();
       this.cache = {
@@ -1957,6 +1965,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
     }
     this.syncing = (async () => {
+      this.assertNoBatchSubmissionQuarantine();
       const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
       let forceFtsOnly =
         this.embeddingBootstrapFailure !== undefined &&
@@ -1997,6 +2006,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       try {
         await runGeneration(forceFtsOnly);
       } catch (err) {
+        if (this.readBatchSubmissionQuarantineStatus()) {
+          throw err;
+        }
         const canDegrade =
           this.providerRequirement.mode === "optional" &&
           (options?.allowEmbeddingBootstrapFallback || hadBootstrapFailure) &&
@@ -2022,6 +2034,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ) {
         this.clearEmbeddingBootstrapFailureAfterRecovery();
       }
+      this.commitBatchSubmissionQuarantine();
     })().finally(() => {
       this.syncing = null;
     });
@@ -2159,6 +2172,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         timeoutMs: this.batch.timeoutMs,
         lastError: this.batchFailureLastError,
         lastProvider: this.batchFailureLastProvider,
+        submissionQuarantine: this.readBatchSubmissionQuarantineStatus(),
       },
       custom: {
         llamaCppRuntime: getLocalEmbeddingRuntimeFacts(this.provider),
@@ -2286,6 +2300,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async closeOnce(): Promise<void> {
     this.closing = true;
+    this.batchAbortController.abort(new Error("memory manager closing"));
     this.queuedArchiveFiles.clear();
     this.queuedSessions.clear();
     this.queuedForce = false;

@@ -7,6 +7,7 @@ import {
   hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
+  type MemoryEmbeddingBatchSubmissionLifecycle,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -83,6 +84,9 @@ const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
 const SOURCE_WIDE_BATCH_MAX_REQUESTS = 50000;
+const BATCH_SUBMISSION_QUARANTINE_META_KEY = "memory_batch_submission_quarantine_v1";
+const BATCH_SUBMISSION_RECOVERY_ACTION =
+  "Reconcile or cancel the listed provider jobs, then run openclaw memory index --force --clear-batch-quarantine.";
 
 const log = createSubsystemLogger("memory");
 
@@ -111,6 +115,65 @@ type PreparedMemoryIndexEntry = {
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
 };
+
+type MemoryBatchSubmissionRecord = {
+  provider: string;
+  submissionId: string;
+  batchName?: string;
+  startedAt: string;
+};
+
+type MemoryBatchSubmissionQuarantine = {
+  version: 1;
+  submissions: MemoryBatchSubmissionRecord[];
+};
+
+type MemoryBatchSubmissionQuarantineStatus = {
+  malformed: boolean;
+  submissions: MemoryBatchSubmissionRecord[];
+  recoveryAction: string;
+};
+
+function buildBatchSubmissionKey(provider: string, submissionId: string): string {
+  return `${provider}\u0000${submissionId}`;
+}
+
+function isNonEmptyBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
+}
+
+function parseBatchSubmissionQuarantine(value: string): MemoryBatchSubmissionQuarantine | null {
+  try {
+    const parsed = JSON.parse(value) as { version?: unknown; submissions?: unknown };
+    if (parsed.version !== 1 || !Array.isArray(parsed.submissions)) {
+      return null;
+    }
+    const submissions: MemoryBatchSubmissionRecord[] = [];
+    for (const entry of parsed.submissions) {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const candidate = entry as Record<string, unknown>;
+      if (
+        !isNonEmptyBoundedString(candidate.provider, 100) ||
+        !isNonEmptyBoundedString(candidate.submissionId, 200) ||
+        !isNonEmptyBoundedString(candidate.startedAt, 100) ||
+        (candidate.batchName !== undefined && !isNonEmptyBoundedString(candidate.batchName, 500))
+      ) {
+        return null;
+      }
+      submissions.push({
+        provider: candidate.provider,
+        submissionId: candidate.submissionId,
+        startedAt: candidate.startedAt,
+        ...(candidate.batchName ? { batchName: candidate.batchName } : {}),
+      });
+    }
+    return { version: 1, submissions };
+  } catch {
+    return null;
+  }
+}
 
 function resolveChunkRecallMetadata(params: {
   curatedRoot: boolean;
@@ -184,12 +247,6 @@ function resolveChunkRecallMetadata(params: {
           : null,
   };
 }
-
-// Retry attempts are host control state. Provider-thrown values stay opaque so
-// they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult<T> =
-  | { kind: "success"; value: T }
-  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -303,6 +360,7 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  protected abstract readonly batchAbortSignal: AbortSignal;
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
@@ -519,6 +577,179 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
   }
 
+  protected readBatchSubmissionQuarantineStatus():
+    | MemoryBatchSubmissionQuarantineStatus
+    | undefined {
+    const row = this.getBatchSubmissionDatabase()
+      .prepare(`SELECT value FROM memory_index_meta WHERE key = ?`)
+      .get(BATCH_SUBMISSION_QUARANTINE_META_KEY) as { value?: unknown } | undefined;
+    if (!row) {
+      return undefined;
+    }
+    if (typeof row.value !== "string") {
+      return {
+        malformed: true,
+        submissions: [],
+        recoveryAction: BATCH_SUBMISSION_RECOVERY_ACTION,
+      };
+    }
+    const parsed = parseBatchSubmissionQuarantine(row.value);
+    if (!parsed || parsed.submissions.length === 0) {
+      return {
+        malformed: true,
+        submissions: [],
+        recoveryAction: BATCH_SUBMISSION_RECOVERY_ACTION,
+      };
+    }
+    return {
+      malformed: false,
+      submissions: parsed.submissions,
+      recoveryAction: BATCH_SUBMISSION_RECOVERY_ACTION,
+    };
+  }
+
+  protected assertNoBatchSubmissionQuarantine(): void {
+    const quarantine = this.readBatchSubmissionQuarantineStatus();
+    if (!quarantine) {
+      return;
+    }
+    const detail = quarantine.malformed
+      ? "the durable quarantine record is malformed"
+      : `${quarantine.submissions.length} provider submission${quarantine.submissions.length === 1 ? "" : "s"} require reconciliation`;
+    throw new Error(
+      `memory embedding batch submission quarantined: ${detail}. ${quarantine.recoveryAction}`,
+    );
+  }
+
+  clearBatchSubmissionQuarantine(): boolean {
+    const result = this.getBatchSubmissionDatabase()
+      .prepare(`DELETE FROM memory_index_meta WHERE key = ?`)
+      .run(BATCH_SUBMISSION_QUARANTINE_META_KEY);
+    this.batchSubmissionKeysPendingCommit.clear();
+    return result.changes > 0;
+  }
+
+  private updateBatchSubmissionQuarantine(
+    update: (current: MemoryBatchSubmissionRecord[]) => MemoryBatchSubmissionRecord[],
+  ): void {
+    const db = this.getBatchSubmissionDatabase();
+    runSqliteImmediateTransactionSync(db, () => {
+      const row = db
+        .prepare(`SELECT value FROM memory_index_meta WHERE key = ?`)
+        .get(BATCH_SUBMISSION_QUARANTINE_META_KEY) as { value?: unknown } | undefined;
+      let current: MemoryBatchSubmissionRecord[] = [];
+      if (row) {
+        if (typeof row.value !== "string") {
+          throw new Error("memory embedding batch quarantine record is malformed");
+        }
+        const parsed = parseBatchSubmissionQuarantine(row.value);
+        if (!parsed) {
+          throw new Error("memory embedding batch quarantine record is malformed");
+        }
+        current = parsed.submissions;
+      }
+      const next = update(current);
+      if (next.length === 0) {
+        db.prepare(`DELETE FROM memory_index_meta WHERE key = ?`).run(
+          BATCH_SUBMISSION_QUARANTINE_META_KEY,
+        );
+        return;
+      }
+      const value = JSON.stringify({ version: 1, submissions: next });
+      db.prepare(
+        `INSERT INTO memory_index_meta (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      ).run(BATCH_SUBMISSION_QUARANTINE_META_KEY, value);
+    });
+  }
+
+  private createBatchSubmissionLifecycle(
+    provider: string,
+  ): MemoryEmbeddingBatchSubmissionLifecycle {
+    const remove = (submissionId: string) => {
+      this.updateBatchSubmissionQuarantine((current) =>
+        current.filter(
+          (entry) => entry.provider !== provider || entry.submissionId !== submissionId,
+        ),
+      );
+      this.batchSubmissionKeysPendingCommit.delete(buildBatchSubmissionKey(provider, submissionId));
+    };
+    return {
+      started: async ({ submissionId }) => {
+        if (!isNonEmptyBoundedString(submissionId, 200)) {
+          throw new Error("memory embedding provider supplied an invalid batch submission id");
+        }
+        this.updateBatchSubmissionQuarantine((current) => {
+          const foreignReservation = current.find(
+            (entry) =>
+              !this.batchSubmissionKeysPendingCommit.has(
+                buildBatchSubmissionKey(entry.provider, entry.submissionId),
+              ),
+          );
+          if (foreignReservation) {
+            throw new Error(
+              "memory embedding batch submission is already reserved by another sync",
+            );
+          }
+          if (
+            current.some(
+              (entry) => entry.provider === provider && entry.submissionId === submissionId,
+            )
+          ) {
+            throw new Error(`memory embedding batch submission id already exists: ${submissionId}`);
+          }
+          return [
+            ...current,
+            {
+              provider,
+              submissionId,
+              startedAt: new Date().toISOString(),
+            },
+          ];
+        });
+        this.batchSubmissionKeysPendingCommit.add(buildBatchSubmissionKey(provider, submissionId));
+      },
+      accepted: async ({ submissionId, batchName }) => {
+        if (!isNonEmptyBoundedString(batchName, 500)) {
+          throw new Error("memory embedding provider supplied an invalid batch resource name");
+        }
+        let found = false;
+        this.updateBatchSubmissionQuarantine((current) =>
+          current.map((entry) => {
+            if (entry.provider !== provider || entry.submissionId !== submissionId) {
+              return entry;
+            }
+            found = true;
+            return { ...entry, batchName };
+          }),
+        );
+        if (!found) {
+          throw new Error(
+            `memory embedding batch submission is not durably owned: ${submissionId}`,
+          );
+        }
+      },
+      rejected: async ({ submissionId }) => {
+        remove(submissionId);
+      },
+    };
+  }
+
+  protected commitBatchSubmissionQuarantine(): void {
+    if (this.batchSubmissionKeysPendingCommit.size === 0) {
+      return;
+    }
+    this.updateBatchSubmissionQuarantine((current) =>
+      current.filter(
+        (entry) =>
+          !this.batchSubmissionKeysPendingCommit.has(
+            buildBatchSubmissionKey(entry.provider, entry.submissionId),
+          ),
+      ),
+    );
+    this.batchSubmissionKeysPendingCommit.clear();
+  }
+
   private async embedChunksWithBatch(
     chunks: IndexedMemoryChunk[],
     _entry: MemoryIndexEntry,
@@ -542,6 +773,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const missingChunks = missing.map((item) => item.chunk);
     const batchResult = await this.runBatchWithFallback({
       provider: provider.id,
+      failureMode: generation.runtime?.batchFailureMode ?? "fallback",
       run: async () =>
         await batchEmbed({
           agentId: this.agentId,
@@ -550,6 +782,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           concurrency: this.batch.concurrency,
           pollIntervalMs: this.batch.pollIntervalMs,
           timeoutMs: this.batch.timeoutMs,
+          signal: this.batchAbortSignal,
+          submissionLifecycle: this.createBatchSubmissionLifecycle(provider.id),
           debug: this.buildBatchDebug(source, chunks, debugContext),
         }),
       fallback: async () => await this.embedChunksInBatches(missingChunks, generation),
@@ -838,8 +1072,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   private async recordBatchFailure(params: {
     provider: string;
     message: string;
-    attempts: 1 | 2;
+    attempts: 1;
     forceDisable?: boolean;
+    preserveBatchSelection?: boolean;
   }): Promise<{ disabled: boolean; count: number }> {
     return await this.withBatchFailureLock(async () => {
       if (!this.batch.enabled) {
@@ -854,64 +1089,52 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         params,
       );
-      this.batch.enabled = nextState.enabled;
+      // A fail-closed native provider must remain selected after failures.
+      // Disabling it here would silently route the next sync through inline
+      // paid embeddings, violating the provider's declared safety contract.
+      this.batch.enabled = params.preserveBatchSelection ? true : nextState.enabled;
       this.batchFailureCount = nextState.count;
       this.batchFailureLastError = nextState.lastError;
       this.batchFailureLastProvider = nextState.lastProvider;
-      return { disabled: !nextState.enabled, count: nextState.count };
+      return { disabled: !this.batch.enabled, count: nextState.count };
     });
-  }
-
-  private async runBatchWithTimeoutRetry<T>(params: {
-    provider: string;
-    run: () => Promise<T>;
-  }): Promise<MemoryBatchRetryResult<T>> {
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      if (!/timed out|timeout/i.test(formatErrorMessage(error))) {
-        return { kind: "failure", error, attempts: 1 };
-      }
-    }
-
-    log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      return { kind: "failure", error, attempts: 2 };
-    }
   }
 
   private async runBatchWithFallback<T>(params: {
     provider: string;
+    failureMode: "fallback" | "error";
     run: () => Promise<T>;
     fallback: () => Promise<number[][]>;
   }): Promise<T | number[][]> {
     if (!this.batch.enabled) {
       return await params.fallback();
     }
-    const result = await this.runBatchWithTimeoutRetry({
-      provider: params.provider,
-      run: params.run,
-    });
-    if (result.kind === "success") {
+    try {
+      const result = await params.run();
       await this.resetBatchFailureCount();
-      return result.value;
+      return result;
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      const forceDisable = isEmbeddingBatchUnavailableError(error);
+      const failure = await this.recordBatchFailure({
+        provider: params.provider,
+        message,
+        attempts: 1,
+        forceDisable,
+        preserveBatchSelection: params.failureMode === "error",
+      });
+      const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
+      if (params.failureMode === "error") {
+        log.warn(
+          `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; inline fallback prohibited: ${message}`,
+        );
+        throw error;
+      }
+      log.warn(
+        `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+      );
+      return await params.fallback();
     }
-
-    const message = formatErrorMessage(result.error);
-    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
-    const failure = await this.recordBatchFailure({
-      provider: params.provider,
-      message,
-      attempts: result.attempts,
-      forceDisable,
-    });
-    const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
-    log.warn(
-      `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
-    );
-    return await params.fallback();
   }
 
   protected getIndexConcurrency(): number {

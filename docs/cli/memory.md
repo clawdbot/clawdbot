@@ -45,12 +45,17 @@ Status also lists any extra search paths from `memory.search.extraPaths`.
 ## `memory index`
 
 ```bash
-openclaw memory index [--agent <id>] [--force] [--verbose]
+openclaw memory index [--agent <id>] [--force] [--clear-batch-quarantine] [--verbose]
 ```
 
 Same per-agent scoping as `status`. `--force` runs a full reindex instead of
 an incremental one. `--verbose` prints per-agent provider, model, sources, and
 extra-path details before showing indexing progress.
+
+When `memory status` reports a native-batch submission quarantine, first
+reconcile or cancel every listed provider job. Then run `memory index --force
+--clear-batch-quarantine`. The explicit recovery flag clears the durable safety
+record before rebuilding; ordinary retries and `--force` alone cannot bypass it.
 
 ## `memory search`
 
