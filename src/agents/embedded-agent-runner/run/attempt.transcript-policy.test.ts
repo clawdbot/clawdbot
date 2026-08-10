@@ -6,9 +6,13 @@ import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 
 const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
+// Explicit factory (no importOriginal): loading the real module would pull the
+// provider registry/loader graph into this focused test. Export every binding
+// the attempt-history import graph links, stubbing the ones this test never calls.
+vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: resolveProviderRuntimePluginMock,
+  resolveProviderRuntimePluginHandle: vi.fn(),
+  clearProviderRuntimePluginCacheForTest: vi.fn(),
 }));
 
 describe("resolveAttemptTranscriptPolicy", () => {
