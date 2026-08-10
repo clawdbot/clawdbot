@@ -31,6 +31,7 @@ type AttemptPromptPreflightParams = Pick<
 type AttemptPromptPreflightState = {
   contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
   preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
+  promptFailed: boolean;
   promptError: unknown;
   promptErrorSource: AgentRunAttemptFailureSource | null;
   skipPromptSubmission: boolean;

@@ -43,6 +43,7 @@ type EmbeddedRunAccountingObservers = {
   onModelCall?: ModelCallObserver;
   onModelCallInstrumentationInstalled?: () => void;
   onAttemptObserved?: (observation: EmbeddedRunAccountingObservation) => void;
+  onAgentTerminal?: () => void;
   onRuntimeSelected?: (runtime: "embedded" | "native") => void;
   onOpaqueWork?: (reason: EmbeddedRunOpaqueWorkReason) => void;
 };
@@ -60,6 +61,7 @@ export function bindEmbeddedRunAccountingObservers<T extends object>(
     value?.onModelCall ||
     value?.onModelCallInstrumentationInstalled ||
     value?.onAttemptObserved ||
+    value?.onAgentTerminal ||
     value?.onRuntimeSelected ||
     value?.onOpaqueWork
   ) {

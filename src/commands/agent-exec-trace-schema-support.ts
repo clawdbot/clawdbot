@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentCommandRunAccountingCoverageReason } from "../agents/command/run-accounting.types.js";
 import type {
@@ -257,9 +258,16 @@ export function digest(domain: string, value: unknown): string {
     .digest("hex");
 }
 
-function dataKeys(keys: readonly PropertyKey[], descriptors: object): PropertyKey[] | undefined {
+function dataKeys(
+  keys: readonly PropertyKey[],
+  descriptors: object,
+  allowToJSONBlocker: boolean,
+): PropertyKey[] | undefined {
   if (!keys.includes("toJSON")) {
     return [...keys];
+  }
+  if (!allowToJSONBlocker) {
+    return undefined;
   }
   const blocker = (descriptors as { toJSON?: PropertyDescriptor }).toJSON;
   if (
@@ -275,7 +283,12 @@ function dataKeys(keys: readonly PropertyKey[], descriptors: object): PropertyKe
   return keys.filter((key) => key !== "toJSON");
 }
 
-export function normalizePlainData(value: unknown, maxBytes: number): unknown {
+export function normalizePlainData(
+  value: unknown,
+  maxBytes: number,
+  options: { allowToJSONBlocker?: boolean } = {},
+): unknown {
+  const allowToJSONBlocker = options.allowToJSONBlocker !== false;
   const state = { bytes: 0, nodes: 0 };
   const charge = (bytes: number): boolean => {
     state.bytes += bytes;
@@ -303,13 +316,16 @@ export function normalizePlainData(value: unknown, maxBytes: number): unknown {
     if (typeof candidate !== "object") {
       return undefined;
     }
+    if (types.isProxy(candidate)) {
+      return undefined;
+    }
     const prototype = Object.getPrototypeOf(candidate);
     if (Array.isArray(candidate)) {
       if (prototype !== Array.prototype || !charge(2)) {
         return undefined;
       }
       const descriptors = Object.getOwnPropertyDescriptors(candidate);
-      const keys = dataKeys(Reflect.ownKeys(candidate), descriptors);
+      const keys = dataKeys(Reflect.ownKeys(candidate), descriptors, allowToJSONBlocker);
       const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, "length");
       if (
         !keys ||
@@ -346,7 +362,7 @@ export function normalizePlainData(value: unknown, maxBytes: number): unknown {
       return undefined;
     }
     const descriptors = Object.getOwnPropertyDescriptors(candidate);
-    const keys = dataKeys(Reflect.ownKeys(candidate), descriptors);
+    const keys = dataKeys(Reflect.ownKeys(candidate), descriptors, allowToJSONBlocker);
     if (!keys || keys.some((key) => typeof key !== "string") || !charge(2)) {
       return undefined;
     }

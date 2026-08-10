@@ -1,4 +1,5 @@
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
+import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -36,7 +37,6 @@ type StreamCleanupInput = {
 function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
   const { attempt, state } = input;
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
-  input.clearAttemptTimeoutTimers();
   if (
     !input.isProbeSession &&
     (terminal.aborted || terminal.timedOut) &&
@@ -50,6 +50,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
   // the active run or mask the prompt failure that caused teardown.
   let firstCleanupError: Error | undefined;
   for (const [name, cleanup] of [
+    ["timeout cleanup", input.clearAttemptTimeoutTimers],
     ["unsubscribe", input.unsubscribe],
     ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
     [
@@ -66,7 +67,9 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
     try {
       cleanup();
     } catch (error) {
-      firstCleanupError ??= error instanceof Error ? error : new Error(String(error));
+      if (firstCleanupError === undefined) {
+        firstCleanupError = toErrorObject(error, "Non-Error stream cleanup rejection");
+      }
       log.error(
         `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
       );
@@ -156,10 +159,14 @@ export async function runEmbeddedAttemptSettledPhase(
   let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
   let cleanupError: Error | undefined;
   const readTerminal = () => projectAgentRunAttemptTerminal(state.terminal);
-  const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
+  const setFailure = (
+    failed: boolean,
+    error: unknown,
+    source: AgentRunAttemptFailureSource | null,
+  ) => {
     state.terminal = setAgentRunAttemptTerminalFailure(
       state.terminal,
-      error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
+      failed ? { error, source: source ?? "prompt" } : null,
     );
   };
   const promptToolPolicyBaseline = {
@@ -260,11 +267,13 @@ export async function runEmbeddedAttemptSettledPhase(
         trajectoryRecorder,
       },
       lifecycle: {
+        markTaskTerminal: input.lifecycle.markAgentTerminal,
         readState: () => {
           const terminal = readTerminal();
           return {
             contextBudgetStatus,
             preflightRecovery,
+            promptFailed: terminal.failed,
             promptError: terminal.promptError,
             promptErrorSource: terminal.promptErrorSource,
           };
@@ -272,7 +281,7 @@ export async function runEmbeddedAttemptSettledPhase(
         writeState: (nextState) => {
           contextBudgetStatus = nextState.contextBudgetStatus;
           preflightRecovery = nextState.preflightRecovery;
-          setFailure(nextState.promptError, nextState.promptErrorSource);
+          setFailure(nextState.promptFailed, nextState.promptError, nextState.promptErrorSource);
         },
         getPrePromptMessageCount: () => sessionRuntimeState.prePromptMessageCount,
         setPrePromptMessageCount: (count) => {
@@ -319,10 +328,19 @@ export async function runEmbeddedAttemptSettledPhase(
       getBeforeAgentFinalizeRevisionEntryId,
       getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
       onSettleErrorState: (settleState) => {
-        setFailure(settleState.promptError, settleState.promptErrorSource);
+        setFailure(
+          settleState.promptFailed,
+          settleState.promptError,
+          settleState.promptErrorSource,
+        );
       },
+      markTaskTerminal: input.lifecycle.markAgentTerminal,
       onSettled: (settledStream) => {
-        setFailure(settledStream.promptError, settledStream.promptErrorSource);
+        setFailure(
+          settledStream.promptFailed,
+          settledStream.promptError,
+          settledStream.promptErrorSource,
+        );
         if (settledStream.timedOutDuringCompaction) {
           state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
             kind: "timeout",
@@ -342,6 +360,7 @@ export async function runEmbeddedAttemptSettledPhase(
       getState: () => {
         const terminal = readTerminal();
         return {
+          promptFailed: terminal.failed,
           promptError: terminal.promptError,
           promptErrorSource: terminal.promptErrorSource,
           yieldAborted,
@@ -410,6 +429,7 @@ export async function runEmbeddedAttemptSettledPhase(
     sessionIdUsed = afterTurn.sessionIdUsed;
     sessionFileUsed = afterTurn.sessionFileUsed;
   } finally {
+    input.lifecycle.markAgentTerminal?.();
     cleanupError = cleanupEmbeddedAttemptStreamExecution({
       attempt,
       clearAttemptTimeoutTimers,

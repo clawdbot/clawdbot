@@ -41,7 +41,11 @@ function createContext(
   overrides?: {
     onAgentEvent?: (event: unknown) => void | Promise<void>;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
-    onBeforeTerminalDelivery?: () => void | Promise<void>;
+    onBeforeTerminalDelivery?: () =>
+      | void
+      | { suppressTerminalDelivery?: boolean }
+      | Promise<void | { suppressTerminalDelivery?: boolean }>;
+    onTaskTerminal?: () => void;
     onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
     resolveTerminalStopReason?: () => string | undefined;
@@ -60,6 +64,7 @@ function createContext(
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
       onBeforeTerminalDelivery: overrides?.onBeforeTerminalDelivery,
+      onTaskTerminal: overrides?.onTaskTerminal,
       resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
       ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
@@ -970,6 +975,46 @@ describe("handleAgentEnd", () => {
 
     resolveChannelFlush?.();
     await endPromise;
+  });
+
+  it("marks the accepted task terminal before deferred delivery and channel cleanup", async () => {
+    const order: string[] = [];
+    const onTaskTerminal = vi.fn(() => order.push("terminal"));
+    const ctx = createContext(undefined, { onTaskTerminal });
+    vi.mocked(ctx.flushDeferredAssistantEvents).mockImplementation(() => {
+      order.push("assistant-delivery");
+    });
+    vi.mocked(ctx.flushDeferredBlockReplies).mockImplementation(() => {
+      order.push("block-delivery");
+    });
+    vi.mocked(ctx.flushBlockReplyBuffer).mockImplementation(() => {
+      order.push("channel-flush");
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onTaskTerminal).toHaveBeenCalledTimes(1);
+    expect(order.slice(0, 4)).toEqual([
+      "terminal",
+      "assistant-delivery",
+      "block-delivery",
+      "channel-flush",
+    ]);
+  });
+
+  it("does not mark retry or suppressed terminal drafts before the accepted result", async () => {
+    const onTaskTerminal = vi.fn();
+    const onBeforeTerminalDelivery = vi
+      .fn()
+      .mockReturnValueOnce({ suppressTerminalDelivery: true })
+      .mockReturnValue(undefined);
+    const ctx = createContext(undefined, { onTaskTerminal, onBeforeTerminalDelivery });
+
+    await handleAgentEnd(ctx, { willRetry: true } as never);
+    expect(onTaskTerminal).not.toHaveBeenCalled();
+
+    await handleAgentEnd(ctx);
+    expect(onTaskTerminal).toHaveBeenCalledTimes(1);
   });
 
   it("resolves compaction retry after a timed-out terminal hook finalizes the original answer", async () => {

@@ -5,7 +5,6 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
-import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import {
   type createEmbeddedAttemptExternalAbortController,
@@ -20,7 +19,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type StreamGuardInput = Parameters<typeof installEmbeddedAttemptStreamGuards>[0];
 type HistoryInput = Parameters<typeof prepareEmbeddedAttemptHistory>[0];
 type StreamInput = Parameters<typeof prepareEmbeddedAttemptStream>[0];
-type ToolResultFlushInput = Parameters<typeof flushPendingToolResultsAfterIdle>[0];
 type ExternalAbortController = Pick<
   ReturnType<typeof createEmbeddedAttemptExternalAbortController>,
   "setCompactionState" | "setRunAbort"
@@ -52,8 +50,7 @@ type StreamPhaseInput = Omit<
 export async function prepareEmbeddedAttemptStreamRuntime(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: StreamInput["activeSession"];
-  sessionManager: HistoryInput["sessionManager"] &
-    NonNullable<ToolResultFlushInput["sessionManager"]>;
+  sessionManager: HistoryInput["sessionManager"];
   sessionLockController: StreamGuardInput["sessionLockController"];
   ownedTranscriptWriteContext: Parameters<typeof withOwnedSessionTranscriptWrites>[0];
   runAbortController: AbortController;
@@ -94,24 +91,12 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
   });
   input.lifecycle.markStreamReady();
 
-  let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
-  try {
-    preparedHistory = await prepareEmbeddedAttemptHistory({
-      ...input.history,
-      attempt,
-      activeSession,
-      sessionManager,
-    });
-  } catch (error) {
-    await flushPendingToolResultsAfterIdle({
-      agent: activeSession.agent,
-      sessionManager,
-      // An already-aborted setup must dispose immediately without orphaning tool calls.
-      ...(attempt.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
-    });
-    activeSession.dispose();
-    throw error;
-  }
+  const preparedHistory = await prepareEmbeddedAttemptHistory({
+    ...input.history,
+    attempt,
+    activeSession,
+    sessionManager,
+  });
 
   const isProbeSession = attempt.sessionId?.startsWith("probe-") ?? false;
   const queueHandleRef: { current?: EmbeddedAgentQueueHandle } = {};

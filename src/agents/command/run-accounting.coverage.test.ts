@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodeModeStats } from "../code-mode-stats.js";
 import type { EmbeddedRunAccountingObservation } from "../embedded-agent-runner/run/accounting-observers.js";
 import {
   bindAgentCommandRunAccounting,
+  bindAgentCommandRunAccountingOnce,
   createRunAccountingAccumulator,
   resolveAgentCommandRunAccounting,
+  runWithAgentCommandAccounting,
+  takeAgentCommandRunAccounting,
 } from "./run-accounting.js";
 
 describe("command run accounting coverage", () => {
@@ -139,6 +142,114 @@ describe("command run accounting coverage", () => {
     });
   });
 
+  it("projects exact agent duration for one returned embedded candidate", () => {
+    const accounting = createRunAccountingAccumulator();
+    const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+    candidate.selectRuntime("embedded");
+    candidate.observeAgentDuration(123);
+    candidate.settle("returned");
+
+    expect(accounting.project()).toMatchObject({
+      agentDurationMs: 123,
+      coverage: {
+        agentTime: { state: "complete" },
+      },
+    });
+  });
+
+  it("projects exact agent duration for one thrown embedded candidate", () => {
+    const accounting = createRunAccountingAccumulator();
+    const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+    candidate.selectRuntime("embedded");
+    candidate.observeAgentDuration(123);
+    candidate.settle("threw");
+
+    expect(accounting.project()).toMatchObject({
+      agentDurationMs: 123,
+      coverage: {
+        agentTime: { state: "complete" },
+      },
+    });
+  });
+
+  it("rejects duplicate duration observations without overwriting the first value", () => {
+    const accounting = createRunAccountingAccumulator();
+    const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+    candidate.selectRuntime("embedded");
+    candidate.observeAgentDuration(123);
+    candidate.observeAgentDuration(999);
+    candidate.settle("returned");
+
+    expect(accounting.project()).toMatchObject({
+      agentDurationMs: 123,
+      coverage: {
+        agentTime: { state: "partial", reasons: ["not_observed"] },
+      },
+    });
+  });
+
+  it("keeps missing or invalid agent duration unavailable", () => {
+    for (const durationMs of [undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const accounting = createRunAccountingAccumulator();
+      const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+      candidate.selectRuntime("embedded");
+      if (durationMs !== undefined) {
+        candidate.observeAgentDuration(durationMs);
+      }
+      candidate.settle("returned");
+
+      const snapshot = accounting.project();
+      expect(snapshot).not.toHaveProperty("agentDurationMs");
+      expect(snapshot.coverage.agentTime).toEqual({
+        state: "unavailable",
+        reasons: ["not_observed"],
+      });
+    }
+  });
+
+  it("does not promote fallback candidate durations to an exact run duration", () => {
+    const accounting = createRunAccountingAccumulator();
+    const failed = accounting.beginCandidate({ provider: "openai", model: "gpt-first" });
+    failed.selectRuntime("embedded");
+    failed.observeAgentDuration(100);
+    failed.settle("threw");
+    const returned = accounting.beginCandidate({ provider: "openai", model: "gpt-second" });
+    returned.selectRuntime("embedded");
+    returned.observeAgentDuration(50);
+    returned.settle("returned");
+
+    const snapshot = accounting.project();
+    expect(snapshot.agentDurationMs).toBe(150);
+    expect(snapshot.coverage.agentTime).toEqual({
+      state: "partial",
+      reasons: ["candidate_failed", "not_observed"],
+    });
+  });
+
+  it("retains completed agent duration when later finalization throws", async () => {
+    const failure = new Error("delivery failed");
+    let caught: unknown;
+    try {
+      await runWithAgentCommandAccounting(async (accounting) => {
+        const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+        candidate.selectRuntime("embedded");
+        candidate.observeAgentDuration(77);
+        candidate.settle("returned");
+        throw failure;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(failure);
+    expect(resolveAgentCommandRunAccounting(failure)).toMatchObject({
+      agentDurationMs: 77,
+      coverage: {
+        agentTime: { state: "complete" },
+      },
+    });
+  });
+
   it("taints every affected metric when one embedded candidate is unobserved", () => {
     const accounting = createRunAccountingAccumulator();
     const observed = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
@@ -264,6 +375,52 @@ describe("command run accounting coverage", () => {
       state: "partial",
       reasons: ["partial_usage", "not_instrumented", "post_turn_compaction"],
     });
+  });
+
+  it("consumes a bound snapshot exactly once for authoritative projection", () => {
+    const target = {};
+    const snapshot = createRunAccountingAccumulator().project();
+    bindAgentCommandRunAccounting(target, snapshot);
+
+    expect(takeAgentCommandRunAccounting(target)).toEqual(snapshot);
+    expect(takeAgentCommandRunAccounting(target)).toBeUndefined();
+    expect(resolveAgentCommandRunAccounting(target)).toBeUndefined();
+  });
+
+  it("rejects a second binding and preserves the original snapshot", () => {
+    const target = {};
+    const first = createRunAccountingAccumulator(100).project();
+    const second = createRunAccountingAccumulator(200).project();
+
+    expect(bindAgentCommandRunAccounting(target, first)).toBe(true);
+    expect(bindAgentCommandRunAccounting(target, second)).toBe(false);
+    expect(takeAgentCommandRunAccounting(target)).toEqual(first);
+    expect(takeAgentCommandRunAccounting(target)).toBeUndefined();
+  });
+
+  it("rejects a prebound production target without replacing its snapshot", () => {
+    const target = {};
+    const first = createRunAccountingAccumulator(100).project();
+    const second = createRunAccountingAccumulator(200).project();
+    expect(bindAgentCommandRunAccounting(target, first)).toBe(true);
+
+    expect(() => bindAgentCommandRunAccountingOnce(target, second)).toThrow(
+      "agent command accounting target was already bound",
+    );
+    expect(takeAgentCommandRunAccounting(target)).toEqual(first);
+  });
+
+  it("retains the binding when cloning during take fails", () => {
+    const target = {};
+    const snapshot = createRunAccountingAccumulator().project();
+    expect(bindAgentCommandRunAccounting(target, snapshot)).toBe(true);
+    vi.spyOn(globalThis, "structuredClone").mockImplementationOnce(() => {
+      throw new Error("clone failed");
+    });
+
+    expect(() => takeAgentCommandRunAccounting(target)).toThrow("clone failed");
+    expect(takeAgentCommandRunAccounting(target)).toEqual(snapshot);
+    expect(takeAgentCommandRunAccounting(target)).toBeUndefined();
   });
 
   it("does not report complete usage when one assistant turn omits usage", () => {
@@ -409,7 +566,7 @@ describe("command run accounting coverage", () => {
     });
     expect(coverage.providerTransport).toEqual({
       state: "unavailable",
-      reasons: ["not_observed", reason],
+      reasons: ["not_observed", "not_instrumented"],
     });
   });
 
@@ -434,7 +591,7 @@ describe("command run accounting coverage", () => {
     });
     expect(snapshot.coverage.providerTransport).toEqual({
       state: "unavailable",
-      reasons: ["not_observed", "acp_runtime"],
+      reasons: ["not_observed", "not_instrumented"],
     });
   });
 

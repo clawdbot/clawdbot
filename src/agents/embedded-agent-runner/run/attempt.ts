@@ -4,6 +4,7 @@ import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
@@ -23,6 +24,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { resolveEmbeddedRunAccountingObservers } from "./accounting-observers.js";
 import {
   createEmbeddedAttemptExternalAbortController,
   type EmbeddedAttemptAbortStatePort,
@@ -42,6 +44,7 @@ import {
   type EmitDiagnosticRunCompleted,
 } from "./attempt-startup.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import { createAgentTerminalBoundary } from "./attempt-terminal-boundary.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { EmbeddedAttemptSessionFileOwner } from "./attempt.session-lock.js";
@@ -49,6 +52,7 @@ import {
   queueSessionsYieldInterruptMessage,
   SESSIONS_YIELD_ABORT_REASON,
 } from "./attempt.sessions-yield.js";
+import { settleEmbeddedBundleRuntimeDisposals } from "./attempt.subscription-cleanup.js";
 import {
   measureEmbeddedAgentPreparation,
   measureEmbeddedAgentPreparationSync,
@@ -59,7 +63,30 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const agentTerminalBoundary = createAgentTerminalBoundary(
+    resolveEmbeddedRunAccountingObservers(params)?.onAgentTerminal,
+    (error) => {
+      log.error(
+        `embedded run terminal accounting observer failed: runId=${params.runId} ${String(error)}`,
+      );
+    },
+  );
   const runAbortController = new AbortController();
+  let preparedSetup: Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
+  try {
+    preparedSetup = await measureEmbeddedAgentPreparation(
+      "attempt.setup",
+      () => prepareEmbeddedAttemptSetup(params),
+      {
+        config: params.config,
+      },
+    );
+  } catch (error) {
+    // Setup can reject before attempt-owned cleanup exists. End agent timing
+    // here so outer runtime release cannot inflate the measured duration.
+    agentTerminalBoundary.mark();
+    throw error;
+  }
   const {
     agentCoreThinkingLevel,
     defaultAgentId,
@@ -77,13 +104,7 @@ export async function runEmbeddedAttempt(
     sandbox,
     sandboxSessionKey,
     sessionAgentId,
-  } = await measureEmbeddedAgentPreparation(
-    "attempt.setup",
-    () => prepareEmbeddedAttemptSetup(params),
-    {
-      config: params.config,
-    },
-  );
+  } = preparedSetup;
 
   let restoreSkillEnv: (() => void) | undefined;
   const executionState: EmbeddedAttemptExecutionState = {
@@ -105,30 +126,45 @@ export async function runEmbeddedAttempt(
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
+  const takeBundleRuntimes = () => {
+    const owned = {
+      mcp: bundleMcpRuntime,
+      lsp: bundleLspRuntime,
+    };
+    bundleMcpRuntime = undefined;
+    bundleLspRuntime = undefined;
+    return owned;
+  };
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
+    const ownedBundleRuntimes = takeBundleRuntimes();
+    let firstCleanupError: Error | undefined;
+    const captureCleanupError = (error: unknown) => {
+      if (firstCleanupError === undefined) {
+        firstCleanupError = toErrorObject(error, "Non-Error cleanup rejection");
+      }
+    };
     if (toolSearchCatalogApplied) {
-      clearToolSearchCatalog({
-        sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        agentId: sessionAgentId,
-        runId: params.runId,
-        catalogRef: toolSearchCatalogRef,
-      });
       toolSearchCatalogApplied = false;
+      try {
+        clearToolSearchCatalog({
+          sessionId: params.sessionId,
+          sessionKey: sandboxSessionKey,
+          agentId: sessionAgentId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
+        });
+      } catch (error) {
+        captureCleanupError(error);
+      }
     }
-    try {
-      await bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    } finally {
-      bundleMcpRuntime = undefined;
+    const runtimeDisposals = await settleEmbeddedBundleRuntimeDisposals(ownedBundleRuntimes);
+    for (const result of runtimeDisposals) {
+      if (result.status === "rejected") {
+        captureCleanupError(result.reason);
+      }
     }
-    try {
-      await bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    } finally {
-      bundleLspRuntime = undefined;
+    if (firstCleanupError !== undefined) {
+      throw firstCleanupError;
     }
   };
   const abortState: EmbeddedAttemptAbortStatePort = {
@@ -152,7 +188,6 @@ export async function runEmbeddedAttempt(
   };
   const externalAbortController = createEmbeddedAttemptExternalAbortController({
     abortSignal: params.abortSignal,
-    cleanupAfterEarlyAbort: cleanupEmbeddedPrepResourcesAfterEarlyExit,
     runAbortController,
     runId: params.runId,
     state: abortState,
@@ -273,13 +308,19 @@ export async function runEmbeddedAttempt(
           getCurrentAttemptPluginMetadataSnapshot,
           getProviderRuntimeHandle,
           isRawModelRun,
+          lifecycle: {
+            onBundleLspRuntimeCreated: (runtime) => {
+              bundleLspRuntime = runtime;
+            },
+            onBundleMcpRuntimeCreated: (runtime) => {
+              bundleMcpRuntime = runtime;
+            },
+          },
           preparedToolBase,
           sessionAgentId,
         }),
       { config: params.config },
     );
-    bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
-    bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
     // Catalog preparation registers global run state before tool projection and
     // diagnostics, so arm cleanup before either can fail and leak the catalog.
@@ -374,6 +415,8 @@ export async function runEmbeddedAttempt(
       ReturnType<typeof prepareEmbeddedAttemptSessionRuntime>
     >["trajectoryRecorder"] = null;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
+    let sessionResult: EmbeddedRunAttemptResult | undefined;
+    let sessionError: Error | undefined;
     try {
       const preparedSessionRuntime = await measureEmbeddedAgentPreparation(
         "attempt.session-runtime",
@@ -459,7 +502,7 @@ export async function runEmbeddedAttempt(
           }),
         { config: params.config },
       );
-      const executionResult = await runEmbeddedAttemptExecutionPhase({
+      const pendingExecution = runEmbeddedAttemptExecutionPhase({
         attempt: params,
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
@@ -494,17 +537,19 @@ export async function runEmbeddedAttempt(
         diagnostics: { diagnosticTrace, runTrace },
         state: executionState,
         lifecycle: {
+          markAgentTerminal: agentTerminalBoundary.mark,
           readYieldState: () => ({ yieldAbortSettled, yieldDetected, yieldMessage }),
           setToolSearchCatalogExecutor: (executor) => {
             toolSearchCatalogExecutor = executor;
           },
         },
       });
+      const executionResult = await agentTerminalBoundary.settle(pendingExecution);
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;
       const codeModeStats = drainCodeModeAttemptStats(toolSearchCatalogRef);
-      return {
+      sessionResult = {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
         ...(catalogSession
@@ -518,15 +563,21 @@ export async function runEmbeddedAttempt(
           : {}),
         ...(codeModeStats ? { codeModeStats } : {}),
       };
-    } finally {
-      const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
+    } catch (error) {
+      sessionError = toErrorObject(error, "Non-Error session failure");
+      agentTerminalBoundary.mark();
+    }
+    const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
+    const ownedBundleRuntimes = takeBundleRuntimes();
+    let sessionCleanupError: Error | undefined;
+    try {
       await cleanupEmbeddedAttemptSessionPhase({
         attempt: params,
         session,
         sessionManager,
         sessionLockController,
-        bundleMcpRuntime,
-        bundleLspRuntime,
+        bundleMcpRuntime: ownedBundleRuntimes.mcp,
+        bundleLspRuntime: ownedBundleRuntimes.lsp,
         removeToolResultContextGuard,
         toolSearchCatalogRef,
         sandboxSessionKey,
@@ -542,8 +593,28 @@ export async function runEmbeddedAttempt(
           beforeAgentRunBlockedBy: executionState.beforeAgentRunBlockedBy,
         }),
       });
+    } catch (error) {
+      sessionCleanupError = toErrorObject(error, "Non-Error session cleanup rejection");
     }
+    if (sessionError !== undefined) {
+      if (sessionCleanupError !== undefined) {
+        log.error(
+          `embedded run session cleanup failed after task failure: runId=${params.runId} ${String(sessionCleanupError)}`,
+        );
+      }
+      throw sessionError;
+    }
+    if (sessionCleanupError !== undefined) {
+      throw sessionCleanupError;
+    }
+    if (!sessionResult) {
+      throw new Error(
+        `embedded run session phase completed without a result: runId=${params.runId}`,
+      );
+    }
+    return sessionResult;
   } catch (error) {
+    agentTerminalBoundary.mark();
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,
       abortSignal: params.abortSignal,
@@ -553,8 +624,18 @@ export async function runEmbeddedAttempt(
     }
     throw error;
   } finally {
-    externalAbortController.dispose();
-    clearToolActivityRun(params.runId);
+    try {
+      externalAbortController.dispose();
+    } catch (error) {
+      log.error(
+        `failed to dispose embedded abort controller: runId=${params.runId} ${String(error)}`,
+      );
+    }
+    try {
+      clearToolActivityRun(params.runId);
+    } catch (error) {
+      log.error(`failed to clear embedded tool activity: runId=${params.runId} ${String(error)}`);
+    }
     try {
       await cleanupEmbeddedPrepResourcesAfterEarlyExit();
     } catch (cleanupErr) {
@@ -569,12 +650,32 @@ export async function runEmbeddedAttempt(
         `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
       );
     }
-    retainedSessionFileOwner?.release();
+    try {
+      retainedSessionFileOwner?.release();
+    } catch (releaseErr) {
+      log.error(
+        `failed to release retained session file owner: runId=${params.runId} ${String(releaseErr)}`,
+      );
+    }
     const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
-    emitDiagnosticRunCompleted?.(
-      terminal.aborted ? "aborted" : "error",
-      terminal.promptError ?? new Error("run exited before diagnostic completion"),
-    );
-    restoreSkillEnv?.();
+    try {
+      emitDiagnosticRunCompleted?.(
+        terminal.aborted ? "aborted" : "error",
+        terminal.failed
+          ? terminal.promptFailure?.error
+          : new Error("run exited before diagnostic completion"),
+      );
+    } catch (error) {
+      log.error(
+        `failed to emit embedded completion diagnostic: runId=${params.runId} ${String(error)}`,
+      );
+    }
+    try {
+      restoreSkillEnv?.();
+    } catch (error) {
+      log.error(
+        `failed to restore embedded skill environment: runId=${params.runId} ${String(error)}`,
+      );
+    }
   }
 }

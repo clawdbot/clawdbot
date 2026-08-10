@@ -29,19 +29,21 @@ export async function handleEmbeddedAttemptPromptError(input: {
   attempt: PromptErrorAttempt;
   error: unknown;
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
+  markTaskTerminal?: () => void;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedSteering: (error?: unknown, failed?: boolean) => void;
   sessionLockController: PromptErrorSessionLockController;
   withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 }): Promise<EmbeddedAttemptPromptErrorOutcome> {
-  input.releaseLeasedSteering(input.error);
+  input.releaseLeasedSteering(input.error, true);
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.
     input.markYieldAborted();
+    input.markTaskTerminal?.();
     await waitForSessionsYieldAbortSettle({
       settlePromise: input.yieldAbortSettled,
       runId: input.attempt.runId,

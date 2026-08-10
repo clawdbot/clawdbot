@@ -1,5 +1,6 @@
 import type {
   ProviderTransportAccountingCollector,
+  ProviderTransportAccountingCoverage,
   ProviderTransportAccountingSnapshot,
 } from "../provider-transport-accounting.js";
 import type {
@@ -29,6 +30,12 @@ function createExactZeroProviderTransport(): ProviderTransportAccountingSnapshot
       authRecoveries: 0,
       payloadRecoveries: 0,
       transportFallbacks: 0,
+    },
+    invocations: {
+      total: 0,
+      totalKind: "exact",
+      entries: [],
+      entriesTruncated: false,
     },
     connections: {
       total: 0,
@@ -97,8 +104,11 @@ function providerTransportContradictsExactZero(projection: ProviderTransportProj
 function resolveCommandProviderTransport(
   exactZeroModelWork: boolean,
   projection: ProviderTransportProjection,
-  coverage: AgentCommandRunAccountingCoverage,
-): { snapshot?: ProviderTransportAccountingSnapshot; coverage: AgentCommandRunAccountingCoverage } {
+  coverage: ProviderTransportAccountingCoverage,
+): {
+  snapshot?: ProviderTransportAccountingSnapshot;
+  coverage: ProviderTransportAccountingCoverage;
+} {
   if (!exactZeroModelWork) {
     return { snapshot: projection.snapshot, coverage };
   }
@@ -125,7 +135,7 @@ function resolveCommandProviderTransport(
 export function reconcileCommandZeroTransport(params: {
   exactZeroBeforeTransport: boolean;
   projection: ProviderTransportProjection;
-  providerCoverage: AgentCommandRunAccountingCoverage;
+  providerCoverage: ProviderTransportAccountingCoverage;
   modelCallsCoverage: AgentCommandRunAccountingCoverage;
   modelCallCoverageReasons: AgentCommandRunAccountingCoverageReason[];
 }) {

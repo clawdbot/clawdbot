@@ -37,6 +37,39 @@ describe("formatErrorMessage", () => {
     expect(format(circular)).toBe("[object Object]");
   });
 
+  it("fails closed on hostile Error proxies and accessors", () => {
+    const prototypeHostile = new Proxy(new Error("hidden"), {
+      getPrototypeOf() {
+        throw new Error("prototype trap");
+      },
+    });
+    const accessorHostile = new Error("ignored");
+    Object.defineProperty(accessorHostile, "message", {
+      get() {
+        throw new Error("message trap");
+      },
+    });
+
+    expect(format(prototypeHostile)).toBe("Unknown error");
+    expect(format(accessorHostile)).toBe("Error");
+  });
+
+  it("bounds hostile and oversized cause chains", () => {
+    const outer = new Error("outer");
+    Object.defineProperty(outer, "cause", {
+      get() {
+        throw new Error("cause trap");
+      },
+    });
+    let deep: Error = new Error("root");
+    for (let index = 0; index < 32; index += 1) {
+      deep = new Error(`wrapper-${String(index)}`, { cause: deep });
+    }
+
+    expect(format(outer)).toBe("outer");
+    expect(format(deep).split(" | ")).toHaveLength(17);
+  });
+
   it("requires an owner-supplied redactor", () => {
     expect(formatErrorMessage("sensitive", { redact: () => "redacted" })).toBe("redacted");
   });
@@ -56,6 +89,19 @@ describe("toErrorObject", () => {
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
   });
+
+  it("retains hostile values only as causes without escaping proxy traps", () => {
+    const value = new Proxy(new Error("hidden"), {
+      getPrototypeOf() {
+        throw new Error("prototype trap");
+      },
+    });
+
+    const error = toErrorObject(value, "request failed");
+
+    expect(error.message).toBe("request failed");
+    expect(error.cause).toBe(value);
+  });
 });
 
 describe("stringifyNonErrorCause", () => {
@@ -68,5 +114,18 @@ describe("stringifyNonErrorCause", () => {
   it("falls back to object tags when JSON has no string result", () => {
     expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
     expect(stringifyNonErrorCause(Symbol("value"))).toBe("[object Symbol]");
+  });
+
+  it("uses a stable fallback when serialization and object tags are hostile", () => {
+    const value = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("get trap");
+        },
+      },
+    );
+
+    expect(stringifyNonErrorCause(value)).toBe("Unknown error");
   });
 });

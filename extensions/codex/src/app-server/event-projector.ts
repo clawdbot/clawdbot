@@ -7,9 +7,6 @@ import {
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
-  type HeartbeatToolResponse,
-  type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type AttemptFailureSource } from "./attempt-terminal.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -26,6 +23,10 @@ import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
+import {
+  resolveCodexProjectedTerminalFailure,
+  type CodexAppServerToolTelemetry,
+} from "./event-projector-result.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
@@ -61,19 +62,6 @@ import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 
 type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
-
-type CodexAppServerToolTelemetry = {
-  didSendViaMessagingTool: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
-  messagingToolSentTexts: string[];
-  messagingToolSentMediaUrls: string[];
-  messagingToolSentTargets: MessagingToolSend[];
-  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
-  toolMediaUrls?: string[];
-  toolAudioAsVoice?: boolean;
-  successfulCronAdds?: number;
-} & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
 
 export class CodexAppServerEventProjector {
   private readonly assistantProjection: CodexAssistantProjection;
@@ -337,6 +325,7 @@ export class CodexAppServerEventProjector {
     const hasDeliverableAssistantOnCompletedTurn =
       this.completedTurn?.status === "completed" &&
       assistantTexts.some((text) => text.trim().length > 0);
+    const hadPromptFailureBeforeSynthesis = this.promptErrorSource !== null;
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
@@ -352,10 +341,18 @@ export class CodexAppServerEventProjector {
       this.synthesizedMissingToolResultError = synthesizedMissingToolResultError;
       this.promptErrorSource = this.promptErrorSource ?? "prompt";
     }
+    const terminalFailure = resolveCodexProjectedTerminalFailure({
+      completedTurn: this.completedTurn,
+      hadPromptFailureBeforeSynthesis,
+      promptError: this.promptError,
+      promptErrorSource: this.promptErrorSource,
+      synthesizedMissingToolResultError: this.synthesizedMissingToolResultError,
+    });
     const assistantMessageOptions = {
       tokenUsage: projectedUsage,
       aborted: this.aborted,
-      promptError: this.promptError,
+      promptFailed: terminalFailure.failed,
+      promptError: terminalFailure.error,
     };
     const lastAssistant = assistantTexts.length
       ? this.assistantProjection.createAssistantMessage(
@@ -389,16 +386,12 @@ export class CodexAppServerEventProjector {
       createAssistantMirrorMessage: (title, text) =>
         this.assistantProjection.createAssistantMirrorMessage(title, text),
     });
-    const turnFailed = this.completedTurn?.status === "failed";
-    const promptError =
-      this.promptError ??
-      this.synthesizedMissingToolResultError ??
-      (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
     const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
       reasoningText,
       planText,
-      promptError,
+      promptFailed: terminalFailure.failed,
+      promptError: terminalFailure.error,
       turnCompleted: Boolean(this.completedTurn),
     });
     const toolMetas = this.toolProgressProjection.toolMetas;
@@ -410,8 +403,9 @@ export class CodexAppServerEventProjector {
     return {
       terminal: attemptTerminal.normalize({
         aborted: this.aborted,
-        promptError,
-        promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
+        failed: terminalFailure.failed,
+        promptError: terminalFailure.error,
+        promptErrorSource: terminalFailure.source,
       }),
       sessionIdUsed: this.params.sessionId,
       terminalTurnId: this.turnId,

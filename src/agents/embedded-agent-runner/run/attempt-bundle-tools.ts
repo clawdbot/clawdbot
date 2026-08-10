@@ -32,6 +32,14 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   getCurrentAttemptPluginMetadataSnapshot: AttemptSetup["getCurrentAttemptPluginMetadataSnapshot"];
   getProviderRuntimeHandle: AttemptSetup["getProviderRuntimeHandle"];
   isRawModelRun: boolean;
+  lifecycle: {
+    onBundleLspRuntimeCreated: (
+      runtime: Awaited<ReturnType<typeof createBundleLspToolRuntime>>,
+    ) => void;
+    onBundleMcpRuntimeCreated: (
+      runtime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>,
+    ) => void;
+  };
   preparedToolBase: PreparedToolBase;
   sessionAgentId: string;
 }) {
@@ -119,16 +127,18 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ],
       })
     : undefined;
-  let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
-  try {
-    const bundleLspEnabled =
-      !params.attempt.forceRestartSafeTools &&
-      shouldCreateBundleLspRuntimeForAttempt({
-        toolsEnabled,
-        disableTools: params.attempt.disableTools || params.isRawModelRun,
-        toolsAllow: params.attempt.toolsAllow,
-      });
-    bundleLspRuntime = bundleLspEnabled
+  if (bundleMcpRuntime) {
+    params.lifecycle.onBundleMcpRuntimeCreated(bundleMcpRuntime);
+  }
+  const bundleLspEnabled =
+    !params.attempt.forceRestartSafeTools &&
+    shouldCreateBundleLspRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.attempt.disableTools || params.isRawModelRun,
+      toolsAllow: params.attempt.toolsAllow,
+    });
+  const bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined =
+    bundleLspEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: params.effectiveWorkspace,
           cfg: params.attempt.config,
@@ -140,112 +150,100 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           ],
         })
       : undefined;
-    const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
-      bundleMcpRuntime?.tools ?? [],
+  if (bundleLspRuntime) {
+    params.lifecycle.onBundleLspRuntimeCreated(bundleLspRuntime);
+  }
+  const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
+    bundleMcpRuntime?.tools ?? [],
+    effectiveToolsAllow,
+    { toolMeta: (tool) => getPluginToolMeta(tool) },
+  );
+  const allowedBundleLspTools = applyEmbeddedAttemptToolsAllow(
+    bundleLspRuntime?.tools ?? [],
+    effectiveToolsAllow,
+    { toolMeta: (tool) => getPluginToolMeta(tool) },
+  );
+  const filteredBundledTools = applyFinalEffectiveToolPolicy({
+    bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
+    config: params.attempt.config,
+    workspaceDir: params.effectiveWorkspace,
+    metadataSnapshot: bundleMetadataSnapshot,
+    conversationCapabilityProfile: runtimeCapabilityProfile,
+    warn: (message) => log.warn(message),
+  });
+  if (bundleMcpRuntime?.restrictAppTools) {
+    const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
+      bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
       effectiveToolsAllow,
       { toolMeta: (tool) => getPluginToolMeta(tool) },
     );
-    const allowedBundleLspTools = applyEmbeddedAttemptToolsAllow(
-      bundleLspRuntime?.tools ?? [],
-      effectiveToolsAllow,
-      { toolMeta: (tool) => getPluginToolMeta(tool) },
-    );
-    const filteredBundledTools = applyFinalEffectiveToolPolicy({
-      bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
+    const allowedAppTools = applyFinalEffectiveToolPolicy({
+      bundledTools: runtimeAllowedAppTools,
       config: params.attempt.config,
       workspaceDir: params.effectiveWorkspace,
       metadataSnapshot: bundleMetadataSnapshot,
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
-    if (bundleMcpRuntime?.restrictAppTools) {
-      const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
-        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
-        effectiveToolsAllow,
-        { toolMeta: (tool) => getPluginToolMeta(tool) },
-      );
-      const allowedAppTools = applyFinalEffectiveToolPolicy({
-        bundledTools: runtimeAllowedAppTools,
-        config: params.attempt.config,
-        workspaceDir: params.effectiveWorkspace,
-        metadataSnapshot: bundleMetadataSnapshot,
-        conversationCapabilityProfile: runtimeCapabilityProfile,
-        warn: (message) => log.warn(message),
-      });
-      // The view outlives this attempt; capture policy against the complete MCP catalog now.
-      bundleMcpRuntime.restrictAppTools(allowedAppTools);
-    }
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0
-        ? normalizeAgentRuntimeTools({
-            runtimePlan: params.attempt.runtimePlan,
-            tools: filteredBundledTools,
-            provider: params.attempt.provider,
-            config: params.attempt.config,
-            workspaceDir: params.effectiveWorkspace,
-            env: process.env,
-            modelId: params.attempt.modelId,
-            modelApi: params.attempt.model.api,
-            model: params.attempt.model,
-            runtimeHandle: params.getProviderRuntimeHandle(),
-            onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
-              logRuntimeToolSchemaQuarantine({
-                diagnostics,
-                tools: sourceTools,
-                runId: params.attempt.runId,
-                agentId: params.sessionAgentId,
-                sessionKey: params.attempt.sessionKey,
-                sessionId: params.attempt.sessionId,
-              }),
-          })
-        : filteredBundledTools;
-    const projectedTools = filterLocalModelLeanTools({
-      tools: [...tools, ...normalizedBundledTools],
-      config: params.attempt.config,
-      agentId: params.sessionAgentId,
-      preserveToolNames: localModelLeanPreserveToolNames,
-    });
-    if (cronCreatorToolAllowlist.length > 0) {
-      // Cron is built before bundled tools; refresh its cap against the complete surface.
-      replaceWithEffectiveCronCreatorToolAllowlist(
-        cronCreatorToolAllowlist,
-        projectedTools,
-        (tool) => getPluginToolMeta(tool),
-      );
-    }
-    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
-    if (inheritedToolAllowlist?.length) {
-      // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
-      // only after final policy and schema projection so children inherit the
-      // parent's complete authorized surface, never denied bundled tools.
-      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
-    }
-    logRuntimeToolSchemaQuarantine({
-      diagnostics: schemaProjection.diagnostics,
-      tools: projectedTools,
-      runId: params.attempt.runId,
-      agentId: params.sessionAgentId,
-      sessionKey: params.attempt.sessionKey,
-      sessionId: params.attempt.sessionId,
-    });
-    return {
-      bundleLspRuntime,
-      bundleMcpRuntime,
-      clientTools,
-      tools,
-      uncompactedEffectiveTools: [...schemaProjection.tools],
-    };
-  } catch (error) {
-    try {
-      await bundleMcpRuntime?.dispose();
-    } catch {
-      // Preserve the preparation error; cleanup is best-effort.
-    }
-    try {
-      await bundleLspRuntime?.dispose();
-    } catch {
-      // Preserve the preparation error; cleanup is best-effort.
-    }
-    throw error;
+    // The view outlives this attempt; capture policy against the complete MCP catalog now.
+    bundleMcpRuntime.restrictAppTools(allowedAppTools);
   }
+  const normalizedBundledTools =
+    filteredBundledTools.length > 0
+      ? normalizeAgentRuntimeTools({
+          runtimePlan: params.attempt.runtimePlan,
+          tools: filteredBundledTools,
+          provider: params.attempt.provider,
+          config: params.attempt.config,
+          workspaceDir: params.effectiveWorkspace,
+          env: process.env,
+          modelId: params.attempt.modelId,
+          modelApi: params.attempt.model.api,
+          model: params.attempt.model,
+          runtimeHandle: params.getProviderRuntimeHandle(),
+          onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
+            logRuntimeToolSchemaQuarantine({
+              diagnostics,
+              tools: sourceTools,
+              runId: params.attempt.runId,
+              agentId: params.sessionAgentId,
+              sessionKey: params.attempt.sessionKey,
+              sessionId: params.attempt.sessionId,
+            }),
+        })
+      : filteredBundledTools;
+  const projectedTools = filterLocalModelLeanTools({
+    tools: [...tools, ...normalizedBundledTools],
+    config: params.attempt.config,
+    agentId: params.sessionAgentId,
+    preserveToolNames: localModelLeanPreserveToolNames,
+  });
+  if (cronCreatorToolAllowlist.length > 0) {
+    // Cron is built before bundled tools; refresh its cap against the complete surface.
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, projectedTools, (tool) =>
+      getPluginToolMeta(tool),
+    );
+  }
+  const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+  if (inheritedToolAllowlist?.length) {
+    // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
+    // only after final policy and schema projection so children inherit the
+    // parent's complete authorized surface, never denied bundled tools.
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+  }
+  logRuntimeToolSchemaQuarantine({
+    diagnostics: schemaProjection.diagnostics,
+    tools: projectedTools,
+    runId: params.attempt.runId,
+    agentId: params.sessionAgentId,
+    sessionKey: params.attempt.sessionKey,
+    sessionId: params.attempt.sessionId,
+  });
+  return {
+    bundleLspRuntime,
+    bundleMcpRuntime,
+    clientTools,
+    tools,
+    uncompactedEffectiveTools: [...schemaProjection.tools],
+  };
 }

@@ -56,14 +56,19 @@ function getWriter(filePath: string): PayloadLogWriter {
   return getQueuedFileWriter(writers, filePath);
 }
 
-function formatError(error: unknown): string | undefined {
+function formatError(error: unknown, failed: boolean): string | undefined {
+  if (!failed) {
+    return undefined;
+  }
   if (error instanceof Error) {
     const redacted = redactAgentDiagnosticPayload(error.message);
-    return typeof redacted === "string" ? redacted : error.message;
+    const message = typeof redacted === "string" ? redacted : error.message;
+    return message || "empty error";
   }
   if (typeof error === "string") {
     const redacted = redactAgentDiagnosticPayload(error);
-    return typeof redacted === "string" ? redacted : error;
+    const message = typeof redacted === "string" ? redacted : error;
+    return message || "empty error";
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
@@ -71,7 +76,11 @@ function formatError(error: unknown): string | undefined {
   if (error && typeof error === "object") {
     return safeJsonStringify(redactAgentDiagnosticPayload(error)) ?? "unknown error";
   }
-  return undefined;
+  try {
+    return String(error);
+  } catch {
+    return "unknown error";
+  }
 }
 
 function digest(value: unknown): string | undefined {
@@ -103,7 +112,7 @@ function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknow
 type AnthropicPayloadLogger = {
   enabled: true;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
-  recordUsage: (messages: AgentMessage[], error?: unknown) => void;
+  recordUsage: (messages: AgentMessage[], failure: { failed: boolean; error: unknown }) => void;
 };
 
 /** Create an Anthropic payload/usage logger when the env flag is enabled. */
@@ -169,9 +178,9 @@ export function createAnthropicPayloadLogger(params: {
     return wrapped;
   };
 
-  const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, error) => {
+  const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, failure) => {
     const usage = findLastAssistantUsage(messages);
-    const errorMessage = formatError(error);
+    const errorMessage = formatError(failure.error, failure.failed);
     if (!usage) {
       if (errorMessage) {
         record({

@@ -32,6 +32,10 @@ import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 
+function throwUnknown(value: unknown): never {
+  throw value;
+}
+
 function createFixture() {
   const order: string[] = [];
   const queueHandle = { kind: "embedded", runId: "run-1" };
@@ -40,6 +44,7 @@ function createFixture() {
   const subscription = { unsubscribe, waitForPendingEvents };
   const detachBackend = vi.fn(() => order.push("detach-backend"));
   const clearTimers = vi.fn(() => order.push("clear-timers"));
+  const markAgentTerminal = vi.fn(() => order.push("terminal"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
   const promptActiveSession = vi.fn(async () => undefined);
   const activeSession = {
@@ -174,6 +179,7 @@ function createFixture() {
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     state,
     lifecycle: {
+      markAgentTerminal,
       readYieldState: () => ({
         yieldAbortSettled: null,
         yieldDetected: true,
@@ -226,6 +232,7 @@ function createFixture() {
     detachBackend,
     getBeforeAgentFinalizeRevisionReason,
     input,
+    markAgentTerminal,
     order,
     queueHandle,
     result,
@@ -251,6 +258,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.order).toEqual([
       "prompt",
       "finalize",
+      "terminal",
       "clear-timers",
       "unsubscribe",
       "detach-backend",
@@ -302,6 +310,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       }),
     );
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
+    expect(fixture.markAgentTerminal).toHaveBeenCalledOnce();
     expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
       "session-1",
       fixture.queueHandle,
@@ -328,7 +337,85 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("unsubscribe failed, possible resource leak"),
     );
+    expect(fixture.order.indexOf("terminal")).toBeLessThan(fixture.order.indexOf("clear-timers"));
   });
+
+  it("attempts every stream cleanup while preserving the exact prompt failure", async () => {
+    const fixture = createFixture();
+    const promptFailure = new Error("prompt failed");
+    mocks.runPrompt.mockRejectedValueOnce(promptFailure);
+    fixture.clearTimers.mockImplementationOnce(() => {
+      fixture.order.push("clear-timers");
+      throw new Error("timer cleanup failed");
+    });
+    fixture.unsubscribe.mockImplementationOnce(() => {
+      fixture.order.push("unsubscribe");
+      throw new Error("unsubscribe failed");
+    });
+    fixture.detachBackend.mockImplementationOnce(() => {
+      fixture.order.push("detach-backend");
+      throw new Error("backend detach failed");
+    });
+    mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
+      fixture.order.push("clear-active-run");
+      throw new Error("active run cleanup failed");
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(promptFailure);
+
+    expect(fixture.markAgentTerminal).toHaveBeenCalledOnce();
+    expect(fixture.clearTimers).toHaveBeenCalledOnce();
+    expect(fixture.unsubscribe).toHaveBeenCalledOnce();
+    expect(fixture.detachBackend).toHaveBeenCalledOnce();
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    expect(fixture.order).toEqual([
+      "terminal",
+      "clear-timers",
+      "unsubscribe",
+      "detach-backend",
+      "clear-active-run",
+    ]);
+  });
+
+  it("surfaces the first cleanup failure after attempting every successful-run release", async () => {
+    const fixture = createFixture();
+    const timerFailure = new Error("timer cleanup failed");
+    fixture.clearTimers.mockImplementationOnce(() => {
+      fixture.order.push("clear-timers");
+      throw timerFailure;
+    });
+    fixture.unsubscribe.mockImplementationOnce(() => {
+      fixture.order.push("unsubscribe");
+      throw new Error("unsubscribe failed");
+    });
+
+    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(timerFailure);
+
+    expect(fixture.detachBackend).toHaveBeenCalledOnce();
+    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, null, false, 0, -0, 0n, Number.NaN, ""])(
+    "normalizes a falsy stream cleanup failure %#",
+    async (reason) => {
+      const fixture = createFixture();
+      fixture.clearTimers.mockImplementationOnce(() => throwUnknown(reason));
+
+      const rejection = await runEmbeddedAttemptSettledPhase(fixture.input).catch(
+        (error: unknown) => error,
+      );
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toBe(
+        typeof reason === "string" ? reason : "Non-Error stream cleanup rejection",
+      );
+      if (typeof reason !== "string") {
+        expect((rejection as Error).cause).toBe(reason);
+      }
+      expect(fixture.unsubscribe).toHaveBeenCalledOnce();
+      expect(fixture.detachBackend).toHaveBeenCalledOnce();
+      expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+    },
+  );
 
   it("releases the active run when backend cleanup throws during a failed prompt", async () => {
     const fixture = createFixture();
@@ -440,6 +527,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     const failure = new Error("settlement failed");
     mocks.finalizeStream.mockImplementationOnce(async (finalizeInput) => {
       finalizeInput.onSettled({
+        promptFailed: true,
         promptError: failure,
         promptErrorSource: null,
         timedOutDuringCompaction: true,

@@ -73,18 +73,9 @@ export function sumExactMetrics(
 
 export function agentDurationMetric(
   snapshot: AgentCommandRunAccountingSnapshot,
-  durationMs: number | undefined,
 ): AgentExecTraceMetric {
-  const reasons = [
-    ...coverageReasons(snapshot.coverage.candidates),
-    ...(snapshot.candidates.total === 1 &&
-    snapshot.candidates.returned === 1 &&
-    snapshot.candidates.threw === 0
-      ? []
-      : ["candidate_scope_incomplete"]),
-  ];
   return observedMetric({
-    value: durationMs,
-    coverage: reasons.length === 0 ? { state: "complete" } : { state: "partial", reasons },
+    value: snapshot.agentDurationMs,
+    coverage: snapshot.coverage.agentTime,
   });
 }

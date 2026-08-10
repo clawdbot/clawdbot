@@ -38,6 +38,7 @@ function prepareCatalogExecutor(
   options?: {
     getRunState?: () => {
       aborted: boolean;
+      promptFailed: boolean;
       promptError: unknown;
       timedOut: boolean;
       yieldDetected: boolean;
@@ -68,6 +69,7 @@ function prepareCatalogExecutor(
       options?.getRunState ??
       (() => ({
         aborted: false,
+        promptFailed: false,
         promptError: undefined,
         timedOut: false,
         yieldDetected: false,
@@ -127,6 +129,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       markExternalAbort: vi.fn(),
       getRunState: () => ({
         aborted: false,
+        promptFailed: false,
         promptError: undefined,
         timedOut: false,
         yieldDetected: false,
@@ -205,6 +208,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       markExternalAbort: vi.fn(),
       getRunState: () => ({
         aborted: false,
+        promptFailed: false,
         promptError: undefined,
         timedOut: false,
         yieldDetected: false,
@@ -245,6 +249,69 @@ describe("prepareEmbeddedAttemptStream", () => {
     resolveSteer?.();
     await queued;
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "does not run finalization hooks after explicit prompt failure payload %#",
+    async (promptError) => {
+      prepareEmbeddedAttemptStream({
+        attempt: {
+          runId: "run-finalize-failed",
+          sessionId: "session-finalize-failed",
+          sessionKey: "agent:main:main",
+        } as never,
+        activeSession: {
+          agent: { hasQueuedMessages: () => false },
+          isStreaming: false,
+          messages: [],
+          pendingMessageCount: 0,
+        } as never,
+        hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+        hookAgentId: "main",
+        diagnosticTrace: {} as never,
+        clientToolCallSlots: [],
+        toolSearchTargetTranscriptProjections: [],
+        isReplaySafeTool: () => false,
+        runAbortController: new AbortController(),
+        abortRun: vi.fn(),
+        markExternalAbort: vi.fn(),
+        getRunState: () => ({
+          aborted: false,
+          promptFailed: true,
+          promptError,
+          timedOut: false,
+          yieldDetected: false,
+        }),
+        hasDeliveredSourceReply: () => false,
+        markSourceReplyDelivered: vi.fn(),
+        onBlockReply: vi.fn(),
+        onBlockReplyFlush: vi.fn(),
+        sandboxSessionKey: "agent:main:main",
+        builtinToolNames: new Set(),
+        replaySafeToolNames: new Set(),
+      });
+      const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+        onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+      };
+
+      await expect(
+        subscriptionInput.onBeforeTerminalDelivery?.({
+          messages: [],
+          willRetry: false,
+          lastAssistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "Draft answer" }],
+            stopReason: "stop",
+          },
+          assistantTexts: ["Draft answer"],
+          hasAssistantVisibleText: true,
+          isError: false,
+          incompleteTerminalAssistant: false,
+          hadDeterministicSideEffect: false,
+        }),
+      ).resolves.toBeUndefined();
+      expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes live events to the transcript session instead of the sandbox authority session", () => {
     prepareCatalogExecutor([], {
@@ -426,6 +493,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       runAbortController,
       getRunState: () => ({
         aborted,
+        promptFailed: false,
         promptError: undefined,
         timedOut: false,
         yieldDetected: false,

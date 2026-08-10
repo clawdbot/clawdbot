@@ -2,7 +2,10 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  formatErrorMessage,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
@@ -42,6 +45,12 @@ export type CodexHostTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
+
+export type CodexTrajectoryPromptFailure = Readonly<{
+  promptError: string;
+  promptErrorCategory: string;
+  promptErrorSource: string;
+}> | null;
 
 type CodexTrajectoryEvent = Record<string, unknown> & {
   data?: Record<string, unknown>;
@@ -195,6 +204,7 @@ export function recordCodexTrajectoryCompletion(
   recorder: CodexTrajectoryRecorder | null,
   params: {
     attempt: EmbeddedRunAttemptParams;
+    promptFailure?: CodexTrajectoryPromptFailure;
     result: EmbeddedRunAttemptResult;
     threadId: string;
     turnId: string;
@@ -206,13 +216,19 @@ export function recordCodexTrajectoryCompletion(
     return;
   }
   const terminal = attemptTerminal.project(params.result.terminal);
+  const promptFailure =
+    "promptFailure" in params
+      ? (params.promptFailure ?? null)
+      : projectCodexTrajectoryPromptFailure(terminal.promptFailure);
   recorder.recordEvent("model.completed", {
     threadId: params.threadId,
     turnId: params.turnId,
     timedOut: params.timedOut,
     yieldDetected: params.yieldDetected ?? false,
     aborted: terminal.aborted,
-    promptError: normalizeCodexTrajectoryError(terminal.promptError),
+    promptError: promptFailure?.promptError ?? null,
+    promptErrorCategory: promptFailure?.promptErrorCategory ?? null,
+    promptErrorSource: promptFailure?.promptErrorSource ?? null,
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,
@@ -295,20 +311,60 @@ function redactSensitiveString(value: string): string {
     .replace(COOKIE_PAIR_RE, "$1=<redacted>");
 }
 
-/** Converts arbitrary prompt errors into trajectory-safe text. */
-export function normalizeCodexTrajectoryError(value: unknown): string | null {
-  if (!value) {
+function trajectoryErrorCategory(value: unknown): string {
+  try {
+    if (value instanceof TypeError) {
+      return "TypeError";
+    }
+    if (value instanceof RangeError) {
+      return "RangeError";
+    }
+    if (value instanceof ReferenceError) {
+      return "ReferenceError";
+    }
+    if (value instanceof SyntaxError) {
+      return "SyntaxError";
+    }
+    if (value instanceof URIError) {
+      return "URIError";
+    }
+    if (typeof AggregateError !== "undefined" && value instanceof AggregateError) {
+      return "AggregateError";
+    }
+    if (value instanceof Error) {
+      return "Error";
+    }
+  } catch {
+    return "unknown";
+  }
+  if (value === null) {
+    return "null";
+  }
+  return typeof value;
+}
+
+/** Freezes one trap-safe trajectory projection of an authoritative terminal failure. */
+export function projectCodexTrajectoryPromptFailure(
+  failure: Readonly<{ error: unknown; source: string }> | null,
+): CodexTrajectoryPromptFailure {
+  if (failure === null) {
     return null;
   }
-  if (value instanceof Error) {
-    return value.message;
+  return Object.freeze({
+    promptError: normalizeCodexTrajectoryError(failure.error, true) ?? "Unknown error",
+    promptErrorCategory: trajectoryErrorCategory(failure.error),
+    promptErrorSource: failure.source,
+  });
+}
+
+/** Converts arbitrary prompt errors into trajectory-safe text. */
+export function normalizeCodexTrajectoryError(
+  value: unknown,
+  failed = value !== null && value !== undefined,
+): string | null {
+  if (!failed) {
+    return null;
   }
-  if (typeof value === "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "Unknown error";
-  }
+  const formatted = value === undefined ? "Unknown error" : formatErrorMessage(value);
+  return formatted.length > 20_000 ? `${truncateUtf16Safe(formatted, 20_000)}…` : formatted;
 }

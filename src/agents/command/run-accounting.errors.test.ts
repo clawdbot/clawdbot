@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  bindAgentCommandRunAccounting,
+  createRunAccountingAccumulator,
   resolveAgentCommandRunAccounting,
   runWithAgentCommandAccounting,
+  takeAgentCommandRunAccounting,
 } from "./run-accounting.js";
 
 async function captureFailure(failure: unknown): Promise<{ value: unknown }> {
@@ -65,6 +68,19 @@ describe("command run accounting failure identity", () => {
     const { value: caughtFunction } = await captureFailure(functionFailure);
     expect(caughtFunction).toBe(functionFailure);
     expectAccounting(functionFailure);
+  });
+
+  it("rejects a prebound thrown target without replacing its snapshot", async () => {
+    const failure = new Error("provider failed");
+    const forged = createRunAccountingAccumulator(100).project();
+    expect(bindAgentCommandRunAccounting(failure, forged)).toBe(true);
+
+    const { value: caught } = await captureFailure(failure);
+
+    expect(caught).toMatchObject({
+      message: "agent command accounting target was already bound",
+    });
+    expect(takeAgentCommandRunAccounting(failure)).toEqual(forged);
   });
 
   it.each(["provider exploded", 503, null, undefined, true])(

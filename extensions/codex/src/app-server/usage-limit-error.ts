@@ -46,7 +46,11 @@ export function createCodexUsageLimitPromptError(message: string): Error & { sta
 }
 
 export function isCodexUsageLimitPromptError(error: unknown): error is Error & { status: 429 } {
-  return error instanceof Error && "status" in error && error.status === 429;
+  try {
+    return error instanceof Error && "status" in error && error.status === 429;
+  } catch {
+    return false;
+  }
 }
 
 /** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */

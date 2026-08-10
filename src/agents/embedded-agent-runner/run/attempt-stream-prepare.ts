@@ -56,6 +56,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type StreamRunState = {
   aborted: boolean;
+  promptFailed: boolean;
   promptError: unknown;
   timedOut: boolean;
   yieldDetected: boolean;
@@ -82,6 +83,7 @@ export function prepareEmbeddedAttemptStream(input: {
   getRunState: () => StreamRunState;
   hasDeliveredSourceReply: () => boolean;
   markSourceReplyDelivered: () => void;
+  onTaskTerminal?: () => void;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
   sandboxSessionKey: string;
@@ -132,7 +134,7 @@ export function prepareEmbeddedAttemptStream(input: {
           attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN);
         if (
           state.aborted ||
-          state.promptError ||
+          state.promptFailed ||
           state.timedOut ||
           hasCompletedClientToolCall ||
           state.yieldDetected ||
@@ -268,6 +270,7 @@ export function prepareEmbeddedAttemptStream(input: {
       onBlockReply: input.onBlockReply,
       onBlockReplyFlush: input.onBlockReplyFlush,
       onBeforeTerminalDelivery,
+      onTaskTerminal: input.onTaskTerminal,
       blockReplyBreak: attempt.blockReplyBreak,
       blockReplyChunking: attempt.blockReplyChunking,
       onPartialReply: attempt.onPartialReply,

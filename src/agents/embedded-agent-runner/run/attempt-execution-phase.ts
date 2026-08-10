@@ -96,6 +96,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       runtimeChannel,
       hookRunner,
       hookAgentId,
+      onTaskTerminal: input.lifecycle.markAgentTerminal,
       diagnosticTrace: input.diagnostics.diagnosticTrace,
       clientToolCallSlots,
       toolSearchTargetTranscriptProjections,
@@ -125,6 +126,7 @@ export async function runEmbeddedAttemptExecutionPhase(
         const terminal = projectAgentRunAttemptTerminal(state.terminal);
         return {
           aborted: terminal.aborted,
+          promptFailed: terminal.failed,
           promptError: terminal.promptError,
           timedOut: terminal.timedOut,
           yieldDetected: input.lifecycle.readYieldState().yieldDetected,

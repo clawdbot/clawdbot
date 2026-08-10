@@ -45,4 +45,40 @@ describe("finalizeEmbeddedAttempt media trajectory capture", () => {
       media: [{ path: "/media/canonical.png", contentType: "image/png" }],
     });
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "records explicit terminal failure detail for payload %#",
+    (promptError) => {
+      const recordEvent = vi.fn();
+      const result = {
+        terminal: { kind: "failed", source: "prompt", error: promptError },
+        assistantTexts: [],
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        didSendDeterministicApprovalPrompt: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        acceptedSessionSpawns: [],
+        clientToolCalls: [],
+        messagesSnapshot: [],
+      } as unknown as EmbeddedRunAttemptResult;
+
+      finalizeEmbeddedAttempt({
+        result,
+        trajectoryRecorder: { recordEvent } as never,
+        synthesizedPayloadCount: 0,
+        emptyAssistantReplyIsSilent: false,
+        hasTerminalOutput: false,
+      });
+
+      expect(recordEvent).toHaveBeenCalledWith(
+        "model.completed",
+        expect.objectContaining({
+          promptError: expect.any(String),
+          promptErrorSource: "prompt",
+        }),
+      );
+    },
+  );
 });

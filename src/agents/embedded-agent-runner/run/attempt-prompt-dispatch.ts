@@ -20,7 +20,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
   promptContext: PromptContext;
   getCompactionReserveTokens: () => number;
   publishState: (state: PromptDispatchState) => void;
-  releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedSteering: (error?: unknown, failed?: boolean) => void;
   state: PromptDispatchState;
   execution: Omit<PromptExecutionInput, "attempt" | "prompt" | "session" | "skipPromptSubmission">;
   observation: Omit<
@@ -130,7 +130,10 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
       transcriptPrompt: promptContext.promptForSession,
     });
   } else {
-    input.releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+    input.releaseLeasedSteering(
+      state.promptFailed ? state.promptError : "prompt submission skipped",
+      true,
+    );
   }
 
   return state;

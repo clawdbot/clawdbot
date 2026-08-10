@@ -32,7 +32,10 @@ import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
-import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
+import {
+  projectCodexTrajectoryPromptFailure,
+  recordCodexTrajectoryCompletion,
+} from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
   createCodexUsageLimitPromptError,
@@ -151,15 +154,20 @@ export async function finalizeCodexAttempt(
       ? state.turnCompletionIdleTimeoutMessage
       : effectiveTimedOut
         ? "codex app-server attempt timed out"
-        : projectedTerminal.promptError);
+        : projectedTerminal.failed
+          ? projectedTerminal.promptFailure?.error
+          : projectedTerminal.promptError);
+  const finalPromptFailed =
+    effectiveTimedOut ||
+    effectiveTurnCompletionIdleTimedOut ||
+    clientClosedPromptErrorForFinal !== undefined ||
+    projectedTerminal.failed;
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
       ? finalPromptError
-      : finalPromptError instanceof Error
-        ? finalPromptError.message
-        : finalPromptError
-          ? formatErrorMessage(finalPromptError)
-          : undefined;
+      : finalPromptFailed
+        ? formatErrorMessage(finalPromptError)
+        : undefined;
   if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
     await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
       phase: "turn_completed",
@@ -214,14 +222,17 @@ export async function finalizeCodexAttempt(
     });
   }
   const finalPromptErrorSource =
-    effectiveTimedOut || clientClosedPromptErrorForFinal
+    effectiveTimedOut ||
+    effectiveTurnCompletionIdleTimedOut ||
+    clientClosedPromptErrorForFinal !== undefined
       ? "prompt"
       : projectedTerminal.promptErrorSource;
-  const codexAppServerFailureKind = clientClosedPromptErrorForFinal
-    ? "client_closed_before_turn_completed"
-    : effectiveTurnCompletionIdleTimedOut
-      ? "turn_completion_idle_timeout"
-      : undefined;
+  const codexAppServerFailureKind =
+    clientClosedPromptErrorForFinal !== undefined
+      ? "client_closed_before_turn_completed"
+      : effectiveTurnCompletionIdleTimedOut
+        ? "turn_completion_idle_timeout"
+        : undefined;
   const replayBlockedReason = codexAppServerFailureKind
     ? resolveCodexAppServerReplayBlockedReason(result)
     : undefined;
@@ -268,7 +279,7 @@ export async function finalizeCodexAttempt(
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
-    (finalPromptError === null || finalPromptError === undefined) &&
+    !finalPromptFailed &&
     (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
   // buildResult retains the bridge's delivery records. Resolve omitted final
   // intent only after the authoritative turn outcome is known, before any
@@ -307,7 +318,7 @@ export async function finalizeCodexAttempt(
         failureKind: modelCallFailureKind,
       },
     );
-  } else if (finalPromptError) {
+  } else if (finalPromptFailed) {
     codexModelCallDiagnostics.emitError(finalPromptError);
   } else {
     codexModelCallDiagnostics.emitCompleted(result);
@@ -371,8 +382,8 @@ export async function finalizeCodexAttempt(
   await runCodexAgentEndHook(params, {
     event: {
       messages: result.messagesSnapshot,
-      success: !finalAborted && !finalPromptError,
-      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      success: !finalAborted && !finalPromptFailed,
+      ...(finalPromptFailed ? { error: formatErrorMessage(finalPromptError) } : {}),
       durationMs: Date.now() - attemptStartedAt,
     },
     ctx: {
@@ -407,7 +418,7 @@ export async function finalizeCodexAttempt(
     !effectiveTimedOut &&
     !runAbortController.signal.aborted &&
     !finalAborted &&
-    !finalPromptError;
+    !finalPromptFailed;
   if (state.shouldDelayNativeHookRelayUnregister) {
     try {
       await markCodexAppServerBindingCoveredThroughTurn({
@@ -432,16 +443,27 @@ export async function finalizeCodexAttempt(
       );
     }
   }
+  const finalTerminal = attemptTerminal.normalize({
+    timedOut: effectiveTimedOut,
+    aborted: finalAborted,
+    failed: finalPromptFailed,
+    promptError: finalPromptError,
+    promptErrorSource: finalPromptErrorSource,
+  });
+  const finalPromptFailure = projectCodexTrajectoryPromptFailure(
+    attemptTerminal.project(finalTerminal).promptFailure,
+  );
   recordCodexTrajectoryCompletion(trajectoryRecorder, {
     attempt: params,
-    result,
+    result: { ...result, terminal: finalTerminal },
+    promptFailure: finalPromptFailure,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     timedOut: effectiveTimedOut,
     yieldDetected: toolState.yieldDetected,
   });
   trajectoryRecorder?.recordEvent("session.ended", {
-    status: finalPromptError
+    status: finalPromptFailed
       ? "error"
       : finalAborted || effectiveTimedOut
         ? "interrupted"
@@ -450,7 +472,9 @@ export async function finalizeCodexAttempt(
     turnId: activeTurnId,
     timedOut: effectiveTimedOut,
     yieldDetected: toolState.yieldDetected,
-    promptError: normalizeCodexTrajectoryError(finalPromptError),
+    promptError: finalPromptFailure?.promptError ?? null,
+    promptErrorCategory: finalPromptFailure?.promptErrorCategory ?? null,
+    promptErrorSource: finalPromptFailure?.promptErrorSource ?? null,
   });
   markTrajectoryEndRecorded();
   const terminalAssistantText = collectTerminalAssistantText(result);
@@ -458,7 +482,7 @@ export async function finalizeCodexAttempt(
     terminalAssistantText &&
     (!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
     !finalAborted &&
-    !finalPromptError
+    !finalPromptFailed
   ) {
     void emitCodexAppServerEvent(params, {
       stream: "assistant",
@@ -466,7 +490,7 @@ export async function finalizeCodexAttempt(
     });
   }
   emitLifecycleTerminal(
-    finalPromptError
+    finalPromptFailed
       ? {
           phase: "error",
           error: formatErrorMessage(finalPromptError),
@@ -483,12 +507,7 @@ export async function finalizeCodexAttempt(
   );
   return {
     ...result,
-    terminal: attemptTerminal.normalize({
-      timedOut: effectiveTimedOut,
-      aborted: finalAborted,
-      promptError: finalPromptError,
-      promptErrorSource: finalPromptErrorSource,
-    }),
+    terminal: finalTerminal,
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
@@ -496,7 +515,7 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
-    ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
+    ...(!finalAborted && !effectiveTimedOut && !finalPromptFailed && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,

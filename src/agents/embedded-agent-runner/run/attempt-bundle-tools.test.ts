@@ -62,6 +62,10 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       getProviderRuntimeHandle: () => undefined,
       isRawModelRun: false,
+      lifecycle: {
+        onBundleLspRuntimeCreated: vi.fn(),
+        onBundleMcpRuntimeCreated: vi.fn(),
+      },
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
         effectiveToolsAllow: undefined,
@@ -212,7 +216,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(inheritedToolAllowlist).not.toContain("server__delete");
   });
 
-  it("disposes prepared bundle runtimes when later policy setup fails", async () => {
+  it("publishes prepared bundle runtimes to the outer owner before later policy setup fails", async () => {
     const disposeMcp = vi.fn(async () => {});
     const disposeLsp = vi.fn(async () => {});
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
@@ -243,6 +247,10 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
       getProviderRuntimeHandle: () => undefined,
       isRawModelRun: false,
+      lifecycle: {
+        onBundleLspRuntimeCreated: vi.fn(),
+        onBundleMcpRuntimeCreated: vi.fn(),
+      },
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
         effectiveToolsAllow: undefined,
@@ -258,7 +266,13 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
     );
-    expect(disposeMcp).toHaveBeenCalledOnce();
-    expect(disposeLsp).toHaveBeenCalledOnce();
+    expect(input.lifecycle.onBundleMcpRuntimeCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ dispose: disposeMcp }),
+    );
+    expect(input.lifecycle.onBundleLspRuntimeCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ dispose: disposeLsp }),
+    );
+    expect(disposeMcp).not.toHaveBeenCalled();
+    expect(disposeLsp).not.toHaveBeenCalled();
   });
 });

@@ -99,6 +99,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
     incompleteTerminalAssistant: boolean;
     hadDeterministicSideEffect: boolean;
   }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
+  /** Records the accepted task terminal boundary before delivery begins. */
+  onTaskTerminal?: () => void;
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;

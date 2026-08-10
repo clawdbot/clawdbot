@@ -48,6 +48,7 @@ import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
+import { createCandidateAgentDurationOwner } from "./candidate-agent-duration.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
@@ -364,6 +365,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             provider: providerOverride,
             model: modelOverride,
           });
+          const candidateDuration = createCandidateAgentDurationOwner(
+            candidateAccounting?.observeAgentDuration,
+          );
           let candidateOutcome: "returned" | "threw" = "threw";
           try {
             attemptMediaTaskIds = sessionKey
@@ -414,6 +418,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             effectiveTurnThinkLevel = candidateThinkLevel;
             const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               commandRunAccounting: candidateAccounting,
+              onAgentTerminal: candidateDuration.markTerminal,
               codeModeActivityOwner: params.codeModeActivityOwner,
               providerOverride,
               modelOverride,
@@ -488,6 +493,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             candidateOutcome = "returned";
             return candidateResult;
           } finally {
+            candidateDuration.markTerminal();
             candidateAccounting?.settle(candidateOutcome);
           }
         },

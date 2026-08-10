@@ -993,7 +993,11 @@ async function executeAgentExec(params: {
           model: null,
           provider: null,
           sessionId: "",
-          error: { kind: "timeout", message: "agent exec process deadline elapsed" },
+          error: {
+            kind: "timeout",
+            message: "agent exec process deadline elapsed",
+            phase: "infrastructure",
+          },
         },
         stdoutContractValid: true,
       };
@@ -1100,7 +1104,7 @@ function harnessFailureResult(
     codeModeEngaged: null,
     diagnostics: message,
     elapsedMs,
-    error: { kind: "harness_error", message },
+    error: { kind: "harness_error", message, phase: "infrastructure" },
     expected: verificationCode(cell),
     failureCategory: "harness_error",
     final: "",

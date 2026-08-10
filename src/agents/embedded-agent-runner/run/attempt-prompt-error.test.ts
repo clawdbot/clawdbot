@@ -4,6 +4,7 @@ const hoisted = vi.hoisted(() => ({
   handleMidTurnPrecheckRequest: vi.fn(),
   isMidTurnPrecheckSignal: vi.fn(() => false),
   isSessionsYieldAbortError: vi.fn(() => false),
+  markTaskTerminal: vi.fn(),
   markYieldAborted: vi.fn(),
   persistSessionsYieldContextMessage: vi.fn(async () => undefined),
   releaseHeldLockForAbort: vi.fn(async () => undefined),
@@ -33,6 +34,7 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     attempt: { runId: "run-1", sessionId: "session-1" },
     error: new Error("prompt failed"),
     handleMidTurnPrecheckRequest: hoisted.handleMidTurnPrecheckRequest,
+    markTaskTerminal: hoisted.markTaskTerminal,
     markYieldAborted: hoisted.markYieldAborted,
     releaseLeasedSteering: hoisted.releaseLeasedSteering,
     sessionLockController: {
@@ -60,8 +62,17 @@ describe("handleEmbeddedAttemptPromptError", () => {
       promptFailure: { error, source: "prompt" },
     });
 
-    expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error);
+    expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error, true);
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "releases leased steering with explicit failure presence for payload %#",
+    async (error) => {
+      await handleEmbeddedAttemptPromptError(createInput({ error }));
+
+      expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error, true);
+    },
+  );
 
   it("routes mid-turn prechecks under the owned session lock", async () => {
     const request = {
@@ -79,6 +90,7 @@ describe("handleEmbeddedAttemptPromptError", () => {
 
     expect(hoisted.withOwnedSessionWriteLock).toHaveBeenCalledOnce();
     expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
+    expect(hoisted.markTaskTerminal).not.toHaveBeenCalled();
   });
 
   it("settles yield aborts, strips artifacts, and persists handoff context", async () => {
@@ -95,6 +107,7 @@ describe("handleEmbeddedAttemptPromptError", () => {
     await expect(handleEmbeddedAttemptPromptError(input)).resolves.toEqual({});
 
     expect(hoisted.markYieldAborted).toHaveBeenCalledOnce();
+    expect(hoisted.markTaskTerminal).toHaveBeenCalledOnce();
     expect(hoisted.waitForSessionsYieldAbortSettle).toHaveBeenCalledWith({
       settlePromise,
       runId: "run-1",
@@ -110,10 +123,10 @@ describe("handleEmbeddedAttemptPromptError", () => {
 
   it("marks yield state before fallible recovery begins", async () => {
     const recoveryError = new Error("settle failed");
-    let marked = false;
+    const order: string[] = [];
     hoisted.isSessionsYieldAbortError.mockReturnValue(true);
     hoisted.waitForSessionsYieldAbortSettle.mockImplementationOnce(async () => {
-      expect(marked).toBe(true);
+      expect(order).toEqual(["yield", "terminal"]);
       throw recoveryError;
     });
 
@@ -122,7 +135,10 @@ describe("handleEmbeddedAttemptPromptError", () => {
         createInput({
           error: new Error("yield handoff"),
           markYieldAborted: () => {
-            marked = true;
+            order.push("yield");
+          },
+          markTaskTerminal: () => {
+            order.push("terminal");
           },
           yieldDetected: true,
         }),

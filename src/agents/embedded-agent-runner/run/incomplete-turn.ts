@@ -300,14 +300,14 @@ export function resolveIncompleteTurnPayloadText(params: {
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
-  promptError?: unknown;
+  promptFailed: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
   if (
     params.payloadCount !== 0 ||
     params.aborted ||
-    Boolean(params.promptError) ||
+    params.promptFailed ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.currentAttemptAssistant ||
@@ -764,7 +764,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   payloadCount: number;
   hasTerminalToolPresentation?: boolean;
   aborted: boolean;
-  promptError?: unknown;
+  promptFailed: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -851,7 +851,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     params.payloadCount !== 0 ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
-    params.promptError != null ||
+    params.promptFailed ||
     params.timedOut ||
     (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
     hasUnsettledToolError ||

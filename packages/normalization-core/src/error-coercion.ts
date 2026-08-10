@@ -4,7 +4,20 @@ export type FormatErrorMessageOptions = {
   redact: (text: string) => string;
 };
 
-function readProperty(value: object, key: "cause" | "code" | "status"): unknown {
+const MAX_ERROR_CAUSE_NODES = 16;
+
+function classifyError(value: unknown): "error" | "other" | "inaccessible" {
+  try {
+    return value instanceof Error ? "error" : "other";
+  } catch {
+    return "inaccessible";
+  }
+}
+
+function readProperty(
+  value: object,
+  key: "cause" | "code" | "message" | "name" | "status",
+): unknown {
   try {
     return (value as Record<string, unknown>)[key];
   } catch {
@@ -71,27 +84,36 @@ function stringifyUnknown(value: unknown): string {
 /** Formats unknown errors with cause details, structured codes, and secret redaction. */
 export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
   let formatted: string;
-  if (value instanceof Error) {
-    formatted = value.message || value.name || "Error";
-    let cause = readProperty(value, "cause");
+  const errorKind = classifyError(value);
+  if (errorKind === "error") {
+    const message = readProperty(value as object, "message");
+    const name = readProperty(value as object, "name");
+    formatted =
+      (typeof message === "string" && message) || (typeof name === "string" && name) || "Error";
+    let cause = readProperty(value as object, "cause");
     const seen = new Set<unknown>([value]);
     const seenMessages = new Set<string>([formatted]);
-    const appendCauseMessage = (message: string | undefined): void => {
-      if (!message || seenMessages.has(message)) {
+    const appendCauseMessage = (text: string | undefined): void => {
+      if (!text || seenMessages.has(text)) {
         return;
       }
-      formatted += ` | ${message}`;
-      seenMessages.add(message);
+      formatted += ` | ${text}`;
+      seenMessages.add(text);
     };
-    while (cause && !seen.has(cause)) {
+    for (let depth = 0; cause && !seen.has(cause) && depth < MAX_ERROR_CAUSE_NODES; depth += 1) {
       seen.add(cause);
-      if (cause instanceof Error) {
-        appendCauseMessage(cause.message);
-        const code = readProperty(cause, "code");
+      const causeKind = classifyError(cause);
+      if (causeKind === "error") {
+        const causeMessage = readProperty(cause as object, "message");
+        appendCauseMessage(typeof causeMessage === "string" ? causeMessage : undefined);
+        const code = readProperty(cause as object, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));
         }
-        cause = readProperty(cause, "cause");
+        cause = readProperty(cause as object, "cause");
+      } else if (causeKind === "inaccessible") {
+        appendCauseMessage("Unknown error");
+        break;
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
         break;
@@ -100,6 +122,8 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         break;
       }
     }
+  } else if (errorKind === "inaccessible") {
+    formatted = "Unknown error";
   } else {
     formatted = formatStatusAndCode(value) ?? stringifyUnknown(value);
   }
@@ -112,15 +136,23 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
  * (codes, statuses) survive the coercion.
  */
 export function toErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
+  const errorKind = classifyError(value);
+  if (errorKind === "error") {
+    return value as Error;
   }
   if (typeof value === "string") {
     return new Error(value);
   }
   const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
+  if (
+    errorKind !== "inaccessible" &&
+    ((typeof value === "object" && value !== null) || typeof value === "function")
+  ) {
+    try {
+      Object.assign(error, value);
+    } catch {
+      // The fallback Error and original cause remain useful when proxy copying fails.
+    }
   }
   return error;
 }
@@ -139,6 +171,10 @@ export function stringifyNonErrorCause(value: unknown): string {
   try {
     return JSON.stringify(value) ?? Object.prototype.toString.call(value);
   } catch {
-    return Object.prototype.toString.call(value);
+    try {
+      return Object.prototype.toString.call(value);
+    } catch {
+      return "Unknown error";
+    }
   }
 }

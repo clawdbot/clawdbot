@@ -42,6 +42,22 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
     ).toBeUndefined();
   });
 
+  it.each([false, 0, "", null, undefined])(
+    "does not classify explicit prompt failure presence for payload %#",
+    (promptError) => {
+      expect(
+        classifyAgentHarnessTerminalOutcome({
+          assistantTexts: [],
+          reasoningText: "",
+          planText: "",
+          promptFailed: true,
+          promptError,
+          turnCompleted: true,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("does not classify deliberate silent replies such as NO_REPLY", () => {
     expect(
       classifyAgentHarnessTerminalOutcome({

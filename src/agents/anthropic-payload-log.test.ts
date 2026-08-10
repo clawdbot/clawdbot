@@ -108,7 +108,10 @@ describe("createAnthropicPayloadLogger", () => {
           },
         } as never,
       ],
-      new Error(`failed with Bearer sk-secret and ${bareGoogleKey}`), // pragma: allowlist secret
+      {
+        failed: true,
+        error: new Error(`failed with Bearer sk-secret and ${bareGoogleKey}`), // pragma: allowlist secret
+      },
     );
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
@@ -124,4 +127,26 @@ describe("createAnthropicPayloadLogger", () => {
     expect(serialized).not.toContain(bareGithubKey);
     expect(serialized).not.toContain(bareGoogleKey);
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "records explicit failure without usage for payload %#",
+    (error) => {
+      const lines: string[] = [];
+      const logger = createAnthropicPayloadLogger({
+        env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
+        writer: {
+          filePath: "memory",
+          write: (line) => lines.push(line),
+          flush: async () => undefined,
+        },
+      });
+
+      logger?.recordUsage([], { failed: true, error });
+
+      expect(JSON.parse(lines[0]?.trim() ?? "{}")).toMatchObject({
+        stage: "usage",
+        error: expect.any(String),
+      });
+    },
+  );
 });

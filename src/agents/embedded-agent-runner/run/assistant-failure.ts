@@ -95,8 +95,13 @@ export async function handleEmbeddedAssistantFailure(input: {
   agentDir: string;
   isProbeSession: boolean;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
-  const { aborted, idleTimedOut, promptError, timedOut, timedOutDuringCompaction } =
-    projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const {
+    aborted,
+    failed: promptFailed,
+    idleTimedOut,
+    timedOut,
+    timedOutDuringCompaction,
+  } = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
   const fallbackThinking = pickFallbackThinkingLevel({
@@ -155,7 +160,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     !cloudCodeAssistFormatError &&
     !imageDimensionError &&
     !terminalInterrupted &&
-    !promptError &&
+    !promptFailed &&
     silentErrorRetryReason &&
     shouldRetrySilentErrorAssistantTurn({
       attempt: input.attempt,

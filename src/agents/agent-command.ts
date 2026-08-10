@@ -45,7 +45,7 @@ import {
   resolveExplicitAgentCommandSessionKey,
 } from "./command/prepare.js";
 import {
-  bindAgentCommandRunAccounting,
+  bindAgentCommandRunAccountingOnce,
   runWithAgentCommandAccounting,
 } from "./command/run-accounting.js";
 import type { RunAccountingAccumulator } from "./command/run-accounting.types.js";
@@ -644,7 +644,7 @@ export async function agentCommand(
       deps,
     );
     commandRunAccounting.seal();
-    bindAgentCommandRunAccounting(result?.meta, commandRunAccounting.project());
+    bindAgentCommandRunAccountingOnce(result?.meta, commandRunAccounting.project());
     return result;
   });
 }

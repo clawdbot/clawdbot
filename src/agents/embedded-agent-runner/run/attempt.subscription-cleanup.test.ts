@@ -2,7 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
+import {
+  cleanupEmbeddedAttemptResources,
+  settleEmbeddedBundleRuntimeDisposals,
+} from "./attempt.subscription-cleanup.js";
 
 function createDeferred<T>() {
   // Manual deferreds let cleanup tests prove ordering around abort settlement.
@@ -13,6 +16,10 @@ function createDeferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function throwUnknown(value: unknown): never {
+  throw value;
 }
 
 describe("cleanupEmbeddedAttemptResources", () => {
@@ -138,6 +145,120 @@ describe("cleanupEmbeddedAttemptResources", () => {
     expect(order).toEqual(["flush", "release", "dispose", "runtime-dispose-start"]);
   });
 
+  it("starts LSP disposal before a hanging MCP disposal settles", async () => {
+    const mcpDispose = createDeferred<void>();
+    const lspError = new Error("LSP cleanup failed");
+    const disposeLsp = vi.fn(async () => {
+      throw lspError;
+    });
+
+    const cleanupPromise = cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+      sessionManager: {},
+      sessionLock: { release: vi.fn(async () => {}) },
+      bundleMcpRuntime: { dispose: () => mcpDispose.promise },
+      bundleLspRuntime: { dispose: disposeLsp },
+    });
+
+    await vi.waitFor(() => {
+      expect(disposeLsp).toHaveBeenCalledOnce();
+    });
+    mcpDispose.resolve();
+    await expect(cleanupPromise).rejects.toBe(lspError);
+  });
+
+  it("settles both runtime failures in stable owner order", async () => {
+    const mcpError = new Error("MCP cleanup failed");
+    const lspError = new Error("LSP cleanup failed");
+
+    const results = await settleEmbeddedBundleRuntimeDisposals({
+      mcp: {
+        dispose: async () => {
+          throw mcpError;
+        },
+      },
+      lsp: {
+        dispose: async () => {
+          throw lspError;
+        },
+      },
+    });
+
+    expect(results).toEqual([
+      { status: "rejected", reason: mcpError },
+      { status: "rejected", reason: lspError },
+    ]);
+  });
+
+  it("surfaces the first disposal failure after attempting every owner", async () => {
+    const sessionError = new Error("session cleanup failed");
+    const mcpError = new Error("MCP cleanup failed");
+    const lspError = new Error("LSP cleanup failed");
+    const disposeMcp = vi.fn(async () => {
+      throw mcpError;
+    });
+    const disposeLsp = vi.fn(async () => {
+      throw lspError;
+    });
+
+    await expect(
+      cleanupEmbeddedAttemptResources({
+        flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+        session: {
+          dispose: () => {
+            throw sessionError;
+          },
+        },
+        sessionManager: {},
+        sessionLock: { release: vi.fn(async () => {}) },
+        bundleMcpRuntime: { dispose: disposeMcp },
+        bundleLspRuntime: { dispose: disposeLsp },
+      }),
+    ).rejects.toBe(sessionError);
+
+    expect(disposeMcp).toHaveBeenCalledOnce();
+    expect(disposeLsp).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes falsy failures while still attempting every disposal owner", async () => {
+    const disposeMcp = vi.fn(async () => await Promise.reject(null as unknown as Error));
+    const disposeLsp = vi.fn(async () => await Promise.reject(false as unknown as Error));
+
+    const rejection = cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+      session: {
+        dispose: () => throwUnknown(undefined),
+      },
+      sessionManager: {},
+      sessionLock: { release: vi.fn(async () => {}) },
+      bundleMcpRuntime: { dispose: disposeMcp },
+      bundleLspRuntime: { dispose: disposeLsp },
+    });
+
+    await expect(rejection).rejects.toMatchObject({
+      message: "Non-Error cleanup rejection",
+      cause: undefined,
+    });
+    expect(disposeMcp).toHaveBeenCalledOnce();
+    expect(disposeLsp).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, -0, 0n, Number.NaN, "", Symbol("cleanup"), { code: "E_CLEANUP" }])(
+    "normalizes a non-Error runtime rejection %#",
+    async (reason) => {
+      await expect(
+        cleanupEmbeddedAttemptResources({
+          flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+          sessionManager: {},
+          sessionLock: { release: vi.fn(async () => {}) },
+          bundleMcpRuntime: {
+            dispose: async () => await Promise.reject(reason as unknown as Error),
+          },
+        }),
+      ).rejects.toBeInstanceOf(Error);
+    },
+  );
+
   it("does not wait for the settle promise on non-aborted cleanup", async () => {
     const release = vi.fn(async () => {});
 
@@ -160,7 +281,9 @@ describe("cleanupEmbeddedAttemptResources", () => {
 
   it("still disposes resources when lock release fails", async () => {
     const releaseError = new Error("release failed");
-    const dispose = vi.fn();
+    const dispose = vi.fn(() => {
+      throw new Error("session cleanup failed");
+    });
     const runtimeDispose = vi.fn(async () => {});
 
     await expect(

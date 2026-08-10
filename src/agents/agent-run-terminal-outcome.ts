@@ -5,6 +5,10 @@ import {
   isAbandonedLivenessState,
   isBlockedLivenessState,
 } from "../shared/agent-liveness.js";
+import type {
+  AgentRunAttemptFailureSource,
+  LegacyAgentRunAttemptTerminalInput,
+} from "./agent-run-terminal-outcome.types.js";
 import {
   AGENT_RUN_ABORTED_ERROR,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -18,19 +22,15 @@ import {
   type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
 
+export type { AgentRunAttemptFailureSource } from "./agent-run-terminal-outcome.types.js";
+
 /** Wait status reported by agent run terminal wait paths. */
 type AgentRunWaitStatus = "ok" | "error" | "timeout";
 
-export type AgentRunAttemptFailureSource =
-  | "prompt"
-  | "compaction"
-  | "precheck"
-  | "hook:before_agent_run";
-
-type AgentRunAttemptFailure = {
+export type AgentRunAttemptFailure = Readonly<{
   source: AgentRunAttemptFailureSource;
   error: unknown;
-};
+}>;
 
 type AgentRunAttemptTimeoutObservation = "compaction" | "tool_execution";
 type AgentRunAttemptTimeoutSource = "runtime" | "run_budget" | "idle" | "external";
@@ -64,18 +64,6 @@ export type AgentRunAttemptTerminal =
       error: unknown;
       timeoutObservation?: AgentRunAttemptTimeoutObservation;
     };
-
-type LegacyAgentRunAttemptTerminalInput = {
-  aborted?: boolean;
-  externalAbort?: boolean;
-  idleTimedOut?: boolean;
-  promptError?: unknown;
-  promptErrorSource?: AgentRunAttemptFailureSource | null;
-  timedOut?: boolean;
-  timedOutByRunBudget?: boolean;
-  timedOutDuringCompaction?: boolean;
-  timedOutDuringToolExecution?: boolean;
-};
 
 // Timeout owns mechanical abort/failure observations; within a timeout, the
 // latest concrete phase/source can only refine toward stronger attribution.
@@ -330,6 +318,10 @@ export function mergeAgentRunAttemptTerminal(
 export function normalizeAgentRunAttemptTerminal(
   input: LegacyAgentRunAttemptTerminalInput,
 ): AgentRunAttemptTerminal {
+  const promptErrorPresent = input.promptError !== null && input.promptError !== undefined;
+  if (input.failed === false && (promptErrorPresent || input.promptErrorSource != null)) {
+    throw new Error("Contradictory agent run prompt failure fields");
+  }
   let terminal: AgentRunAttemptTerminal = { kind: "ok" };
   if (input.aborted || input.externalAbort) {
     terminal = mergeAgentRunAttemptTerminal(terminal, {
@@ -361,7 +353,7 @@ export function normalizeAgentRunAttemptTerminal(
       source: "observation",
     });
   }
-  if (input.promptError !== null && input.promptError !== undefined) {
+  if (input.failed === true || promptErrorPresent || input.promptErrorSource != null) {
     terminal = setAgentRunAttemptTerminalFailure(terminal, {
       error: input.promptError,
       source: input.promptErrorSource ?? "prompt",
@@ -373,6 +365,7 @@ export function normalizeAgentRunAttemptTerminal(
 /** Projects the closed attempt terminal into legacy event/meta fields. */
 export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal) {
   const failure = getAgentRunAttemptFailure(terminal);
+  const promptFailure = failure ? Object.freeze({ ...failure }) : null;
   const externalAbort =
     (terminal.kind === "aborted" || terminal.kind === "timeout") && terminal.source === "external";
   const timedOut = terminal.kind === "timeout" && terminal.source !== "observation";
@@ -384,11 +377,12 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
         terminal.aborted === true),
     cleanupYieldAborted: terminal.kind === "aborted" && terminal.source === "yield_cleanup",
     externalAbort,
-    failed: failure !== undefined,
+    failed: promptFailure !== null,
     idleTimedOut: terminal.kind === "timeout" && terminal.source === "idle",
     interrupted: externalAbort || timedOut,
-    promptError: failure ? failure.error : null,
-    promptErrorSource: failure?.source ?? null,
+    promptError: promptFailure?.error ?? null,
+    promptErrorSource: promptFailure?.source ?? null,
+    promptFailure,
     timedOut,
     timedOutByRunBudget: terminal.kind === "timeout" && terminal.source === "run_budget",
     timedOutDuringCompaction:
@@ -661,7 +655,7 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
     input.promptTimeoutOutcome?.timeoutPhase ?? (timedOutDuringPrompt ? "provider" : undefined);
   const providerStarted =
     input.promptTimeoutOutcome?.providerStarted ?? (timedOutDuringPrompt ? true : undefined);
-  const restartAborted = hasRestartAbortReason(projected.promptError);
+  const restartAborted = hasRestartAbortReason(projected.promptFailure?.error);
   const assistantStopReason =
     projected.promptErrorSource !== null ? undefined : input.assistant?.stopReason;
   const unattributedAttemptTimeout =
@@ -683,7 +677,9 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   return buildAgentRunTerminalOutcome({
     status,
     error:
-      projected.promptErrorSource !== null ? projected.promptError : input.assistant?.errorMessage,
+      projected.promptErrorSource !== null
+        ? projected.promptFailure?.error
+        : input.assistant?.errorMessage,
     stopReason,
     livenessState: input.promptTimeoutOutcome?.livenessState,
     timeoutPhase,

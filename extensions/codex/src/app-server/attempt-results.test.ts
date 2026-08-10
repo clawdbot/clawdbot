@@ -2,11 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
+  buildCodexTurnStartFailureResult,
   collectTerminalAssistantText,
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
 function createResult(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
   return {
@@ -35,6 +36,24 @@ function createResult(overrides: Partial<EmbeddedRunAttemptResult> = {}): Embedd
 }
 
 describe("Codex app-server attempt results", () => {
+  it.each([false, 0, "", null, undefined])(
+    "preserves explicit turn-start failure payload %#",
+    (promptError) => {
+      const result = buildCodexTurnStartFailureResult({
+        params: { sessionId: "session-1" } as never,
+        message: "turn start failed",
+        promptError,
+        messagesSnapshot: [],
+        systemPromptReport: {} as never,
+      });
+
+      expect(attemptTerminal.project(result.terminal)).toMatchObject({
+        failed: true,
+        promptFailure: { source: "prompt", error: promptError },
+      });
+    },
+  );
+
   it("formats terminal assistant text", () => {
     expect(
       collectTerminalAssistantText(

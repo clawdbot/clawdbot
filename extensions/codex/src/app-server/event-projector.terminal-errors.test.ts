@@ -198,6 +198,26 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it.each([false, 0, "", null, undefined])(
+    "preserves explicit projector failure presence through missing-tool synthesis for payload %#",
+    async (promptError) => {
+      const projector = await createProjector();
+      Object.assign(projector as unknown as Record<string, unknown>, {
+        promptError,
+        promptErrorSource: "prompt",
+      });
+      await projector.handleNotification(pendingCommandStarted("cmd-existing-failure"));
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+
+      expect(readAttemptTerminal(result)).toMatchObject({
+        failed: true,
+        promptFailure: { source: "prompt", error: promptError },
+      });
+      expect(result.agentHarnessResultClassification).toBeUndefined();
+    },
+  );
+
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const projector = await createProjector(undefined, {

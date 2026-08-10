@@ -101,6 +101,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   const {
     aborted,
     externalAbort,
+    failed: promptFailed,
     promptError,
     promptErrorSource,
     timedOut,
@@ -215,6 +216,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     ...commonRecoveryInput,
     aborted,
     signalOwnedInterruption,
+    promptFailed,
     promptError,
     assistantErrorText,
     assistantOverflowCandidate,
@@ -281,7 +283,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
   );
   let shouldSurfaceCodexCompletionTimeout = false;
-  if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
+  if (promptFailed && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
     const recoveryRetry = resolveCodexAppServerRecoveryRetry({
       attempt,
       retryAvailable: input.codexAppServerRecoveryRetryAvailable,
@@ -307,7 +309,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     }
   }
   if (
-    promptError &&
+    promptFailed &&
     !terminalInterrupted &&
     promptErrorSource !== "compaction" &&
     !hasRecoverableCodexAppServerTimeoutOutcome &&

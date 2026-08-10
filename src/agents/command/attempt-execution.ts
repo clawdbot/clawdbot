@@ -531,6 +531,7 @@ export async function persistCliTurnTranscript(params: {
 
 export function runAgentAttempt(params: {
   commandRunAccounting?: AgentCommandRunCandidateAccounting;
+  onAgentTerminal?: () => void;
   codeModeActivityOwner: CodeModeActivityOwner;
   providerOverride: string;
   modelOverride: string;
@@ -1284,6 +1285,7 @@ export function runAgentAttempt(params: {
     onModelCallInstrumentationInstalled:
       params.commandRunAccounting?.markModelCallInstrumentationInstalled,
     onAttemptObserved: params.commandRunAccounting?.observeEmbeddedAttempt,
+    onAgentTerminal: params.onAgentTerminal,
     onRuntimeSelected: params.commandRunAccounting?.selectRuntime,
     onOpaqueWork: params.commandRunAccounting?.markOpaqueWork,
   });

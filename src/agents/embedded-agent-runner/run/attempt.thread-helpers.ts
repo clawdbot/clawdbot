@@ -109,12 +109,12 @@ export function appendAttemptCacheTtlIfNeeded(params: {
  */
 export function shouldPersistCompletedBootstrapTurn(params: {
   shouldRecordCompletedBootstrapTurn: boolean;
-  promptError: unknown;
+  promptFailed: boolean;
   aborted: boolean;
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
 }): boolean {
-  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
+  if (!params.shouldRecordCompletedBootstrapTurn || params.promptFailed || params.aborted) {
     return false;
   }
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {

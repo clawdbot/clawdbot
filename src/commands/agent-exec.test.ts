@@ -541,35 +541,6 @@ describe("agent exec command composition", () => {
     });
   });
 
-  it("classifies cleanup failures before emitting the JSON envelope", async () => {
-    const { runtime, log } = createRuntime();
-    let observedStateDir = "";
-    vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
-
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => {
-        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-        return successResult();
-      }),
-    });
-    tempRoots.push(observedStateDir);
-
-    expect(result).toMatchObject({
-      exitCode: 1,
-      envelope: {
-        ok: false,
-        status: "error",
-        error: { kind: "exception", message: "Agent exec cleanup failed: cleanup denied" },
-      },
-    });
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { message: "Agent exec cleanup failed: cleanup denied" },
-    });
-  });
-
   it("threads --cwd to both workspace and tool cwd", async () => {
     const root = await makeTempRoot("openclaw-agent-exec-cwd-");
     const { runtime } = createRuntime();

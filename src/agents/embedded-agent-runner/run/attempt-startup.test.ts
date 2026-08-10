@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -34,11 +39,21 @@ vi.mock("../sandbox-skills.js", () => ({
   mapSandboxSkillUsagePaths: vi.fn(() => []),
 }));
 
-import { prepareEmbeddedAttemptSkills } from "./attempt-startup.js";
+import {
+  prepareEmbeddedAttemptSkills,
+  startEmbeddedAttemptDiagnostics,
+} from "./attempt-startup.js";
+
+function flushDiagnosticEvents(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
 
 describe("prepareEmbeddedAttemptSkills", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticEventsForTest();
   });
 
   it("restores environment overrides when later preparation fails", () => {
@@ -71,5 +86,70 @@ describe("prepareEmbeddedAttemptSkills", () => {
     expect(prepared.skillsSnapshotForRun).toBeUndefined();
     expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
     expect(mocks.mapSandboxSkillEntriesForPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe("startEmbeddedAttemptDiagnostics", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
+  it.each([false, 0, "", null, undefined])(
+    "categorizes explicit failed completion payload %#",
+    async (error) => {
+      const events: DiagnosticEventPayload[] = [];
+      const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+        if (event.type === "run.completed") {
+          events.push(event);
+        }
+      });
+      try {
+        const diagnostics = startEmbeddedAttemptDiagnostics({
+          runId: "run-1",
+          sessionId: "session-1",
+          provider: "openai",
+          modelId: "gpt-test",
+        } as EmbeddedRunAttemptParams);
+        diagnostics.emitCompleted("error", error);
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: "run.completed",
+          outcome: "error",
+          errorCategory: error === null ? "null" : typeof error,
+        }),
+      ]);
+    },
+  );
+
+  it("does not categorize a successful completion", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "run.completed") {
+        events.push(event);
+      }
+    });
+    try {
+      const diagnostics = startEmbeddedAttemptDiagnostics({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        modelId: "gpt-test",
+      } as EmbeddedRunAttemptParams);
+      diagnostics.emitCompleted("completed");
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([
+      expect.not.objectContaining({
+        errorCategory: expect.anything(),
+      }),
+    ]);
   });
 });

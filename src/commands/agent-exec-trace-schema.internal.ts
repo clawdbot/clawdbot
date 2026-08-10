@@ -116,8 +116,7 @@ function deriveMetrics(source: AgentExecTraceSource): MetricSet {
       ? { state: "exact", value: receipt.modelFacingApiCalls }
       : receipt
         ? {
-            state: "lower_bound",
-            value: receipt.modelFacingApiCalls,
+            state: "unavailable",
             reasons: normalizeReasons([
               "invocation_receipt_incomplete",
               ...receipt.incompleteReasons,
@@ -283,6 +282,9 @@ function deriveAudit(source: AgentExecTraceSource, metrics: MetricSet): AgentExe
     }
     if (!source.invocationReceipt.complete) {
       reasons.add("invocation_receipt_incomplete");
+      for (const reason of source.invocationReceipt.incompleteReasons) {
+        reasons.add(reason);
+      }
     }
     if (source.invocationReceipt.truncated) {
       reasons.add("invocation_receipt_truncated");
@@ -367,16 +369,17 @@ function normalizeSource(value: unknown): AgentExecTraceSource | undefined {
     return undefined;
   }
   const { sha256, ...rawContents } = value;
-  const contents = parseSourceContents(rawContents);
-  if (
-    !contents ||
-    typeof sha256 !== "string" ||
-    !SHA256_PATTERN.test(sha256) ||
-    sha256 !== digest("openclaw.agent-exec.trace-source.v2", contents)
-  ) {
+  if (sha256 !== digest("openclaw.agent-exec.trace-source.v2", rawContents)) {
     return undefined;
   }
-  return { ...contents, sha256 };
+  const contents = parseSourceContents(rawContents);
+  if (!contents || typeof sha256 !== "string" || !SHA256_PATTERN.test(sha256)) {
+    return undefined;
+  }
+  return {
+    ...contents,
+    sha256: digest("openclaw.agent-exec.trace-source.v2", contents),
+  };
 }
 
 function parseAudit(value: unknown): AgentExecTrace["audit"] | undefined {
@@ -408,6 +411,15 @@ function normalizeAgentExecTraceData(value: unknown): AgentExecTrace | undefined
   ) {
     return undefined;
   }
+  const rawContents = {
+    schemaVersion: TRACE_SCHEMA_VERSION,
+    source: value.source,
+    projection: value.projection,
+    audit: value.audit,
+  };
+  if (value.sha256 !== digest("openclaw.agent-exec.trace.v2", rawContents)) {
+    return undefined;
+  }
   const source = normalizeSource(value.source);
   const metrics = parseMetrics(value.projection.metrics);
   const audit = parseAudit(value.audit);
@@ -416,22 +428,24 @@ function normalizeAgentExecTraceData(value: unknown): AgentExecTrace | undefined
   }
   const derivedMetrics = deriveMetrics(source);
   const derivedAudit = deriveAudit(source, derivedMetrics);
+  const sourceWasDowngraded = canonicalJson(source) !== canonicalJson(value.source);
   if (
-    canonicalJson(metrics) !== canonicalJson(derivedMetrics) ||
-    canonicalJson(audit) !== canonicalJson(derivedAudit)
+    !sourceWasDowngraded &&
+    (canonicalJson(metrics) !== canonicalJson(derivedMetrics) ||
+      canonicalJson(audit) !== canonicalJson(derivedAudit))
   ) {
     return undefined;
   }
   const contents = {
     schemaVersion: TRACE_SCHEMA_VERSION,
     source,
-    projection: { metrics },
-    audit,
+    projection: { metrics: sourceWasDowngraded ? derivedMetrics : metrics },
+    audit: sourceWasDowngraded ? derivedAudit : audit,
   };
-  if (value.sha256 !== digest("openclaw.agent-exec.trace.v2", contents)) {
-    return undefined;
-  }
-  return { ...contents, sha256: value.sha256 };
+  return {
+    ...contents,
+    sha256: digest("openclaw.agent-exec.trace.v2", contents),
+  };
 }
 
 export function normalizeAgentExecTrace(value: unknown): AgentExecTrace | undefined {

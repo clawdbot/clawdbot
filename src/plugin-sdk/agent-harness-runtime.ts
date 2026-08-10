@@ -546,6 +546,7 @@ export type AgentHarnessTerminalOutcomeInput = {
   assistantTexts: readonly string[];
   reasoningText?: string | null;
   planText?: string | null;
+  promptFailed?: boolean;
   promptError?: unknown;
   turnCompleted: boolean;
 };
@@ -568,6 +569,7 @@ export function classifyAgentHarnessTerminalOutcome(
 ): AgentHarnessTerminalOutcomeClassification | undefined {
   if (
     !params.turnCompleted ||
+    params.promptFailed === true ||
     (params.promptError !== undefined && params.promptError !== null) ||
     hasVisibleAssistantText(params.assistantTexts)
   ) {

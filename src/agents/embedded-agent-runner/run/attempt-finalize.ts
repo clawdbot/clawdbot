@@ -50,8 +50,8 @@ export function finalizeEmbeddedAttempt(
     lastAssistantStopReason: result.lastAssistant?.stopReason,
     hasTerminalOutput: params.hasTerminalOutput,
   });
-  const promptError = terminalState.promptError
-    ? formatErrorMessage(terminalState.promptError)
+  const promptError = terminalState.failed
+    ? formatErrorMessage(terminalState.promptFailure?.error)
     : undefined;
 
   trajectoryRecorder?.recordEvent("model.completed", {

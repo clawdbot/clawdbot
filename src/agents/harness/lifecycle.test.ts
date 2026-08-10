@@ -15,6 +15,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { projectAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { AgentHarnessPreflightError, resolveAgentHarnessPreflightOwner } from "./errors.js";
@@ -485,6 +486,7 @@ describe("AgentHarness lifecycle runner", () => {
     expect(runCompleted?.trace).toEqual(runStarted?.trace);
     expect(runCompleted?.outcome).toBe("completed");
     expect(runCompleted?.channel).toBe("discord-voice");
+    expect(runCompleted).not.toHaveProperty("errorCategory");
     expect(harnessCompleted?.trace).toEqual(harnessTrace);
     expect(harnessCompleted?.channel).toBe("discord-voice");
     expect(attemptResult?.diagnosticTrace).toEqual(harnessTrace);
@@ -654,6 +656,53 @@ describe("AgentHarness lifecycle runner", () => {
     expect(outcome.agentHarnessResultClassification).toBe("empty");
     expect(outcome.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "preserves explicit legacy failure presence for payload %#",
+    async (promptError) => {
+      const params = createAttemptParams();
+      const harnessTrace = createDiagnosticTrace();
+      const { terminal: _terminal, ...base } = createAttemptResult();
+      const result: AgentHarnessAttemptResult = {
+        ...base,
+        aborted: false,
+        externalAbort: false,
+        failed: true,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        promptError,
+        promptErrorSource: "prompt",
+      };
+      const harness: AgentHarness = {
+        id: "legacy",
+        label: "Legacy",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(async () => structuredClone(result)),
+      };
+      const diagnostics = captureDiagnosticEvents((event) => event.type === "run.completed");
+
+      let outcome: Awaited<ReturnType<typeof runAgentHarnessLifecycleAttempt>>;
+      try {
+        outcome = await runWithDiagnosticTraceContext(harnessTrace, () =>
+          runAgentHarnessLifecycleAttempt(harness, params),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        diagnostics.unsubscribe();
+      }
+
+      expect(projectAgentRunAttemptTerminal(outcome.terminal)).toMatchObject({
+        failed: true,
+        promptFailure: { source: "prompt", error: promptError },
+      });
+      expect(diagnostics.events[0]?.event).toMatchObject({
+        type: "run.completed",
+        outcome: "error",
+        errorCategory: promptError === null ? "null" : typeof promptError,
+      });
+    },
+  );
 
   it("preserves harness-supplied classification when no classify hook is registered", async () => {
     const params = createAttemptParams();

@@ -18,6 +18,23 @@ type ToolResultFlushManager = {
   clearPendingToolResults?: (() => void) | undefined;
 };
 
+type DisposableRuntime = { dispose(): Promise<void> | void };
+
+export async function settleEmbeddedBundleRuntimeDisposals(params: {
+  mcp?: DisposableRuntime;
+  lsp?: DisposableRuntime;
+}): Promise<PromiseSettledResult<void>[]> {
+  // Start both owners before awaiting either so a slow teardown cannot prevent
+  // its sibling from releasing resources.
+  return Promise.allSettled(
+    [params.mcp, params.lsp].map((runtime) =>
+      Promise.resolve().then(async () => {
+        await runtime?.dispose();
+      }),
+    ),
+  );
+}
+
 async function waitForEmbeddedAbortSettle(params: {
   promise: Promise<unknown> | null | undefined;
   runId: string;
@@ -88,7 +105,12 @@ export async function cleanupEmbeddedAttemptResources(params: {
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
-  let sessionLockReleaseError: unknown;
+  let firstCleanupError: Error | undefined;
+  const captureCleanupError = (error: unknown) => {
+    if (firstCleanupError === undefined) {
+      firstCleanupError = toErrorObject(error, "Non-Error cleanup rejection");
+    }
+  };
   try {
     try {
       params.removeToolResultContextGuard?.();
@@ -122,27 +144,26 @@ export async function cleanupEmbeddedAttemptResources(params: {
       // recover even if runtime disposal stalls or throws.
       await params.sessionLock.release();
     } catch (err) {
-      sessionLockReleaseError = err;
+      captureCleanupError(err);
     }
   }
 
   try {
     params.session?.dispose();
-  } catch {
-    /* best-effort */
+  } catch (error) {
+    captureCleanupError(error);
   }
-  try {
-    await params.bundleMcpRuntime?.dispose();
-  } catch {
-    /* best-effort */
-  }
-  try {
-    await params.bundleLspRuntime?.dispose();
-  } catch {
-    /* best-effort */
+  const runtimeResults = await settleEmbeddedBundleRuntimeDisposals({
+    mcp: params.bundleMcpRuntime,
+    lsp: params.bundleLspRuntime,
+  });
+  for (const result of runtimeResults) {
+    if (result.status === "rejected") {
+      captureCleanupError(result.reason);
+    }
   }
 
-  if (sessionLockReleaseError) {
-    throw toErrorObject(sessionLockReleaseError, "Non-Error thrown");
+  if (firstCleanupError !== undefined) {
+    throw firstCleanupError;
   }
 }

@@ -49,7 +49,6 @@ function createTimeoutAbortReason(): Error {
 /** Owns the external AbortSignal listener and its handoff to the live session. */
 export function createEmbeddedAttemptExternalAbortController(input: {
   abortSignal?: AbortSignal;
-  cleanupAfterEarlyAbort: () => Promise<void>;
   runAbortController: AbortController;
   runId: string;
   state: EmbeddedAttemptAbortStatePort;
@@ -62,7 +61,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     isPendingOrRetrying: () => boolean;
   }) => void;
   setRunAbort: (abort: RunAbort) => void;
-  throwIfFiredAfterPrepCleanup: () => Promise<void>;
+  throwIfFired: () => void;
 } {
   let abortActiveSession: ActiveSessionAbort | undefined;
   let abortRun: RunAbort | undefined;
@@ -137,7 +136,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     setRunAbort: (abort) => {
       abortRun = abort;
     },
-    throwIfFiredAfterPrepCleanup: async () => {
+    throwIfFired: () => {
       const signal = input.abortSignal;
       if (!signal?.aborted) {
         return;
@@ -146,7 +145,6 @@ export function createEmbeddedAttemptExternalAbortController(input: {
       input.state.markAborted();
       input.state.markExternalAbort();
       input.state.setPromptError(abortError);
-      await input.cleanupAfterEarlyAbort();
       throw abortError;
     },
   };

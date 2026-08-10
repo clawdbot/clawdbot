@@ -90,6 +90,19 @@ function makeToolRuntime(
   };
 }
 
+function makeProjectionFailureTool(error: unknown): McpCatalogTool {
+  return {
+    serverName: "bundleProbe",
+    safeServerName: "bundleProbe",
+    toolName: "bundle_probe",
+    description: "Bundle probe",
+    get inputSchema(): never {
+      throw error;
+    },
+    fallbackDescription: "Bundle probe",
+  };
+}
+
 describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
@@ -253,6 +266,102 @@ describe("createBundleMcpToolRuntime", () => {
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
     });
+  });
+
+  it("releases the run lease without disposing a session runtime when projection fails", async () => {
+    const projectionError = new Error("tool projection failed");
+    let activeLeases = 0;
+    let runtimeDisposeCalls = 0;
+    const sessionRuntime = makeToolRuntime({
+      tools: [makeProjectionFailureTool(projectionError)],
+    });
+    sessionRuntime.acquireLease = () => {
+      activeLeases += 1;
+      return () => {
+        activeLeases -= 1;
+      };
+    };
+    sessionRuntime.dispose = async () => {
+      runtimeDisposeCalls += 1;
+    };
+
+    let rejection: unknown;
+    try {
+      await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBe(projectionError);
+    expect(activeLeases).toBe(0);
+    expect(runtimeDisposeCalls).toBe(0);
+  });
+
+  it("preserves the projection failure when one-shot runtime cleanup rejects", async () => {
+    const projectionError = new Error("tool projection failed");
+    const cleanupError = new Error("runtime cleanup failed");
+    let activeLeases = 0;
+    let cleanupCalls = 0;
+    const runtime = makeToolRuntime({
+      tools: [makeProjectionFailureTool(projectionError)],
+    });
+    runtime.acquireLease = () => {
+      activeLeases += 1;
+      return () => {
+        activeLeases -= 1;
+      };
+    };
+
+    let rejection: unknown;
+    try {
+      await materializeBundleMcpToolsForRun({
+        runtime,
+        disposeRuntime: async () => {
+          cleanupCalls += 1;
+          throw cleanupError;
+        },
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBe(projectionError);
+    expect(activeLeases).toBe(0);
+    expect(cleanupCalls).toBe(1);
+  });
+
+  it("rolls back a one-shot runtime exactly once when projection fails", async () => {
+    const projectionError = new Error("tool projection failed");
+    let activeLeases = 0;
+    let runtimeDisposeCalls = 0;
+
+    let rejection: unknown;
+    try {
+      await createBundleMcpToolRuntime({
+        workspaceDir: "/workspace",
+        createRuntime: () => {
+          const runtime = makeToolRuntime({
+            tools: [makeProjectionFailureTool(projectionError)],
+          });
+          runtime.acquireLease = () => {
+            activeLeases += 1;
+            return () => {
+              activeLeases -= 1;
+            };
+          };
+          runtime.dispose = async () => {
+            runtimeDisposeCalls += 1;
+          };
+          return runtime;
+        },
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBe(projectionError);
+    expect(activeLeases).toBe(0);
+    expect(runtimeDisposeCalls).toBe(1);
   });
 
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {

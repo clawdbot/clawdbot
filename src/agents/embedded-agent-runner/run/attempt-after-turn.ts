@@ -45,6 +45,7 @@ type CompleteEmbeddedAttemptAfterTurnInput = {
   sessionLockController: AttemptSessionLockController;
   withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
   state: {
+    promptFailed: boolean;
     promptError: unknown;
     yieldAborted: boolean;
     sessionIdUsed: string;
@@ -107,7 +108,7 @@ export async function completeEmbeddedAttemptAfterTurn(
     }) => {
       await finalizeAttemptContextEngineTurn({
         contextEngine: activeContextEngine,
-        promptError: Boolean(state.promptError),
+        promptError: state.promptFailed,
         aborted: lifecycleState.aborted,
         yieldAborted: state.yieldAborted,
         sessionIdUsed,
@@ -163,7 +164,7 @@ export async function completeEmbeddedAttemptAfterTurn(
           sessionKey: attempt.sessionKey,
           sessionTarget: attempt.sessionTarget,
           sessionFile: attempt.sessionFile,
-          promptError: Boolean(state.promptError),
+          promptError: state.promptFailed,
           aborted: lifecycleState.aborted,
           yieldAborted: state.yieldAborted,
           tokenBudget: attempt.contextTokenBudget,
@@ -195,7 +196,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       if (
         shouldPersistCompletedBootstrapTurn({
           shouldRecordCompletedBootstrapTurn: runtime.shouldRecordCompletedBootstrapTurn,
-          promptError: state.promptError,
+          promptFailed: state.promptFailed,
           aborted: lifecycleState.aborted,
           timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
           compactionOccurredThisAttempt: state.compactionOccurredThisAttempt,
@@ -219,11 +220,14 @@ export async function completeEmbeddedAttemptAfterTurn(
     messages: state.messagesSnapshot,
     note: lifecycleAfterTurn.timedOutDuringCompaction
       ? "compaction timeout"
-      : state.promptError
+      : state.promptFailed
         ? "prompt error"
         : undefined,
   });
-  runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
+  runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, {
+    failed: state.promptFailed,
+    error: state.promptError,
+  });
 
   if (
     attempt.operation !== "settled-tool-finalization" &&
@@ -234,13 +238,13 @@ export async function completeEmbeddedAttemptAfterTurn(
     // stamp an AbortError into promptError, and surfacing it as `error` would
     // make agent_end consumers treat a user abort as an errored completion.
     const agentEndError =
-      state.promptError && !lifecycleForAgentEnd.aborted
+      state.promptFailed && !lifecycleForAgentEnd.aborted
         ? formatErrorMessage(state.promptError)
         : undefined;
     runAgentEndSideEffects({
       event: {
         messages: state.messagesSnapshot,
-        success: !lifecycleForAgentEnd.aborted && !state.promptError,
+        success: !lifecycleForAgentEnd.aborted && !state.promptFailed,
         error: agentEndError,
         durationMs: Date.now() - runtime.promptStartedAt,
       },

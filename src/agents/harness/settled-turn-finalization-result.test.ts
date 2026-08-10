@@ -153,15 +153,18 @@ describe("assertSettledTurnFinalizationResult", () => {
     });
   });
 
-  it("rejects a failed full attempt even when it contains visible assistant text", () => {
-    expect(() =>
-      projectSettledTurnFinalizationAttemptResult(
-        successfulAttempt({
-          terminal: { kind: "failed", source: "prompt", error: new Error("provider failed") },
-        }),
-      ),
-    ).toThrow("did not complete successfully");
-  });
+  it.each([false, 0, "", null, undefined])(
+    "rejects a failed full attempt with payload %# even when it contains visible assistant text",
+    (error) => {
+      expect(() =>
+        projectSettledTurnFinalizationAttemptResult(
+          successfulAttempt({
+            terminal: { kind: "failed", source: "prompt", error },
+          }),
+        ),
+      ).toThrow("did not complete successfully");
+    },
+  );
 
   it("rejects a full attempt that compacted before producing its answer", () => {
     expect(() =>

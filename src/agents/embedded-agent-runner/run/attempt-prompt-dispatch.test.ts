@@ -48,6 +48,7 @@ function createInput(overrides: Partial<DispatchInput> = {}): DispatchInput {
     state: {
       contextBudgetStatus: undefined,
       preflightRecovery: undefined,
+      promptFailed: false,
       promptError: null,
       promptErrorSource: null,
       skipPromptSubmission: false,
@@ -135,6 +136,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     hoisted.prepareEmbeddedAttemptPromptPreflight.mockImplementationOnce(
       async (input: PreflightMockInput) => ({
         ...input.state,
+        promptFailed: true,
         promptError,
         promptErrorSource: "precheck",
       }),
@@ -143,7 +145,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     const result = await dispatchEmbeddedAttemptPrompt(createInput({ releaseLeasedSteering }));
 
     expect(result.promptError).toBe(promptError);
-    expect(releaseLeasedSteering).toHaveBeenCalledWith(promptError);
+    expect(releaseLeasedSteering).toHaveBeenCalledWith(promptError, true);
     expect(hoisted.submitEmbeddedAttemptPrompt).not.toHaveBeenCalled();
   });
 
@@ -153,6 +155,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     const admittedState = {
       contextBudgetStatus: undefined,
       preflightRecovery: undefined,
+      promptFailed: true,
       promptError,
       promptErrorSource: "precheck" as const,
       skipPromptSubmission: false,

@@ -49,6 +49,7 @@ export async function recoverEmbeddedRunOverflow(
   input: EmbeddedRunCompactionRecoveryInput & {
     aborted: boolean;
     signalOwnedInterruption: boolean;
+    promptFailed: boolean;
     promptError: unknown;
     assistantErrorText?: string;
     assistantOverflowCandidate?: AssistantMessage;
@@ -61,7 +62,7 @@ export async function recoverEmbeddedRunOverflow(
   const contextOverflowError =
     !input.aborted && !input.signalOwnedInterruption
       ? (() => {
-          if (input.promptError) {
+          if (input.promptFailed) {
             const errorText = formatErrorMessage(input.promptError);
             if (isLikelyContextOverflowError(errorText)) {
               return { text: errorText, source: "promptError" as const };

@@ -28,7 +28,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   >;
   externalAbortController: {
     arm: () => void;
-    throwIfFiredAfterPrepCleanup: () => Promise<void>;
+    throwIfFired: () => void;
   };
   getSessionManager: () => ReturnType<typeof guardSessionManager> | undefined;
   onSessionFileOwnerAcquired: (owner: EmbeddedAttemptSessionFileOwner) => void;
@@ -55,7 +55,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
     sessionTarget: attempt.sessionTarget,
   });
 
-  await externalAbortController.throwIfFiredAfterPrepCleanup();
+  externalAbortController.throwIfFired();
   const sessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
     sessionFile: attempt.sessionFile,
     timeoutMs: sessionWriteLockOptions.maxHoldMs,
@@ -109,7 +109,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   externalAbortController.arm();
   // The signal can fire while the eager lock is acquired. Recheck after arming
   // so a stopped run never reaches session creation or provider prompt.
-  await externalAbortController.throwIfFiredAfterPrepCleanup();
+  externalAbortController.throwIfFired();
 
   return {
     compactionTimeoutMs,

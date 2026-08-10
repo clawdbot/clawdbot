@@ -1,5 +1,7 @@
 /** Settles the provider stream and completes the post-turn lifecycle phase. */
+import { toErrorObject } from "../../../infra/errors.js";
 import { isRunnerAbortError } from "../abort.js";
+import { log } from "../logger.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
@@ -31,9 +33,11 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   getBeforeAgentFinalizeRevisionEntryId: () => string | undefined;
   getContextEngineAfterTurnCheckpoint: () => number | null;
   onSettleErrorState: (state: {
+    promptFailed: boolean;
     promptError: unknown;
     promptErrorSource: StreamSettleInput["state"]["promptErrorSource"];
   }) => void;
+  markTaskTerminal?: () => void;
   onSettled: (result: StreamSettleResult) => void;
   getState: () => FinalizePhaseState;
   settle: Omit<
@@ -66,7 +70,8 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
       rewoundBeforeAgentFinalizeRevision = true;
     });
   }
-  let settledStream: StreamSettleResult;
+  let settledStream: StreamSettleResult | undefined;
+  let primaryFailure: Error | undefined;
   try {
     if (input.repairedRejectedThinkingReplay && !rewoundBeforeAgentFinalizeRevision) {
       activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
@@ -87,6 +92,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
 
     const currentState = input.getState();
     const streamSettleState = {
+      promptFailed: currentState.promptFailed,
       promptError: currentState.promptError,
       promptErrorSource: currentState.promptErrorSource,
       yieldAborted: currentState.yieldAborted,
@@ -110,14 +116,35 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
       input.onSettleErrorState(streamSettleState);
       throw error;
     }
-  } finally {
-    if (rewoundBeforeAgentFinalizeRevision) {
+  } catch (error) {
+    primaryFailure = toErrorObject(error, "Non-Error stream settlement rejection");
+    input.markTaskTerminal?.();
+  }
+  let rewindFailure: Error | undefined;
+  if (rewoundBeforeAgentFinalizeRevision) {
+    try {
       await withOwnedSessionWriteLock(() => {
         // Settlement classifies the completed attempt from its original
         // in-memory messages. Later work always sees the rewound branch.
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       });
+    } catch (error) {
+      rewindFailure = toErrorObject(error, "Non-Error session rewind rejection");
     }
+  }
+  if (primaryFailure !== undefined) {
+    if (rewindFailure !== undefined) {
+      log.error(
+        `failed to restore rewound session branch after stream failure: runId=${input.attempt.runId} ${String(rewindFailure)}`,
+      );
+    }
+    throw primaryFailure;
+  }
+  if (rewindFailure !== undefined) {
+    throw rewindFailure;
+  }
+  if (settledStream === undefined) {
+    throw new Error(`stream settlement completed without a result: runId=${input.attempt.runId}`);
   }
   // Publish settled fields before after-turn hooks: those hooks may throw, and
   // outer teardown still needs the completed stream snapshot and usage state.
@@ -132,6 +159,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
     withOwnedSessionWriteLock,
     ...input.afterTurn,
     state: {
+      promptFailed: settledStream.promptFailed,
       promptError: settledStream.promptError,
       yieldAborted: afterSettleState.yieldAborted,
       sessionIdUsed: settledStream.sessionIdUsed,

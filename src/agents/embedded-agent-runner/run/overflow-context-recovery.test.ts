@@ -13,6 +13,25 @@ vi.mock("../tool-result-truncation.js", () => ({
 }));
 
 describe("recoverEmbeddedRunOverflow", () => {
+  it.each([false, 0, "", null, undefined])(
+    "does not inherit stale assistant overflow after explicit prompt failure %#",
+    async (promptError) => {
+      const { recoverEmbeddedRunOverflow } = await import("./overflow-context-recovery.js");
+
+      await expect(
+        recoverEmbeddedRunOverflow({
+          aborted: false,
+          signalOwnedInterruption: false,
+          promptFailed: true,
+          promptError,
+          assistantErrorText: "Context window exceeded",
+          contextTokenBudget: 200_000,
+          genericCompactionRecoveryAllowed: true,
+        } as never),
+      ).resolves.toEqual({ action: "none" });
+    },
+  );
+
   it("passes the frozen prompt projection into append-only fallback truncation", async () => {
     const { recoverEmbeddedRunOverflow } = await import("./overflow-context-recovery.js");
     const promptError = new Error("Context window exceeded for this request");
@@ -71,6 +90,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       genericCompactionRecoveryAllowed: true,
       aborted: false,
       signalOwnedInterruption: false,
+      promptFailed: true,
       promptError,
       attempt,
       toolResultPromptProjectionState: projectionState,

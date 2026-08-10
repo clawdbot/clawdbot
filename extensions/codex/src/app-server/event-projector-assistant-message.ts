@@ -17,6 +17,7 @@ export type AssistantMessageOptions = {
       }
     | undefined;
   aborted: boolean;
+  promptFailed: boolean;
   promptError: unknown;
 };
 
@@ -66,8 +67,8 @@ export function createAssistantMessage(
     provider: attribution.provider,
     model: params.modelId,
     usage,
-    stopReason: options.aborted ? "aborted" : options.promptError ? "error" : "stop",
-    errorMessage: options.promptError ? formatErrorMessage(options.promptError) : undefined,
+    stopReason: options.aborted ? "aborted" : options.promptFailed ? "error" : "stop",
+    errorMessage: options.promptFailed ? formatErrorMessage(options.promptError) : undefined,
     timestamp: Date.now(),
   };
 }

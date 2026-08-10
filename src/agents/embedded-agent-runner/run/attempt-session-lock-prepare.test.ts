@@ -71,7 +71,7 @@ function createFixture(options?: { rejectPostArmFence?: Error }) {
     arm: vi.fn(() => {
       order.push("arm");
     }),
-    throwIfFiredAfterPrepCleanup: vi.fn(async () => {
+    throwIfFired: vi.fn(() => {
       fenceCount += 1;
       order.push(`abort-fence-${fenceCount}`);
       if (fenceCount === 2 && options?.rejectPostArmFence) {

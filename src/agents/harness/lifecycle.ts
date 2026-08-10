@@ -101,6 +101,7 @@ function normalizeAgentHarnessAttemptResult(
   const {
     aborted,
     externalAbort,
+    failed,
     idleTimedOut,
     promptError,
     promptErrorSource,
@@ -116,6 +117,7 @@ function normalizeAgentHarnessAttemptResult(
   const terminal = normalizeAgentRunAttemptTerminal({
     aborted,
     externalAbort,
+    failed,
     idleTimedOut,
     promptError,
     promptErrorSource,
@@ -174,7 +176,7 @@ function agentRunCompletion(result: AgentHarnessCanonicalAttemptResult): AgentRu
     return { outcome: "blocked", blockedBy: "before_agent_run" };
   }
   if (terminal.promptErrorSource !== null) {
-    return { outcome: "error", error: terminal.promptError };
+    return { outcome: "error", error: terminal.promptFailure?.error };
   }
   return { outcome: "completed" };
 }
@@ -229,7 +231,7 @@ function emitAgentHarnessRunCompleted(params: {
   // A classified (non-thrown) failure carries its error on result.terminal;
   // forward the message so the error span shows more than a bare category.
   const errorMessage =
-    outcome === "error" ? diagnosticErrorMessage(terminal.promptError) : undefined;
+    outcome === "error" ? diagnosticErrorMessage(terminal.promptFailure?.error) : undefined;
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "harness.run.completed",
@@ -288,7 +290,7 @@ export async function runAgentHarnessLifecycleAttempt(
       return;
     }
     agentRunCompleted = true;
-    const failed = completion.outcome === "error" && completion.error != null;
+    const failed = completion.outcome === "error";
     const errorMessage = failed ? diagnosticErrorMessage(completion.error) : undefined;
     emitTrustedDiagnosticEventWithPrivateData(
       {

@@ -79,7 +79,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
   }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  const { promptError } = projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const { failed: promptFailed } = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: input.runParams.trigger === "cron",
     payloadCount: input.payloadsWithToolMedia?.length ?? 0,
@@ -137,7 +137,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
-    promptError,
+    promptFailed,
     timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
@@ -198,7 +198,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
 }): Promise<TerminalResolution> {
   const { runParams, attempt, retryState } = input;
-  const { externalAbort, promptError } = projectAgentRunAttemptTerminal(attempt.terminal);
+  const { externalAbort, failed: promptFailed } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
@@ -277,7 +277,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     shouldRetryMissingAssistantTurn({
       payloadCount,
       aborted: terminalAborted,
-      promptError,
+      promptFailed,
       timedOut: terminalTimedOut,
       attempt,
     }) &&
@@ -319,7 +319,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&
-    !promptError &&
+    !promptFailed &&
     !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
     !input.replayState.hadPotentialSideEffects,
@@ -333,7 +333,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.attemptCompactionCount > 0 &&
     payloadCount === 0 &&
     !terminalInterrupted &&
-    !promptError &&
+    !promptFailed &&
     !attempt.clientToolCalls &&
     !attempt.yieldDetected &&
     !attempt.didSendDeterministicApprovalPrompt &&
@@ -406,7 +406,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     beforeFinalizeRevisionReason &&
     !settledTurnFinalizationAttempted &&
     !terminalInterrupted &&
-    !promptError &&
+    !promptFailed &&
     !attempt.clientToolCalls &&
     !attempt.yieldDetected &&
     !emptyAssistantReplyIsSilent

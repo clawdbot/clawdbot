@@ -723,15 +723,22 @@ describe("agentCommand compaction transcript rotation", () => {
       "message",
       expect.stringContaining("agent run aborted for restart"),
     );
-    expect(resolveAgentCommandRunAccounting(error)).toMatchObject({
+    const accounting = resolveAgentCommandRunAccounting(error);
+    expect(accounting?.agentDurationMs).toEqual(expect.any(Number));
+    expect(accounting?.agentDurationMs).toBeGreaterThanOrEqual(0);
+    expect(accounting).toMatchObject({
       coverage: {
+        agentTime: {
+          state: "partial",
+          reasons: ["not_observed", "unknown_runtime"],
+        },
         usage: {
           state: "unavailable",
           reasons: expect.arrayContaining(["post_turn_compaction"]),
         },
         providerTransport: {
           state: "unavailable",
-          reasons: expect.arrayContaining(["post_turn_compaction"]),
+          reasons: ["not_observed", "not_instrumented"],
         },
       },
     });
@@ -970,7 +977,7 @@ describe("agentCommand compaction transcript rotation", () => {
         },
         providerTransport: {
           state: "unavailable",
-          reasons: expect.arrayContaining(["post_turn_compaction"]),
+          reasons: ["not_observed", "not_instrumented"],
         },
       },
     });

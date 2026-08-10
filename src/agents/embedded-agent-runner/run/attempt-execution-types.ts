@@ -71,6 +71,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
   };
   state: EmbeddedAttemptExecutionState;
   lifecycle: {
+    markAgentTerminal?: () => void;
     readYieldState: () => {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;

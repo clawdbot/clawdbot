@@ -67,7 +67,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     const abortActiveSession = vi.fn(async () => {});
     const controller = createEmbeddedAttemptExternalAbortController({
       abortSignal: source.signal,
-      cleanupAfterEarlyAbort: vi.fn(async () => {}),
       runAbortController,
       runId: "run-external",
       state: state.port,
@@ -93,7 +92,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     mocks.countActiveToolExecutions.mockReturnValue(1);
     const controller = createEmbeddedAttemptExternalAbortController({
       abortSignal: source.signal,
-      cleanupAfterEarlyAbort: vi.fn(async () => {}),
       runAbortController,
       runId: "run-compaction-timeout",
       state: state.port,
@@ -121,7 +119,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     const abortRun = vi.fn();
     const controller = createEmbeddedAttemptExternalAbortController({
       abortSignal: source.signal,
-      cleanupAfterEarlyAbort: vi.fn(async () => {}),
       runAbortController: new AbortController(),
       runId: "run-live",
       state: state.port,
@@ -157,7 +154,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     };
     const controller = createEmbeddedAttemptExternalAbortController({
       abortSignal: source.signal,
-      cleanupAfterEarlyAbort: vi.fn(async () => {}),
       runAbortController,
       runId: attempt.runId,
       state: state.port,
@@ -209,23 +205,20 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     }
   });
 
-  it("cleans prepared resources before rejecting a pre-fired signal", async () => {
+  it("publishes abort state before synchronously rejecting a pre-fired signal", () => {
     const source = new AbortController();
     const reason = new Error("cancelled during setup");
     source.abort(reason);
-    const cleanupAfterEarlyAbort = vi.fn(async () => {});
     const state = createAbortState();
     const controller = createEmbeddedAttemptExternalAbortController({
       abortSignal: source.signal,
-      cleanupAfterEarlyAbort,
       runAbortController: new AbortController(),
       runId: "run-setup",
       state: state.port,
     });
 
-    await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
+    expect(() => controller.throwIfFired()).toThrow(reason);
 
-    expect(cleanupAfterEarlyAbort).toHaveBeenCalledTimes(1);
     expect(state.markAborted).toHaveBeenCalledTimes(1);
     expect(state.markExternalAbort).toHaveBeenCalledTimes(1);
     expect(state.setPromptError).toHaveBeenCalledWith(reason);

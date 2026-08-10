@@ -3,27 +3,31 @@ import type { CachedInputObservation } from "@openclaw/ai/internal/shared";
 
 export type ProviderTransportAccountingTotalKind = "exact" | "lower_bound";
 
+export const PROVIDER_TRANSPORT_ACCOUNTING_COVERAGE_REASONS = [
+  "not_observed",
+  "not_instrumented",
+  "transport_details_truncated",
+  "transport_totals_lower_bound",
+  "transport_outcomes_lower_bound",
+  "transport_identity_overflow",
+  "transport_unknown_route",
+  "transport_uncorrelated_event",
+  "transport_event_id_missing",
+  "transport_event_conflict",
+  "transport_invalid_fact",
+  "transport_invalid_ordinal",
+  "transport_invocation_relation_incomplete",
+  "transport_invocation_relation_invalid",
+  "transport_lifecycle_ambiguous",
+  "transport_observer_failed",
+  "transport_logical_call_incomplete",
+  "transport_terminal_unverified",
+  "transport_endpoint_authority_partial",
+  "transport_submission_authority_partial",
+] as const;
+
 export type ProviderTransportAccountingCoverageReason =
-  | "not_observed"
-  | "not_instrumented"
-  | "transport_details_truncated"
-  | "transport_totals_lower_bound"
-  | "transport_outcomes_lower_bound"
-  | "transport_identity_overflow"
-  | "transport_unknown_route"
-  | "transport_uncorrelated_event"
-  | "transport_event_id_missing"
-  | "transport_event_conflict"
-  | "transport_invalid_fact"
-  | "transport_invalid_ordinal"
-  | "transport_invocation_relation_incomplete"
-  | "transport_invocation_relation_invalid"
-  | "transport_lifecycle_ambiguous"
-  | "transport_observer_failed"
-  | "transport_logical_call_incomplete"
-  | "transport_terminal_unverified"
-  | "transport_endpoint_authority_partial"
-  | "transport_submission_authority_partial";
+  (typeof PROVIDER_TRANSPORT_ACCOUNTING_COVERAGE_REASONS)[number];
 
 export type ProviderTransportAccountingCoverage =
   | { state: "complete" }

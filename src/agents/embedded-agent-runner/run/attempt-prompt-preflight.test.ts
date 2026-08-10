@@ -150,6 +150,7 @@ describe("attempt prompt preflight", () => {
       state: {
         contextBudgetStatus: undefined,
         preflightRecovery: undefined,
+        promptFailed: false,
         promptError: null,
         promptErrorSource: null,
         skipPromptSubmission: false,
@@ -170,6 +171,7 @@ describe("attempt prompt preflight", () => {
     const state: Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"] = {
       contextBudgetStatus: undefined,
       preflightRecovery: undefined,
+      promptFailed: false,
       promptError: null,
       promptErrorSource: null,
       skipPromptSubmission: false,
@@ -220,6 +222,7 @@ describe("attempt prompt preflight", () => {
       state: {
         contextBudgetStatus: undefined,
         preflightRecovery: undefined,
+        promptFailed: false,
         promptError: null,
         promptErrorSource: null,
         skipPromptSubmission: false,

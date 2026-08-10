@@ -4,7 +4,6 @@ const mocks = vi.hoisted(() => ({
   abortable: vi.fn(),
   bindOwnedSessionTranscriptWrites: vi.fn(),
   createRunAbort: vi.fn(),
-  flushPendingToolResultsAfterIdle: vi.fn(),
   installStreamGuards: vi.fn(),
   prepareHistory: vi.fn(),
   prepareStream: vi.fn(),
@@ -15,9 +14,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../../config/sessions/transcript-write-context.js", () => ({
   bindOwnedSessionTranscriptWrites: mocks.bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites: mocks.withOwnedSessionTranscriptWrites,
-}));
-vi.mock("../wait-for-idle-before-flush.js", () => ({
-  flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
 }));
 vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
 vi.mock("./attempt-abort.js", () => ({
@@ -144,6 +140,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
       markTimedOutByRunBudget: vi.fn(),
       readRunState: () => ({
         aborted: false,
+        promptFailed: false,
         promptError: null,
         timedOut: false,
         yieldDetected: false,
@@ -246,20 +243,14 @@ describe("prepareEmbeddedAttemptStreamRuntime", () => {
     expect(mocks.abortable).toHaveBeenCalledOnce();
   });
 
-  it("flushes pending tool results and disposes the session when history preparation fails", async () => {
+  it("leaves published session ownership to the outer cleanup when history preparation fails", async () => {
     const fixture = createFixture({ aborted: true });
     const failure = new Error("history failed");
     mocks.prepareHistory.mockRejectedValueOnce(failure);
-    mocks.flushPendingToolResultsAfterIdle.mockResolvedValue(undefined);
 
     await expect(prepareEmbeddedAttemptStreamRuntime(fixture.input)).rejects.toBe(failure);
 
-    expect(mocks.flushPendingToolResultsAfterIdle).toHaveBeenCalledWith({
-      agent: fixture.activeSession.agent,
-      sessionManager: fixture.sessionManager,
-      timeoutMs: 0,
-    });
-    expect(fixture.activeSession.dispose).toHaveBeenCalledOnce();
+    expect(fixture.activeSession.dispose).not.toHaveBeenCalled();
     expect(mocks.createRunAbort).not.toHaveBeenCalled();
     expect(mocks.prepareStream).not.toHaveBeenCalled();
     expect(mocks.prepareTimeout).not.toHaveBeenCalled();

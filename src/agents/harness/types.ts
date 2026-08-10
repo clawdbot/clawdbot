@@ -58,6 +58,7 @@ type AgentHarnessDeprecatedAttemptTerminalFields = {
   timedOutDuringCompaction?: boolean;
   timedOutDuringToolExecution?: boolean;
   timedOutByRunBudget?: boolean;
+  failed?: boolean;
   promptError?: unknown;
   promptErrorSource?:
     | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource

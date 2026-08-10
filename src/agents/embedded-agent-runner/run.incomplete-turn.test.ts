@@ -154,6 +154,7 @@ function makeSettledContinuationParams(
     modelApi: "openai-chatgpt-responses",
     payloadCount: 0,
     aborted: false,
+    promptFailed: false,
     timedOut: false,
     attempt: makeAttemptResult(attemptOverrides),
     ...overrides,
@@ -2601,10 +2602,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it.each([
-    { label: "aborted", aborted: true, timedOut: false, promptError: null },
-    { label: "timed out", aborted: false, timedOut: true, promptError: null },
-    { label: "prompt error", aborted: false, timedOut: false, promptError: new Error("closed") },
-  ])("does not continue a $label tool-use terminal turn", ({ aborted, timedOut, promptError }) => {
+    { label: "aborted", aborted: true, timedOut: false, promptFailed: false },
+    { label: "timed out", aborted: false, timedOut: true, promptFailed: false },
+    { label: "prompt error", aborted: false, timedOut: false, promptFailed: true },
+  ])("does not continue a $label tool-use terminal turn", ({ aborted, timedOut, promptFailed }) => {
     const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
       content: [{ type: "tool_use", id: "tool_1", name: "bash", input: {} }],
@@ -2618,7 +2619,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           lastAssistant: toolUseAssistant,
           currentAttemptAssistant: toolUseAssistant,
         },
-        { aborted, timedOut, promptError },
+        { aborted, timedOut, promptFailed },
       ),
     );
 
@@ -2948,6 +2949,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       shouldRetryMissingAssistantTurn({
         payloadCount: 0,
         aborted: false,
+        promptFailed: false,
         timedOut: false,
         attempt: replaySafeAttempt,
       }),
@@ -2956,6 +2958,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       shouldRetryMissingAssistantTurn({
         payloadCount: 0,
         aborted: false,
+        promptFailed: false,
         timedOut: false,
         attempt: makeAttemptResult({
           assistantTexts: [],
@@ -2969,6 +2972,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       shouldRetryMissingAssistantTurn({
         payloadCount: 0,
         aborted: false,
+        promptFailed: false,
         timedOut: false,
         attempt: makeAttemptResult({
           assistantTexts: [],

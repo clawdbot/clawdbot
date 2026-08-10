@@ -88,6 +88,7 @@ export async function runCodexSettledTurnFinalization(
     createAssistantMessage(attempt, text, {
       tokenUsage: bounded.usage,
       aborted: false,
+      promptFailed: false,
       promptError: null,
     }),
     mirrorIdentity,

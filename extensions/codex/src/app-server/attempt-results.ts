@@ -110,7 +110,8 @@ export function buildCodexTurnStartFailureResult(params: {
 }): EmbeddedRunAttemptResult {
   return {
     terminal: attemptTerminal.normalize({
-      promptError: params.promptError ?? params.message,
+      failed: true,
+      promptError: Object.hasOwn(params, "promptError") ? params.promptError : params.message,
       promptErrorSource: "prompt",
     }),
     sessionIdUsed: params.params.sessionId,

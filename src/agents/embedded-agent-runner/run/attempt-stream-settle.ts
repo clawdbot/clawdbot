@@ -52,6 +52,7 @@ type ToolSearchTargetTranscriptProjections = Parameters<
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type StreamSettleResult = {
+  promptFailed: boolean;
   promptError: unknown;
   promptErrorSource: AgentRunAttemptFailureSource | null;
   timedOutDuringCompaction: boolean;
@@ -75,6 +76,7 @@ export async function settleEmbeddedAttemptStream(input: {
   withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
   subscription: EmbeddedAttemptSubscription;
   state: {
+    promptFailed: boolean;
     promptError: unknown;
     promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
@@ -104,7 +106,7 @@ export async function settleEmbeddedAttemptStream(input: {
   shouldFlushForContextEngine: boolean;
 }): Promise<StreamSettleResult> {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-  let { promptError, promptErrorSource, sessionIdUsed } = state;
+  let { promptFailed, promptError, promptErrorSource, sessionIdUsed } = state;
 
   if (
     shouldWaitForCompletionRequiredAsyncTasks({
@@ -165,6 +167,8 @@ export async function settleEmbeddedAttemptStream(input: {
         `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
       );
       promptErrorSource = "prompt";
+      promptFailed = true;
+      state.promptFailed = true;
       state.promptError = promptError;
       state.promptErrorSource = promptErrorSource;
     }
@@ -186,7 +190,7 @@ export async function settleEmbeddedAttemptStream(input: {
         prePromptMessageCount: input.prePromptMessageCount,
       });
       const attemptAccepted =
-        !promptError &&
+        !promptFailed &&
         !input.readLifecycleState().aborted &&
         !input.readLifecycleState().timedOut &&
         !state.yieldAborted &&
@@ -219,9 +223,11 @@ export async function settleEmbeddedAttemptStream(input: {
     if (!isRunnerAbortError(err)) {
       throw err;
     }
-    if (!promptError) {
+    if (!promptFailed) {
       promptError = err;
       promptErrorSource = "compaction";
+      promptFailed = true;
+      state.promptFailed = true;
       state.promptError = promptError;
       state.promptErrorSource = promptErrorSource;
     }
@@ -353,7 +359,7 @@ export async function settleEmbeddedAttemptStream(input: {
       }),
     });
 
-    if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
+    if (promptFailed && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
       try {
         sessionManager.appendCustomEntry("openclaw:prompt-error", {
           timestamp: Date.now(),
@@ -375,6 +381,7 @@ export async function settleEmbeddedAttemptStream(input: {
   });
 
   return {
+    promptFailed,
     promptError,
     promptErrorSource,
     timedOutDuringCompaction: input.readLifecycleState().timedOutDuringCompaction,

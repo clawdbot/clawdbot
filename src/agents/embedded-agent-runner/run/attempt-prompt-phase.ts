@@ -96,6 +96,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     ) => void;
     setFinalPromptText: (prompt: string) => void;
     markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
+    markTaskTerminal?: () => void;
     markYieldAborted: () => void;
     readYieldState: () => Pick<
       PromptErrorInput,
@@ -117,14 +118,14 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     skipPromptSubmission = nextSkipPromptSubmission;
     input.lifecycle.writeState(phaseState);
   };
-  const releaseLeasedSteering = (error?: unknown) => {
+  const releaseLeasedSteering = (error?: unknown, failed = error !== undefined) => {
     if (!leasedSteering) {
       return;
     }
     releasePendingAgentSteeringItems({
       runIds: leasedSteering.runIds,
       leaseId: leasedSteering.leaseId,
-      error: error ? formatErrorMessage(error) : undefined,
+      error: failed ? formatErrorMessage(error) : undefined,
     });
     leasedSteering = undefined;
   };
@@ -142,7 +143,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     patchState({
       preflightRecovery: outcome.preflightRecovery,
       ...(outcome.promptError
-        ? { promptError: outcome.promptError, promptErrorSource: "precheck" }
+        ? { promptFailed: true, promptError: outcome.promptError, promptErrorSource: "precheck" }
         : {}),
     });
   };
@@ -150,6 +151,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   const promptStartedAt = Date.now();
   if (input.emptyExplicitToolAllowlistError) {
     patchState({
+      promptFailed: true,
       promptError: input.emptyExplicitToolAllowlistError,
       promptErrorSource: "precheck",
     });
@@ -228,6 +230,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     if (beforeAgentRunOutcome) {
       input.lifecycle.markBeforeAgentRunBlocked(beforeAgentRunOutcome);
       patchState({
+        promptFailed: true,
         promptError: beforeAgentRunOutcome.promptError,
         promptErrorSource: "hook:before_agent_run",
       });
@@ -311,6 +314,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       attempt,
       error,
       handleMidTurnPrecheckRequest,
+      markTaskTerminal: input.lifecycle.markTaskTerminal,
       markYieldAborted: input.lifecycle.markYieldAborted,
       releaseLeasedSteering,
       sessionLockController: input.sessionLockController,
@@ -319,6 +323,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     });
     if (promptErrorOutcome.promptFailure) {
       patchState({
+        promptFailed: true,
         promptError: promptErrorOutcome.promptFailure.error,
         promptErrorSource: promptErrorOutcome.promptFailure.source,
       });
@@ -336,7 +341,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
       const state = input.lifecycle.readState();
       if (!state.preflightRecovery && state.promptErrorSource !== "precheck") {
-        patchState({ promptError: null, promptErrorSource: null });
+        patchState({ promptFailed: false, promptError: null, promptErrorSource: null });
         handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
       }
     });

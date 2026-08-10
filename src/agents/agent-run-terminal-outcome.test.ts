@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromAttempt,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   mergeAgentRunAttemptTerminal,
@@ -586,6 +587,82 @@ describe("agent run attempt terminal", () => {
       }),
     ).toMatchObject({ timedOut: false, timedOutDuringCompaction: true });
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "keeps the explicit failure fact immutable for rejection payload %#",
+    (error) => {
+      const projected = projectAgentRunAttemptTerminal({
+        kind: "failed",
+        source: "prompt",
+        error,
+      });
+
+      expect(projected.failed).toBe(true);
+      expect(projected.promptFailure).toEqual({ source: "prompt", error });
+      expect(Object.isFrozen(projected.promptFailure)).toBe(true);
+      expect(structuredClone(projected.promptFailure)).toEqual({
+        source: "prompt",
+        error,
+      });
+    },
+  );
+
+  it.each([false, 0, "", null, undefined])(
+    "projects exact terminal outcome error payload %#",
+    (error) => {
+      expect(
+        buildAgentRunTerminalOutcomeFromAttempt({
+          terminal: { kind: "failed", source: "prompt", error },
+        }),
+      ).toMatchObject({
+        status: "error",
+        reason: "failed",
+      });
+    },
+  );
+
+  it("rejects a legacy success claim that also carries a prompt failure", () => {
+    expect(() =>
+      normalizeAgentRunAttemptTerminal({
+        failed: false,
+        promptError: false,
+        promptErrorSource: "prompt",
+      }),
+    ).toThrow("Contradictory agent run prompt failure fields");
+  });
+
+  it.each([null, undefined])(
+    "treats a legacy failure source as explicit failure presence for payload %#",
+    (promptError) => {
+      expect(
+        projectAgentRunAttemptTerminal(
+          normalizeAgentRunAttemptTerminal({
+            promptError,
+            promptErrorSource: "prompt",
+          }),
+        ),
+      ).toMatchObject({
+        failed: true,
+        promptFailure: { source: "prompt", error: promptError },
+      });
+    },
+  );
+
+  it.each([false, 0, "", null, undefined])(
+    "normalizes explicit legacy prompt failure presence for payload %#",
+    (error) => {
+      const terminal = normalizeAgentRunAttemptTerminal({
+        failed: true,
+        promptError: error,
+        promptErrorSource: "prompt",
+      });
+
+      expect(projectAgentRunAttemptTerminal(terminal)).toMatchObject({
+        failed: true,
+        promptFailure: { source: "prompt", error },
+      });
+    },
+  );
 
   it("normalizes the shipped harness shape through the same precedence owner", () => {
     const error = new Error("request timed out");

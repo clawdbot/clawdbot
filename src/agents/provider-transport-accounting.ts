@@ -1,5 +1,11 @@
 import { AI_MODEL_TRANSPORT_OUTCOMES, type AiModelTransportEvent } from "@openclaw/ai";
 import {
+  MAX_MODEL_TRANSPORT_ATTEMPTS,
+  MAX_MODEL_TRANSPORT_EVENTS,
+  MAX_MODEL_TRANSPORT_INVOCATIONS,
+  MAX_MODEL_TRANSPORT_LOGICAL_CALLS,
+} from "./provider-transport-accounting-limits.js";
+import {
   hasTransportFallbackCause,
   isKnownValue,
   normalizeIdentity,
@@ -23,9 +29,9 @@ import {
   latestProviderTransportLogicalCall,
   markProviderTransportObservationFailure,
   prepareProviderTransportEventIdentity,
-  rejectProviderTransportFact,
-  rejectProviderTransportValue,
-  requireProviderTransportIdentity,
+  rejectProviderTransportFact as rejectFact,
+  rejectProviderTransportValue as rejectValue,
+  requireProviderTransportIdentity as requireIdentity,
   type MutableProviderTransportAccounting,
 } from "./provider-transport-accounting-state.js";
 import {
@@ -55,16 +61,12 @@ export {
 } from "./provider-transport-accounting-observer.js";
 export type {
   ProviderTransportAccountingCollector,
+  ProviderTransportAccountingCoverage,
   ProviderTransportAccountingCoverageReason,
   ProviderTransportAccountingObserver,
   ProviderTransportAccountingObservationKind,
   ProviderTransportAccountingSnapshot,
 } from "./provider-transport-accounting.types.js";
-
-const MAX_MODEL_TRANSPORT_LOGICAL_CALLS = 64;
-const MAX_MODEL_TRANSPORT_EVENTS = 128;
-const MAX_MODEL_TRANSPORT_ATTEMPTS = 128;
-const MAX_MODEL_TRANSPORT_INVOCATIONS = 128;
 
 type TrackedLogicalCall = ProviderTransportProjectionCall;
 type RoutePhase = NonNullable<TrackedLogicalCall["phase"]>;
@@ -72,10 +74,6 @@ type CallScopedTransportEvent = Exclude<
   AiModelTransportEvent,
   { type: "connection"; reason: "prewarm" }
 >;
-
-const rejectFact = rejectProviderTransportFact;
-const rejectValue = rejectProviderTransportValue;
-const requireIdentity = requireProviderTransportIdentity;
 
 function correlateTransportEvent(
   event: AiModelTransportEvent,

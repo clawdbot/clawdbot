@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CodexHostTrajectoryRecorder,
   createCodexTrajectoryRecorder,
+  normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
@@ -30,6 +31,43 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("normalizeCodexTrajectoryError", () => {
+  it.each([false, 0, "", null, undefined])(
+    "serializes explicit failure payload %#",
+    (promptError) => {
+      expect(normalizeCodexTrajectoryError(promptError, true)).toEqual(expect.any(String));
+    },
+  );
+
+  it.each([
+    {
+      label: "prototype-hostile proxy",
+      value: new Proxy(
+        {},
+        {
+          getPrototypeOf: () => {
+            throw new Error("prototype trap");
+          },
+        },
+      ),
+      expected: "Unknown error",
+    },
+    {
+      label: "throwing message accessor",
+      value: Object.create(Error.prototype, {
+        message: {
+          get: () => {
+            throw new Error("message trap");
+          },
+        },
+      }),
+      expected: "Error",
+    },
+  ])("normalizes a $label without throwing", ({ value, expected }) => {
+    expect(normalizeCodexTrajectoryError(value, true)).toBe(expected);
+  });
 });
 
 function expectTrajectoryRecorder(

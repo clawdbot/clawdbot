@@ -33,6 +33,8 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { bindEmbeddedRunAccountingObservers } from "./accounting-observers.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type SubscribeEmbeddedAgentSessionFn =
   typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession;
@@ -1339,6 +1341,7 @@ export async function createContextEngineAttemptRunner(params: {
     info?: Partial<ContextEngineInfo>;
   };
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
+  accountingObservers?: Parameters<typeof bindEmbeddedRunAccountingObservers>[1];
   createSession?: () => MutableSession;
   sessionMessages?: AgentMessage[];
   sessionMessagesAfterRepair?: AgentMessage[];
@@ -1399,9 +1402,7 @@ export async function createContextEngineAttemptRunner(params: {
     process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
   try {
-    return await (
-      await loadRunEmbeddedAttempt()
-    )({
+    const attemptParams: EmbeddedRunAttemptParams = {
       sessionId: "embedded-session",
       sessionKey: params.sessionKey,
       sessionFile: params.sessionKey,
@@ -1450,7 +1451,11 @@ export async function createContextEngineAttemptRunner(params: {
         },
       },
       ...params.attemptOverrides,
-    });
+    };
+    bindEmbeddedRunAccountingObservers(attemptParams, params.accountingObservers);
+    return await (
+      await loadRunEmbeddedAttempt()
+    )(attemptParams);
   } finally {
     if (previousTrajectoryEnv === undefined) {
       delete process.env.OPENCLAW_TRAJECTORY;

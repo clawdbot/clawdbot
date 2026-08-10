@@ -304,6 +304,9 @@ export function handleAgentEnd(
   };
 
   const deliverTerminal = () => {
+    if (evt?.willRetry !== true) {
+      ctx.params.onTaskTerminal?.();
+    }
     ctx.state.deferBlockReplyDelivery = false;
     ctx.flushDeferredAssistantEvents();
     ctx.flushDeferredBlockReplies();

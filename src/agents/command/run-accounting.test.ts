@@ -202,7 +202,7 @@ describe("command run accounting", () => {
           total: { state: "complete" },
         },
         tools: { state: "complete" },
-        agentTime: { state: "unavailable", reasons: ["not_instrumented"] },
+        agentTime: { state: "unavailable", reasons: ["not_observed"] },
         commandExecutionDuration: { state: "complete" },
         wallLatency: { state: "unavailable", reasons: ["not_instrumented"] },
         providerTransport: { state: "unavailable", reasons: ["not_observed"] },
@@ -248,7 +248,7 @@ describe("command run accounting", () => {
         cost: { state: "unavailable", reasons: ["cli_runtime"] },
         providerTransport: {
           state: "unavailable",
-          reasons: ["not_observed", "cli_runtime"],
+          reasons: ["not_observed", "not_instrumented"],
         },
       },
     });
@@ -782,7 +782,7 @@ describe("command run accounting", () => {
       },
       providerTransport: {
         state: "unavailable",
-        reasons: ["not_observed", "session_core_compaction"],
+        reasons: ["not_observed", "not_instrumented"],
       },
     });
   });
@@ -984,7 +984,7 @@ describe("command run accounting", () => {
           },
           tools: { state: "unavailable", reasons: ["not_observed"] },
           cost: { state: "unavailable", reasons: ["not_observed"] },
-          agentTime: { state: "unavailable", reasons: ["not_instrumented"] },
+          agentTime: { state: "unavailable", reasons: ["not_observed"] },
           commandExecutionDuration: { state: "complete" },
           wallLatency: { state: "unavailable", reasons: ["not_instrumented"] },
           providerTransport: { state: "unavailable", reasons: ["not_observed"] },

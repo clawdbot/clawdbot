@@ -163,7 +163,7 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
       return;
     }
     completed = true;
-    const failed = err != null && outcome !== "blocked";
+    const failed = outcome === "error";
     const errorMessage = failed ? diagnosticErrorMessage(err) : undefined;
     emitTrustedDiagnosticEventWithPrivateData(
       {

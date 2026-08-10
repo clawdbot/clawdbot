@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   completeAfterTurn: vi.fn(),
+  logError: vi.fn(),
   settleStream: vi.fn(),
 }));
 
@@ -11,6 +12,9 @@ vi.mock("./attempt-after-turn.js", () => ({
 vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
+vi.mock("../logger.js", () => ({
+  log: { error: mocks.logError },
+}));
 
 import { SessionManager } from "../../sessions/index.js";
 import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
@@ -18,6 +22,7 @@ import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js
 type FinalizeInput = Parameters<typeof finalizeEmbeddedAttemptStreamPhase>[0];
 type SettleMockInput = {
   state: {
+    promptFailed: boolean;
     promptError: unknown;
     promptErrorSource: unknown;
   };
@@ -30,6 +35,7 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
     agent: { state: { messages: [] } },
   };
   const phaseState: ReturnType<FinalizeInput["getState"]> = {
+    promptFailed: false,
     promptError: null,
     promptErrorSource: null,
     yieldAborted: false,
@@ -59,6 +65,9 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
     getBeforeAgentFinalizeRevisionEntryId: () => undefined,
     getContextEngineAfterTurnCheckpoint: () => 7,
     onSettleErrorState: vi.fn(),
+    markTaskTerminal: vi.fn(() => {
+      order.push("terminal");
+    }),
     onSettled: vi.fn(() => {
       order.push("settled-published");
     }),
@@ -125,6 +134,7 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
       getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
     });
     const settledStream = {
+      promptFailed: false,
       promptError: null,
       promptErrorSource: null,
       timedOutDuringCompaction: false,
@@ -184,8 +194,10 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
       fixture.order.push("pending-events");
       fixture.phaseState.promptError = pendingError;
       fixture.phaseState.promptErrorSource = "prompt";
+      fixture.phaseState.promptFailed = true;
     });
     const settledStream = {
+      promptFailed: false,
       promptError: null,
       promptErrorSource: null,
       timedOutDuringCompaction: false,
@@ -263,6 +275,7 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
       timedOutDuringCompaction: false,
     });
     const settledStream = {
+      promptFailed: true,
       promptError: cancellationReason,
       promptErrorSource: "prompt",
       timedOutDuringCompaction: false,
@@ -389,6 +402,51 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
       "Rejected first answer",
     );
     expect(fixture.input.onSettleErrorState).toHaveBeenCalledOnce();
+    expect(fixture.input.markTaskTerminal).toHaveBeenCalledOnce();
     expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
+  });
+
+  it("preserves the exact settlement failure when rewound-branch restoration also fails", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "Original request",
+      timestamp: 1,
+    });
+    const rejectedId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Rejected first answer" }],
+      stopReason: "stop",
+      timestamp: 2,
+    } as never);
+    const primaryError = new Error("settlement failed");
+    const restoreError = new Error("branch restore failed");
+    let lockCalls = 0;
+    const order: string[] = [];
+    const fixture = createFixture({
+      activeSession: {
+        agent: { state: { messages: sessionManager.buildSessionContext().messages } },
+      } as never,
+      sessionManager: sessionManager as never,
+      repairedRejectedThinkingReplay: false,
+      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
+      markTaskTerminal: vi.fn(() => {
+        order.push("terminal");
+      }),
+      withOwnedSessionWriteLock: vi.fn(async (operation) => {
+        lockCalls += 1;
+        if (lockCalls === 2) {
+          order.push("restore");
+          throw restoreError;
+        }
+        return await operation();
+      }),
+    });
+    mocks.settleStream.mockRejectedValue(primaryError);
+
+    await expect(finalizeEmbeddedAttemptStreamPhase(fixture.input)).rejects.toBe(primaryError);
+
+    expect(order).toEqual(["terminal", "restore"]);
+    expect(mocks.logError).toHaveBeenCalledWith(expect.stringContaining("branch restore failed"));
   });
 });

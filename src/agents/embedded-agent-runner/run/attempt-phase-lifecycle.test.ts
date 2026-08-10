@@ -72,6 +72,7 @@ describe("embedded attempt phase lifecycle state", () => {
         getLastAssistantUsage: () => undefined,
       } as never,
       state: {
+        promptFailed: false,
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
@@ -150,6 +151,7 @@ describe("embedded attempt phase lifecycle state", () => {
         getLastAssistantUsage: () => undefined,
       } as never,
       state: {
+        promptFailed: false,
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
@@ -180,6 +182,87 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(result.promptError).toBeNull();
     expect(hoisted.waitForCompletionRequiredAsyncTasks).toHaveBeenCalledTimes(2);
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "keeps prompt failure presence through stream settlement for payload %#",
+    async (reason) => {
+      const messages = [{ role: "assistant", content: [], stopReason: "stop" }];
+      const appendCustomEntry = vi.fn();
+      const onBlockReplyFlush = vi.fn();
+      const result = await settleEmbeddedAttemptStream({
+        attempt: {
+          runId: "run-falsy",
+          sessionId: "session-falsy",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          provider: "test",
+          modelId: "model",
+          model: { api: "openai-responses" },
+        } as never,
+        activeSession: {
+          agent: { state: { messages } },
+          isCompacting: false,
+          isStreaming: false,
+          messages,
+          sessionId: "session-falsy",
+        } as never,
+        sessionManager: {
+          appendCustomEntry,
+          buildSessionContext: () => ({ messages }),
+          getEntries: () => [],
+          removeTrailingEntries: vi.fn(() => 0),
+        } as never,
+        sessionLockController: {} as never,
+        withOwnedSessionWriteLock: async (operation) => await operation(),
+        subscription: {
+          toolMetas: [],
+          waitForCompactionRetry: async () => {},
+          isCompactionInFlight: () => false,
+          getCompactionCount: () => 0,
+          getCurrentAttemptAssistant: () => messages[0],
+          getUsageTotals: () => undefined,
+          getLastAssistantUsage: () => undefined,
+        } as never,
+        state: {
+          promptFailed: true,
+          promptError: reason,
+          promptErrorSource: "prompt",
+          yieldAborted: false,
+          sessionIdUsed: "session-falsy",
+        },
+        readLifecycleState: () => ({
+          aborted: false,
+          timedOut: false,
+          timedOutDuringCompaction: false,
+        }),
+        markTimedOutDuringCompaction: () => {},
+        runAbortDeadlineAtMs: Date.now() + 60_000,
+        runAbortSignal: new AbortController().signal,
+        isProbeSession: true,
+        onBlockReplyFlush,
+        abortable: async (promise) => await promise,
+        prePromptMessageCount: 0,
+        toolSearchTargetTranscriptProjections: [],
+        cache: {
+          observabilityEnabled: false,
+          changesForTurn: null,
+          retention: undefined,
+        },
+        shouldFlushForContextEngine: false,
+      });
+
+      expect(result.promptFailed).toBe(true);
+      expect(result.promptError).toBe(reason);
+      expect(onBlockReplyFlush).toHaveBeenCalledWith({
+        reason: "pre_compaction",
+        attemptAccepted: false,
+      });
+      expect(appendCustomEntry).toHaveBeenCalledWith(
+        "openclaw:prompt-error",
+        expect.objectContaining({ error: String(reason) }),
+      );
+    },
+  );
 
   it("keeps projected nested tool evidence from owning the model terminal (#118274)", async () => {
     const modelAssistant = {
@@ -239,6 +322,7 @@ describe("embedded attempt phase lifecycle state", () => {
         getLastAssistantUsage: () => undefined,
       } as never,
       state: {
+        promptFailed: false,
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
@@ -324,6 +408,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionLockController: {} as never,
       withOwnedSessionWriteLock: async (operation) => await operation(),
       state: {
+        promptFailed: false,
         promptError: null,
         yieldAborted: false,
         sessionIdUsed: "session-1",
@@ -374,6 +459,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionLockController: {} as never,
       withOwnedSessionWriteLock: async (operation) => await operation(),
       state: {
+        promptFailed: true,
         promptError: abortError,
         yieldAborted: false,
         sessionIdUsed: "session-1",
@@ -410,6 +496,69 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(event?.error).toBeUndefined();
   });
 
+  it.each([false, 0, "", null, undefined])(
+    "keeps prompt failure presence through after-turn consumers for payload %#",
+    async (reason) => {
+      const appendCustomEntry = vi.fn();
+      const recordStage = vi.fn();
+      await completeEmbeddedAttemptAfterTurn({
+        attempt: {
+          runId: "run-falsy",
+          sessionId: "session-falsy",
+          sessionFile: "/tmp/session.jsonl",
+        } as never,
+        activeSession: {} as never,
+        sessionManager: { appendCustomEntry } as never,
+        sessionLockController: {} as never,
+        withOwnedSessionWriteLock: async (operation) => await operation(),
+        state: {
+          promptFailed: true,
+          promptError: reason,
+          yieldAborted: false,
+          sessionIdUsed: "session-falsy",
+          messagesSnapshot: [],
+          prePromptMessageCount: 0,
+          contextEngineAfterTurnCheckpoint: null,
+          compactionOccurredThisAttempt: false,
+        },
+        readLifecycleState: () => ({
+          aborted: false,
+          timedOut: false,
+          idleTimedOut: false,
+          timedOutDuringCompaction: false,
+        }),
+        runtime: {
+          effectiveWorkspace: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          sessionAgentId: "main",
+          resolveActiveContextEnginePluginId: () => undefined,
+          shouldRecordCompletedBootstrapTurn: true,
+          cacheTrace: { recordStage } as never,
+          anthropicPayloadLogger: null,
+          hookAgentId: "main",
+          diagnosticTrace: { traceId: "trace-falsy", spanId: "span-falsy" } as never,
+          skillWorkshopAvailable: false,
+          hookRunner: null,
+          promptStartedAt: Date.now(),
+        },
+      });
+
+      expect(appendCustomEntry).not.toHaveBeenCalled();
+      expect(recordStage).toHaveBeenCalledWith(
+        "session:after",
+        expect.objectContaining({ note: "prompt error" }),
+      );
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            success: false,
+            error: String(reason),
+          }),
+        }),
+      );
+    },
+  );
+
   it("re-reads abort state inside the post-turn session write", async () => {
     let aborted = false;
     await completeEmbeddedAttemptAfterTurn({
@@ -426,6 +575,7 @@ describe("embedded attempt phase lifecycle state", () => {
         return await operation();
       },
       state: {
+        promptFailed: false,
         promptError: null,
         yieldAborted: false,
         sessionIdUsed: "session-1",
@@ -476,6 +626,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionLockController: {} as never,
       withOwnedSessionWriteLock: async (operation) => await operation(),
       state: {
+        promptFailed: false,
         promptError: null,
         yieldAborted: false,
         sessionIdUsed: "session-1",

@@ -70,7 +70,7 @@ type DispatchCall = {
 type PromptErrorCall = {
   error: unknown;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedSteering: (error?: unknown, failed?: boolean) => void;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
@@ -81,6 +81,7 @@ function createFixture() {
   const state: PromptPhaseState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
+    promptFailed: false,
     promptError: null,
     promptErrorSource: null,
   };
@@ -349,7 +350,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(input.yieldDetected).toBe(true);
       expect(input.yieldAbortSettled).toBe(yieldAbortSettled);
       expect(input.yieldMessage).toBe("yield context");
-      input.releaseLeasedSteering(input.error);
+      input.releaseLeasedSteering(input.error, true);
       input.markYieldAborted();
       return {};
     });
@@ -366,7 +367,30 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     ]);
     expect(fixture.markYieldAborted).toHaveBeenCalledOnce();
     expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseId: "lease-1", runIds: ["run-1"] }),
+      expect.objectContaining({
+        leaseId: "lease-1",
+        runIds: ["run-1"],
+        error: "submission failed",
+      }),
     );
   });
+
+  it.each([false, 0, "", null, undefined])(
+    "publishes prompt failure presence independently of rejection payload %#",
+    async (reason) => {
+      const fixture = createFixture();
+      mocks.dispatchPrompt.mockRejectedValue(reason);
+      mocks.handlePromptError.mockResolvedValue({
+        promptFailure: { error: reason, source: "prompt" },
+      });
+
+      await runEmbeddedAttemptPromptPhase(fixture.input);
+
+      expect(fixture.state).toMatchObject({
+        promptFailed: true,
+        promptError: reason,
+        promptErrorSource: "prompt",
+      });
+    },
+  );
 });

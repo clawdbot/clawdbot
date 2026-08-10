@@ -141,6 +141,20 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.traceAttempts).toEqual([]);
   });
 
+  it.each([false, 0, "", null, undefined])(
+    "does not retry a silent assistant error when prompt failure payload is %#",
+    async (reason) => {
+      const fixture = makeExhaustedCredentialFailureInput();
+      fixture.input.attempt.terminal = { kind: "failed", source: "prompt", error: reason };
+      fixture.input.emptyErrorRetries = 0;
+
+      await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+        action: "proceed",
+        emptyErrorRetries: 0,
+      });
+    },
+  );
+
   it("does not cache an exact credential-file failure from a fallback candidate", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";

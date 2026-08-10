@@ -831,6 +831,7 @@ describe("CLI attempt execution", () => {
       beginModelCall: vi.fn(),
       markModelCallInstrumentationInstalled: vi.fn(),
       observeEmbeddedAttempt: vi.fn(),
+      observeAgentDuration: vi.fn(),
       markOpaqueWork: vi.fn(),
       settle: vi.fn(),
     };
@@ -848,11 +849,13 @@ describe("CLI attempt execution", () => {
     expect(returnedResult).toBe(sourceResult);
     expect(resolveEmbeddedRunAccountingObservers(embedded)).toEqual({
       codeModeActivityOwner,
+      allocateDiagnosticModelCallId: undefined,
       onAgentSubmission: commandRunAccounting.beginAgentSubmission,
       onModelCall: commandRunAccounting.beginModelCall,
       onModelCallInstrumentationInstalled:
         commandRunAccounting.markModelCallInstrumentationInstalled,
       onAttemptObserved: commandRunAccounting.observeEmbeddedAttempt,
+      onAgentTerminal: undefined,
       onRuntimeSelected: commandRunAccounting.selectRuntime,
       onOpaqueWork: commandRunAccounting.markOpaqueWork,
     });
@@ -955,6 +958,7 @@ describe("CLI attempt execution", () => {
         beginModelCall,
         markModelCallInstrumentationInstalled,
         observeEmbeddedAttempt: vi.fn(),
+        observeAgentDuration: vi.fn(),
         markOpaqueWork: vi.fn(),
         settle: vi.fn(),
       },

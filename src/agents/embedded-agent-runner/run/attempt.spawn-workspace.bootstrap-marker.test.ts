@@ -1,13 +1,14 @@
 // Coverage for deciding when bootstrap completion markers are persisted.
 import { describe, expect, it } from "vitest";
 import { shouldPersistCompletedBootstrapTurn } from "./attempt.thread-helpers.js";
+import { shouldRetryMissingAssistantTurn } from "./incomplete-turn.js";
 
 describe("runEmbeddedAttempt bootstrap completion marker", () => {
   it("keeps marker persistence enabled for clean sessions_yield exits", () => {
     expect(
       shouldPersistCompletedBootstrapTurn({
         shouldRecordCompletedBootstrapTurn: true,
-        promptError: undefined,
+        promptFailed: false,
         aborted: false,
         timedOutDuringCompaction: false,
         compactionOccurredThisAttempt: false,
@@ -19,7 +20,7 @@ describe("runEmbeddedAttempt bootstrap completion marker", () => {
     expect(
       shouldPersistCompletedBootstrapTurn({
         shouldRecordCompletedBootstrapTurn: false,
-        promptError: undefined,
+        promptFailed: false,
         aborted: false,
         timedOutDuringCompaction: false,
         compactionOccurredThisAttempt: false,
@@ -31,7 +32,7 @@ describe("runEmbeddedAttempt bootstrap completion marker", () => {
     expect(
       shouldPersistCompletedBootstrapTurn({
         shouldRecordCompletedBootstrapTurn: true,
-        promptError: undefined,
+        promptFailed: false,
         aborted: true,
         timedOutDuringCompaction: false,
         compactionOccurredThisAttempt: false,
@@ -45,7 +46,7 @@ describe("runEmbeddedAttempt bootstrap completion marker", () => {
     expect(
       shouldPersistCompletedBootstrapTurn({
         shouldRecordCompletedBootstrapTurn: true,
-        promptError: new Error("prompt failed"),
+        promptFailed: true,
         aborted: false,
         timedOutDuringCompaction: false,
         compactionOccurredThisAttempt: false,
@@ -55,7 +56,7 @@ describe("runEmbeddedAttempt bootstrap completion marker", () => {
     expect(
       shouldPersistCompletedBootstrapTurn({
         shouldRecordCompletedBootstrapTurn: true,
-        promptError: undefined,
+        promptFailed: false,
         aborted: false,
         timedOutDuringCompaction: true,
         compactionOccurredThisAttempt: false,
@@ -65,10 +66,28 @@ describe("runEmbeddedAttempt bootstrap completion marker", () => {
     expect(
       shouldPersistCompletedBootstrapTurn({
         shouldRecordCompletedBootstrapTurn: true,
-        promptError: undefined,
+        promptFailed: false,
         aborted: false,
         timedOutDuringCompaction: false,
         compactionOccurredThisAttempt: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("missing assistant prompt failure guard", () => {
+  it("uses the explicit failure fact instead of the rejection payload", () => {
+    expect(
+      shouldRetryMissingAssistantTurn({
+        payloadCount: 0,
+        aborted: false,
+        promptFailed: true,
+        timedOut: false,
+        attempt: {
+          assistantTexts: [],
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+          toolMetas: [],
+        } as never,
       }),
     ).toBe(false);
   });
