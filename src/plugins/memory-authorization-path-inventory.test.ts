@@ -14,6 +14,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 const REQUIRED_PHASE_0_PATH_IDS = [
   "selected-runtime-manager-acquisition",
+  "memory-index-manager-sync-repro-manager-acquisition",
   "selected-runtime-backend-resolution",
   "bootstrap-memory-and-user-files",
   "startup-recent-memory-context",
@@ -709,6 +710,13 @@ describe("memory authorization path inventory", () => {
       disposition: "blocked-in-enforced-mode",
       surfaces: ["src/hooks/bundled/session-memory/handler.ts"],
     });
+    expect(entriesById.get("memory-index-manager-sync-repro-manager-acquisition")).toEqual({
+      id: "memory-index-manager-sync-repro-manager-acquisition",
+      direction: "control",
+      owner: "operator-memory-host",
+      disposition: "legacy-only",
+      surfaces: ["scripts/memory-index-manager.sync-repro.ts"],
+    });
   });
 
   it("names only existing production surfaces", () => {
@@ -838,9 +846,9 @@ describe("memory authorization path inventory", () => {
     );
   });
 
-  it("does not allow an unrecorded production context-free manager acquisition", () => {
+  it("does not allow an unrecorded repo-owned context-free manager acquisition", () => {
     const scanned = listRepoFilesSync(REPO_ROOT, {
-      roots: ["src", "extensions", "packages"],
+      roots: ["src", "extensions", "packages", "scripts"],
       includeFile: isProductionTypeScript,
     });
     const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
