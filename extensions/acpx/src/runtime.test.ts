@@ -1539,31 +1539,34 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it.each(["google/gemini-3.1-flash-lite", "gpt-5.4/ultra", "openai/foo/bar"])(
-    "fails closed on Codex ACP model config control %s without re-injecting it",
-    async (value) => {
-      const baseStore: TestSessionStore = {
-        load: vi.fn(async () => ({
-          acpxRecordId: "agent:codex:acp:test",
-          agentCommand: CODEX_ACP_COMMAND,
-        })),
-        save: vi.fn(async () => {}),
-      };
-      const { runtime, delegate } = makeRuntime(baseStore);
-      const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
-      const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
-        sessionKey: "agent:codex:acp:test",
-        backend: "acpx",
-        runtimeSessionName: "agent:codex:acp:test",
+  it.each([
+    "google/gemini-3.1-flash-lite",
+    "gpt-5.4/ultra",
+    "openai/foo/bar",
+    "openai/",
+    "openai//high",
+  ])("fails closed on Codex ACP model config control %s without re-injecting it", async (value) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
-      };
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
 
-      await expect(runtime.setConfigOption({ handle, key: "model", value })).rejects.toMatchObject({
-        code: "ACP_INVALID_RUNTIME_OPTION",
-      });
-      expect(setConfigOption).not.toHaveBeenCalled();
-    },
-  );
+    await expect(runtime.setConfigOption({ handle, key: "model", value })).rejects.toMatchObject({
+      code: "ACP_INVALID_RUNTIME_OPTION",
+    });
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
 
   it("normalizes Codex ACP slash reasoning suffixes to config controls", async () => {
     const baseStore: TestSessionStore = {
