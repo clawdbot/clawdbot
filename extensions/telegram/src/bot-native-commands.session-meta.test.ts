@@ -14,7 +14,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // Telegram tests cover bot native commands.session meta plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createTelegramGroupCommandContext,
@@ -710,16 +710,17 @@ function resetSessionMetaMocks() {
   deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
 }
 
-describe("registerTelegramNativeCommands — session metadata", () => {
-  beforeAll(async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const commandModule = await import("./bot-native-commands.js");
-    registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
-    await import("./bot-native-commands.runtime.js");
-    agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
-  });
+resetPluginRuntimeStateForTest();
+setActivePluginRegistry(createEmptyPluginRegistry());
+const commandModule = await import("./bot-native-commands.js");
+registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
+await import("./bot-native-commands.runtime.js");
+agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
+resetSessionMetaMocks();
+const warmStatusHandler = registerAndResolveStatusHandler({ cfg: {} });
+await warmStatusHandler.handler(createTelegramPrivateCommandContext());
 
+describe("registerTelegramNativeCommands — session metadata", () => {
   beforeEach(resetSessionMetaMocks);
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
