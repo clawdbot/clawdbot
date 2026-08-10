@@ -1,3 +1,7 @@
+import {
+  isFrozenClawToolAllowPolicy,
+  markFrozenClawToolAllowPolicy,
+} from "../claws/tool-policy-runtime.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   applyToolPolicyPipeline,
@@ -25,7 +29,11 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
 ): TPolicy | undefined {
-  return mergeAlsoAllowPolicy(policy, alsoAllow ? [...alsoAllow] : undefined);
+  const merged = mergeAlsoAllowPolicy(policy, alsoAllow ? [...alsoAllow] : undefined);
+  if (isFrozenClawToolAllowPolicy(policy)) {
+    markFrozenClawToolAllowPolicy(merged);
+  }
+  return merged;
 }
 
 /**

@@ -357,7 +357,8 @@ function pushAgentCapabilityChanges(params: {
 
 type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
-function normalizeLegacyProfileAgentForComparison(
+function normalizeLegacyAgent(
+  config: OpenClawConfig,
   currentAgent: AgentConfig,
   desiredAgent: AgentConfig,
 ): AgentConfig {
@@ -365,7 +366,14 @@ function normalizeLegacyProfileAgentForComparison(
   if (!tools?.profile || desiredAgent.tools?.profile !== "full" || !desiredAgent.tools.allow) {
     return currentAgent;
   }
-  const snapshot = resolveClawToolProfileSnapshot(tools);
+  const snapshot = resolveClawToolProfileSnapshot({
+    ...tools,
+    alsoAllow: (
+      resolvePortableTools(config, currentAgent.id) as {
+        alsoAllow?: string[];
+      }
+    ).alsoAllow,
+  });
   if (!snapshot) {
     return currentAgent;
   }
@@ -460,7 +468,7 @@ export function pushResolvedAgentCapabilityChanges(params: {
   const currentIndex = currentAgents.findIndex((agent) => agent.id === params.agentId);
   const existingCurrentAgent = currentIndex === -1 ? undefined : currentAgents[currentIndex];
   const currentAgent = existingCurrentAgent
-    ? normalizeLegacyProfileAgentForComparison(existingCurrentAgent, params.desiredAgent)
+    ? normalizeLegacyAgent(params.config, existingCurrentAgent, params.desiredAgent)
     : undefined;
   const comparisonAgents = [...currentAgents];
   if (currentAgent && currentIndex !== -1) {

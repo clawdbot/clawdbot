@@ -21,13 +21,12 @@ import {
   selectClawBootstrapProvenanceColumns,
 } from "./provenance-bootstrap.js";
 import { legacySafeColumnProjection } from "./provenance-legacy-columns.js";
+import * as installRecordSchema from "./provenance-schema-version.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
 export {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
-
-const CLAW_INSTALL_RECORD_SCHEMA_VERSION = "openclaw.clawInstallRecord.v1" as const;
 
 export type ClawInstallStatus =
   | "pending"
@@ -60,7 +59,7 @@ type ClawInstallRow = {
 };
 
 export type PersistedClawInstall = {
-  schemaVersion: typeof CLAW_INSTALL_RECORD_SCHEMA_VERSION;
+  schemaVersion: ReturnType<typeof installRecordSchema.parseClawInstallRecordSchemaVersion>;
   claw: ClawAddPlan["claw"];
   manifestSchemaVersion: ClawAddPlan["manifestSchemaVersion"];
   planIntegrity: string;
@@ -99,7 +98,7 @@ type InstallRow = {
 
 function rowToInstall(row: InstallRow): PersistedClawInstall {
   return {
-    schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+    schemaVersion: installRecordSchema.parseClawInstallRecordSchemaVersion(row.schema_version),
     claw: {
       kind: row.source_kind,
       name: row.claw_name,
@@ -143,7 +142,7 @@ function bootstrapProvenance(plan: ClawAddPlan) {
 
 function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
   return {
-    schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+    schemaVersion: installRecordSchema.parseClawInstallRecordSchemaVersion(row.schema_version),
     claw: {
       kind: row.source_kind,
       name: row.claw_name,
@@ -175,7 +174,6 @@ export function clawInstallRecordMatchesPlan(
 ): boolean {
   const bootstrap = bootstrapProvenance(plan);
   return (
-    record.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
     record.claw.kind === plan.claw.kind &&
     record.claw.name === plan.claw.name &&
     record.claw.version === plan.claw.version &&
@@ -217,18 +215,11 @@ export function readClawInstallRecordFromDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
-function getClawInstallRow(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions,
-): ClawInstallRow | undefined {
-  return selectClawInstallRow(openOpenClawStateDatabase(options).db, agentId);
-}
-
 export function readClawInstallRecord(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawInstall | undefined {
-  const row = getClawInstallRow(agentId, options);
+  const row = selectClawInstallRow(openOpenClawStateDatabase(options).db, agentId);
   return row ? rowToRecord(row) : undefined;
 }
 
@@ -249,7 +240,11 @@ export function persistClawInstallRecord(
     const existing = selectClawInstallRow(db, plan.agent.finalId);
     if (existing) {
       if (existing.status !== "complete" && isSameInstallAttempt(existing, plan)) {
-        return rowToRecord(existing);
+        const record = rowToRecord(existing);
+        if (record.schemaVersion !== installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION) {
+          return installRecordSchema.upgradeClawInstallSchema(db, plan.agent.finalId, record);
+        }
+        return record;
       }
       // A nonmatching partial attempt remains durable ownership evidence. A later
       // remove/doctor lifecycle must clear it; a new plan must never overwrite it.
@@ -274,7 +269,7 @@ export function persistClawInstallRecord(
        )`,
     ).run({
       agent_id: plan.agent.finalId,
-      schema_version: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+      schema_version: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
       source_kind: plan.claw.kind,
       claw_name: plan.claw.name,
       claw_version: plan.claw.version,
@@ -295,7 +290,7 @@ export function persistClawInstallRecord(
       updated_at_ms: nowMs,
     });
     return {
-      schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+      schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
       claw: plan.claw,
       manifestSchemaVersion: plan.manifestSchemaVersion,
       planIntegrity: plan.planIntegrity,
@@ -409,7 +404,8 @@ export function updateClawInstallRecord(
     const result = db /* sqlite-allow-raw: Claw install provenance compare-and-swap write. */
       .prepare(
         `UPDATE claw_installs
-            SET source_kind = @source_kind,
+            SET schema_version = @schema_version,
+                source_kind = @source_kind,
                 claw_name = @claw_name,
                 claw_version = @claw_version,
                 package_root = @package_root,
@@ -432,6 +428,7 @@ export function updateClawInstallRecord(
       )
       .run({
         agent_id: plan.agent.finalId,
+        schema_version: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
         source_kind: plan.claw.kind,
         claw_name: plan.claw.name,
         claw_version: plan.claw.version,
@@ -459,7 +456,7 @@ export function updateClawInstallRecord(
     }
   }, options);
   return {
-    schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+    schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
     claw: plan.claw,
     manifestSchemaVersion: plan.manifestSchemaVersion,
     planIntegrity: plan.planIntegrity,

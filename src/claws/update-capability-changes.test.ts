@@ -306,6 +306,31 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     expect(changes.filter((change) => change.path.startsWith("agent.tools."))).toEqual([]);
   });
 
+  it("reports authority removed by freezing an inherited global alsoAllow grant", () => {
+    const desiredTools = materializeClawToolProfile({
+      tools: { profile: "coding" },
+    }).tools;
+    const changes = collectChanges({
+      currentAgent: {
+        id: "worker",
+        tools: { profile: "coding" },
+      },
+      desiredAgent: {
+        id: "worker",
+        tools: desiredTools,
+      },
+      tools: { alsoAllow: ["browser"] },
+    });
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.allow",
+        classification: "reduction",
+        requiresDistinctConsent: false,
+      }),
+    );
+  });
+
   it("classifies inherited profiles and wildcard reductions by effective capabilities", () => {
     const inheritedExpansion = collectChanges({
       currentAgent: { id: "worker" },
