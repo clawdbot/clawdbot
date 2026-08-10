@@ -71,19 +71,6 @@ export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
     reason: "Canonical non-array record predicate owned by normalization-core.",
   },
   {
-    file: "packages/gateway-protocol/src/frame-guards.ts",
-    name: "isRecord",
-    count: 1,
-    reason: "Dependency-minimal browser-safe protocol guard cannot import workspace coercion code.",
-  },
-  {
-    file: "packages/gateway-protocol/src/gateway-error-details.ts",
-    name: "asRecord",
-    count: 1,
-    reason:
-      "Dependency-minimal browser-safe protocol parsing cannot import workspace coercion code.",
-  },
-  {
     file: "packages/llm-core/src/validation.ts",
     name: "isRecord",
     count: 1,
