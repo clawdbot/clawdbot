@@ -1830,6 +1830,7 @@ export const en: TranslationMap = {
     title: "Terminal",
     toggle: "Toggle terminal",
     open: "Open terminal",
+    openFullscreen: "Open full-screen terminal",
     hide: "Hide terminal",
     resize: "Resize terminal panel",
     newSession: "New terminal session",
