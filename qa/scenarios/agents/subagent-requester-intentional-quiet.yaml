@@ -26,6 +26,7 @@ scenario:
     kind: flow
     retryCount: 0
     suiteIsolation: isolated
+    isolationReason: Arms a shared mock-provider response gate while exercising requester-settle delivery.
     summary: Exercise an explicit quiet requester settlement through a real ephemeral Gateway and deterministic mock provider.
     config:
       requiredProviderMode: mock-openai
