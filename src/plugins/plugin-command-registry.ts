@@ -1,5 +1,4 @@
 /** Exact registry projection helpers for plugin command runtimes. */
-import type { RegisteredPluginCommand } from "./command-registry-state.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -14,7 +13,7 @@ export function resolveSelectedPluginCommandRegistry(): PluginRegistry | null {
   );
 }
 
-export function listRegisteredPluginCommands(registry: PluginRegistry): RegisteredPluginCommand[] {
+export function listRegisteredPluginCommands(registry: PluginRegistry) {
   return registry.commands.map((entry) => ({
     ...entry.command,
     pluginId: entry.pluginId,

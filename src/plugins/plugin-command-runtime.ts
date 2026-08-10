@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
+import type { PluginCommandReplyOptionCarrier } from "./plugin-command-dispatch-contract.js";
 import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
 import {
   pluginCommandSupportsChannel,
@@ -15,12 +16,9 @@ import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
-declare const pluginCommandDispatchBrand: unique symbol;
+export { PLUGIN_COMMAND_DISPATCH } from "./plugin-command-dispatch-contract.js";
 
-/** Collision-free reply-option key for a prepared plugin command catalog decision. */
-export const PLUGIN_COMMAND_DISPATCH: unique symbol = Symbol.for(
-  "openclaw.pluginCommandDispatch",
-) as never;
+declare const pluginCommandDispatchBrand: unique symbol;
 
 export type PluginCommandDispatchContext = Readonly<{
   senderId?: string;
@@ -59,9 +57,8 @@ export type PluginCommandDispatch = Readonly<{
 export type PluginCommandCatalogDecision = PluginCommandDispatch | Readonly<{ kind: "non-plugin" }>;
 
 /** Reply-pipeline field carrying the terminal native catalog ownership decision. */
-export type PluginCommandReplyOptions = Readonly<{
-  [PLUGIN_COMMAND_DISPATCH]?: PluginCommandCatalogDecision;
-}>;
+export type PluginCommandReplyOptions =
+  PluginCommandReplyOptionCarrier<PluginCommandCatalogDecision>;
 
 export type PluginCommandNativeCandidate = Readonly<{
   name: string;
