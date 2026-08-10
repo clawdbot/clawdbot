@@ -156,7 +156,6 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Opening Browser…", exact: true }).waitFor();
       expect(await terminalButton.isEnabled()).toBe(true);
       await gateway.resolveDeferred("worker.desktop.launch", { app: "browser", status: "ready" });
-      await panel.getByText("Opened Browser", { exact: true }).waitFor();
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
 
       await gateway.deferNext("worker.desktop.launch");

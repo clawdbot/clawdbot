@@ -64,7 +64,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private connection: DesktopConnectionHandle | null = null;
   private operationId = 0;
   private launchOperationId = 0;
-  private appStatusTimer: number | null = null;
   private controlTakeoverRecoveryUsed = false;
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
@@ -308,10 +307,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.launchingApp = null;
     this.appStatusText = null;
     this.launchErrorText = null;
-    if (this.appStatusTimer !== null) {
-      window.clearTimeout(this.appStatusTimer);
-      this.appStatusTimer = null;
-    }
   }
 
   private async refreshEnvironments(): Promise<void> {
@@ -457,10 +452,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     const operationId = ++this.launchOperationId;
     const label = desktopAppLabel(app);
-    if (this.appStatusTimer !== null) {
-      window.clearTimeout(this.appStatusTimer);
-      this.appStatusTimer = null;
-    }
     this.launchingApp = app;
     this.appStatusText = t("desktop.openingApp", { app: label });
     this.launchErrorText = null;
@@ -473,13 +464,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         return;
       }
       this.launchingApp = null;
-      this.appStatusText = t("desktop.openedApp", { app: label });
-      this.appStatusTimer = window.setTimeout(() => {
-        if (operationId === this.launchOperationId) {
-          this.appStatusText = null;
-          this.appStatusTimer = null;
-        }
-      }, 1_800);
+      this.appStatusText = null;
     } catch (error) {
       if (operationId !== this.launchOperationId || environmentId !== this.environmentId) {
         return;
@@ -652,7 +637,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
           ? html`<div class="desktop-connecting" role="status" aria-live="polite">
               <span class="desktop-connecting__monitor" aria-hidden="true">${icons.monitor}</span>
               <span class="desktop-connecting__copy">
-                ${t("desktop.connectingWorker")}
+                ${t("desktop.connecting")}
                 <span class="desktop-connecting__dots" aria-hidden="true">
                   <span class="desktop-connecting__dot"></span>
                   <span class="desktop-connecting__dot"></span>
