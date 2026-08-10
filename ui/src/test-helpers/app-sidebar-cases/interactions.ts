@@ -288,7 +288,7 @@ describe("AppSidebar multi-select", () => {
     }
   });
 
-  it("does not assign selected sessions that were deleted while the dialog was open", async () => {
+  it("assigns with captured identities when rows leave the projection mid-write", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     try {
       const { sidebar, harness } = await mountMultiSelect([
@@ -313,13 +313,29 @@ describe("AppSidebar multi-select", () => {
       await submitInputDialog("Projects");
       await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
 
-      // Both rows disappear while the catalog write is still in flight; patching
-      // their keys now would recreate the sessions that were just removed.
+      // Both rows leave this bounded projection while the catalog write is still
+      // in flight. That is not evidence they were deleted, so the assignment must
+      // still go out — carrying the identity captured with each row, which is what
+      // lets the Gateway refuse a target that really was replaced.
       harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
       landCatalogWrite();
-      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]));
 
-      expect(harness.patchMany).not.toHaveBeenCalled();
+      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
+      expect(harness.patchMany).toHaveBeenCalledWith(
+        [
+          {
+            key: "agent:main:a",
+            agentId: "main",
+            expectedSessionId: "session-agent:main:a",
+          },
+          {
+            key: "agent:main:b",
+            agentId: "main",
+            expectedSessionId: "session-agent:main:b",
+          },
+        ],
+        { category: "Projects" },
+      );
       expect(harness.patch).not.toHaveBeenCalled();
     } finally {
       restoreDialogPolyfill();
