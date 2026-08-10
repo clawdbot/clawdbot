@@ -276,7 +276,7 @@ describe("AgentHarness lifecycle runner", () => {
   });
 
   it("records a normally completed empty finalization without emitting an error", async () => {
-    const params = createAttemptParams();
+    const params = createFinalizationParams();
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
