@@ -138,7 +138,7 @@ final class GatewayProcessManager {
     }
 
     func setActive(_ active: Bool) {
-        // Remote mode should never spawn a local gateway; treat as stopped.
+        // Remote mode should never manage a local Gateway; treat as stopped.
         if CommandResolver.connectionModeIsRemote() {
             self.desiredActive = false
             self.stop()
@@ -363,7 +363,7 @@ final class GatewayProcessManager {
 
     func startIfNeeded() {
         guard self.desiredActive else { return }
-        // Do not spawn in remote mode (the gateway should run on the remote host).
+        // Do not start a local Gateway in remote mode; the remote host owns it.
         guard !CommandResolver.connectionModeIsRemote() else {
             self.status = .stopped
             return
@@ -378,7 +378,7 @@ final class GatewayProcessManager {
             return
         }
         // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
-        // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
+        // Avoid concurrent startup tasks that can thrash launchd and flap the port.
         switch self.status {
         case .starting, .running, .attachedExisting:
             return
@@ -390,7 +390,7 @@ final class GatewayProcessManager {
         let startGeneration = self.gatewayStartGeneration
         self.logger.debug("gateway start requested")
 
-        // First try to latch onto an already-running gateway to avoid spawning a duplicate.
+        // First try to attach to an already-running Gateway before enabling launchd.
         self.beginGatewayStartTask(generation: startGeneration) { [weak self] in
             guard let self else { return }
             if await self.attachExistingGatewayAfterPendingDisable(startGeneration: startGeneration) {
@@ -524,7 +524,7 @@ final class GatewayProcessManager {
     }
 
     /// Attempt to connect to an already-running gateway on the configured port.
-    /// If successful, mark status as attached and skip spawning a new process.
+    /// If successful, mark status as attached and skip launchd startup.
     private func attachExistingGatewayIfAvailable(
         port requestedPort: Int? = nil,
         startGeneration: UInt64? = nil) async -> Bool
@@ -591,7 +591,7 @@ final class GatewayProcessManager {
                     return true
                 }
 
-                // No reachable gateway (and no listener) — fall through to spawn.
+                // No reachable Gateway (and no listener) — fall through to launchd startup.
                 self.existingGatewayDetails = nil
                 return false
             }
@@ -703,17 +703,6 @@ extension GatewayProcessManager {
     private func prepareLaunchdGatewayStart(startGeneration: UInt64) async -> LaunchAgentStartupContext? {
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         self.existingGatewayDetails = nil
-        let resolution = await GatewayEnvironment.resolveGatewayCommand()
-        guard self.isCurrentGatewayStart(startGeneration) else { return nil }
-        await MainActor.run { self.environmentStatus = resolution.status }
-        guard resolution.command != nil else {
-            await MainActor.run {
-                self.status = .failed(resolution.status.message)
-            }
-            self.logger.error("gateway command resolve failed: \(resolution.status.message)")
-            return nil
-        }
-
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             let message = "Launchd disabled; start the Gateway manually or disable attach-only."
             self.status = .failed(message)

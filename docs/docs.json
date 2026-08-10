@@ -630,7 +630,7 @@
     },
     {
       "source": "/mac/child-process",
-      "destination": "/platforms/mac/child-process"
+      "destination": "/platforms/mac/bundled-gateway"
     },
     {
       "source": "/mac/dev-setup",
@@ -1612,7 +1612,6 @@
                     "group": "Runtime",
                     "pages": [
                       "platforms/mac/bundled-gateway",
-                      "platforms/mac/child-process",
                       "platforms/mac/health",
                       "platforms/mac/logging",
                       "platforms/mac/remote",
