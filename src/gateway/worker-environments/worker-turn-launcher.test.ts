@@ -822,7 +822,7 @@ describe("worker turn launcher", () => {
     const manager = openSessionManager();
     manager.appendMessage(
       makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "discarded-call", name: "read", arguments: {} }],
+        content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
         stopReason: "toolUse",
         timestamp: 16,
       }),
@@ -832,7 +832,7 @@ describe("worker turn launcher", () => {
     );
     manager.appendMessage({
       role: "toolResult",
-      toolCallId: "discarded-call",
+      toolCallId: "shared-call",
       toolName: "read",
       content: [{ type: "text", text: "Discarded owner result" }],
       isError: false,
@@ -840,14 +840,14 @@ describe("worker turn launcher", () => {
     });
     manager.appendMessage(
       makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "kept-call", name: "read", arguments: {} }],
+        content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
         stopReason: "toolUse",
         timestamp: 19,
       }),
     );
     manager.appendMessage({
       role: "toolResult",
-      toolCallId: "kept-call",
+      toolCallId: "shared-call",
       toolName: "read",
       content: [{ type: "text", text: "Kept owner result" }],
       isError: false,
@@ -943,11 +943,13 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.initialMessages).toMatchObject([
       { role: "user" },
-      { role: "assistant", content: [{ id: "kept-call" }] },
-      { role: "toolResult", toolCallId: "kept-call" },
+      { role: "assistant", content: [{ id: "shared-call" }] },
+      { role: "toolResult", toolCallId: "shared-call" },
       { role: "assistant" },
     ]);
-    expect(JSON.stringify(descriptor?.assignment.initialMessages)).not.toContain("discarded-call");
+    expect(JSON.stringify(descriptor?.assignment.initialMessages)).not.toContain(
+      "Discarded owner result",
+    );
     const persistedEntries = openSessionManager().getEntries();
     const persistedCurrentUsers = persistedEntries.filter((entry) => {
       if (typeof entry !== "object" || entry === null || !("message" in entry)) {
