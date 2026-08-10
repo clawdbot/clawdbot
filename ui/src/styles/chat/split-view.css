@@ -144,8 +144,6 @@ openclaw-chat-pane {
   overflow: hidden;
   color: var(--text);
   font-size: 12px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .chat-pane__session-title-button {
@@ -166,6 +164,15 @@ openclaw-chat-pane {
 .chat-pane__session-title-button:focus-visible {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   outline: none;
+}
+
+.chat-pane__session-title-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Inter's visible ink sits 0.8px above its line-box center at this size. */
+  transform: translateY(1px);
 }
 
 .chat-pane__session-title-input {
