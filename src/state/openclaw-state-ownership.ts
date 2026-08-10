@@ -1,15 +1,13 @@
-import { existsSync, statSync, type BigIntStats } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { sha256HexPrefix } from "../infra/crypto-digest.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   openNodeSqliteDatabase,
-  resolveImmutableSqliteFileUri,
   tryAcquireExclusiveSqliteCoordinator,
 } from "../infra/node-sqlite.js";
 import {
@@ -18,7 +16,7 @@ import {
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
 } from "../infra/sqlite-coordinator.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.paths.js";
@@ -26,12 +24,6 @@ import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.path
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
 const MAX_OWNERSHIP_TIMESTAMP_MS = 8_640_000_000_000_000;
 const MANAGER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-
-type OwnershipSqliteGeneration = {
-  database?: BigIntStats;
-  journal: boolean;
-  wal: boolean;
-};
 
 export type OpenClawExternalStateOwnership = {
   claimedAt: number;
@@ -151,72 +143,15 @@ function inspectOwnershipThroughConnection(
   }
 }
 
-function inspectImmutableOwnership(databasePath: string): OpenClawExternalStateOwnership | null {
-  return inspectOwnershipThroughConnection(
-    resolveImmutableSqliteFileUri(databasePath),
-    databasePath,
-  );
-}
-
-function captureOwnershipSqliteGeneration(databasePath: string): OwnershipSqliteGeneration {
-  const database = statSync(databasePath, { bigint: true, throwIfNoEntry: false });
-  if (database && !database.isFile()) {
-    throw new Error(`SQLite ownership inspection target must be a regular file: ${databasePath}`);
-  }
-  return {
-    ...(database ? { database } : {}),
-    journal: existsSync(`${databasePath}-journal`),
-    wal: existsSync(`${databasePath}-wal`),
-  };
-}
-
-function sameOwnershipSqliteGeneration(
-  left: OwnershipSqliteGeneration,
-  right: OwnershipSqliteGeneration,
-): boolean {
-  const sameDatabase = left.database
-    ? right.database !== undefined &&
-      sameFileIdentity(left.database, right.database) &&
-      left.database.ctimeNs === right.database.ctimeNs &&
-      left.database.mtimeNs === right.database.mtimeNs &&
-      left.database.size === right.database.size
-    : right.database === undefined;
-  return sameDatabase && left.journal === right.journal && left.wal === right.wal;
-}
-
-function inspectStablePublicImmutableOwnership(
+function inspectJournalAwarePublicOwnership(
   databasePath: string,
 ): OpenClawExternalStateOwnership | null {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const before = captureOwnershipSqliteGeneration(databasePath);
-    if (!before.database) {
-      return null;
-    }
-    if (before.wal || before.journal) {
-      return inspectOwnershipThroughConnection(databasePath, databasePath);
-    }
-
-    let observation: { value: OpenClawExternalStateOwnership | null } | { error: unknown };
-    try {
-      observation = { value: inspectImmutableOwnership(databasePath) };
-    } catch (error) {
-      observation = { error };
-    }
-    const after = captureOwnershipSqliteGeneration(databasePath);
-    if (sameOwnershipSqliteGeneration(before, after) && !after.wal && !after.journal) {
-      if ("value" in observation) {
-        return observation.value;
-      }
-      if (isSqliteCorruptionError(observation.error)) {
-        return inspectOwnershipThroughConnection(databasePath, databasePath);
-      }
-      throw observation.error;
-    }
-    if (after.wal || after.journal || attempt === 1) {
-      return inspectOwnershipThroughConnection(databasePath, databasePath);
-    }
+  const prepared = prepareSqliteReadOnlyLocationSync(databasePath);
+  try {
+    return inspectOwnershipThroughConnection(prepared.location, databasePath);
+  } finally {
+    prepared.cleanup();
   }
-  return inspectOwnershipThroughConnection(databasePath, databasePath);
 }
 
 function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
@@ -239,7 +174,7 @@ function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
       database.close();
     }
   }
-  return inspectStablePublicImmutableOwnership(resolvedPath);
+  return inspectJournalAwarePublicOwnership(resolvedPath);
 }
 
 function resolveOpenClawStateOwnershipCoordinatorPath(databasePath: string): string {
@@ -288,10 +223,7 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  if (existsSync(`${resolvedPath}-wal`) || existsSync(`${resolvedPath}-journal`)) {
-    return inspectOwnershipThroughConnection(resolvedPath, resolvedPath);
-  }
-  return inspectStablePublicImmutableOwnership(resolvedPath);
+  return inspectJournalAwarePublicOwnership(resolvedPath);
 }
 
 function assertOwnershipAllowsWrite(

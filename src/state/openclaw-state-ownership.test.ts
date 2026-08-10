@@ -196,7 +196,7 @@ describe("external shared-state ownership", () => {
     }
   });
 
-  it("rechecks ownership when a WAL appears during immutable inspection", () => {
+  it("keeps its snapshot stable when a WAL appears after capture", () => {
     const env = createEnv(true);
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
@@ -233,8 +233,9 @@ describe("external shared-state ownership", () => {
     });
 
     try {
-      expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toEqual(ownership);
+      expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toBeNull();
       expect(injected).toBe(true);
+      expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toEqual(ownership);
     } finally {
       exec.mockRestore();
       writer?.close();
@@ -335,7 +336,7 @@ describe("external shared-state ownership", () => {
             (result as { value_json?: unknown } | undefined)?.value_json ===
             JSON.stringify(transientOwnership);
           writer.exec("ROLLBACK;");
-          return result;
+          return originalGet.apply(this, params);
         } finally {
           racedReader.close();
         }
