@@ -15,6 +15,7 @@ import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
@@ -32,7 +33,6 @@ import {
   testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
-  getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,

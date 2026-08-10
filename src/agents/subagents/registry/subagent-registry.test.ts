@@ -59,6 +59,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type {
   ContextEngineSubagentEndedParams,
@@ -540,35 +541,6 @@ describe("subagent registry seam flow", () => {
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
     vi.useRealTimers();
-  });
-
-  it("routes controller and child lookups through scoped snapshots", () => {
-    const controllerSessionKey = "agent:main:controller";
-    const childSessionKey = "agent:main:subagent:scoped";
-    const run = {
-      runId: "run-scoped",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      controllerSessionKey,
-      task: "scoped registry run",
-      cleanup: "keep" as const,
-      createdAt: Date.now(),
-      execution: { status: "running" as const },
-    };
-    mocks.getSubagentRunsSnapshotForController.mockReturnValue(new Map([[run.runId, run]]));
-    mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(new Map([[run.runId, run]]));
-
-    expect(mod.listSubagentRunsForController(controllerSessionKey)).toEqual([run]);
-    expect(mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(run);
-    expect(mocks.getSubagentRunsSnapshotForController).toHaveBeenCalledWith(
-      expect.any(Map),
-      controllerSessionKey,
-    );
-    expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
-      expect.any(Map),
-      childSessionKey,
-    );
   });
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {
@@ -3313,10 +3285,10 @@ describe("subagent registry seam flow", () => {
       expect(run?.pauseReason).toBe("sessions_yield");
     });
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(mod.countPendingDescendantRuns("agent:main:main")).toBe(1);
+    expect(countPendingDescendantRuns("agent:main:main")).toBe(1);
 
     expect(
-      mod.replaceSubagentRunAfterSteer({
+      mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-yield-paused",
         nextRunId: "run-yield-continuation",
       }),
@@ -3438,7 +3410,7 @@ describe("subagent registry seam flow", () => {
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
       // A yielded row is still unsettled work, so the parent's batch keeps
       // deferring instead of waking on a run that has not produced a result.
-      expect(mod.countPendingDescendantRuns("agent:main:main")).toBe(1);
+      expect(countPendingDescendantRuns("agent:main:main")).toBe(1);
     });
   });
 
@@ -5212,7 +5184,7 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(
-      mod.replaceSubagentRunAfterSteer({
+      mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-replacement-persist-old",
         nextRunId: "run-replacement-persist-new",
       }),
@@ -5774,7 +5746,7 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(
-      mod.replaceSubagentRunAfterSteer({
+      mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-suspended-old",
         nextRunId: "run-suspended-new",
       }),

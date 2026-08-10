@@ -318,7 +318,7 @@ describe("subagent registry steer restarts", () => {
     };
     task?: string;
   }) => {
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: params.previousRunId,
       nextRunId: params.nextRunId,
       fallback: params.fallback,
@@ -723,7 +723,7 @@ describe("subagent registry steer restarts", () => {
     previous.accumulatedRuntimeMs = 0;
     previous.execution.outcome = { status: "ok" };
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-runtime-old",
       nextRunId: "run-runtime-new",
       fallback: previous,
@@ -752,7 +752,7 @@ describe("subagent registry steer restarts", () => {
     });
 
     expect(
-      mod.replaceSubagentRunAfterSteer({
+      mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-retired-generation-old",
         nextRunId: "run-retired-generation-new",
         lifecycleGeneration: "retired-generation",
@@ -771,7 +771,7 @@ describe("subagent registry steer restarts", () => {
     });
 
     expect(
-      mod.replaceSubagentRunAfterSteer({
+      mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-current-generation-old",
         nextRunId: "run-current-generation-new",
         lifecycleGeneration: "test-generation",
@@ -801,7 +801,7 @@ describe("subagent registry steer restarts", () => {
     });
 
     expect(
-      mod.replaceSubagentRunAfterSteer({
+      mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-generation-persist-old",
         nextRunId: "run-generation-persist-new",
         lifecycleGeneration: "test-generation",
@@ -832,7 +832,7 @@ describe("subagent registry steer restarts", () => {
       lastDropReason: "sink_unavailable",
     };
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delivery-old",
       nextRunId: "run-delivery-new",
       fallback: previous,
@@ -866,7 +866,7 @@ describe("subagent registry steer restarts", () => {
       };
     }
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-wake-old",
       nextRunId: "run-wake-new",
       fallback: previous,

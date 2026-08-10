@@ -11,6 +11,7 @@ import {
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -137,8 +138,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   clearPendingLifecycleError,
-  countPendingDescendantRuns: (rootSessionKey) =>
-    publicApi.countPendingDescendantRuns(rootSessionKey),
+  countPendingDescendantRuns,
   suppressAnnounceForSteerRestart: contextCleanup.suppressAnnounceForSteerRestart,
   resolveSubagentTask: findSubagentTaskForRun,
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
@@ -469,7 +469,7 @@ const subagentRunManager = createSubagentRunManager({
 
 export const markSubagentRunForSteerRestart = subagentRunManager.markSubagentRunForSteerRestart;
 export const clearSubagentRunSteerRestart = subagentRunManager.clearSubagentRunSteerRestart;
-export const replaceSubagentRunAfterSteer = subagentRunManager.replaceSubagentRunAfterSteer;
+export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubagentRunAfterSteer;
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
 export const registerSubagentRun: (params: RegisterSubagentRunParams) => void =
@@ -583,7 +583,6 @@ const publicApi = createSubagentRegistryPublicApi({
 export const leasePendingAgentSteeringItems = publicApi.leasePendingAgentSteeringItems;
 export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringItems;
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
-export const listSubagentRunsForController = publicApi.listSubagentRunsForController;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
@@ -591,12 +590,7 @@ export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
-export const countActiveDescendantRuns = publicApi.countActiveDescendantRuns;
-export const countPendingDescendantRuns = publicApi.countPendingDescendantRuns;
-export const listDescendantRunsForRequester = publicApi.listDescendantRunsForRequester;
 export const getSubagentRunByChildSessionKey = publicApi.getSubagentRunByChildSessionKey;
-export const getLatestSubagentRunByChildSessionKey =
-  publicApi.getLatestSubagentRunByChildSessionKey;
 export function initSubagentRegistry() {
   const state = getSubagentRegistryBootstrapState();
   if (!state.ready || !state.restorer) {

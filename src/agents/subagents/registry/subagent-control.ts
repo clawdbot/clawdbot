@@ -41,6 +41,7 @@ import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilitie
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSessionEntryForKey } from "./subagent-list.js";
+import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
 import {
   resolveFinalizedSubagentTaskState,
   resolveKilledSubagentTaskEndedAt,
@@ -55,11 +56,10 @@ import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   claimSubagentRunKill,
   clearSubagentRunSteerRestart,
-  countPendingDescendantRuns,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   releaseSubagentRunKillClaim,
-  replaceSubagentRunAfterSteer,
+  replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -1187,7 +1187,7 @@ export async function steerControlledSubagentRun(params: {
       };
     }
 
-    const replaced = replaceSubagentRunAfterSteer({
+    const replaced = replaceSubagentRunAfterSteerCore({
       previousRunId: params.entry.runId,
       nextRunId: runId,
       fallback: currentEntry,

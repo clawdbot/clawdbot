@@ -4,6 +4,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
+import { countActiveDescendantRuns } from "./subagent-registry-read.js";
 
 vi.mock("../../../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../../../config/config.js")>(
@@ -141,7 +143,7 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("countActiveDescendantRuns traverses through ended parents", () => {
-    const { addSubagentRunForTests, countActiveDescendantRuns } = subagentRegistry;
+    const { addSubagentRunForTests } = subagentRegistry;
 
     addSubagentRunForTests({
       runId: "run-parent-ended",
@@ -172,7 +174,7 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("countPendingDescendantRuns includes ended descendants until cleanup completes", () => {
-    const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
+    const { addSubagentRunForTests } = subagentRegistry;
 
     addSubagentRunForTests({
       runId: "run-parent-ended-pending",
@@ -221,7 +223,7 @@ describe("subagent registry nested agent tracking", () => {
   });
 
   it("keeps parent pending for parallel children until both descendants complete cleanup", () => {
-    const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
+    const { addSubagentRunForTests } = subagentRegistry;
     const parentSessionKey = "agent:main:subagent:orch-parallel";
 
     addSubagentRunForTests({
