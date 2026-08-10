@@ -1,7 +1,6 @@
 // Resolves channel presence policy advertised by plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import {
   hasMeaningfulChannelConfig,
@@ -10,6 +9,7 @@ import {
   type AmbientEnvTriggerPolicy,
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -342,6 +342,12 @@ function loadInstalledChannelManifestRecords(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly PluginManifestRecord[] {
+  if (!params.workspaceDir) {
+    return resolveConfigWidePluginManifestRegistry({
+      config: params.config,
+      env: params.env,
+    }).plugins;
+  }
   return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -361,8 +367,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   manifestRecords?: readonly PluginManifestRecord[];
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
-  const workspaceDir =
-    params.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(params.config, env);
+  const workspaceDir = params.workspaceDir;
   const records =
     params.manifestRecords ??
     loadInstalledChannelManifestRecords({
@@ -462,9 +467,9 @@ function listChannelIdsForGatewayPolicy(
     .filter(
       (entry) =>
         entry.effective ||
-        // Ambient credentials may promote a bundled disabled-by-default owner.
-        (entry.blockedReasons.length > 0 &&
-          entry.blockedReasons.every((reason) => reason === "bundled-disabled-by-default")),
+        // A bundled disabled-by-default owner remains eligible even when an
+        // untrusted sibling manifest for the same channel is also blocked.
+        entry.blockedReasons.includes("bundled-disabled-by-default"),
     )
     .map((entry) => entry.channelId);
 }
@@ -486,8 +491,7 @@ export function listChannelIdsForOwnershipMigration(
   >,
 ): string[] {
   const env = params.env ?? process.env;
-  const workspaceDir =
-    params.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(params.config, env);
+  const workspaceDir = params.workspaceDir;
   const records =
     params.manifestRecords ??
     loadInstalledChannelManifestRecords({ config: params.config, workspaceDir, env });

@@ -8,10 +8,11 @@ import {
   resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentEntries, resolveAgentConfig, tryResolveSoleAgentId } from "./agent-scope.js";
+import { listAgentEntries, resolveAgentConfig } from "./agent-scope.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
@@ -26,7 +27,7 @@ function isHeartbeatSharedAcrossAgents(config: OpenClawConfig): boolean {
 function tryResolveHeartbeatOwnerAgentId(config?: OpenClawConfig): string | undefined {
   return (
     normalizeOptionalString(config?.agents?.defaults?.heartbeat?.agentId) ??
-    tryResolveSoleAgentId(config ?? {})
+    tryResolveLegacyCompatibilityAgentId(config ?? {})
   );
 }
 

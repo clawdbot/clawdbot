@@ -3,7 +3,12 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { normalizeDiscoveredAgentModel } from "./agent-model-discovery.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
@@ -116,7 +121,10 @@ function resolveInput(
   config: OpenClawConfig,
   options: LoadPreparedAgentModelRegistryOptions = {},
 ): PreparedModelRuntimeInput {
-  const agentId = options.agentId ?? resolveDefaultAgentId(config);
+  const agentId =
+    options.agentId ??
+    tryResolveLegacyCompatibilityAgentId(config) ??
+    resolveDefaultAgentId(config);
   const agentDir = options.agentDir ?? resolveAgentDir(config, agentId);
   const workspaceDir = options.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
   return {

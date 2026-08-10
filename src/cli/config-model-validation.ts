@@ -4,7 +4,7 @@ import {
   listAgentEntriesWithSource,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
-  tryResolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -152,7 +152,7 @@ function collectTouchedTextModelRefs(params: {
     ? new Map(previousRefs.map((ref) => [modelRefComparisonKey(ref), ref]))
     : undefined;
   const previousDefaultAgentId = params.previousConfig
-    ? tryResolveDefaultAgentId(params.previousConfig)
+    ? tryResolveLegacyCompatibilityAgentId(params.previousConfig)
     : undefined;
   const defaultPrimaryProviderChanged =
     defaultPrimaryTouched &&
@@ -306,7 +306,7 @@ function expandInheritedDefaultRefs(
   refs: TouchedModelRef[],
 ): TouchedModelRef[] {
   const agentEntries = listAgentEntries(config);
-  const defaultAgentId = tryResolveDefaultAgentId(config);
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const expanded: TouchedModelRef[] = [];
   const seen = new Set<string>();
   const push = (ref: TouchedModelRef) => {
@@ -396,7 +396,10 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
       return undefined;
     }
-    const targetAgentId = ref.agentId ?? agentScope.resolveDefaultAgentId(config);
+    const targetAgentId =
+      ref.agentId ??
+      agentScope.tryResolveLegacyCompatibilityAgentId(config) ??
+      agentScope.resolveDefaultAgentId(config);
     const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
     const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const [modelRuntime, preparedCatalog] = await loadModelModules();

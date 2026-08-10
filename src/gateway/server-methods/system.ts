@@ -16,11 +16,12 @@ import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   validateSystemEventParams,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import {
   readUtilityModelSetting,
   resolveUtilityModelRefForAgent,
 } from "../../agents/utility-model.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
@@ -62,7 +63,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
   const lanAddress = (await resolveCachedAdvertisedLanHost()) ?? undefined;
-  const soleAgentId = tryResolveSoleAgentId(config);
+  const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const defaultAgentUtilityModel = soleAgentId
     ? (() => {
         const utilitySetting = readUtilityModelSetting(config, soleAgentId);

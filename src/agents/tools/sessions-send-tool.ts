@@ -41,7 +41,6 @@ import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { tryResolveSoleAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -201,7 +200,10 @@ function isConfiguredAgentMainSessionKey(params: {
   }
   const agentId =
     params.agentId ??
-    resolveAgentIdFromSessionKey(params.sessionKey, tryResolveSoleAgentId(params.cfg));
+    resolveAgentIdFromSessionKey(
+      params.sessionKey,
+      tryResolveLegacyCompatibilityAgentId(params.cfg),
+    );
   return (
     params.sessionKey === params.mainKey ||
     params.sessionKey ===
@@ -223,7 +225,10 @@ async function createConfiguredAgentMainSession(params: {
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const targetAgentId =
     params.agentId ??
-    resolveAgentIdFromSessionKey(params.sessionKey, tryResolveSoleAgentId(params.cfg));
+    resolveAgentIdFromSessionKey(
+      params.sessionKey,
+      tryResolveLegacyCompatibilityAgentId(params.cfg),
+    );
   try {
     const createParams = {
       key: params.sessionKey,
@@ -471,9 +476,18 @@ export function createSessionsSendTool(opts?: {
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
+      const requesterStoreOwner = resolvePersistedSessionStoreOwnerForKey(
+        cfg,
+        effectiveRequesterKey,
+      );
       const requesterAgentId = normalizeAgentId(
         opts?.agentId ??
-          resolveAgentIdFromSessionKey(effectiveRequesterKey, tryResolveSoleAgentId(cfg)),
+          resolveAgentIdFromSessionKey(
+            effectiveRequesterKey,
+            requesterStoreOwner.kind === "configured"
+              ? requesterStoreOwner.agentId
+              : tryResolveLegacyCompatibilityAgentId(cfg),
+          ),
       );
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);

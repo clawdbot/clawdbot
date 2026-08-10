@@ -182,6 +182,66 @@ describe("transcript turn logical ownership", () => {
     });
   });
 
+  it("uses an explicit agent for a pathless injected session store", async () => {
+    await withTempHome(async (home) => {
+      const configuredStorePath = path.join(home, "shared-sessions.json");
+      const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
+      const sessionStore = { global: sessionEntry };
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: configuredStorePath },
+      } satisfies OpenClawConfig;
+
+      await expect(
+        persistSessionTranscriptTurn(
+          {
+            agentId: "research",
+            sessionId: sessionEntry.sessionId,
+            sessionKey: "global",
+            sessionStore,
+          },
+          {
+            config: cfg,
+            messages: [{ message: { role: "user", content: "injected research" } }],
+            updateMode: "none",
+          },
+        ),
+      ).resolves.toMatchObject({ appendedCount: 1 });
+    });
+  });
+
+  it("keeps a pathless injected session store ownerless without an explicit agent", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: path.join(home, "shared-sessions.json") },
+      } satisfies OpenClawConfig;
+
+      await expect(
+        persistSessionTranscriptTurn(
+          {
+            sessionId: "injected-ownerless",
+            sessionKey: "global",
+            sessionStore: { global: { sessionId: "injected-ownerless", updatedAt: 1 } },
+          },
+          {
+            config: cfg,
+            messages: [{ message: { role: "user", content: "must select" } }],
+            updateMode: "none",
+          },
+        ),
+      ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "treats a symlink alias as the configured owned fixed store",
     async () => {

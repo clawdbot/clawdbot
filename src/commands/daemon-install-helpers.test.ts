@@ -60,6 +60,10 @@ vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
 }));
 
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: mocks.loadPluginManifestRegistry,
+}));
+
 vi.mock("../daemon/launchd-exec.js", async (importActual) => ({
   ...(await importActual<typeof import("../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.execLaunchctl,
@@ -242,6 +246,15 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             command: "${node}",
             args: ["./secret-ref-resolver.js"],
             passEnv: ["ACME_SECRETS_TOKEN"],
+          },
+        },
+      },
+      {
+        id: "acme-plugin",
+        origin: "global",
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "apiKey", expected: "string" }],
           },
         },
       },

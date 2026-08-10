@@ -3,7 +3,7 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveAgentConfig, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentConfig, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
@@ -159,7 +159,7 @@ export function formatAgentModelStartupDetails(params: {
   provider: string;
   model: string;
 }): string {
-  const soleAgentId = tryResolveDefaultAgentId(params.cfg);
+  const soleAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
   const defaultAgentConfig = soleAgentId ? resolveAgentConfig(params.cfg, soleAgentId) : undefined;
   const explicitThinking = resolveExplicitStartupThinking({
     cfg: params.cfg,

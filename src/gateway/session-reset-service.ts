@@ -15,6 +15,7 @@ import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import {
   clearBootstrapSnapshot,
@@ -116,6 +117,12 @@ import {
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
 } from "./worker-environments/session-placement-lifecycle.js";
+
+function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
+  return normalizeAgentId(
+    agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
+  );
+}
 
 type McpRunEndWatcherState = {
   cancellations: Map<string, () => void>;
@@ -454,7 +461,7 @@ async function ensureSessionRuntimeCleanup(params: {
   clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
-    agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
+    agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
   });
   await stopSubagentsForRequester({
     cfg: params.cfg,
@@ -928,7 +935,7 @@ export async function cleanupSessionBeforeMutation(params: {
     // Clear physical harness ownership after the old run drains but before the
     // store can expose a successor generation to a new turn.
     const resetParams = {
-      agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
       sessionId: params.entry.sessionId,
       sessionKey: params.target.canonicalKey ?? params.key,
       sessionFile: params.target.canonicalKey ?? params.key,
@@ -956,7 +963,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
-  const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
+  const agentId = resolveLifecycleAgentId(params.cfg, params.target.agentId);
   const sessionFile = sessionId
     ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
     : undefined;
@@ -1359,7 +1366,7 @@ export async function performGatewaySessionReset(params: {
         ? normalizeOptionalString(entry?.worktree?.id)
         : undefined;
       const resetLifecycleRevision = entry?.lifecycleRevision;
-      const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
+      const agentId = resolveLifecycleAgentId(cfg, target.agentId);
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const resetPluginRegistry = getActivePluginRegistry();
       const isResetLifecycleCurrent = () => {
@@ -1441,9 +1448,7 @@ export async function performGatewaySessionReset(params: {
       }
       const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
         ? await readGatewayBeforeResetPluginHookMessages({
-            agentId: normalizeAgentId(
-              target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
-            ),
+            agentId: resolveLifecycleAgentId(cfg, target.agentId ?? requestedAgentId),
             entry,
             sessionId: entry?.sessionId,
             sessionKey: target.canonicalKey ?? params.key,

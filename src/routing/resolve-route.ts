@@ -4,7 +4,7 @@ import {
   AgentSelectionRequiredError,
   listAgentEntries,
   resolveDefaultAgentId,
-  tryResolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
@@ -139,7 +139,7 @@ function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
   const next: AgentLookupCache = {
     agentsRef,
     byNormalizedId,
-    fallbackSoleAgentId: tryResolveDefaultAgentId(cfg),
+    fallbackSoleAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
   };
   agentLookupCacheByCfg.set(cfg, next);
   return next;
@@ -800,10 +800,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   }
 
   return choose(
-    resolveDefaultAgentId(input.cfg, {
-      surface: `${channel} account ${accountId} routing`,
-      hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
-    }),
+    tryResolveLegacyCompatibilityAgentId(input.cfg) ??
+      resolveDefaultAgentId(input.cfg, {
+        surface: `${channel} account ${accountId} routing`,
+        hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
+      }),
     "default",
   );
 }

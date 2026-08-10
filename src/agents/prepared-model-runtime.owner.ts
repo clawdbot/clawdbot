@@ -1,5 +1,6 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -8,7 +9,6 @@ import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
-  tryResolveSoleAgentId,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -336,10 +336,10 @@ export function listConfiguredOwnerInputs(
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
 ): PreparedModelRuntimeInput[] {
-  const soleAgentId = tryResolveSoleAgentId(config);
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config).map((agentId) => {
-    const preserveWorkspaceDirOnRefresh = agentId === soleAgentId && defaultWorkspaceDir;
+    const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
     const input: PreparedModelRuntimeInput = {
       agentId,
       agentDir: resolveAgentDir(config, agentId),

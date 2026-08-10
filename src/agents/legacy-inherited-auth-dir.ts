@@ -1,16 +1,15 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentDir, tryResolveSoleAgentId } from "./agent-scope-config.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
 
 export function resolveLegacyInheritedAuthAgentId(config: OpenClawConfig): string {
   return (
     normalizeOptionalString(config.agents?.defaults?.authInheritance?.agentId) ??
-    tryGetLegacyDefaultAgentId(config) ??
-    tryResolveSoleAgentId(config) ??
+    tryResolveLegacyCompatibilityAgentId(config) ??
     "main"
   );
 }

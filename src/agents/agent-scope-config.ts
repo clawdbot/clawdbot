@@ -208,6 +208,14 @@ function tryResolveRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefi
   return marked.length === 1 ? normalizeAgentId(marked[0]!.id) : undefined;
 }
 
+/** Resolves sole/raw legacy owners plus the retained in-process migration owner. */
+export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): string | undefined {
+  const retainedAgentId = getRetainedLegacyDefaultAgentId(cfg);
+  return retainedAgentId && listAgentIds(cfg).includes(retainedAgentId)
+    ? retainedAgentId
+    : tryResolveDefaultAgentId(cfg);
+}
+
 /** @deprecated Use resolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
 export function resolveDefaultAgentId(
   cfg: OpenClawConfig,
@@ -317,10 +325,7 @@ export function resolveAgentContextLimits(
 }
 
 function tryResolveInheritedWorkspaceAgentId(cfg: OpenClawConfig): string | undefined {
-  const retainedAgentId = getRetainedLegacyDefaultAgentId(cfg);
-  return retainedAgentId && resolveAgentEntry(cfg, retainedAgentId)
-    ? retainedAgentId
-    : tryResolveSoleAgentId(cfg);
+  return tryResolveLegacyCompatibilityAgentId(cfg);
 }
 
 export function resolveAgentWorkspaceDir(
@@ -383,5 +388,9 @@ export function resolveDefaultAgentDir(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return resolveAgentDir(cfg, resolveDefaultAgentId(cfg), env);
+  return resolveAgentDir(
+    cfg,
+    tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
+    env,
+  );
 }

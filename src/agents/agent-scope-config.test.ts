@@ -77,6 +77,18 @@ describe("agent roster resolution", () => {
     expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
   });
 
+  it("keeps a raw legacy marker owner on the inherited workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/srv/ops" },
+        entries: { ops: { default: true }, research: {} },
+      },
+    };
+
+    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe("/srv/ops");
+    expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
+  });
+
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
     expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBe("alpha");
     for (const marker of ["false", 1]) {

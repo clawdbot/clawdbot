@@ -8,7 +8,7 @@ import {
   listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
@@ -71,7 +71,7 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
 
 /** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const configuredAgents = listAgentEntries(cfg);
   const orderedIds =
     configuredAgents.length > 0
@@ -237,10 +237,20 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
+  const deletedAgentOwnedHeartbeat =
+    normalizeOptionalString(prunedDefaults?.heartbeat?.agentId) !== undefined &&
+    normalizeAgentId(prunedDefaults?.heartbeat?.agentId) === id;
+  const nextHeartbeat =
+    deletedAgentOwnedHeartbeat && nextAgentsList.length > 1
+      ? undefined
+      : clearOwnerRef(prunedDefaults?.heartbeat, "agents.defaults.heartbeat.agentId");
+  if (deletedAgentOwnedHeartbeat && nextAgentsList.length > 1) {
+    clearedOwnerRefs.push("agents.defaults.heartbeat");
+  }
   const nextDefaults = prunedDefaults
     ? {
         ...prunedDefaults,
-        heartbeat: clearOwnerRef(prunedDefaults.heartbeat, "agents.defaults.heartbeat.agentId"),
+        heartbeat: nextHeartbeat,
         systemAgent: clearOwnerRef(
           prunedDefaults.systemAgent,
           "agents.defaults.systemAgent.agentId",

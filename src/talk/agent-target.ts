@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
@@ -7,6 +10,7 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/sessi
 export function resolveTalkTargetAgentId(config: OpenClawConfig): string {
   return normalizeAgentId(
     normalizeOptionalString(config.talk?.agentId) ??
+      tryResolveLegacyCompatibilityAgentId(config) ??
       resolveDefaultAgentId(config, {
         surface: "Talk relay ownership",
         hint: "Set talk.agentId to the agent that owns unscoped Talk sessions.",

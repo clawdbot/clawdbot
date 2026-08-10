@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
   lowercasePreservingWhitespace,
@@ -26,12 +27,13 @@ import {
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import { resolveUserPath } from "../utils.js";
 import {
+  AgentSelectionRequiredError,
   listAgentIds,
   resolveMutableAgentEntry,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-  tryResolveSoleAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope-config.js";
 export {
   listAgentEntries,
@@ -47,6 +49,7 @@ export {
   tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
+  tryResolveLegacyCompatibilityAgentId,
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
@@ -320,15 +323,24 @@ export function resolveSessionAgentIds(params: {
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
   const scopedAgentId =
     explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : fallbackAgentId);
-  const soleAgentId = tryResolveSoleAgentId(params.config ?? {});
+  const cfg = params.config ?? {};
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
+  if (!scopedAgentId && persistedStoreOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
+    });
+  }
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const sessionAgentId =
     scopedAgentId ??
-    soleAgentId ??
-    resolveDefaultAgentId(params.config ?? {}, {
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    compatibilityAgentId ??
+    resolveDefaultAgentId(cfg, {
       surface: "session agent resolution",
       hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
     });
-  const defaultAgentId = soleAgentId ?? sessionAgentId;
+  const defaultAgentId = compatibilityAgentId ?? sessionAgentId;
   return { defaultAgentId, sessionAgentId };
 }
 
@@ -527,8 +539,12 @@ export function resolveRunModelFallbacksOverride(params: {
   const explicitAgentId = normalizeOptionalString(params.agentId);
   const agentId = explicitAgentId
     ? normalizeAgentId(explicitAgentId)
-    : (parseAgentSessionKey(params.sessionKey)?.agentId ??
-      (listAgentIds(params.cfg).length > 0 ? resolveDefaultAgentId(params.cfg) : undefined));
+    : listAgentIds(params.cfg).length > 0
+      ? resolveSessionAgentIds({
+          config: params.cfg,
+          sessionKey: params.sessionKey ?? undefined,
+        }).sessionAgentId
+      : undefined;
   return agentId ? resolveAgentModelFallbacksOverride(params.cfg, agentId) : undefined;
 }
 

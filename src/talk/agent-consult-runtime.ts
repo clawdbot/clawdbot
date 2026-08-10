@@ -1,6 +1,9 @@
 // Agent consult runtime starts agent consultation flows from talk sessions.
 import { randomUUID } from "node:crypto";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -289,6 +292,7 @@ export async function consultRealtimeVoiceAgent(params: {
   params.abortSignal?.throwIfAborted();
   const agentId =
     params.agentId ??
+    tryResolveLegacyCompatibilityAgentId(params.cfg) ??
     resolveDefaultAgentId(params.cfg, {
       surface: `${params.surface} consult routing`,
       hint: "Pass the owning agent id from the Talk/voice/meeting surface target.",

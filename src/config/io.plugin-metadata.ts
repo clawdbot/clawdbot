@@ -39,6 +39,7 @@ export function resolveConfigWidePluginManifestRegistry(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   allowCurrent?: boolean;
+  pluginIds?: readonly string[];
   pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
 }): PluginManifestRegistry {
   const env = params.env ?? process.env;
@@ -53,6 +54,7 @@ export function resolveConfigWidePluginManifestRegistry(params: {
           env,
           allowCurrent: params.allowCurrent,
           allowWorkspaceScopedCurrent: true,
+          ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
           ...(params.pluginIdScope ? { pluginIdScope: params.pluginIdScope } : {}),
         }).manifestRegistry,
     ),

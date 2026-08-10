@@ -299,9 +299,17 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(opts.cfg);
+  if (!opts.agentId?.trim() && persistedStoreOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: "stored session lookup",
+      hint: `The shared fixed-store rows belong to retired agent "${persistedStoreOwner.agentId}".`,
+    });
+  }
   const storeAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
-    : (tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+    : ((persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+      tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
       resolveDefaultAgentId(opts.cfg, {
         surface: "stored session lookup",
         hint: "Pass an explicit agent id when looking up a session by id.",
@@ -530,6 +538,7 @@ export function resolveSession(opts: {
     (opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined) ??
     resolvedAgentId ??
     parseAgentSessionKey(sessionKey)?.agentId ??
+    tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
     resolveDefaultAgentId(opts.cfg, {
       surface: "agent command session ownership",
       hint: "Pass --agent <id> or an agent-prefixed --session-key.",

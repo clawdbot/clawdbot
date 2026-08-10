@@ -6,6 +6,7 @@ import {
   listAgentEntries,
   resolveDefaultAgentId,
   toAgentEntriesRecord,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -43,10 +44,11 @@ export function resolveSystemAgentTargetAgentId(
     return normalizeAgentId(configuredAgentId);
   }
   return normalizeAgentId(
-    resolveDefaultAgentId(config, {
-      surface: "system-agent consult routing",
-      hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-    }),
+    tryResolveLegacyCompatibilityAgentId(config) ??
+      resolveDefaultAgentId(config, {
+        surface: "system-agent consult routing",
+        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+      }),
   );
 }
 

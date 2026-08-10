@@ -36,7 +36,6 @@ import {
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
-import { resolveDefaultAgentId, tryResolveSoleAgentId } from "../../agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
@@ -75,7 +74,6 @@ import {
   loadSessionEntry,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-  resolveAgentIdFromSessionKey,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
   resolveSessionStorePathCore,
@@ -123,7 +121,6 @@ function tryResolveRequesterAgentId(
   }
   return (
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-    tryResolveSoleAgentId(cfg) ??
     tryResolveLegacyCompatibilityAgentId(cfg)
   );
 }
@@ -650,8 +647,10 @@ export function loadRequesterSessionEntry(requesterSessionKey: string, explicitA
 
 export function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const agentId =
-    explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey, tryResolveSoleAgentId(cfg));
+  const agentId = tryResolveRequesterAgentId(cfg, sessionKey, explicitAgentId);
+  if (!agentId) {
+    return undefined;
+  }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
@@ -829,10 +828,10 @@ async function deliverCompletionDirect(params: {
   ) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(
-    params.requesterSessionKey,
-    resolveDefaultAgentId(params.cfg),
-  );
+  const agentId = tryResolveRequesterAgentId(params.cfg, params.requesterSessionKey);
+  if (!agentId) {
+    return undefined;
+  }
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
   try {

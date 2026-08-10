@@ -1,5 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
 import {
   getRetainedLegacyDefaultAgentId,
   setRetainedLegacyDefaultAgentId,
@@ -24,13 +24,7 @@ export function inheritLegacyDefaultAgentId(
 export function tryGetLegacyDefaultAgentId(config: OpenClawConfig): string | undefined {
   return getRetainedLegacyDefaultAgentId(config);
 }
-
-export function tryResolveLegacyCompatibilityAgentId(config: OpenClawConfig): string | undefined {
-  const retainedAgentId = tryGetLegacyDefaultAgentId(config);
-  return retainedAgentId && listAgentIds(config).includes(retainedAgentId)
-    ? retainedAgentId
-    : tryResolveDefaultAgentId(config);
-}
+export { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
 
 export function resolveSessionStoreCompatibilityAgentId(config: OpenClawConfig): string {
   const persistedAgentId = config.agents?.defaults?.sessionStore?.agentId?.trim();

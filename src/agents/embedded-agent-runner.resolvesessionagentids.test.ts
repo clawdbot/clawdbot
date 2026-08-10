@@ -27,6 +27,38 @@ describe("resolveSessionAgentIds", () => {
     );
   });
 
+  it("uses a configured persisted owner for a fixed-store global session", () => {
+    expect(
+      resolveSessionAgentIds({
+        sessionKey: "global",
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "beta" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }).sessionAgentId,
+    ).toBe("beta");
+  });
+
+  it("rejects a retired fixed-store owner for a global session", () => {
+    expect(() =>
+      resolveSessionAgentIds({
+        sessionKey: "global",
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "retired" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }),
+    ).toThrow(AgentSelectionRequiredError);
+  });
+
   it("keeps the agent id for provider-qualified agent sessions", () => {
     // Channel-qualified agent session keys still carry the owning agent in the
     // second segment.

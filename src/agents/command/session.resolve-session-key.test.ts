@@ -171,6 +171,32 @@ describe("resolveSessionKeyForRequest", () => {
     ]);
   });
 
+  it("uses the persisted fixed-store owner for direct session-id lookup", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
+    const sharedStore = {
+      main: { sessionId: "ops-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+
+    expect(
+      resolveStoredSessionKeyForSessionId({
+        cfg: {
+          session: { store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { research: {}, ops: {} },
+          },
+        },
+        sessionId: "ops-session",
+      }),
+    ).toMatchObject({
+      sessionKey: "main",
+      sessionStore: sharedStore,
+      storePath: "/stores/shared.sqlite",
+    });
+  });
+
   it("does not reassign a retired sole agent's unscoped row to its replacement", () => {
     hoisted.listAgentIdsMock.mockReturnValue(["research"]);
     mockSessionStores({

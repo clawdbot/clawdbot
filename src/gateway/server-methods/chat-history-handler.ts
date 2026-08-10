@@ -15,6 +15,7 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
   resolveSessionAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../../agents/agent-scope.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
@@ -83,7 +84,7 @@ async function handleChatMetadataRequest({
   const requestedAgentId =
     typeof metadataParams.agentId === "string" && metadataParams.agentId.trim()
       ? normalizeAgentId(metadataParams.agentId)
-      : resolveDefaultAgentId(cfg);
+      : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
   if (!listAgentIds(cfg).includes(requestedAgentId)) {
     respond(
       false,

@@ -14,7 +14,10 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
-import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../legacy.default-agent-owner.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
@@ -24,6 +27,7 @@ import {
   resolveSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
+import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
@@ -676,7 +680,7 @@ export function resolveSessionStoreTargets(
   if (opts.store) {
     const defaultAgentId = hasAgent
       ? normalizeAgentId(opts.agent ?? "")
-      : resolveDefaultAgentId(cfg);
+      : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
     const knownAgentIds = new Set(listAgentIds(cfg).map(normalizeAgentId));
     if (hasAgent && !knownAgentIds.has(defaultAgentId)) {
       throw new Error(
@@ -723,7 +727,14 @@ export function resolveSessionStoreTargets(
     ];
   }
 
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(cfg);
+  if (persistedStoreOwner.kind === "retired") {
+    throw new Error(`Session store owner is retired: ${persistedStoreOwner.agentId}`);
+  }
+  const defaultAgentId =
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    tryResolveLegacyCompatibilityAgentId(cfg) ??
+    resolveDefaultAgentId(cfg);
   return [
     {
       agentId: defaultAgentId,

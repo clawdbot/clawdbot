@@ -481,4 +481,20 @@ describe("agents helpers", () => {
       research: { workspace: "/srv/fleet/research" },
     });
   });
+
+  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
+          entries: { ops: {}, research: {}, writer: {} },
+        },
+      },
+      "ops",
+    );
+
+    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
+    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
+  });
 });
