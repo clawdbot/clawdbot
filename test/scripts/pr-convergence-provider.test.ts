@@ -36,6 +36,7 @@ function createGhFixture() {
               headRefName: "feat/audit",
               headRefOid: headSha,
               lastEditedAt: "2026-08-10T00:00:00Z",
+              author: { login: "pr-author" },
             },
           },
         },
@@ -69,6 +70,7 @@ describe("GitHub PR convergence provider", () => {
       html_url: `https://github.com/${repo}/pull/${pr}`,
       head: { sha: headSha, ref: "feat/audit" },
       last_edited_at: "2026-08-10T00:00:00Z",
+      user: { login: "pr-author" },
     });
     await expect(provider.fetchFormalReviews({ repo, pr })).resolves.toEqual({
       items: [{ id: 1 }, { id: 2 }],

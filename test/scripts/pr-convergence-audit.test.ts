@@ -26,6 +26,7 @@ type ProviderOptions = {
   headShaFinal?: string;
   prLastEditedAtInitial?: string | null;
   prLastEditedAtFinal?: string | null;
+  prAuthor?: string;
 };
 
 function successfulCheck(name: string, id: number) {
@@ -90,6 +91,7 @@ function createProvider(options: ProviderOptions = {}) {
             pullReads === 1
               ? (options.prLastEditedAtInitial ?? null)
               : (options.prLastEditedAtFinal ?? options.prLastEditedAtInitial ?? null),
+          user: { login: options.prAuthor ?? "pr-author" },
         };
       },
       async fetchFormalReviews() {
@@ -264,19 +266,58 @@ describe("pr-convergence-audit", () => {
     expect(result.reason).toContain("No trusted exact-head ClawSweeper pass");
   });
 
-  it("does not treat ClawSweeper command receipts as durable review findings", async () => {
+  it("uses a trusted command receipt to pin a PR-author re-review request to its head", async () => {
     const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
     const { provider } = createProvider({
+      prAuthor: "contributor",
       issueComments: [
+        {
+          id: 9000,
+          html_url: `${prUrl}#issuecomment-9000`,
+          created_at: "2026-07-26T08:59:00Z",
+          author_association: "CONTRIBUTOR",
+          user: { login: "contributor", type: "User" },
+          body: "@clawsweeper re-review",
+        },
         clawsweeperComment({
           id: 9104,
           body: [
             "<!-- clawsweeper-command-ack:9000 -->",
             `<!-- clawsweeper-command-status:${pr}:re_review:${staleSha} -->`,
+            `<!-- clawsweeper-command:9000:2026-07-26T08:59:00Z:re_review:${staleSha} -->`,
             "Re-review requested for the previous head.",
           ].join("\n"),
         }),
-        clawsweeperComment({ id: 9105, body: passBody }),
+        clawsweeperComment({
+          id: 9105,
+          body: passBody,
+          updatedAt: "2026-07-26T09:00:01Z",
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.READY);
+    expect(result.findingCounts).toEqual({ re_review_request: 1 });
+    expect(result.findings[0]).toMatchObject({
+      kind: "re_review_request",
+      reviewedSha: staleSha,
+      currentHead: false,
+      effectiveAt: "2026-07-26T08:59:00Z",
+    });
+  });
+
+  it("does not treat re-review instructions inside a ClawSweeper verdict as a request", async () => {
+    const { provider } = createProvider({
+      issueComments: [
+        clawsweeperComment({
+          id: 9106,
+          body: [
+            "Fresh review can be requested by commenting `@clawsweeper re-review`.",
+            `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`,
+          ].join("\n"),
+        }),
       ],
     });
 
@@ -655,6 +696,7 @@ describe("pr-convergence-audit", () => {
   it("returns UNKNOWN for an exact-head re-review request instead of READY", async () => {
     const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
     const { provider } = createProvider({
+      prAuthor: "contributor",
       formalReviews: [],
       issueComments: [
         clawsweeperComment({
@@ -665,12 +707,12 @@ describe("pr-convergence-audit", () => {
           id: 9801,
           html_url: `${prUrl}#issuecomment-9801`,
           created_at: "2026-07-26T10:00:00Z",
-          author_association: "MEMBER",
-          user: { login: "maintainer", type: "User" },
+          author_association: "CONTRIBUTOR",
+          user: { login: "contributor", type: "User" },
           body: [
-            "Please take another look after the proof update.",
             "@clawsweeper re-review",
-            `<!-- clawsweeper-verdict:note item=${pr} sha=${headSha} -->`,
+            "",
+            "Please take another look after the proof update.",
           ].join("\n"),
         },
       ],

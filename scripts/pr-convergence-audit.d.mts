@@ -79,6 +79,7 @@ export type PrConvergenceProvider = {
     html_url: string;
     head: { sha: string; ref: string };
     last_edited_at?: string | null;
+    user?: { login?: string };
   }>;
   fetchFormalReviews: (params: { repo: string; pr: number }) => Promise<{
     items: Record<string, unknown>[];
@@ -127,6 +128,7 @@ export function extractFindingsFromEvidenceItem(
     author_association?: string | null;
     performed_via_github_app?: { slug?: string } | null;
     user?: { login?: string; type?: string } | null;
+    isPullRequestAuthor?: boolean;
   },
   headSha: string,
 ): NormalizedFinding[];

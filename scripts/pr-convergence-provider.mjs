@@ -8,6 +8,9 @@ const PULL_REQUEST_QUERY = `query($owner: String!, $name: String!, $number: Int!
       headRefName
       headRefOid
       lastEditedAt
+      author {
+        login
+      }
     }
   }
 }`;
@@ -100,12 +103,21 @@ export function createGhPrConvergenceProvider({ readGh = defaultReadGh } = {}) {
       if (!pull) {
         throw new Error(`pull request #${pr} was not found in ${repo}`);
       }
-      return {
+      /** @type {{
+       *   number: number;
+       *   html_url: string;
+       *   head: { sha: string; ref: string };
+       *   last_edited_at: string | null;
+       *   user?: { login: string };
+       * }} */
+      const normalizedPull = {
         number: pull.number,
         html_url: pull.url,
         head: { sha: pull.headRefOid, ref: pull.headRefName },
         last_edited_at: pull.lastEditedAt ?? null,
+        user: { login: pull.author?.login ?? "" },
       };
+      return normalizedPull;
     },
 
     async fetchFormalReviews({ repo, pr }) {

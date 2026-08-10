@@ -83,6 +83,7 @@
  *   html_url: string;
  *   head: { sha: string; ref: string };
  *   last_edited_at?: string | null;
+ *   user?: { login?: string };
  * }>} fetchPullRequest
  * @property {(params: { repo: string; pr: number }) => Promise<{
  *   items: Record<string, unknown>[];
@@ -145,12 +146,6 @@ const FINDING_KIND_PATTERNS = [
     kind: "changes_requested",
     regex: /\bchanges requested\b/i,
     severity: "changes_requested",
-    blocking: true,
-  },
-  {
-    kind: "re_review_request",
-    regex: /(?:@clawsweeper\s+re-review\b|\bre-review requested\b)/i,
-    severity: "re_review",
     blocking: true,
   },
 ];
@@ -221,6 +216,36 @@ function extractClawSweeperMarkerKinds(body = "") {
 
 function isClawSweeperCommandReceipt(body = "") {
   return /<!--\s*clawsweeper-command-(?:ack|status):/i.test(body);
+}
+
+function extractClawSweeperReReviewReceipt(comment = {}) {
+  if (!isTrustedClawSweeperActor(comment)) {
+    return null;
+  }
+  const body = String(comment?.body ?? "");
+  const ack = body.match(/<!--\s*clawsweeper-command-ack:(\d+)\s*-->/i);
+  const status = body.match(
+    /<!--\s*clawsweeper-command-status:\d+:re_review:([0-9a-f]{40})\s*-->/i,
+  );
+  if (!ack || !status) {
+    return null;
+  }
+  const command = body.match(/<!--\s*clawsweeper-command:\d+:(.+?):re_review:[0-9a-f]{40}\s*-->/i);
+  const effectiveAt = normalizeNullableTimestamp(command?.[1] ?? comment?.created_at);
+  if (!effectiveAt) {
+    return null;
+  }
+  return {
+    commandCommentId: ack[1],
+    receiptCommentId: String(comment?.id ?? ""),
+    reviewedSha: normalizeSha(status[1]),
+    effectiveAt,
+    url: String(comment?.html_url ?? ""),
+  };
+}
+
+function hasStandaloneClawSweeperReReviewCommand(body = "") {
+  return /(?:^|\r?\n)\s*@clawsweeper\s+re-review\s*(?:\r?\n|$)/i.test(body);
 }
 
 function normalizeNullableTimestamp(value) {
@@ -371,6 +396,26 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
     item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedClawSweeperActor(item);
   const trustedRepositoryActor =
     item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedRepositoryActor(item);
+  const trustedReReviewRequester =
+    item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT &&
+    !trustedClawSweeper &&
+    (trustedRepositoryActor || item.isPullRequestAuthor === true);
+  if (trustedReReviewRequester && hasStandaloneClawSweeperReReviewCommand(body)) {
+    const requestReviewedSha = reviewedSha ?? headSha;
+    findings.push({
+      id: `${item.surface}:${item.id}:re_review_request`,
+      kind: "re_review_request",
+      severity: "re_review",
+      blocking: true,
+      currentHead: requestReviewedSha === headSha,
+      reason: `Matched an authenticated standalone re-review command in ${item.surface}.`,
+      sourceSurface: item.surface,
+      sourceId: item.id,
+      sourceUrl: item.url,
+      reviewedSha: requestReviewedSha,
+      effectiveAt: item.effectiveAt ?? null,
+    });
+  }
   if (
     item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT &&
     !trustedClawSweeper &&
@@ -453,11 +498,14 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
   return findings;
 }
 
-function withActorFields(normalized, raw) {
+function withActorFields(normalized, raw, pullRequestAuthor = "") {
   return Object.assign({}, normalized, {
     author_association: raw?.author_association ?? null,
     performed_via_github_app: raw?.performed_via_github_app ?? null,
     user: raw?.user ?? null,
+    isPullRequestAuthor:
+      Boolean(pullRequestAuthor) &&
+      normalized.author.toLowerCase() === pullRequestAuthor.toLowerCase(),
   });
 }
 
@@ -906,19 +954,56 @@ export async function auditPrConvergence({ repo, pr, provider }) {
 
   const findingItems = [
     ...(formalReviewsResult.items ?? []).map((item) =>
-      withActorFields(normalizeFormalReview(item, repo, pr), item),
+      withActorFields(
+        normalizeFormalReview(item, repo, pr),
+        item,
+        finalPull?.user?.login ?? initialPull?.user?.login,
+      ),
     ),
     ...(inlineReviewCommentsResult.items ?? []).map((item) =>
-      withActorFields(normalizeInlineReviewComment(item, repo, pr), item),
+      withActorFields(
+        normalizeInlineReviewComment(item, repo, pr),
+        item,
+        finalPull?.user?.login ?? initialPull?.user?.login,
+      ),
     ),
     ...(issueCommentsResult.items ?? []).map((item) =>
-      withActorFields(normalizeIssueComment(item, repo, pr), item),
+      withActorFields(
+        normalizeIssueComment(item, repo, pr),
+        item,
+        finalPull?.user?.login ?? initialPull?.user?.login,
+      ),
     ),
   ];
 
-  const findings = findingItems
-    .flatMap((item) => extractFindingsFromEvidenceItem(item, evidence.headSha))
-    .toSorted((left, right) => compareStrings(left.id, right.id));
+  const reReviewReceipts = (issueCommentsResult.items ?? [])
+    .map((comment) => extractClawSweeperReReviewReceipt(comment))
+    .filter((receipt) => receipt?.reviewedSha);
+  const acknowledgedReReviewSourceIds = new Set(
+    reReviewReceipts.map((receipt) => receipt.commandCommentId),
+  );
+  const findings = [
+    ...findingItems
+      .flatMap((item) => extractFindingsFromEvidenceItem(item, evidence.headSha))
+      .filter(
+        (finding) =>
+          finding.kind !== "re_review_request" ||
+          !acknowledgedReReviewSourceIds.has(finding.sourceId),
+      ),
+    ...reReviewReceipts.map((receipt) => ({
+      id: `${EVIDENCE_SURFACES.ISSUE_COMMENT}:${receipt.receiptCommentId}:re_review_request`,
+      kind: "re_review_request",
+      severity: "re_review",
+      blocking: true,
+      currentHead: receipt.reviewedSha === evidence.headSha,
+      reason: "Matched an authenticated ClawSweeper re-review command receipt.",
+      sourceSurface: EVIDENCE_SURFACES.ISSUE_COMMENT,
+      sourceId: receipt.receiptCommentId,
+      sourceUrl: receipt.url || `${prUrl}#issuecomment-${receipt.receiptCommentId}`,
+      reviewedSha: receipt.reviewedSha,
+      effectiveAt: receipt.effectiveAt,
+    })),
+  ].toSorted((left, right) => compareStrings(left.id, right.id));
 
   const passIdentity = {
     pullRequest: { number: pr, head: { sha: evidence.headSha } },
