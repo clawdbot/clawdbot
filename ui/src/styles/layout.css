@@ -486,7 +486,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 76%, transparent);
+  color: var(--muted);
 }
 
 /* Settings rail entries are anchors but read as app chrome: default arrow,
@@ -696,7 +696,7 @@ openclaw-settings-save-indicator {
   margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  color: var(--muted);
 }
 
 /* ===========================================
@@ -1721,8 +1721,7 @@ html.openclaw-native-macos
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  opacity: 0.85;
+  color: var(--muted);
 }
 
 .sidebar-session-group-toggle
@@ -1733,19 +1732,21 @@ html.openclaw-native-macos
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
-.sidebar-recent-sessions__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 12px;
-}
-
+.sidebar-recent-sessions__list,
 .sidebar-session-tree,
-.sidebar-session-tree__children {
+.sidebar-session-tree__children,
+.sidebar-session-tree__list,
+.sidebar-session-catalog-host__sessions,
+.sidebar-session-catalog-project,
+.sidebar-session-catalog-project__sessions {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.sidebar-recent-sessions__list {
+  min-height: 12px;
 }
 
 .sidebar-session-tree__children {
@@ -1826,13 +1827,6 @@ html.openclaw-native-macos
   stroke: currentColor;
   fill: none;
   stroke-width: 1.8px;
-}
-
-.sidebar-session-catalog-host__sessions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 
 .sidebar-session-catalog-project__head {

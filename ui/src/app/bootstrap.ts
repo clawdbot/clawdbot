@@ -27,6 +27,7 @@ import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserAnnotationHandoff } from "./browser-annotation-handoff.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
+import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -352,6 +353,7 @@ export function bootstrapApplication(
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
+  const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
   const browserAnnotationHandoff = createBrowserAnnotationHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
@@ -371,26 +373,33 @@ export function bootstrapApplication(
         }
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
+  let lastRecoveryClient: GatewayBrowserClient | null = null;
   const stopPostConnect = gateway.subscribe((snapshot) => {
     if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
+      lastRecoveryClient = null;
       return;
     }
-    if (lastPostConnectClient === snapshot.client) {
+    if (lastPostConnectClient !== snapshot.client) {
+      lastPostConnectClient = snapshot.client;
+      void config.refresh({
+        auth: {
+          hello: snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        },
+      });
+      void sendSessionObserverVisibility(
+        snapshot.client,
+        loadChatObserverDisplayPreference() !== "off",
+      ).catch(() => undefined);
+    }
+    // Recovery scope resolves after hello, so dedupe its later publication independently.
+    if (!snapshot.client.recoveryScopeReady || lastRecoveryClient === snapshot.client) {
       return;
     }
-    lastPostConnectClient = snapshot.client;
-    void config.refresh({
-      auth: {
-        hello: snapshot.hello,
-        settings: { token: gateway.connection.token },
-        password: gateway.connection.password,
-      },
-    });
-    void sendSessionObserverVisibility(
-      snapshot.client,
-      loadChatObserverDisplayPreference() !== "off",
-    ).catch(() => undefined);
+    lastRecoveryClient = snapshot.client;
+    cloudStartup.resumeRecovery();
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
@@ -439,6 +448,7 @@ export function bootstrapApplication(
     config,
     runtimeConfig,
     sessions,
+    cloudStartup,
     workboard,
     overlays,
     navigation,
@@ -554,6 +564,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
+      cloudStartup.dispose();
       sessions.dispose();
       workboard.dispose();
       stopConfigWriteSuspension();

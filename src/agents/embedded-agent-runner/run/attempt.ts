@@ -22,23 +22,23 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { log } from "../logger.js";
-import {
-  createEmbeddedAttemptExternalAbortController,
-  type EmbeddedAttemptAbortStatePort,
-} from "./attempt-abort.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import type { EmbeddedAttemptExecutionState } from "./attempt-execution-types.js";
+import {
+  createEmbeddedAttemptExternalAbortController,
+  type EmbeddedAttemptAbortStatePort,
+} from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
-import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import {
+  prepareEmbeddedAttemptSetup,
   prepareEmbeddedAttemptSkills,
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
-} from "./attempt-startup.js";
+} from "./attempt-setup.js";
+import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";

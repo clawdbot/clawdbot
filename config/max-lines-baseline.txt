@@ -529,7 +529,6 @@ src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
-src/channels/turn/kernel.test.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
@@ -780,9 +779,6 @@ src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
-src/infra/outbound/message-action-runner.media.test.ts
-src/infra/outbound/message-action-runner.plugin-dispatch.test.ts
-src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts

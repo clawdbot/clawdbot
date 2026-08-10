@@ -876,8 +876,12 @@ suite.define(() => {
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       const label = row.locator(".sidebar-recent-session__name");
       const link = row.locator("a.sidebar-recent-session__link");
+      const tree = row.locator("..");
+      const list = tree.locator("..");
       await expect.poll(() => label.textContent()).toBe(readableTitle);
-      expect(await row.getAttribute("role")).toBe("listitem");
+      expect(await list.getAttribute("role")).toBe("list");
+      expect(await tree.getAttribute("role")).toBe("listitem");
+      expect(await row.getAttribute("role")).toBeNull();
       expect(await row.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-label")).toBeNull();
       expect(await link.getAttribute("aria-current")).toBe("page");

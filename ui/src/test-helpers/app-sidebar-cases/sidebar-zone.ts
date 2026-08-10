@@ -251,6 +251,11 @@ describe("AppSidebar interleaved zone", () => {
     );
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
+    const pinnedRow = sidebar.querySelector('[data-session-key="agent:main:alpha"]');
+    const pinnedTree = pinnedRow?.closest(".sidebar-session-tree");
+    expect(pinnedRow?.hasAttribute("role")).toBe(false);
+    expect(pinnedTree?.hasAttribute("role")).toBe(false);
+    expect(pinnedRow?.closest('[role="list"]')).toBeNull();
     expect(sidebar.querySelector(".nav-item--home")?.hasAttribute("draggable")).toBe(false);
   });
 

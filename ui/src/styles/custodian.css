@@ -109,6 +109,14 @@ openclaw-custodian-page {
   gap: 8px;
 }
 
+/* Onboarding: the thread already introduces the mascot, so the header keeps
+   only its actions as a quiet top-right row. */
+.custodian__header--minimal {
+  justify-content: flex-end;
+  padding-bottom: 8px;
+  border-bottom: 0;
+}
+
 .custodian__identity {
   display: flex;
   align-items: center;
@@ -252,14 +260,15 @@ openclaw-custodian-page {
 
 .custodian__option-card {
   /* Left offset = avatar column (36px) + group gap (10px) so cards align with
-     the message text column, not the avatar gutter. */
-  margin: -12px 16px 14px 46px;
+     the message text column, not the avatar gutter. No negative top margin:
+     it overlays the preceding message's sender/timestamp row. */
+  margin: 4px 16px 14px 46px;
 }
 
 .custodian__wizard-step {
   display: grid;
   gap: 12px;
-  margin: -12px 16px 14px 46px;
+  margin: 4px 16px 14px 46px;
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

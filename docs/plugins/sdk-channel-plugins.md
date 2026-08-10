@@ -99,11 +99,11 @@ operation accepts visible final text and enforces its transport's caption and
 overflow rules. Core then holds final-mode streamed text for that operation and
 falls back to text when the voice payload is proven unsent.
 
-Legacy reply helpers such as `dispatchInboundReplyWithBase` and
-`recordInboundSessionAndDispatchReply` remain available for compatibility
-dispatchers. Do not use them for new channel code; start with the `message`
-adapter, receipts, and receive/send lifecycle helpers on
-`openclaw/plugin-sdk/channel-outbound` instead.
+The legacy `dispatchInboundReplyWithBase` helper remains available from the
+deprecated `openclaw/plugin-sdk/inbound-reply-dispatch` compatibility shim.
+Do not use it for new channel code; start with the `message` adapter, receipts,
+and receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-outbound`
+instead.
 
 ### Inbound ingress (experimental)
 

@@ -33,6 +33,30 @@ describe("worker placement dispatch", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("reports every durable startup transition without letting reporting break dispatch", async () => {
+    const harness = createHarness(placementStore);
+    const states: string[] = [];
+
+    const placement = await harness.service.dispatch(REQUEST, (current) => {
+      states.push(current.state);
+      throw new Error("reporting failed");
+    });
+
+    expect(placement.state).toBe("active");
+    expect(states).toEqual(["requested", "provisioning", "syncing", "starting", "active"]);
+  });
+
+  it("reports the final durable placement after startup failure teardown", async () => {
+    const harness = createHarness(placementStore, { failAt: "sync" });
+    const states: string[] = [];
+
+    await expect(
+      harness.service.dispatch(REQUEST, (placement) => states.push(placement.state)),
+    ).rejects.toThrow("sync failed");
+
+    expect(states).toEqual(["requested", "provisioning", "syncing", "failed"]);
+  });
+
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
     const harness = createHarness(placementStore);
     const active = harness.placements.seedActive(2);

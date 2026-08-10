@@ -158,6 +158,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       agentModel: agentDefaultModel,
     });
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
+    const cloudStartup = this.context.cloudStartup.get(state.sessionKey);
+    const cloudStartupPending = cloudStartup !== null && cloudStartup.phase !== "failed";
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
@@ -267,7 +269,14 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
-      sending: state.chatSending || this.sessionSuggestionAddOperation !== undefined,
+      sending:
+        cloudStartupPending ||
+        state.chatSending ||
+        this.sessionSuggestionAddOperation !== undefined,
+      cloudStartup,
+      onRetryCloudStartup: cloudStartup?.retryable
+        ? () => this.context.cloudStartup.retry(state.sessionKey)
+        : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
@@ -347,7 +356,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
           !selectedSessionArchived &&
-          (!sessionParticipationBlocked || suggestionViewer),
+          (!sessionParticipationBlocked || suggestionViewer) &&
+          !cloudStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason

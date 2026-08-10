@@ -367,7 +367,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
-    return renderSessionTree({ host: this, session });
+    // Pinned sessions live in the navigation zone, not a session list.
+    return renderSessionTree({ host: this, session, listItem: false });
   }
 
   private renderSessions() {

@@ -61,16 +61,15 @@ import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../../infra/outbound/message-account-selection.js";
+import type {
+  MessageActionGateway,
+  MessageActionResult,
+} from "../../infra/outbound/message-action-contracts.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../../infra/outbound/message-action-params.js";
-import {
-  getToolResult,
-  runMessageAction,
-  type MessageActionRunResult,
-  type MessageActionRunnerGateway,
-} from "../../infra/outbound/message-action-runner.js";
+import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
   resolveAllowedMessageActions,
@@ -1845,7 +1844,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // Gateway request. Keep their authority operation-local by dispatching
       // channel actions in-process instead of laundering it through a new
       // backend connection.
-      const gateway: MessageActionRunnerGateway | undefined =
+      const gateway: MessageActionGateway | undefined =
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {
@@ -1925,7 +1924,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      let result: MessageActionRunResult;
+      let result: MessageActionResult;
       try {
         result = await runMessageActionForTool({
           cfg,
