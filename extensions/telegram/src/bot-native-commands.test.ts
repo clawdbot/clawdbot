@@ -23,9 +23,6 @@ import {
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
-let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
-let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
-
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
   inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
@@ -145,8 +142,8 @@ function replyAt(params: Record<string, unknown>, index = 0) {
 
 resetPluginRuntimeStateForTest();
 setActivePluginRegistry(createEmptyPluginRegistry());
-({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
-  await import("./bot-native-commands.js"));
+const { registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
+  await import("./bot-native-commands.js");
 registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
 describe("registerTelegramNativeCommands", () => {

@@ -378,12 +378,12 @@ describe("plugin command runtime", () => {
     const outerHoldingGate = new Promise<void>((resolve) => {
       outerHolding = resolve;
     });
-    let innerDispatch!: PluginCommandDispatch;
+    const innerDispatchRef: { current?: PluginCommandDispatch } = {};
     registerCommand(registry, {
       pluginId: "outer",
       name: "outer",
       handler: async () => {
-        await innerDispatch.execute({ ...executionContext, commandBody: "/inner" });
+        await innerDispatchRef.current!.execute({ ...executionContext, commandBody: "/inner" });
         outerHolding();
         await outerGate;
         return { text: "outer" };
@@ -391,7 +391,7 @@ describe("plugin command runtime", () => {
     });
     setActivePluginRegistry(registry);
     const candidates = createPluginCommandRuntime().listNativeCandidates("telegram");
-    innerDispatch = requirePluginDispatch(
+    innerDispatchRef.current = requirePluginDispatch(
       candidates.find((candidate) => candidate.name === "inner")!,
     );
     const outerDispatch = requirePluginDispatch(
@@ -406,7 +406,9 @@ describe("plugin command runtime", () => {
       clearSettled = true;
     });
     releaseDetached();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(clearSettled).toBe(false);
     releaseOuter();
     await expect(running).resolves.toEqual({ text: "outer" });

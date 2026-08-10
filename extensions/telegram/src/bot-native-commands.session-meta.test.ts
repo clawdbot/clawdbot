@@ -300,7 +300,6 @@ vi.mock("./bot/delivery.replies.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
 
-let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let activePluginRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
@@ -709,8 +708,7 @@ function resetSessionMetaMocks() {
 }
 
 activePluginRegistry = createEmptyPluginRegistry();
-const commandModule = await import("./bot-native-commands.js");
-registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
+const { registerTelegramNativeCommands } = await import("./bot-native-commands.js");
 await import("./bot-native-commands.runtime.js");
 agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
 resetSessionMetaMocks();

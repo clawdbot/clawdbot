@@ -4,6 +4,7 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import type { PluginCommandReplyOptions } from "../plugins/plugin-command-runtime.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
@@ -109,7 +110,7 @@ type ReasoningProgressPayload = {
 type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
-export type GetReplyOptions = {
+export type GetReplyOptions = PluginCommandReplyOptions & {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */

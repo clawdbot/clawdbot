@@ -1088,6 +1088,7 @@ describe("Discord native plugin command dispatch", () => {
       channelConfig: null,
       mediaLocalRoots: [],
       preferFollowUp: true,
+      pluginCommandDispatch: { kind: "non-plugin" },
       log: { error: vi.fn() } as never,
     });
 
@@ -1232,6 +1233,7 @@ describe("Discord native plugin command dispatch", () => {
       channelConfig: null,
       mediaLocalRoots: [],
       preferFollowUp: true,
+      pluginCommandDispatch: { kind: "non-plugin" },
       suppressReplies: true,
       log: { error: vi.fn() } as never,
     });
@@ -1293,6 +1295,7 @@ describe("Discord native plugin command dispatch", () => {
       channelConfig: null,
       mediaLocalRoots: [],
       preferFollowUp: true,
+      pluginCommandDispatch: { kind: "non-plugin" },
       suppressReplies: true,
       log: { error: vi.fn() } as never,
     });

@@ -186,7 +186,7 @@ function formatTelegramCommandRetrySuccessLog(params: {
 }
 
 export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginCommandSpec>(params: {
-  specs: TSpec[];
+  specs: readonly TSpec[];
   existingCommands: Set<string>;
 }): {
   commands: TelegramMenuCommand[];

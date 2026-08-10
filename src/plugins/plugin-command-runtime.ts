@@ -114,8 +114,7 @@ function createSelectedPluginCommandDispatch(
   channel: string,
   args?: string,
 ): PluginCommandDispatch {
-  let dispatch: PluginCommandDispatch;
-  dispatch = Object.freeze({
+  const dispatch = Object.freeze({
     kind: "plugin" as const,
     async execute(this: PluginCommandDispatch, context: PluginCommandDispatchContext) {
       if (this !== dispatch) {

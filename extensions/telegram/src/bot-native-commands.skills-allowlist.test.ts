@@ -85,7 +85,9 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
     );
 
     expect(setMyCommands).toHaveBeenCalledOnce();
-    const registeredCommands = setMyCommands.mock.calls[0]?.[0] ?? [];
+    const registeredCommands = (setMyCommands.mock.calls[0]?.[0] ?? []) as Array<{
+      command: string;
+    }>;
 
     expect(registeredCommands.map((entry) => entry.command)).toContain("alpha_skill");
     expect(registeredCommands.map((entry) => entry.command)).not.toContain("beta_skill");

@@ -15,9 +15,9 @@ import {
   type ChatCommandDefinition,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import {
-  type PluginCommandCatalogDecision,
-  type PluginCommandNativeCandidate,
+import type {
+  PluginCommandCatalogDecision,
+  PluginCommandNativeCandidate,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";

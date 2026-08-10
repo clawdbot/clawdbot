@@ -54,10 +54,8 @@ function endPluginCommandExecution(registry: PluginRegistry): void {
 }
 
 export function isPluginCommandExecutionActiveHere(registry: PluginRegistry): boolean {
-  return (
-    [...(executionContext.getStore() ?? [])].some(
-      (token) => token.registry === registry && token.active,
-    ) === true
+  return [...(executionContext.getStore() ?? [])].some(
+    (token) => token.registry === registry && token.active,
   );
 }
 
