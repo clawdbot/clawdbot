@@ -4563,7 +4563,10 @@ describe("grouped chat rendering", () => {
       },
     );
     const imageBlob = new Blob(["png"], { type: "image/png" });
-    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => imageBlob }));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      blob: async () => imageBlob,
+    }));
     vi.stubGlobal("fetch", fetchMock);
     let copiedBlob: Blob | undefined;
     class ClipboardItemMock {
@@ -4574,7 +4577,11 @@ describe("grouped chat rendering", () => {
     });
     vi.stubGlobal("ClipboardItem", ClipboardItemMock);
     vi.stubGlobal("navigator", { clipboard: { write } });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        expect(this.download).toBe("Ticketed image.png");
+      });
     const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const container = document.body.appendChild(document.createElement("div"));
     renderAssistantMessage(
@@ -4587,7 +4594,6 @@ describe("grouped chat rendering", () => {
 
     expectElement(container, 'button[aria-label="Download image"]', HTMLButtonElement).click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect(click.mock.instances[0]?.download).toBe("Ticketed image.png");
 
     expectElement(container, 'button[aria-label="Copy image"]', HTMLButtonElement).click();
     await vi.waitFor(() => expect(copiedBlob?.type).toBe("image/png"));
